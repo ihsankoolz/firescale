@@ -1,0 +1,93 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale check > finds a tracked .env and exits 1 when the rule is enforced 1`] = `
+"core/no-committed-env  (enforced, blocker)
+  .env
+    ".env" is tracked by git. Env files usually hold secrets and must not be committed. [deterministic fix available]
+  apps/web/.env.local
+    "apps/web/.env.local" is tracked by git. Env files usually hold secrets and must not be committed. [deterministic fix available]
+  How to fix: fscale explain core/no-committed-env
+
+FAILED: 1 rule checked, 2 violations (2 enforced, 0 report-only).
+"
+`;
+
+exports[`fscale check > reports but exits 0 by default, because the default status is evaluated 1`] = `
+"core/no-committed-env  (evaluated, blocker)
+  .env
+    ".env" is tracked by git. Env files usually hold secrets and must not be committed. [deterministic fix available]
+  apps/web/.env.local
+    "apps/web/.env.local" is tracked by git. Env files usually hold secrets and must not be committed. [deterministic fix available]
+  How to fix: fscale explain core/no-committed-env
+
+OK: 1 rule checked, 2 violations (0 enforced, 2 report-only).
+Report-only violations do not fail the run. Set a rule to "enforced" to make it fail.
+"
+`;
+
+exports[`fscale check --json > matches the snapshot 1`] = `
+"{
+  "schemaVersion": 1,
+  "version": "<version>",
+  "ok": false,
+  "summary": {
+    "rules": 1,
+    "violations": 2,
+    "enforcedViolations": 2
+  },
+  "rules": [
+    {
+      "id": "core/no-committed-env",
+      "status": "enforced",
+      "severity": "blocker",
+      "category": "security",
+      "description": "No .env files are tracked by git, except example files such as .env.example.",
+      "violations": 2
+    }
+  ],
+  "diagnostics": [
+    {
+      "ruleId": "core/no-committed-env",
+      "message": "\\".env\\" is tracked by git. Env files usually hold secrets and must not be committed.",
+      "file": ".env",
+      "fixable": "deterministic",
+      "status": "enforced",
+      "severity": "blocker"
+    },
+    {
+      "ruleId": "core/no-committed-env",
+      "message": "\\"apps/web/.env.local\\" is tracked by git. Env files usually hold secrets and must not be committed.",
+      "file": "apps/web/.env.local",
+      "fixable": "deterministic",
+      "status": "enforced",
+      "severity": "blocker"
+    }
+  ]
+}
+"
+`;
+
+exports[`fscale check --json > matches the snapshot for a clean repo 1`] = `
+"{
+  "schemaVersion": 1,
+  "version": "<version>",
+  "ok": true,
+  "summary": {
+    "rules": 1,
+    "violations": 0,
+    "enforcedViolations": 0
+  },
+  "rules": [
+    {
+      "id": "core/no-committed-env",
+      "status": "evaluated",
+      "severity": "blocker",
+      "category": "security",
+      "description": "No .env files are tracked by git, except example files such as .env.example.",
+      "violations": 0
+    }
+  ],
+  "diagnostics": []
+}
+"
+`;

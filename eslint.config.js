@@ -32,5 +32,10 @@ export default defineConfig(
     files: ['*.config.{js,ts}', '**/rules/*/rule.ts'],
     rules: { 'no-restricted-syntax': 'off' },
   },
+  {
+    // Plain Node build scripts.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
+  },
   prettier,
 );

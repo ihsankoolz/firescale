@@ -1,0 +1,22 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale usage > prints help with no arguments 1`] = `
+"fscale - knock the scale off a repo, and prove it's clean.
+
+Usage:
+  fscale check [--rules <glob>] [--json]   Run rules and report violations
+  fscale explain <rule>                    Print what a rule checks and how to fix it
+  fscale --version                         Print the firescale version
+  fscale --help                            Print this help
+
+Options:
+  --rules <glob>   Only run matching rules, e.g. "core/*" (comma-separated)
+  --json           Print the report as JSON (see docs/check-json.md)
+  --cwd <dir>      Run as if started in <dir>
+
+Exit codes:
+  0  no enforced rule failed
+  1  an enforced rule has violations
+  2  bad usage, bad config, or an internal error
+"
+`;

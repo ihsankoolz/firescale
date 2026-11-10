@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ihsankoolz/firescale/blob/main/packages/cli/schemas/check-output.schema.json",
+  "title": "fscale check --json output",
+  "description": "The report printed by `fscale check --json`. Paths are relative to the repo root and always use forward slashes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "version", "ok", "summary", "rules", "diagnostics"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of this format. Changes only on a breaking change.",
+      "const": 1
+    },
+    "version": {
+      "description": "The firescale version that produced the report.",
+      "type": "string"
+    },
+    "ok": {
+      "description": "False when at least one enforced rule has a violation. Matches the exit code: true is 0, false is 1.",
+      "type": "boolean"
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules", "violations", "enforcedViolations"],
+      "properties": {
+        "rules": {
+          "description": "Number of rules that ran.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "violations": {
+          "description": "Total number of diagnostics.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "enforcedViolations": {
+          "description": "Diagnostics from rules whose status is enforced.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "rules": {
+      "description": "Every rule that ran, sorted by id. Rules that are off are not listed.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "status", "severity", "category", "description", "violations"],
+        "properties": {
+          "id": { "$ref": "#/definitions/ruleId" },
+          "status": { "$ref": "#/definitions/status" },
+          "severity": { "$ref": "#/definitions/severity" },
+          "category": {
+            "enum": ["security", "reliability", "consistency", "maintainability"]
+          },
+          "description": { "type": "string" },
+          "violations": {
+            "description": "Number of diagnostics this rule produced.",
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "description": "Every violation, grouped by rule in the order of `rules`, then sorted by file and line.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "message", "file", "fixable", "status", "severity"],
+        "properties": {
+          "ruleId": { "$ref": "#/definitions/ruleId" },
+          "message": { "type": "string", "minLength": 1 },
+          "file": {
+            "description": "Path relative to the repo root, with forward slashes.",
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\\\]+$"
+          },
+          "range": {
+            "description": "Inclusive, 1-based line range. Absent when the violation is about the whole file.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["startLine", "endLine"],
+            "properties": {
+              "startLine": { "type": "integer", "minimum": 1 },
+              "endLine": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "project": {
+            "description": "Name of the project the file belongs to, when known.",
+            "type": "string"
+          },
+          "fixable": {
+            "description": "Who can fix it: the rule's own fix, a coding agent following the rule's SKILL.md, or a human.",
+            "enum": ["deterministic", "agent", "manual"]
+          },
+          "status": { "$ref": "#/definitions/status" },
+          "severity": { "$ref": "#/definitions/severity" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "ruleId": {
+      "description": "Rule id in the form <pack>/<rule>.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*/[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "status": {
+      "description": "evaluated: reported only. enforced: a violation fails the run.",
+      "enum": ["evaluated", "enforced"]
+    },
+    "severity": {
+      "enum": ["blocker", "high", "medium", "low"]
+    }
+  }
+}
