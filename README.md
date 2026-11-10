@@ -12,7 +12,7 @@ You need:
 
 - Node.js 22.18 or newer
 - pnpm 12 (`corepack enable` or `npm install -g pnpm@12`)
-- A stable Rust toolchain (`rustup` picks it up from `rust-toolchain.toml`)
+- Rust via `rustup` (the pinned toolchain in `rust-toolchain.toml` is installed automatically)
 
 ```
 pnpm install

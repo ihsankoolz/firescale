@@ -17,7 +17,8 @@ doctest = false
 
 [dependencies]
 firescale-core = { path = "../core" }
-napi = { version = "=3.16.1", default-features = false, features = ["napi4"] }
+# Default features: napi4 and dyn-symbols (the latter resolves Node symbols at load time on Windows).
+napi = "=3.16.1"
 napi-derive = "=3.7.0"
 
 [build-dependencies]

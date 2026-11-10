@@ -1,8 +1,9 @@
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
+import { defineConfig } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
-export default tseslint.config(
+export default defineConfig(
   {
     ignores: [
       '**/dist/**',
@@ -13,7 +14,7 @@ export default tseslint.config(
     ],
   },
   js.configs.recommended,
-  ...tseslint.configs.strict,
+  tseslint.configs.strict,
   {
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',
