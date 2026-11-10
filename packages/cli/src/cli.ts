@@ -1,3 +1,4 @@
+import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { FirescaleError } from '@firescale/sdk';
@@ -92,6 +93,14 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
     const { values, positionals } = parsed;
     const [command, ...rest] = positionals;
     const cwd = path.resolve(io.cwd ?? process.cwd(), values.cwd ?? '.');
+
+    const cwdIsFolder = await stat(cwd).then(
+      (stats) => stats.isDirectory(),
+      () => false,
+    );
+    if (!cwdIsFolder) {
+      throw new FirescaleError(`Folder "${cwd}" does not exist. Check the --cwd value.`);
+    }
 
     if (values.version) {
       io.stdout(`${getVersion()}\n`);

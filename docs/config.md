@@ -38,6 +38,6 @@ Rule status:
 
 Unknown keys, packs, rule ids and statuses are errors, so a typo cannot silently disable a rule.
 
-The root is found by walking up from the current folder: the nearest folder with a firescale config wins, then the nearest folder with `.git`, then the current folder.
+The root is found by walking up from the current folder to the nearest folder that has a firescale config or a `.git` entry. The search stops at the git root. With neither, the root is the current folder.
 
 `firescale.config.ts` is loaded by Node's built-in TypeScript support (Node 22.18 or newer), so it may only use erasable TypeScript syntax. The `import { defineConfig } from 'firescale'` line needs firescale installed in the repo; without it, export a plain object.

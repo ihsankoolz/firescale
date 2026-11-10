@@ -103,7 +103,28 @@ describe('loadConfig', () => {
   });
 });
 
+describe('loadConfig error paths', () => {
+  it('reports an unreadable config without a stack trace', async () => {
+    const repo = await fixtures.create({ files: { 'firescale.config.json/keep.txt': 'x\n' } });
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toMatch(/^fscale: Could not read firescale\.config\.json \(/);
+    expect(result.stderr).not.toContain('    at ');
+  });
+});
+
 describe('findRoot', () => {
+  it('does not look for a config above the git root', async () => {
+    const outer = await fixtures.create({
+      files: { 'firescale.config.json': '{}', 'inner/file.txt': 'x\n' },
+      track: 'no-git',
+    });
+    const { runGit } = await import('@firescale/sdk');
+    const inner = path.join(outer.root, 'inner');
+    await runGit(inner, ['init', '--quiet']);
+    expect(await findRoot(inner)).toBe(inner);
+  });
+
   it('prefers the nearest config file, then the git root, then the folder itself', async () => {
     const repo = await fixtures.create({ files: { 'a/b/file.txt': 'x\n' } });
     const nested = path.join(repo.root, 'a', 'b');

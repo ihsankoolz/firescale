@@ -26,7 +26,7 @@ Status key: ☐ not started · ◐ in progress · ☑ done
 
 ---
 
-## M1 — Rule SDK and the first rule ◐
+## M1 — Rule SDK and the first rule ☑
 
 **Build**
 
@@ -39,9 +39,9 @@ Status key: ☐ not started · ◐ in progress · ☑ done
 
 **Done when**
 
-- ☐ `fscale check` finds a tracked `.env` in a fixture repo and exits 1 when the rule is `enforced`.
-- ☐ `fscale check --json` output matches a documented schema, with a snapshot test.
-- ☐ The rule test covers: passing repo, failing repo, fixed repo, fix run twice (idempotent).
+- ☑ `fscale check` finds a tracked `.env` in a fixture repo and exits 1 when the rule is `enforced`.
+- ☑ `fscale check --json` output matches a documented schema, with a snapshot test.
+- ☑ The rule test covers: passing repo, failing repo, fixed repo, fix run twice (idempotent).
 
 ---
 

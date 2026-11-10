@@ -3,6 +3,9 @@ import { FirescaleError } from './errors.js';
 import { normalizeRelative } from './paths.js';
 import type { GitWriter } from './types.js';
 
+/** How many paths go into one `git rm` call. */
+const UNTRACK_BATCH = 100;
+
 interface GitResult {
   code: number;
   stdout: string;
@@ -67,18 +70,22 @@ export function createGit(root: string): GitWriter {
     async untrack(paths) {
       if (paths.length === 0) return;
       const relative = paths.map(normalizeRelative);
-      const result = await runGit(root, [
-        'rm',
-        '--cached',
-        '--quiet',
-        '--ignore-unmatch',
-        '--',
-        ...relative,
-      ]);
-      if (result.code !== 0) {
-        throw new FirescaleError(
-          `git rm --cached failed: ${result.stderr.trim()}. Fix the git error above, then run the fix again.`,
-        );
+      // Batches keep the command line under the Windows length limit.
+      for (let start = 0; start < relative.length; start += UNTRACK_BATCH) {
+        // --literal-pathspecs: file names are names, never globs or pathspec magic.
+        const result = await runGit(root, [
+          '--literal-pathspecs',
+          'rm',
+          '--cached',
+          '--quiet',
+          '--',
+          ...relative.slice(start, start + UNTRACK_BATCH),
+        ]);
+        if (result.code !== 0) {
+          throw new FirescaleError(
+            `git rm --cached failed: ${result.stderr.trim()}. Fix the git error above, then run the fix again.`,
+          );
+        }
       }
     },
   };

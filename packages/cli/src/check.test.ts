@@ -32,7 +32,7 @@ function failingRepo(config?: string) {
 
 /** Replaces the firescale version so snapshots survive a version bump. */
 function stableVersion(json: string): string {
-  return json.replace(/"version": "\d+\.\d+\.\d+"/, '"version": "<version>"');
+  return json.replace(/"version": "[^"]+"/, '"version": "<version>"');
 }
 
 describe('fscale check', () => {
@@ -127,6 +127,19 @@ describe('fscale check', () => {
     expect(outcome.code).toBe(EXIT_VIOLATIONS);
     const report = JSON.parse(outcome.stdout) as CheckReport;
     expect(report.rules[0]?.status).toBe('enforced');
+  });
+});
+
+describe('fscale check errors', () => {
+  it('names a --cwd folder that does not exist', async () => {
+    const repo = await fixtures.create();
+    const missing = path.join(repo.root, 'nope');
+    const result = await runCli(['check', '--cwd', missing]);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(
+      `fscale: Folder "${missing}" does not exist. Check the --cwd value.\n`,
+    );
   });
 });
 

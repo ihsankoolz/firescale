@@ -13,7 +13,7 @@ SPEC §10 asks for one config file, `firescale.config.ts` or `.json`, holding th
 - **Defaults:** packs `['core']`, status `evaluated` (SPEC §10), no protected paths.
 - **Strict validation:** unknown top-level keys, packs, rule ids, rule keys and statuses are errors (exit code 2). A typo must not silently turn a rule off.
 - **Both files present:** error. No precedence rule to remember.
-- **Root discovery:** walk up from the working folder to the nearest config file, else the nearest `.git`, else stay put.
+- **Root discovery:** walk up from the working folder to the nearest folder with a config file or a `.git` entry, else stay put. The search stops at the git root, so a stray config in a parent folder cannot claim a repo below it.
 - **Packs:** only built-in packs resolve in M1 (`core`). Third-party packs are not designed yet.
 - `protectedPaths` is parsed and validated now but only used from M5.
 

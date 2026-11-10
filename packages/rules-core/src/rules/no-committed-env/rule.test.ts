@@ -176,3 +176,81 @@ describe('core/no-committed-env: fix run twice (idempotent)', () => {
     expect(await repo.read('.gitignore')).toBeNull();
   });
 });
+
+describe('core/no-committed-env: review regressions', () => {
+  it('keeps .env.example un-ignored when its negation sits before the ignore lines', async () => {
+    const repo = await fixtures.create({
+      files: { '.env': EXAMPLE, '.env.example': EXAMPLE, '.gitignore': '!.env.example\n.env\n' },
+    });
+    await repo.fix(rule);
+    const lines = ((await repo.read('.gitignore')) ?? '').split('\n');
+    expect(lines.lastIndexOf('!.env.example')).toBeGreaterThan(lines.lastIndexOf('.env.*'));
+    expect(lines.lastIndexOf('!.env.example')).toBeGreaterThan(lines.lastIndexOf('.env'));
+
+    // git itself must agree: without --force, the example is still addable.
+    const { runGit } = await import('@firescale/sdk');
+    const ignored = await runGit(repo.root, ['check-ignore', '--no-index', '-q', '.env.example']);
+    expect(ignored.code).toBe(1);
+    const envIgnored = await runGit(repo.root, ['check-ignore', '--no-index', '-q', '.env.local']);
+    expect(envIgnored.code).toBe(0);
+  });
+
+  it('untracks files whose names contain spaces, unicode and glob characters', async () => {
+    const names = ['my app/.env', 'café/.env.local', '[x]/.env', 'a b/[y] é/.env.prod'];
+    const repo = await fixtures.create({
+      files: Object.fromEntries(names.map((name) => [name, EXAMPLE])),
+    });
+    expect((await repo.check(rule)).map((d) => d.file).sort()).toEqual([...names].sort());
+    const result = await repo.fix(rule);
+    expect(result.changedFiles).toEqual(expect.arrayContaining(names));
+    expect(await repo.trackedFiles()).toEqual([]);
+    expect(await repo.check(rule)).toEqual([]);
+    for (const name of names) expect(await repo.read(name)).toBe(EXAMPLE);
+  });
+
+  it('treats a file name as a literal, not as a glob over other files', async () => {
+    const repo = await fixtures.create({
+      files: { '[ab]/.env': EXAMPLE, 'a/keep.txt': 'x\n', 'b/keep.txt': 'x\n' },
+    });
+    await repo.fix(rule);
+    expect(await repo.trackedFiles()).toEqual(['a/keep.txt', 'b/keep.txt']);
+  });
+
+  it('rejects allow entries that contain a folder', async () => {
+    const repo = await fixtures.create({ files: { 'apps/web/.env.local': EXAMPLE } });
+    await expect(repo.check(rule, { allow: ['apps/web/.env.local'] })).rejects.toThrow(
+      'without folders',
+    );
+  });
+
+  it('fix() itself is idempotent when called twice with the same diagnostics', async () => {
+    const { createContext } = await import('@firescale/sdk');
+    const repo = await fixtures.create({
+      files: { '.env': EXAMPLE, '.gitignore': '.env\n' },
+    });
+    const diagnostics = await repo.check(rule);
+    const ctx = createContext({ root: repo.root });
+    if (!rule.fix) throw new Error('rule has no fix');
+
+    await rule.fix(ctx, diagnostics);
+    const afterFirst = await repo.read('.gitignore');
+    expect(afterFirst).toBe(
+      '.env\n# Env files hold secrets. Commit an example file instead.\n.env.*\n!.env.example\n',
+    );
+    // Second direct call: the file is already untracked and the lines exist.
+    const second = await rule.fix(ctx, []);
+    expect(second.changedFiles).toEqual([]);
+    expect(await repo.read('.gitignore')).toBe(afterFirst);
+  });
+
+  it('does not duplicate lines in a .gitignore that starts with a BOM', async () => {
+    const bom = String.fromCharCode(0xfeff);
+    const repo = await fixtures.create({
+      files: { '.env': EXAMPLE, '.gitignore': `${bom}.env\n.env.*\n!.env.example\n` },
+      track: ['.env'],
+    });
+    const result = await repo.fix(rule);
+    expect(result.changedFiles).toEqual(['.env']);
+    expect(await repo.read('.gitignore')).toBe(`${bom}.env\n.env.*\n!.env.example\n`);
+  });
+});

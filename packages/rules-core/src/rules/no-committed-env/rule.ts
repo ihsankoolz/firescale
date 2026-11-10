@@ -16,18 +16,40 @@ function allowList(options: RuleOptions): readonly string[] {
   if (allow === undefined) return DEFAULT_ALLOW;
   if (
     !Array.isArray(allow) ||
-    !allow.every((name): name is string => typeof name === 'string' && isEnvFile(name))
+    !allow.every(
+      (name): name is string => typeof name === 'string' && !/[\\/]/.test(name) && isEnvFile(name),
+    )
   ) {
     throw new FirescaleError(
-      'core/no-committed-env: option "allow" must be a list of env file names, for example [".env.example", ".env.template"]. Fix it in your firescale config.',
+      'core/no-committed-env: option "allow" must be a list of env file names without folders, for example [".env.example", ".env.template"]. Fix it in your firescale config.',
     );
   }
   return allow;
 }
 
-/** The ignore lines the fix guarantees: ignore every env file, keep the allowed examples. */
-function requiredIgnoreLines(allow: readonly string[]): string[] {
-  return ['.env', '.env.*', ...allow.map((name) => `!${name}`)];
+/** Ignore every env file at any depth. */
+const IGNORE_LINES: readonly string[] = ['.env', '.env.*'];
+
+/**
+ * Works out which lines to append to `.gitignore` so that env files are
+ * ignored and the allowed examples are not. In a gitignore the last matching
+ * line wins, so each `!<example>` line must come after the ignore lines: one
+ * that sits before them is added again at the end.
+ */
+function linesToAppend(gitignore: string, allow: readonly string[]): string[] {
+  const lines = gitignore
+    .replace(new RegExp(`^${String.fromCharCode(0xfeff)}`), '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd());
+  const missing = IGNORE_LINES.filter((line) => !lines.includes(line));
+  const lastIgnore =
+    missing.length > 0
+      ? Number.POSITIVE_INFINITY
+      : Math.max(...IGNORE_LINES.map((line) => lines.lastIndexOf(line)));
+  const negations = allow
+    .map((name) => `!${name}`)
+    .filter((line) => lines.lastIndexOf(line) < lastIgnore);
+  return [...missing, ...negations];
 }
 
 export default defineRule({
@@ -59,8 +81,7 @@ export default defineRule({
 
     const current = (await ctx.files.exists(GITIGNORE)) ? await ctx.files.read(GITIGNORE) : '';
     const eol = current.includes('\r\n') ? '\r\n' : '\n';
-    const present = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-    const missing = requiredIgnoreLines(allow).filter((line) => !present.has(line));
+    const missing = linesToAppend(current, allow);
     if (missing.length > 0) {
       const separator = current === '' || current.endsWith('\n') ? '' : eol;
       const block = ['# Env files hold secrets. Commit an example file instead.', ...missing];
@@ -68,6 +89,7 @@ export default defineRule({
       changedFiles.push(GITIGNORE);
     }
 
+    if (files.length === 0) return { changedFiles };
     return {
       changedFiles,
       notes: [

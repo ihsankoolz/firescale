@@ -45,23 +45,21 @@ async function exists(file: string): Promise<boolean> {
 
 /**
  * Finds the repo root for `cwd`: the nearest folder, walking up, that holds a
- * firescale config; failing that, the nearest one that holds `.git`; failing
- * that, `cwd` itself.
+ * firescale config or a `.git` entry. The search never goes above the git
+ * root, so a stray config higher up cannot claim the repo. With neither, the
+ * root is `cwd` itself.
  */
 export async function findRoot(cwd: string): Promise<string> {
   const start = path.resolve(cwd);
-  for (const markers of [CONFIG_FILES, ['.git']]) {
-    let dir = start;
-    for (;;) {
-      for (const marker of markers) {
-        if (await exists(path.join(dir, marker))) return dir;
-      }
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
+  let dir = start;
+  for (;;) {
+    for (const marker of [...CONFIG_FILES, '.git']) {
+      if (await exists(path.join(dir, marker))) return dir;
     }
+    const parent = path.dirname(dir);
+    if (parent === dir) return start;
+    dir = parent;
   }
-  return start;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,7 +77,15 @@ function isStatus(value: unknown): value is RuleStatus {
 async function readRaw(root: string, file: string): Promise<unknown> {
   const absolute = path.join(root, file);
   if (file.endsWith('.json')) {
-    const text = (await readFile(absolute, 'utf8')).replace(/^\uFEFF/, '');
+    let text: string;
+    try {
+      text = (await readFile(absolute, 'utf8')).replace(/^\uFEFF/, '');
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new FirescaleError(
+        `Could not read ${file} (${reason}). Make sure it is a readable file.`,
+      );
+    }
     try {
       return JSON.parse(text) as unknown;
     } catch (error) {
@@ -103,6 +109,11 @@ async function readRaw(root: string, file: string): Promise<unknown> {
     if (code === 'ERR_MODULE_NOT_FOUND' && reason.includes("'firescale'")) {
       throw new FirescaleError(
         `${file} imports "firescale", but it is not installed in this repo. Add firescale as a dev dependency, or export a plain object without the import.`,
+      );
+    }
+    if (/Unexpected token 'export'|Cannot use import statement/.test(reason)) {
+      throw new FirescaleError(
+        `${file} was loaded as CommonJS, so its import/export syntax failed. Set "type": "module" in the nearest package.json, or use firescale.config.json instead.`,
       );
     }
     throw new FirescaleError(

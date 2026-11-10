@@ -14,7 +14,7 @@ Env files usually hold API keys, database passwords and tokens. Once one is comm
 ## Manual fix
 
 1. Stop tracking each reported file, keeping your local copy: `git rm --cached <file>`.
-2. Add these lines to the root `.gitignore`:
+2. Add these lines to the root `.gitignore`, in this order (the last matching line wins):
 
    ```
    .env
@@ -35,7 +35,7 @@ Fix only the files named in this rule's diagnostics. Never print, copy or summar
 Apply these steps exactly:
 
 1. For each reported file, run `git rm --cached --quiet -- <file>`. Do not delete the file from disk.
-2. Make sure the root `.gitignore` contains the lines `.env`, `.env.*` and `!.env.example`. Add only the lines that are missing. Create the file if it does not exist.
+2. Make sure the root `.gitignore` contains the lines `.env`, `.env.*` and `!.env.example`. Add only the lines that are missing. `!.env.example` must come after `.env` and `.env.*`, because the last matching line wins; if it sits before them, add it again at the end. Create the file if it does not exist.
 3. Do not edit, move or rename the env files themselves.
 
 ### REPORT
