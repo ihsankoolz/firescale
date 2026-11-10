@@ -6,7 +6,7 @@ Status key: ☐ not started · ◐ in progress · ☑ done
 
 ---
 
-## M0 — Skeleton ◐
+## M0 — Skeleton ☑
 
 **Build**
 
@@ -20,9 +20,9 @@ Status key: ☐ not started · ◐ in progress · ☑ done
 
 **Done when**
 
-- ☐ CI is green on all three OSes.
-- ☐ `pnpm build && pnpm test` passes from a clean clone.
-- ☐ `fscale --version` prints a version that came through the Rust binding.
+- ☑ CI is green on all three OSes.
+- ☑ `pnpm build && pnpm test` passes from a clean clone.
+- ☑ `fscale --version` prints a version that came through the Rust binding.
 
 ---
 
