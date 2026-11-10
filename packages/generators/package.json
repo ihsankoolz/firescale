@@ -1,0 +1,8 @@
+{
+  "name": "@firescale/generators",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The init, add and sync generators for firescale.",
+  "license": "MIT",
+  "type": "module"
+}

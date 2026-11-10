@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/napi"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ihsankoolz/firescale"
+rust-version = "1.85"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+
+[profile.release]
+lto = true
+strip = "symbols"

@@ -19,13 +19,18 @@ Guidance for any coding agent working in this repo.
 
 ## Commands
 
-These are filled in during M0. Keep this list accurate.
+Keep this list accurate. Run `pnpm build` before `pnpm typecheck` or `pnpm test`: the native binding and its types are build output.
 
 - Install: `pnpm install`
-- Build everything: `pnpm build`
-- Test everything: `pnpm test`
-- Lint and typecheck: `pnpm lint` and `pnpm typecheck`
-- Rust only: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`
+- Build everything (Rust core, native binding, TS packages): `pnpm build`
+- Test everything (`cargo test` + Vitest): `pnpm test`
+  - TypeScript only: `pnpm test:ts`. Rust only: `pnpm test:rust`
+- Lint (ESLint, Prettier check, `cargo fmt --check`, clippy): `pnpm lint`
+  - Parts: `pnpm lint:ts`, `pnpm lint:format`, `pnpm lint:rust`
+- Typecheck: `pnpm typecheck`
+- Format: `pnpm format`
+- Run the local CLI: `pnpm fscale --version`
+- Rust only: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - Definition of done (from M4 on): `pnpm fscale verify`
 
 ## Hard rules

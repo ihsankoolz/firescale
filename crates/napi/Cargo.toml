@@ -1,0 +1,27 @@
+[package]
+name = "firescale-napi"
+description = "Node.js bindings for the firescale core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+# Test binaries of an N-API addon cannot link outside Node. Logic and its
+# tests live in firescale-core; the binding is tested from the TypeScript side.
+test = false
+doctest = false
+
+[dependencies]
+firescale-core = { path = "../core" }
+napi = { version = "=3.16.1", default-features = false, features = ["napi4"] }
+napi-derive = "=3.7.0"
+
+[build-dependencies]
+napi-build = "=2.6.0"
+
+[lints]
+workspace = true

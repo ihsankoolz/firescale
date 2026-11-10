@@ -6,7 +6,7 @@ Status key: ☐ not started · ◐ in progress · ☑ done
 
 ---
 
-## M0 — Skeleton ☐
+## M0 — Skeleton ◐
 
 **Build**
 
