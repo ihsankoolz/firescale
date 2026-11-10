@@ -26,7 +26,7 @@ Status key: ☐ not started · ◐ in progress · ☑ done
 
 ---
 
-## M1 — Rule SDK and the first rule ☐
+## M1 — Rule SDK and the first rule ◐
 
 **Build**
 
