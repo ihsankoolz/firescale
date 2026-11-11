@@ -11,8 +11,11 @@ mod tests;
 
 pub const ID: &str = "core/readme-setup";
 
-const INSTALL_HEADINGS: [&str; 8] = [
+/// Heading words and phrases, matched as whole words.
+const INSTALL_HEADINGS: [&str; 13] = [
     "install",
+    "installation",
+    "installing",
     "setup",
     "set up",
     "getting started",
@@ -20,17 +23,26 @@ const INSTALL_HEADINGS: [&str; 8] = [
     "quickstart",
     "development",
     "dev setup",
+    "prerequisites",
+    "build",
+    "building",
 ];
 
-const RUN_HEADINGS: [&str; 8] = [
+const RUN_HEADINGS: [&str; 14] = [
     "usage",
     "run",
+    "running",
     "start",
+    "starting",
     "getting started",
     "quick start",
     "quickstart",
     "development",
-    "running",
+    "examples",
+    "example",
+    "commands",
+    "test",
+    "testing",
 ];
 
 const INSTALL_COMMANDS: [&str; 16] = [
@@ -184,11 +196,28 @@ fn contains_command(segment: &str, command: &str) -> bool {
     false
 }
 
+/// Lower-case words of `text`; a word is a maximal run of letters.
+fn words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphabetic())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// True when the words of `phrase` appear in `heading` as whole, adjacent words.
+fn heading_has_phrase(heading: &[String], phrase: &str) -> bool {
+    let wanted = words(phrase);
+    !wanted.is_empty()
+        && heading
+            .windows(wanted.len())
+            .any(|w| w == wanted.as_slice())
+}
+
 fn satisfied(text: &str, heading_keys: &[&str], commands: &[&str]) -> bool {
-    if headings(text)
-        .iter()
-        .any(|h| heading_keys.iter().any(|k| h.contains(k)))
-    {
+    if headings(text).iter().any(|h| {
+        let heading = words(h);
+        heading_keys.iter().any(|k| heading_has_phrase(&heading, k))
+    }) {
         return true;
     }
     code_segments(text)

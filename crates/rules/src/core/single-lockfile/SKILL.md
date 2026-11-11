@@ -9,6 +9,8 @@ description: Explains how to fix violations of the firescale rule core/single-lo
 
 In a repo with a root `package.json`, exactly one lockfile exists, and it belongs to the package manager named in `packageManager`. The lockfiles considered are `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `bun.lock` and `bun.lockb`.
 
+A `package.json` that declares no dependencies (and no `workspaces` or `pnpm-workspace.yaml`) has nothing to lock, so a missing lockfile is fine. A package inside a workspace is also fine without its own lockfile when a parent folder has one; the search stops after the first folder that contains `.git`.
+
 Two lockfiles make installs differ between machines and CI, and a lockfile from the wrong manager is silently ignored. With no lockfile, dependency versions drift.
 
 ## Manual fix

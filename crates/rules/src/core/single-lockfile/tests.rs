@@ -8,6 +8,8 @@ use super::{SingleLockfile, ID};
 
 const PKG: &str = "{\"name\":\"demo\"}\n";
 const PKG_PNPM: &str = "{\"name\":\"demo\",\"packageManager\":\"pnpm@9.15.0\"}\n";
+const PKG_PNPM_DEPS: &str =
+    "{\"name\":\"demo\",\"packageManager\":\"pnpm@9.15.0\",\"dependencies\":{\"left-pad\":\"1.3.0\"}}\n";
 const LOCK: &str = "lock\n";
 
 fn files(fixture: &Fixture) -> Vec<String> {
@@ -57,7 +59,7 @@ mod failing_repo {
 
     #[test]
     fn reports_missing_lockfile_on_package_json() {
-        let f = Fixture::new(&[("package.json", PKG_PNPM)], Track::All).unwrap();
+        let f = Fixture::new(&[("package.json", PKG_PNPM_DEPS)], Track::All).unwrap();
         let found = f.check(&SingleLockfile, &Options::new()).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].file, "package.json");
@@ -107,6 +109,19 @@ mod failing_repo {
     }
 
     #[test]
+    fn wrong_manager_message_says_declared_lockfile_is_missing() {
+        let f = Fixture::new(
+            &[("package.json", PKG_PNPM), ("package-lock.json", LOCK)],
+            Track::All,
+        )
+        .unwrap();
+        let found = f.check(&SingleLockfile, &Options::new()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(found[0].message.contains("unexpected"));
+        assert!(found[0].message.contains("pnpm lockfile is missing"));
+    }
+
+    #[test]
     fn counts_binary_bun_lockfile() {
         let f = Fixture::new(
             &[
@@ -118,6 +133,84 @@ mod failing_repo {
         )
         .unwrap();
         assert_eq!(files(&f), ["bun.lock", "bun.lockb"]);
+    }
+}
+
+mod nothing_to_lock {
+    use super::*;
+
+    #[test]
+    fn package_without_dependencies_needs_no_lockfile() {
+        let f = Fixture::new(&[("package.json", PKG_PNPM)], Track::All).unwrap();
+        assert!(files(&f).is_empty());
+    }
+
+    #[test]
+    fn empty_dependency_maps_still_need_no_lockfile() {
+        let pkg = "{\"dependencies\":{},\"devDependencies\":{}}\n";
+        let f = Fixture::new(&[("package.json", pkg)], Track::All).unwrap();
+        assert!(files(&f).is_empty());
+    }
+
+    #[test]
+    fn dev_dependencies_need_a_lockfile() {
+        let pkg = "{\"devDependencies\":{\"vitest\":\"1.0.0\"}}\n";
+        let f = Fixture::new(&[("package.json", pkg)], Track::All).unwrap();
+        assert_eq!(files(&f), ["package.json"]);
+    }
+
+    #[test]
+    fn workspaces_field_needs_a_lockfile() {
+        let pkg = "{\"workspaces\":[\"packages/*\"]}\n";
+        let f = Fixture::new(&[("package.json", pkg)], Track::All).unwrap();
+        assert_eq!(files(&f), ["package.json"]);
+    }
+
+    #[test]
+    fn pnpm_workspace_file_needs_a_lockfile() {
+        let f = Fixture::new(
+            &[
+                ("package.json", PKG),
+                ("pnpm-workspace.yaml", "packages:\n  - a\n"),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        assert_eq!(files(&f), ["package.json"]);
+    }
+}
+
+mod workspace_member {
+    use super::*;
+    use firescale_core::rule::check_rule;
+
+    fn member_files(files: &[(&str, &str)]) -> Vec<String> {
+        let f = Fixture::new(files, Track::All).unwrap();
+        let root = f.root().join("packages").join("app");
+        check_rule(&SingleLockfile, &root, &Options::new())
+            .unwrap()
+            .into_iter()
+            .map(|d| d.file)
+            .collect()
+    }
+
+    #[test]
+    fn member_with_root_lockfile_is_fine() {
+        let found = member_files(&[
+            ("package.json", PKG),
+            ("pnpm-lock.yaml", LOCK),
+            ("packages/app/package.json", PKG_PNPM_DEPS),
+        ]);
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn member_without_any_lockfile_is_reported() {
+        let found = member_files(&[
+            ("package.json", PKG),
+            ("packages/app/package.json", PKG_PNPM_DEPS),
+        ]);
+        assert_eq!(found, ["package.json"]);
     }
 }
 

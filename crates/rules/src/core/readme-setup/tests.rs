@@ -40,6 +40,18 @@ mod passing_repo {
     }
 
     #[test]
+    fn whole_word_headings_satisfy_the_steps() {
+        for text in [
+            "# demo\n\n## Running the app\n\n## Installation notes\n",
+            "# demo\n\n## Getting Started\n",
+            "demo\n====\n\nQuick start\n-----------\n\nx\n",
+            "# demo\n\n## Set up\n\n## Examples\n",
+        ] {
+            assert!(check(&[("README.md", text)]).is_empty(), "{text}");
+        }
+    }
+
+    #[test]
     fn works_outside_a_git_repo() {
         let f = Fixture::new(&[("README.md", GOOD)], Track::NoGit).unwrap();
         assert!(f.check(&ReadmeSetup, &Options::new()).unwrap().is_empty());
@@ -69,6 +81,15 @@ mod failing_repo {
         assert!(d.iter().all(|x| x.file == "README.md"));
         assert!(d[0].message.contains("install") || d[1].message.contains("install"));
         assert!(d.iter().any(|x| x.message.contains("run the project")));
+    }
+
+    #[test]
+    fn substring_headings_do_not_count() {
+        for heading in ["Truncation", "Restart policy", "Reinstallation"] {
+            let text = format!("# demo\n\n## {heading}\n\nx\n");
+            let d = check(&[("README.md", text.as_str())]);
+            assert_eq!(d.len(), 2, "{heading}");
+        }
     }
 
     #[test]

@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule core/readme-setup by adding 
 
 ## What this rule enforces and why
 
-The root README (`README.md`, `README`, `README.rst` or `README.txt`, in any letter case) shows how to install and how to run the project. The check is a heuristic. "Install" is satisfied by a heading such as Install, Setup, Getting started, Quick start or Development, or by a known install command (`npm install`, `pnpm install`, `pip install`, `cargo build`, ...) in a code block or inline code. "Run" is satisfied by a heading such as Usage, Run, Start, Getting started or Development, or by a known run command (`npm run`, `pnpm dev`, `cargo run`, `python`, `make`, ...).
+The root README (`README.md`, `README`, `README.rst` or `README.txt`, in any letter case) shows how to install and how to run the project. The check is a heuristic. Headings match whole words only, ignoring case, so "Reinstallation" or "Restart policy" do not count. "Install" is satisfied by a heading with one of the words Install, Installation, Installing, Setup, Set up, Getting started, Quick start, Development, Dev setup, Prerequisites, Build or Building, or by a known install command (`npm install`, `pnpm install`, `pip install`, `cargo build`, ...) in a code block or inline code. "Run" is satisfied by a heading with one of the words Usage, Run, Running, Start, Starting, Getting started, Quick start, Development, Example(s), Commands, Test or Testing, or by a known run command (`npm run`, `pnpm dev`, `cargo run`, `python`, `make`, ...).
 
 New contributors and agents cannot work on a project if they cannot tell how to set it up and start it.
 

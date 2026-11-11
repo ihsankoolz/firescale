@@ -40,8 +40,6 @@ A running log, newest milestone first. For each milestone: what was built, decis
 - `no-secrets-in-source` hashes every tracked file for its cache key, so the cache gives it little on large repos.
 - The secrets rule misses tokens in formats it does not know.
 - Raised by the review and not fixed:
-  - `readme-setup` accepts a heading that merely contains "run" or "start" inside another word (for example "Truncation"), so it is too lenient.
-  - `single-lockfile` reports "no lockfile" for a `package.json` with no dependencies, and when run inside a workspace member.
   - `no-secrets-in-source` does not scan `dist/`, `build/` or `vendor/` folders, so a secret committed there is missed.
   - `env-example` scans test files too, so variables only tests use are reported.
   - `gitignore-basics`' fix writes only its comment line when no language is detected.

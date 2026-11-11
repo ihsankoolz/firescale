@@ -1,5 +1,7 @@
 //! `core/single-lockfile`: exactly one lockfile exists, matching the declared package manager.
 
+use std::path::Path;
+
 use firescale_core::model::{Category, Finding, Fixable, RuleMeta, Severity};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
@@ -29,6 +31,52 @@ fn declared_manager(package_json: &str) -> Option<String> {
     let declared = value.get("packageManager")?.as_str()?;
     let name = declared.split('@').next().unwrap_or(declared).trim();
     (!name.is_empty()).then(|| name.to_owned())
+}
+
+/// True when package.json lists dependencies of any kind, or marks a workspace root.
+fn needs_lockfile(package_json: &str, root: &Path) -> bool {
+    if root.join("pnpm-workspace.yaml").is_file() {
+        return true;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(package_json.trim_start_matches('\u{feff}'))
+    else {
+        // Unreadable JSON: keep the strict behaviour.
+        return true;
+    };
+    if value.get("workspaces").is_some() {
+        return true;
+    }
+    [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ]
+    .iter()
+    .any(|key| {
+        value.get(key).is_some_and(|deps| match deps {
+            Value::Object(map) => !map.is_empty(),
+            Value::Null => false,
+            _ => true,
+        })
+    })
+}
+
+/// True when a parent folder holds a known lockfile (a workspace member).
+/// The walk ends after the first folder that contains `.git`.
+fn ancestor_has_lockfile(root: &Path) -> bool {
+    if root.join(".git").exists() {
+        return false;
+    }
+    for dir in root.ancestors().skip(1) {
+        if LOCKFILES.iter().any(|(name, _)| dir.join(name).is_file()) {
+            return true;
+        }
+        if dir.join(".git").exists() {
+            return false;
+        }
+    }
+    false
 }
 
 fn finding(file: &str, message: String) -> Finding {
@@ -81,6 +129,9 @@ impl BuiltinRule for SingleLockfile {
         let declared = declared_manager(&package_json);
 
         if present.is_empty() {
+            if !needs_lockfile(&package_json, ctx.root()) || ancestor_has_lockfile(ctx.root()) {
+                return Ok(Vec::new());
+            }
             let manager = declared.as_deref().unwrap_or("npm");
             return Ok(vec![finding(
                 PACKAGE_JSON,
@@ -134,7 +185,7 @@ impl BuiltinRule for SingleLockfile {
             Some(manager) if manager != owner => vec![finding(
                 name,
                 format!(
-                    "package.json declares {manager} but the lockfile \"{name}\" belongs to {owner}. Make them agree: change \"packageManager\", or run \"{manager} install\" and delete \"{name}\"."
+                    "\"{name}\" is unexpected and the {manager} lockfile is missing: package.json declares {manager} but the lockfile \"{name}\" belongs to {owner}. Make them agree: change \"packageManager\", or run \"{manager} install\" and delete \"{name}\"."
                 ),
             )],
             _ => Vec::new(),
