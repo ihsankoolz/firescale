@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule core/ci-exists by adding a G
 
 ## What this rule enforces and why
 
-A CI workflow exists and runs on pull requests. The rule looks for `.yml` or `.yaml` files in `.github/workflows/`, and at least one of them must mention a `pull_request` (or `pull_request_target`) trigger outside comments. If another CI system's config exists at the repo root (`.gitlab-ci.yml`, `.circleci/config.yml`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `Jenkinsfile`), the rule reports nothing, because it only understands GitHub Actions triggers.
+A CI workflow exists and runs on pull requests. The rule looks for `.yml` or `.yaml` files in `.github/workflows/`, and at least one of them must list `pull_request` or `pull_request_target` as a trigger under its top-level `on:` key. The rule reads `on:` as a scalar (`on: pull_request`), a flow list (`on: [push, pull_request]`), a block list, or a mapping with trigger keys. Mentions elsewhere (a `run:` line, a job name, a comment) do not count. Workflows triggered only by `workflow_call`, `workflow_dispatch` or `schedule` do not count either, but they never cause a finding on their own when another workflow runs on pull requests. If another CI system's config exists at the repo root (`.gitlab-ci.yml`, `.circleci/config.yml`, `azure-pipelines.yml`, `bitbucket-pipelines.yml`, `Jenkinsfile`), the rule reports nothing, because it only understands GitHub Actions triggers.
 
 Without CI on pull requests, broken builds and failing tests reach the main branch unnoticed.
 

@@ -20,7 +20,7 @@ All three are pinned. They are the only new runtime dependencies.
 
 A rule's key is a BLAKE3 hash of:
 
-1. a cache format number and the firescale version (this stands in for "rule version": built-in rules ship with the binary);
+1. a cache format number and the firescale version (this stands in for "rule version": built-in rules ship with the binary), and whether the root is inside a git work tree, because rules behave differently there and `git init` changes no file a rule lists;
 2. the rule id and its `inputs` globs;
 3. the rule's options from the config;
 4. for every file matching `inputs`: its path, its content hash, and **whether git tracks it**.

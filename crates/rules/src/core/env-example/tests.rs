@@ -337,3 +337,48 @@ mod exclude_paths {
         }
     }
 }
+
+mod segments_and_comments {
+    use super::*;
+
+    const READ: &str = "const v = process.env.EXAMPLE_SEG_VAR;\n";
+
+    fn names(f: &Fixture, opts: serde_json::Value) -> Vec<Diagnostic> {
+        f.check(&EnvExample, &options(opts)).unwrap()
+    }
+
+    #[test]
+    fn exclude_paths_match_whole_segments() {
+        let f = repo(&[("src/ab/y.ts", READ)]);
+        assert_eq!(names(&f, json!({ "excludePaths": ["src/a"] })).len(), 1);
+    }
+
+    #[test]
+    fn exclude_paths_with_and_without_trailing_slash_exclude_the_folder() {
+        let f = repo(&[("src/a/x.ts", READ)]);
+        assert!(names(&f, json!({ "excludePaths": ["src/a/"] })).is_empty());
+        assert!(names(&f, json!({ "excludePaths": ["src/a"] })).is_empty());
+        assert!(names(&f, json!({ "excludePaths": ["src/a/x.ts"] })).is_empty());
+    }
+
+    #[test]
+    fn commented_reads_are_ignored_but_the_next_real_read_is_found() {
+        let f = repo(&[
+            (".env.example", "UNRELATED=\n"),
+            (
+                "app.py",
+                "# os.environ[\"EXAMPLE_PY_COMMENT\"]\nx = os.environ[\"EXAMPLE_PY_REAL\"]\n",
+            ),
+            (
+                "app.js",
+                "// process.env.EXAMPLE_JS_COMMENT\n/* process.env.EXAMPLE_JS_BLOCK */\n * process.env.EXAMPLE_JS_STAR\nconst a = process.env.EXAMPLE_JS_REAL;\n",
+            ),
+        ]);
+        let d = check(&f);
+        let all: String = d.iter().map(|x| x.message.clone()).collect();
+        assert!(all.contains("EXAMPLE_PY_REAL"), "{all}");
+        assert!(all.contains("EXAMPLE_JS_REAL"), "{all}");
+        assert!(!all.contains("COMMENT") && !all.contains("BLOCK") && !all.contains("STAR"));
+        assert_eq!(d.len(), 2);
+    }
+}

@@ -147,8 +147,22 @@ fn is_source(file: &str) -> bool {
         .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext))
 }
 
-/// Every env var read in tracked source files: name -> (file, line) of the first read.
-/// Reads the `excludePaths` option: repo-relative path prefixes whose files
+/// True when `file` equals `entry` or lies under it as a folder (whole segments only).
+fn is_under(file: &str, entry: &str) -> bool {
+    let entry = entry.trim_end_matches('/');
+    file == entry
+        || file
+            .strip_prefix(entry)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// A cheap, conservative comment filter on the trimmed line.
+fn is_comment(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('#') || t.starts_with("//") || t.starts_with('*') || t.starts_with("/*")
+}
+
+/// Reads the `excludePaths` option: repo-relative paths (whole segments) that
 /// are not scanned, for example fixtures that contain env reads on purpose.
 fn excluded_paths(ctx: &RuleContext) -> Result<Vec<String>> {
     let Some(option) = ctx.options().get("excludePaths") else {
@@ -168,7 +182,7 @@ fn excluded_paths(ctx: &RuleContext) -> Result<Vec<String>> {
     });
     paths.ok_or_else(|| {
         Error::user(
-            "core/env-example: option \"excludePaths\" must be a list of repo-relative path prefixes with forward slashes, for example [\"tests/fixtures/\"]. Fix it in your firescale config.",
+            "core/env-example: option \"excludePaths\" must be a list of repo-relative folders or files with forward slashes, for example [\"tests/fixtures\"] or [\"tests/fixtures/\"]. Fix it in your firescale config.",
         )
     })
 }
@@ -178,11 +192,7 @@ fn scan(ctx: &RuleContext) -> Result<BTreeMap<String, (String, u32)>> {
     let excluded = excluded_paths(ctx)?;
     let mut found: BTreeMap<String, (String, u32)> = BTreeMap::new();
     for file in ctx.git().tracked_files()? {
-        if !is_source(&file)
-            || excluded
-                .iter()
-                .any(|prefix| file.starts_with(prefix.as_str()))
-        {
+        if !is_source(&file) || excluded.iter().any(|entry| is_under(&file, entry)) {
             continue;
         }
         let path = file
@@ -198,6 +208,9 @@ fn scan(ctx: &RuleContext) -> Result<BTreeMap<String, (String, u32)>> {
             continue;
         };
         for (index, line) in text.lines().enumerate() {
+            if is_comment(line) {
+                continue;
+            }
             for name in names_in_line(line) {
                 if is_ignored(name, &ignore) {
                     continue;

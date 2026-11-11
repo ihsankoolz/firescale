@@ -51,13 +51,23 @@ fn normalise(line: &str) -> String {
     text.to_owned()
 }
 
+/// Covered when the LAST line matching the entry is not a negation (`!entry`).
 fn is_covered(gitignore: &str, entry: &str) -> bool {
-    gitignore
+    let mut covered = false;
+    for line in gitignore
         .trim_start_matches('\u{feff}')
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .any(|line| normalise(line) == entry)
+    {
+        match line.strip_prefix('!') {
+            Some(rest) if normalise(rest) == entry => covered = false,
+            Some(_) => {}
+            None if normalise(line) == entry => covered = true,
+            None => {}
+        }
+    }
+    covered
 }
 
 fn missing_entries(ctx: &RuleContext, gitignore: &str) -> Result<Vec<&'static str>> {

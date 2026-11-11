@@ -9,9 +9,19 @@ description: Handles violations of the firescale rule core/no-secrets-in-source,
 
 No tracked file contains an obvious key or token. The rule looks for a few well-known formats: AWS access key IDs, GitHub tokens, Slack tokens, Stripe live keys, Google API keys, npm tokens and private key blocks. It reports the file, the line and the kind of secret, never the value.
 
-Anyone who can read the repo can read a committed secret, and it stays in git history after the line is deleted. Obvious placeholders (such as a value made of one repeated character, or one that contains the word "example") are ignored. Lockfiles, binary or very large files and folders such as `node_modules`, `dist`, `build`, `target` and `vendor` are skipped.
+Anyone who can read the repo can read a committed secret, and it stays in git history after the line is deleted.
 
-To mark a line that is not a secret, put the text `firescale:allow-secret` on that line. To skip a whole file, list its path in the `allowFiles` option.
+A private key is reported only when there is evidence of key material: the header line (`BEGIN ... PRIVATE KEY`) must start the line (after optional whitespace), and either one of the next 3 lines is a base64 body line (at least 40 characters of letters, digits, `+`, `/`, `=`) or a matching `END ... PRIVATE KEY` line follows within 200 lines. A header inside a quoted string on a code line is not reported. Fixed-length formats (AWS access key IDs, Google API keys, npm tokens) must not be followed by a letter, digit or underscore.
+
+What is skipped, exactly:
+
+- Lockfiles: `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `Cargo.lock`, `bun.lock`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`, `Gemfile.lock`.
+- Binary files (containing a NUL byte), files that are not UTF-8, and files over 1 MB.
+- Any file under a folder named `node_modules`, `dist`, `build`, `target` or `vendor`, at any depth.
+- File suffixes `.min.js`, `.map`, `.svg`, `.png`, `.jpg`, `.jpeg`, `.gif`, `.ico`, `.woff`, `.woff2`, `.pdf` and `.snap`.
+- Placeholder values: a value made of one repeated character, or one containing `EXAMPLE`, `example`, `xxxx`, `XXXX`, `0000000000` or `placeholder`.
+- Any line containing the marker `firescale:allow-secret`.
+- Files listed in the `allowFiles` option: a list of repo-relative paths with forward slashes, for example `["docs/sample-config.txt"]`.
 
 ## Manual fix
 

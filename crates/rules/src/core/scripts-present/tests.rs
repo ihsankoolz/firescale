@@ -136,3 +136,29 @@ fn package_json_with_a_byte_order_mark_is_parsed() {
     let f = Fixture::new(&[("package.json", bom.as_str())], Track::All).unwrap();
     assert!(missing(&f, &Options::new()).is_empty());
 }
+
+mod unexpected_shape {
+    use super::*;
+
+    #[test]
+    fn non_object_top_level_or_scripts_gives_one_shape_finding() {
+        for text in [
+            "[]",
+            "{\"scripts\":null}",
+            "{\"scripts\":\"lint\"}",
+            "{\"scripts\":[]}",
+        ] {
+            let f = Fixture::new(&[("package.json", text)], Track::All).unwrap();
+            let found = missing(&f, &Options::new());
+            assert_eq!(found.len(), 1, "{text}");
+            assert!(found[0].contains("unexpected shape"), "{}", found[0]);
+            assert!(found[0].contains("Expected"), "{}", found[0]);
+        }
+    }
+
+    #[test]
+    fn an_object_without_scripts_still_reports_each_missing_script() {
+        let f = Fixture::new(&[("package.json", "{}")], Track::All).unwrap();
+        assert_eq!(missing(&f, &Options::new()).len(), 3);
+    }
+}

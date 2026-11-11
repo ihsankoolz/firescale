@@ -65,12 +65,90 @@ fn candidate_files(ctx: &RuleContext) -> Result<Vec<String>> {
     Ok(files)
 }
 
-/// True when the text mentions a pull request trigger outside comments.
+/// Removes a `#` comment: a `#` at the start of the text or after whitespace.
+fn strip_comment(line: &str) -> &str {
+    let mut prev_space = true;
+    for (i, c) in line.char_indices() {
+        if c == '#' && prev_space {
+            return &line[..i];
+        }
+        prev_space = c.is_whitespace();
+    }
+    line
+}
+
+fn unquote(s: &str) -> &str {
+    let s = s.trim();
+    for q in ['"', '\''] {
+        if let Some(inner) = s.strip_prefix(q).and_then(|r| r.strip_suffix(q)) {
+            return inner.trim();
+        }
+    }
+    s
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Splits `key: value` at the first colon that ends the key.
+fn key_of(entry: &str) -> &str {
+    let key = entry.split(':').next().unwrap_or(entry);
+    unquote(key)
+}
+
+/// The trigger names listed under the top-level `on` key.
+///
+/// Reads these shapes: scalar, flow list, flow mapping, block list and block
+/// mapping (first nesting level only).
+fn triggers(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().map(strip_comment).collect();
+    let mut out = Vec::new();
+    let Some(start) = lines.iter().position(|l| {
+        let t = l.trim_end();
+        indent_of(t) == 0 && ["on:", "\"on\":", "'on':"].iter().any(|p| t.starts_with(p))
+    }) else {
+        return out;
+    };
+    let head = lines[start].trim_end();
+    let rest = head[head.find(':').map_or(0, |i| i + 1)..].trim();
+    if !rest.is_empty() {
+        if let Some(inner) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+            out.extend(inner.split(',').map(|i| unquote(i).to_owned()));
+        } else if let Some(inner) = rest.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+            out.extend(inner.split(',').map(|i| key_of(i).to_owned()));
+        } else {
+            out.push(unquote(rest).to_owned());
+        }
+        return out;
+    }
+    let mut level: Option<usize> = None;
+    for line in &lines[start + 1..] {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = indent_of(line);
+        let t = line.trim();
+        if indent == 0 && !t.starts_with('-') {
+            break;
+        }
+        let lvl = *level.get_or_insert(indent);
+        if indent != lvl {
+            continue;
+        }
+        match t.strip_prefix('-') {
+            Some(item) => out.push(unquote(item).to_owned()),
+            None => out.push(key_of(t).to_owned()),
+        }
+    }
+    out
+}
+
+/// True when the workflow's `on` key lists a pull request trigger.
 fn mentions_pull_request(text: &str) -> bool {
-    text.lines().any(|line| {
-        let code = line.split('#').next().unwrap_or("");
-        code.contains("pull_request")
-    })
+    triggers(text)
+        .iter()
+        .any(|t| t == "pull_request" || t == "pull_request_target")
 }
 
 impl BuiltinRule for CiExists {

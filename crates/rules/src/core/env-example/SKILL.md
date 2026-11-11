@@ -7,7 +7,14 @@ description: Fixes violations of the firescale rule core/env-example by listing 
 
 ## What this rule enforces and why
 
-If tracked source code reads environment variables, the root `.env.example` lists each of them. The rule scans `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, `.rs`, `.go` and `.rb` files (not `node_modules`, `dist`, `build`, `target`, `vendor` or `.git`) for reads such as `process.env.NAME`, `import.meta.env.NAME`, `os.environ["NAME"]`, `os.getenv("NAME")`, `env::var("NAME")`, `os.Getenv("NAME")` and `ENV["NAME"]`. Only upper-case names count. Common system names (`NODE_ENV`, `CI`, `PATH`, `HOME`, ...) and names starting with `npm_`, `GITHUB_`, `RUNNER_` or `FSCALE_` are ignored. Add more with the `ignore` option, a list of names.
+If tracked source code reads environment variables, the root `.env.example` lists each of them. The rule scans `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, `.rs`, `.go` and `.rb` files (not `node_modules`, `dist`, `build`, `target`, `vendor` or `.git`) for reads such as `process.env.NAME`, `import.meta.env.NAME`, `os.environ["NAME"]`, `os.getenv("NAME")`, `env::var("NAME")`, `os.Getenv("NAME")` and `ENV["NAME"]`. Only upper-case names count. Common system names (`NODE_ENV`, `CI`, `PATH`, `HOME`, ...) and names starting with `npm_`, `GITHUB_`, `RUNNER_` or `FSCALE_` are ignored.
+
+Options:
+
+- `ignore`: a list of extra variable names to skip, for example `["EXTRA_VAR"]`.
+- `excludePaths`: a list of repo-relative paths (forward slashes) that are not scanned, for example `["tests/fixtures"]`. Matching is by whole path segment: an entry, with or without a trailing `/`, excludes the path equal to it and everything under it. `["src/a"]` excludes `src/a/x.ts` but not `src/ab/y.ts`.
+
+Limits: lines whose trimmed text starts with `#`, `//`, `*` or `/*` are skipped as comments. This filter is cheap, so reads inside multi-line strings or docstrings can still be picked up. Destructuring (`const { FOO } = process.env`) and computed names (`process.env[name]`) are not detected.
 
 Without an example file, a new developer finds out which variables are needed only when the app crashes.
 

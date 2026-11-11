@@ -77,6 +77,24 @@ impl BuiltinRule for ScriptsPresent {
                 fixable: Fixable::Manual,
             }]);
         };
+        let shape_problem = if !package.is_object() {
+            Some("the top level is not an object")
+        } else if package.get("scripts").is_some_and(|s| !s.is_object()) {
+            Some("\"scripts\" is not an object")
+        } else {
+            None
+        };
+        if let Some(problem) = shape_problem {
+            return Ok(vec![Finding {
+                message: format!(
+                    "package.json has an unexpected shape: {problem}. Expected a JSON object with a \"scripts\" object that maps script names to commands, for example {{\"scripts\": {{\"test\": \"vitest run\"}}}}."
+                ),
+                file: PACKAGE_JSON.to_owned(),
+                range: None,
+                project: None,
+                fixable: Fixable::Manual,
+            }]);
+        }
         let scripts = package.get("scripts");
         Ok(required
             .into_iter()

@@ -169,8 +169,15 @@ fn match_at(line: &str, at: usize) -> Option<(&'static str, usize)> {
                 continue;
             }
             let end = start + run;
+            if matches!(format.len, Len::Exactly(_))
+                && bytes
+                    .get(end)
+                    .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_')
+            {
+                continue;
+            }
             if is_placeholder(&line[start..end]) {
-                return None;
+                continue;
             }
             return Some((format.kind, end));
         }
@@ -178,18 +185,49 @@ fn match_at(line: &str, at: usize) -> Option<(&'static str, usize)> {
     None
 }
 
+fn is_base64_body(line: &str) -> bool {
+    let t = line.trim();
+    t.len() >= 40
+        && t.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+}
+
+/// The label between `-----BEGIN ` and `PRIVATE KEY-----` when `line` is a header at its start.
+fn private_key_header(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix(KEY_BEGIN)?;
+    let at = rest.find(KEY_END)?;
+    Some(&rest[..at])
+}
+
+/// True when a header at `lines[index]` is followed by key material: a base64
+/// body line within 3 lines, or the matching END line within 200 lines.
+fn has_key_material(lines: &[&str], index: usize, label: &str) -> bool {
+    let end_line = format!("-----END {label}{KEY_END}");
+    let body = lines
+        .iter()
+        .skip(index + 1)
+        .take(3)
+        .any(|l| is_base64_body(l));
+    body || lines
+        .iter()
+        .skip(index + 1)
+        .take(200)
+        .any(|l| l.trim_start().starts_with(&end_line))
+}
+
 /// Finds secrets in a text. Returns `(1-based line, kind)` for each match.
 /// The secret text itself is never returned.
 #[must_use]
 pub fn find_secrets(text: &str) -> Vec<(usize, &'static str)> {
     let mut found = Vec::new();
-    for (index, line) in text.lines().enumerate() {
+    let lines: Vec<&str> = text.lines().collect();
+    for (index, line) in lines.iter().copied().enumerate() {
         if line.contains(ALLOW_MARKER) {
             continue;
         }
         let number = index + 1;
-        if let Some(begin) = line.find(KEY_BEGIN) {
-            if line[begin..].contains(KEY_END) {
+        if let Some(label) = private_key_header(line) {
+            if has_key_material(&lines, index, label) {
                 found.push((number, "a private key"));
             }
         }

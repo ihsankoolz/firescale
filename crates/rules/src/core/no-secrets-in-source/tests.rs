@@ -124,7 +124,6 @@ mod failing_repo {
             (stripe(), "Stripe live key"),
             (google(), "Google API key"),
             (npm(), "npm token"),
-            (private_key(), "private key"),
         ];
         for (token, kind) in cases {
             let text = format!("line one\nvalue = \"{token}\"\n");
@@ -154,6 +153,61 @@ mod failing_repo {
     fn handles_crlf_line_endings() {
         let text = format!("a\r\nb\r\n{}\r\n", github());
         assert_eq!(find_secrets(&text), vec![(3, "a GitHub token")]);
+    }
+}
+
+fn fake_body() -> String {
+    mix("aB3+/xY9", 8)
+}
+
+fn pem(body: &str) -> String {
+    let end = private_key().replace("BEGIN", "END");
+    format!("{}\n{body}\n{end}\n", private_key())
+}
+
+mod private_key_evidence {
+    use super::*;
+
+    #[test]
+    fn a_header_with_a_body_line_is_reported() {
+        let text = format!("x\n  {}\n{}\n", private_key(), fake_body());
+        assert_eq!(find_secrets(&text), vec![(2, "a private key")]);
+        assert_eq!(find_secrets(&pem(&fake_body())).len(), 1);
+    }
+
+    #[test]
+    fn a_header_with_a_matching_end_line_is_reported() {
+        let end = private_key().replace("BEGIN", "END");
+        let text = format!("{}\nshort\nshort\nshort\nshort\n{end}\n", private_key());
+        assert_eq!(find_secrets(&text), vec![(1, "a private key")]);
+    }
+
+    #[test]
+    fn a_header_alone_or_inside_a_string_is_not_reported() {
+        let alone = format!("{}\nshort\n", private_key());
+        assert!(find_secrets(&alone).is_empty());
+        let code = format!("const HEADER = \"{}\";\n{}\n", private_key(), fake_body());
+        assert!(find_secrets(&code).is_empty());
+        let one_line = format!("v = \"{}\"\n", private_key());
+        assert!(find_secrets(&one_line).is_empty());
+    }
+}
+
+mod boundaries_and_placeholders {
+    use super::*;
+
+    #[test]
+    fn an_exact_length_token_followed_by_more_characters_is_not_reported() {
+        assert!(find_secrets(&format!("{}a\n", aws())).is_empty());
+        assert!(find_secrets(&format!("{}_x\n", aws())).is_empty());
+        assert_eq!(find_secrets(&format!("{}\"\n", aws())).len(), 1);
+    }
+
+    #[test]
+    fn a_placeholder_does_not_hide_a_real_token_later_in_the_line() {
+        let placeholder = ["gh", "p_"].concat() + &"a".repeat(36);
+        let text = format!("{placeholder} {}\n", github());
+        assert_eq!(find_secrets(&text), vec![(1, "a GitHub token")]);
     }
 }
 

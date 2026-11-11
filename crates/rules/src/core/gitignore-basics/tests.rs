@@ -146,3 +146,49 @@ mod fixed_repo {
         assert!(f.read(".gitignore").is_none());
     }
 }
+
+mod negation {
+    use super::*;
+
+    #[test]
+    fn a_later_negation_uncovers_the_entry_and_a_later_ignore_covers_it_again() {
+        let f = Fixture::new(
+            &[
+                ("package.json", PKG),
+                (".gitignore", "node_modules/\n!node_modules/\n"),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        assert_eq!(messages(&f).len(), 1);
+        let g = Fixture::new(
+            &[
+                ("package.json", PKG),
+                (".gitignore", "!node_modules\nnode_modules/\n"),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        assert!(messages(&g).is_empty());
+    }
+
+    #[test]
+    fn fix_appends_after_the_negation_and_is_idempotent() {
+        let f = Fixture::new(
+            &[
+                ("package.json", PKG),
+                (".gitignore", "node_modules/\n!node_modules/\n"),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        let first = f.fix(&GitignoreBasics, &Options::new()).unwrap();
+        assert_eq!(first.changed_files, [".gitignore"]);
+        assert!(f.read(".gitignore").unwrap().ends_with("node_modules/\n"));
+        assert!(messages(&f).is_empty());
+        let after = f.read(".gitignore");
+        let second = f.fix(&GitignoreBasics, &Options::new()).unwrap();
+        assert!(second.changed_files.is_empty());
+        assert_eq!(f.read(".gitignore"), after);
+    }
+}

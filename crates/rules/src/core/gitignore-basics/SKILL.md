@@ -21,7 +21,7 @@ Without these entries, dependencies and build output get committed by accident. 
 
 ### DETERMINISTIC
 
-Create `.gitignore` if it is missing. Append the missing entries as `name/` under one comment line. Keep existing lines and the file's line endings (CRLF stays CRLF). Do not add entries that are already covered.
+Create `.gitignore` if it is missing. Append the missing entries as `name/` under one comment line. Keep existing lines and the file's line endings (CRLF stays CRLF). Do not add entries that are already covered. An entry counts as covered only if the last line matching it is not a negation, so `node_modules/` followed by `!node_modules/` is not covered and the entry is appended again after it.
 
 ### REPORT
 

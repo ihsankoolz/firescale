@@ -138,3 +138,57 @@ fn meta_inputs_list_other_ci_configs() {
     assert!(inputs.contains(&".drone.yml".to_owned()));
     assert!(inputs.contains(&".appveyor.yml".to_owned()));
 }
+
+mod trigger_shapes {
+    use super::*;
+
+    fn passes(on: &str) -> bool {
+        let text = format!("name: ci\n{on}\njobs: {{}}\n");
+        let f = Fixture::new(&[(".github/workflows/ci.yml", text.as_str())], Track::All).unwrap();
+        check(&f).is_empty()
+    }
+
+    #[test]
+    fn scalar_flow_list_block_list_and_mapping_pass() {
+        assert!(passes("on: pull_request"));
+        assert!(passes("on: [push, pull_request]"));
+        assert!(passes("\"on\": [push, pull_request] # trigger"));
+        assert!(passes("'on':\n  - push\n  - pull_request"));
+        assert!(passes(
+            "on:\n  push:\n    branches: [main]\n  pull_request_target:\n"
+        ));
+        assert!(passes("on:\n  pull_request:\n    branches: [main]"));
+    }
+
+    #[test]
+    fn nested_or_commented_mentions_do_not_pass() {
+        assert!(!passes("on:\n  push:\n    branches: [pull_request]"));
+        assert!(!passes("on: push # pull_request later"));
+        assert!(!passes("on: [push, workflow_dispatch]"));
+    }
+
+    #[test]
+    fn echo_and_job_name_do_not_pass() {
+        let text = "on: push\njobs:\n  pull_request_lint:\n    runs-on: x\n    steps:\n      - run: echo \"skip pull_request\"\n";
+        let f = Fixture::new(&[(".github/workflows/ci.yml", text)], Track::All).unwrap();
+        let d = check(&f);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].file, ".github/workflows/ci.yml");
+    }
+
+    #[test]
+    fn reusable_workflow_next_to_a_real_pr_workflow_gives_no_finding() {
+        let f = Fixture::new(
+            &[
+                (
+                    ".github/workflows/a-reusable.yml",
+                    "on:\n  workflow_call:\njobs: {}\n",
+                ),
+                (".github/workflows/b-ci.yml", PR_WORKFLOW),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        assert!(check(&f).is_empty());
+    }
+}

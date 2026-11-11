@@ -42,6 +42,8 @@ A running log, newest milestone first. For each milestone: what was built, decis
 - Raised by the review and not fixed:
   - `no-secrets-in-source` does not scan `dist/`, `build/` or `vendor/` folders, so a secret committed there is missed.
   - `env-example` scans test files too, so variables only tests use are reported.
+  - `env-example` can still pick up an env read written inside a multi-line string, and misses destructuring and computed names.
+  - `single-lockfile` looks at parent folders up to the repo root, which are not in its cache inputs when firescale runs inside a workspace member.
   - `gitignore-basics`' fix writes only its comment line when no language is detected.
 
 ## M4 — `fix`, SARIF and facts

@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule core/scripts-present by addi
 
 ## What this rule enforces and why
 
-A root `package.json` defines the scripts `lint`, `test` and `build` (or the names in the rule's `required` option). npm's placeholder `echo "Error: no test specified" && exit 1` counts as no test script. A `package.json` that is not valid JSON is also reported.
+A root `package.json` defines the scripts `lint`, `test` and `build` (or the names in the rule's `required` option). npm's placeholder `echo "Error: no test specified" && exit 1` counts as no test script. A `package.json` that is not valid JSON is also reported, and so is one whose top level, or whose `scripts` value, is not a JSON object (a single finding about the unexpected shape). A workspace root is expected to have these scripts too; that is intended.
 
 Standard script names let people, CI and agents run the same commands in every repo without reading the project first.
 
