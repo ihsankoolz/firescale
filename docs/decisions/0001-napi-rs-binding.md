@@ -1,6 +1,6 @@
 # 0001 — Rust-to-Node bridge: napi-rs v3
 
-Status: accepted (M0)
+Status: superseded by ADR 0008 (M2)
 
 ## Context
 
