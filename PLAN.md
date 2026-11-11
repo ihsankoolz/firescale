@@ -140,7 +140,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M7 — `verify` and agent hooks ☐
+## M7 — `verify` and agent hooks ☑
 
 **Build**
 
@@ -153,10 +153,10 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 **Done when**
 
-- ☐ `fscale verify` exits non-zero with a clear summary when a fixture repo has a failing test.
-- ☐ Hook files are generated for three agents, with snapshot tests.
-- ☐ The loop guard is covered by a test.
-- ☐ p50 and p99 verify latency are recorded in `bench/RESULTS.md`.
+- ☑ `fscale verify` exits non-zero with a clear summary when a fixture repo has a failing test.
+- ☑ Hook files are generated for three agents, with snapshot tests.
+- ☑ The loop guard is covered by a test.
+- ☑ p50 and p99 verify latency are recorded in `bench/RESULTS.md`.
 
 ---
 

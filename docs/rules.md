@@ -13,6 +13,17 @@ The `core` pack is on by default. Every rule is report-only (`evaluated`) until 
 | `core/scripts-present`      | `package.json` has `lint`, `test` and `build` scripts.                      | medium   | no           |
 | `core/readme-setup`         | The README shows how to install and how to run.                             | low      | no           |
 
+## The `agent-ready` pack
+
+Not on by default. Add `"agent-ready"` to `packs` in your config. It checks that a coding agent can work in the repo and prove its work (ADR 0014).
+
+| Rule                              | Checks                                                                            | Severity | `fscale fix` |
+| --------------------------------- | --------------------------------------------------------------------------------- | -------- | ------------ |
+| `agent-ready/agents-md`           | `AGENTS.md` exists at the repo root and is not blank.                             | medium   | no           |
+| `agent-ready/single-test-command` | One command runs the tests: a `test` script, Cargo, pytest config or `make test`. | medium   | no           |
+| `agent-ready/verify-hook`         | An agent stop hook runs `fscale verify` (see [hooks.md](hooks.md)).               | medium   | no           |
+| `agent-ready/commands-documented` | `AGENTS.md` mentions the detected build, test, lint and typecheck commands.       | low      | no           |
+
 ## Options
 
 | Rule                        | Option         | Meaning                                                                 |
@@ -22,5 +33,6 @@ The `core` pack is on by default. Every rule is report-only (`evaluated`) until 
 | `core/env-example`          | `ignore`       | Extra variable names that need not be listed.                           |
 | `core/env-example`          | `excludePaths` | Repo-relative path prefixes that are not scanned, for example fixtures. |
 | `core/scripts-present`      | `required`     | Script names to require instead of `lint`, `test`, `build`.             |
+| `agent-ready/verify-hook`   | `agents`       | Agents that must each have the hook. Default: any one of the three.     |
 
 To silence one line for the secrets rule, put `firescale:allow-secret` in a comment on that line.

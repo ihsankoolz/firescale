@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pnpm --silent fscale hooks run --agent claude"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -8,9 +8,15 @@ GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit)
 
 Not yet proven on macOS or Windows:
 
+- **M7:** see the M7 section below for what its CI run covered.
 - **M6:** the reworked npm install test (`scripts/smoke-npm.mjs`) on Windows. The earlier version passed on Linux and macOS; on Windows the install, `--version` and `check` passed and the script then failed on its own quoting bug, which is fixed but unconfirmed. The launcher changes from the review are also Linux-only so far.
 
 ## Needs your decision (all milestones, most important first)
+
+- **(M7) The Cursor hook format is unconfirmed.** cursor.com was blocked from the build session, twice. `fscale hooks install` writes `.cursor/hooks.json` from a best reading and prints a note. Someone with access to Cursor's docs should check it (ADR 0014), or allow `cursor.com` in the cloud environment's network settings so a session can.
+- **(M7) The `agent-ready` pack is opt-in**, not on by default. Say if you want it on for every repo.
+- **(M7) A verify step with no command is skipped, not failed.** A repo with no tests passes `fscale verify`. The `agent-ready/single-test-command` rule is how you make that an error.
+- **(M7) The hook lets an agent stop after 3 failed attempts in a row.** `FSCALE_HOOK_MAX_BLOCKS` changes it.
 
 - **(M6) The npm name `fscale` is taken by an unrelated package.** `npx firescale` works; `npx fscale` would run that other package. After `npm install firescale` the command `fscale` is ours. If that risk bothers you, the options are to ask npm about the name or to make `firescale` the only command.
 - **(M6) No postinstall step, so one Node start sits in front of every `fscale` run from npm.** ADR 0013 explains why. Agent hooks can call the binary directly. Say if you want the postinstall optimisation anyway.
@@ -26,6 +32,36 @@ Not yet proven on macOS or Windows:
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M7 — `verify` and agent hooks
+
+**Built**
+
+- `fscale verify` (`--affected`, `--json`): check, lint, typecheck, test, with one compact summary. Commands come from the `verify` config key, Nx, Turborepo, package scripts or Cargo.
+- `fscale hooks install` for Claude Code, Codex and Cursor, and `fscale hooks run`, the stop hook with a loop guard.
+- The `agent-ready` rule pack: `agents-md`, `commands-documented`, `single-test-command`, `verify-hook`.
+- This repo runs its own hooks: `.claude/`, `.codex/` and `.cursor/` call `fscale verify`.
+- `bench/verify-bench.mjs` and verify latency in `bench/RESULTS.md` (firescale's share: p50 8.8 ms, p99 18.0 ms).
+- Docs: `docs/verify.md`, `docs/hooks.md`, and the JSON schema for `verify --json`.
+
+**Decisions made for you** (all ADR 0014)
+
+- Steps stop at the first failure. A step with no command is skipped and does not fail.
+- The hook command is `fscale hooks run --agent <name>`, so the loop guard and each agent's reply format live in the binary.
+- Hooks merge into existing agent settings and never touch user-level settings. `--bin` chooses how the hook starts fscale; for npm installs use `npx firescale`.
+- The loop guard allows 3 blocks in a row per session, then lets the agent stop with a note.
+- `agent-ready` is opt-in and has no deterministic fixes yet.
+- `fscale explain` now says which pack to turn on when a rule's pack is off.
+- Two test expectations were updated because the text they pin changed on purpose: the config error's list of allowed keys (now includes `verify`; this was the known failing test), and the help snapshot.
+
+**Known limits**
+
+- Cursor's hook format is unconfirmed (see above).
+- Verify latency was measured on Linux only.
+- No time limit on verify steps; output is captured, not streamed.
+- No `hooks uninstall`. Gemini CLI has no hook support here.
+- `agent-ready/verify-hook` can serve a stale cached result when the hook file is untracked and git-ignored.
+- A subagent started the `agent-ready` pack and stopped at a usage limit after the first rule; the other three were written in the main session.
 
 ## M6 — npm packaging
 
