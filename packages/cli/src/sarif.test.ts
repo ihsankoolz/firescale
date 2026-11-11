@@ -112,3 +112,24 @@ describe('fscale check --sarif', () => {
     expect(uris.some((uri) => uri?.includes('\\'))).toBe(false);
   });
 });
+
+describe('the SARIF schema used by these tests', () => {
+  it('really rejects documents that are not valid SARIF', async () => {
+    const validate = await validator();
+    expect(validate({ version: '2.1.0', runs: [{ tool: { driver: { name: 'x' } } }] })).toBe(true);
+    // Missing the required tool, a wrong version, and a result with a bad level.
+    expect(validate({ version: '2.1.0', runs: [{}] })).toBe(false);
+    expect(validate({ version: '1.0.0', runs: [] })).toBe(false);
+    expect(
+      validate({
+        version: '2.1.0',
+        runs: [
+          {
+            tool: { driver: { name: 'x' } },
+            results: [{ message: { text: 'm' }, level: 'fatal' }],
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+});

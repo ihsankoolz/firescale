@@ -249,15 +249,28 @@ fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let mut out = String::new();
     let (mut total, mut rules_changed) = (0, 0);
     for rule in &selection.rules {
-        let outcome = match &rule.source {
+        let attempt = match &rule.source {
             RuleSource::Builtin(builtin) => {
-                fix_rule_with(*builtin, root, &rule.options, args.dry_run)?
+                fix_rule_with(*builtin, root, &rule.options, args.dry_run)
             }
             // A custom rule's fix runs in the Node host, through the SDK.
             RuleSource::Custom { pack, .. } if rule.meta.has_fix => {
-                host.fix_rule(pack, &rule.meta.id, &rule.options, args.dry_run)?
+                host.fix_rule(pack, &rule.meta.id, &rule.options, args.dry_run)
             }
             RuleSource::Custom { .. } => continue,
+        };
+        // A failure must not hide what earlier rules already changed.
+        let outcome = match attempt {
+            Ok(outcome) => outcome,
+            Err(error) if total > 0 && !args.dry_run => {
+                return Err(Error::user(format!(
+                    "{}\n\nThe fix of {} failed after these changes had already been made:\n\n{}\nReview them with `git status` and `git diff`, then run `fscale fix` again.",
+                    error.message(),
+                    rule.meta.id,
+                    out.trim_end()
+                )));
+            }
+            Err(error) => return Err(error),
         };
         if outcome.changes.is_empty() {
             continue;
@@ -307,7 +320,7 @@ fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }
 
     if total == 0 {
-        out.push_str("Nothing to fix: no enabled rule has a deterministic fix to apply.\n");
+        out.push_str("Nothing to fix: no deterministic fix has anything left to do.\n");
     } else if args.dry_run {
         out.push_str(&format!(
             "Dry run: {} in {}. Nothing was changed. Run `fscale fix` to apply.\n",

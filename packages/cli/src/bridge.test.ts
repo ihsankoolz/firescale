@@ -430,9 +430,7 @@ describe('fscale fix with a custom TypeScript rule', () => {
     expect((await runCli(['check'], repo.root)).code).toBe(EXIT_OK);
 
     const second = await runCli(['fix'], repo.root);
-    expect(second.stdout).toBe(
-      'Nothing to fix: no enabled rule has a deterministic fix to apply.\n',
-    );
+    expect(second.stdout).toBe('Nothing to fix: no deterministic fix has anything left to do.\n');
     expect(await repo.read('.gitignore')).toBe('dist\n*.log\n');
   });
 

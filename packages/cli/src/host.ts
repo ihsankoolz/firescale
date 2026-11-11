@@ -215,7 +215,7 @@ async function fix(params: Record<string, unknown>): Promise<unknown> {
   } catch (error) {
     if (isUserError(error)) throw error;
     throw new FirescaleError(
-      `The fix of rule "${ruleId}" crashed: ${reasonOf(error)}. This is a bug in the rule. Report it to the rule's author; nothing else was changed by firescale.`,
+      `The fix of rule "${ruleId}" crashed: ${reasonOf(error)}. This is a bug in the rule. The fix may have changed some files before it failed: check git status and git diff, and report the bug to the rule's author.`,
     );
   }
 }

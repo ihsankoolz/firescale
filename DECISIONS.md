@@ -37,7 +37,9 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 - Nx's project graph and uv workspaces are not read. `nx.json` is only reported as a tool.
 - A custom rule that writes files without using its context cannot be previewed by `--dry-run`.
-- The diff in a dry run has one hunk per file.
+- The diff in a dry run has one hunk per file, shows CRLF as LF, and falls back to "remove all, add all" for very large rewrites.
+- In a dry run, a fix that reads back a file it has just written sees the old content, so its preview can differ from the real run. No built-in fix does this.
+- `fscale facts` skips a workspace member whose folder does not exist without a warning, and does not handle two projects with the same name.
 - `--affected` does not make `check` faster.
 - The facts readers handle common `Cargo.toml` and workspace forms only; see `docs/facts.md`.
 

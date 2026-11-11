@@ -43,9 +43,7 @@ describe('fscale fix', () => {
 
     const second = await runCli(['fix'], repo.root);
     expect(second.code).toBe(EXIT_OK);
-    expect(second.stdout).toBe(
-      'Nothing to fix: no enabled rule has a deterministic fix to apply.\n',
-    );
+    expect(second.stdout).toBe('Nothing to fix: no deterministic fix has anything left to do.\n');
     expect(await repo.read('.gitignore')).toBe(gitignore);
     expect(await repo.trackedFiles()).toEqual(['.gitignore', 'README.md', 'firescale.config.json']);
   });
@@ -91,7 +89,7 @@ describe('fscale fix', () => {
       },
     });
     expect((await runCli(['fix'], off.root)).stdout).toBe(
-      'Nothing to fix: no enabled rule has a deterministic fix to apply.\n',
+      'Nothing to fix: no deterministic fix has anything left to do.\n',
     );
     expect(await off.trackedFiles()).toContain('.env');
   });
