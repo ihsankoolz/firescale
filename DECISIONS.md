@@ -2,6 +2,14 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## CI owed
+
+GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), and you asked for work to continue without it. From that point everything is verified on Linux only, on the build machine, and pushes carry `[skip ci]` so they start no runs. When Actions is available again, start the CI workflow by hand on `main` (Actions tab, "CI", "Run workflow"); that runs the checks, the benchmarks and the npm install tests on all three OSes.
+
+Not yet proven on macOS or Windows:
+
+- **M6:** the reworked npm install test (`scripts/smoke-npm.mjs`) on Windows. The earlier version passed on Linux and macOS; on Windows the install, `--version` and `check` passed and the script then failed on its own quoting bug, which is fixed but unconfirmed. The launcher changes from the review are also Linux-only so far.
+
 ## Needs your decision (all milestones, most important first)
 
 - **(M6) The npm name `fscale` is taken by an unrelated package.** `npx firescale` works; `npx fscale` would run that other package. After `npm install firescale` the command `fscale` is ours. If that risk bothers you, the options are to ask npm about the name or to make `firescale` the only command.
