@@ -31,6 +31,24 @@ describe('defineRule', () => {
     expect(defineRule(makeRule({ fix: () => ({ changedFiles: [] }) })).fix).toBeTypeOf('function');
   });
 
+  it('accepts `after` and freezes it, and leaves it out when it is not given', () => {
+    const rule = defineRule(makeRule({ after: ['core/gitignore-basics'] }));
+    expect(rule.after).toEqual(['core/gitignore-basics']);
+    expect(Object.isFrozen(rule.after)).toBe(true);
+    expect('after' in defineRule(makeRule())).toBe(false);
+  });
+
+  it.each([
+    ['a string', 'core/gitignore-basics', 'after must be an array of rule ids'],
+    ['a non-string entry', [1], 'after must be an array of rule ids'],
+    ['a malformed id', ['gitignore-basics'], 'after has an invalid rule id "gitignore-basics"'],
+    ['the rule itself', ['demo/some-rule'], 'after must not list the rule itself'],
+  ])('rejects `after` that is %s', (_name, after, message) => {
+    const define = (): unknown => defineRule(makeRule({ after: after as unknown as string[] }));
+    expect(define).toThrow(FirescaleError);
+    expect(define).toThrow(message);
+  });
+
   it.each(['nopack', 'Demo/rule', 'demo/Rule', 'demo/', '/rule', 'demo/a/b', 'demo/a_b', ''])(
     'rejects bad id %j',
     (id) => {

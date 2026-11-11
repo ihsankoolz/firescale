@@ -123,6 +123,12 @@ export interface Rule {
   description: string;
   /** Globs of the files the check depends on. Used for cache hashing from M2. */
   inputs: readonly string[];
+  /**
+   * Optional. Ids of rules whose fixes must run before this rule's fix, for
+   * example when this fix edits a file another rule's fix creates. It only
+   * orders fixes. An id that no rule has, or a cycle, is an error.
+   */
+  after?: readonly string[];
   check: (ctx: RuleContext) => Promise<Finding[]> | Finding[];
   /** Optional. Must be deterministic and idempotent. */
   fix?: (ctx: FixContext, diagnostics: readonly Diagnostic[]) => Promise<FixResult> | FixResult;

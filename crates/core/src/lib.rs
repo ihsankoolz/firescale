@@ -12,6 +12,7 @@ pub mod diff;
 pub mod error;
 pub mod explain;
 pub mod facts;
+pub mod fixloop;
 pub mod git;
 pub mod hooks;
 pub mod model;
@@ -19,6 +20,7 @@ pub mod node;
 pub mod report;
 pub mod rule;
 pub mod sarif;
+pub mod scratch;
 pub mod select;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

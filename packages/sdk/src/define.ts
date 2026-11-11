@@ -31,13 +31,31 @@ export function defineRule(rule: Rule): Readonly<Rule> {
   if (!Array.isArray(rule.inputs) || rule.inputs.some((glob) => typeof glob !== 'string')) {
     throw new FirescaleError(`${where}: inputs must be an array of glob strings.`);
   }
+  if (rule.after !== undefined) {
+    if (!Array.isArray(rule.after) || rule.after.some((id) => typeof id !== 'string')) {
+      throw new FirescaleError(`${where}: after must be an array of rule ids.`);
+    }
+    const bad = rule.after.find((id) => !RULE_ID.test(id));
+    if (bad !== undefined) {
+      throw new FirescaleError(
+        `${where}: after has an invalid rule id ${JSON.stringify(bad)}. Use "<pack>/<rule>", for example "core/gitignore-basics".`,
+      );
+    }
+    if (rule.after.includes(rule.id)) {
+      throw new FirescaleError(`${where}: after must not list the rule itself.`);
+    }
+  }
   if (typeof rule.check !== 'function') {
     throw new FirescaleError(`${where}: check must be a function.`);
   }
   if (rule.fix !== undefined && typeof rule.fix !== 'function') {
     throw new FirescaleError(`${where}: fix must be a function when present.`);
   }
-  return Object.freeze({ ...rule, inputs: Object.freeze([...rule.inputs]) });
+  return Object.freeze({
+    ...rule,
+    inputs: Object.freeze([...rule.inputs]),
+    ...(rule.after === undefined ? {} : { after: Object.freeze([...rule.after]) }),
+  });
 }
 
 /** Validates a rule pack and returns it frozen. */

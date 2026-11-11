@@ -23,6 +23,7 @@ impl BuiltinRule for AgentsMdExists {
             // The second glob changes the cache key when AGENTS.md is a folder with files in it.
             inputs: vec![AGENTS_MD.to_owned(), format!("{AGENTS_MD}/**")],
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

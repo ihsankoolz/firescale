@@ -234,6 +234,7 @@ impl BuiltinRule for ReadmeSetup {
             description: "README has install and run steps.".to_owned(),
             inputs: vec!["README*".to_owned(), "readme*".to_owned()],
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

@@ -63,6 +63,7 @@ impl BuiltinRule for VerifyHook {
                 .map(|agent| agent.config_file().to_owned())
                 .collect(),
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

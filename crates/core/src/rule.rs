@@ -239,6 +239,9 @@ pub fn check_rule(
 pub struct FixOutcome {
     pub result: FixResult,
     pub changes: Vec<Change>,
+    /// How many deterministic violations the fix was asked to repair. Zero
+    /// means the rule had nothing for its fix to do.
+    pub attempted: usize,
 }
 
 /// Runs one built-in rule's deterministic fix on its current diagnostics.
@@ -272,5 +275,6 @@ pub fn fix_rule_with(
     Ok(FixOutcome {
         result,
         changes: ctx.changes(),
+        attempted: diagnostics.len(),
     })
 }

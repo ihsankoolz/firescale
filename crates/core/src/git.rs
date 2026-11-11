@@ -43,6 +43,48 @@ pub fn run_git(cwd: &Path, args: &[&str]) -> Result<GitOutput> {
     })
 }
 
+/// Like `run_git`, with `input` written to git's stdin.
+pub fn run_git_with_input(cwd: &Path, args: &[&str], input: &[u8]) -> Result<GitOutput> {
+    use std::io::Write;
+
+    let failed = |error: std::io::Error| {
+        let reason = if error.kind() == ErrorKind::NotFound {
+            "git was not found on PATH".to_owned()
+        } else {
+            error.to_string()
+        };
+        Error::user(format!(
+            "Could not run git ({reason}). Install git and make sure it is on your PATH, then try again."
+        ))
+    };
+    let mut child = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(failed)?;
+    // Write from another thread: git may fill its output pipe before it has
+    // read all of its input, and would then wait on us while we wait on it.
+    let stdin = child.stdin.take();
+    let output = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            if let Some(mut stdin) = stdin {
+                // A git that exits early closes the pipe; its exit code says why.
+                let _ = stdin.write_all(input);
+            }
+        });
+        child.wait_with_output()
+    })
+    .map_err(failed)?;
+    Ok(GitOutput {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
 /// Git access for one repo root.
 #[derive(Debug, Clone)]
 pub struct Git {

@@ -55,6 +55,7 @@ impl BuiltinRule for ScriptsPresent {
             description: "Standard scripts exist: lint, test and build.".to_owned(),
             inputs: vec![PACKAGE_JSON.to_owned()],
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

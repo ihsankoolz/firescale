@@ -38,6 +38,7 @@ interface RuleDescription {
   description: string;
   inputs: readonly string[];
   hasFix: boolean;
+  after: readonly string[];
   skillFile: string;
 }
 
@@ -167,6 +168,7 @@ async function describePacks(params: Record<string, unknown>): Promise<PackDescr
         description: rule.description,
         inputs: rule.inputs,
         hasFix: rule.fix !== undefined,
+        after: rule.after ?? [],
         skillFile: fileURLToPath(skillFile),
       })),
     });
@@ -197,9 +199,12 @@ async function check(params: Record<string, unknown>): Promise<Diagnostic[]> {
 }
 
 async function fix(params: Record<string, unknown>): Promise<unknown> {
+  // `root` is where the fix works. In a dry run of the fix loop that is a
+  // scratch copy of the repo, while the pack is still loaded from the repo.
   const root = stringParam(params, 'root');
+  const packRoot = typeof params['packRoot'] === 'string' ? params['packRoot'] : root;
   const ruleId = stringParam(params, 'ruleId');
-  const rule = await findRule(root, stringParam(params, 'pack'), ruleId);
+  const rule = await findRule(packRoot, stringParam(params, 'pack'), ruleId);
   const options = isRecord(params['options']) ? params['options'] : {};
   try {
     const outcome = await fixRuleWithChanges(
@@ -211,6 +216,7 @@ async function fix(params: Record<string, unknown>): Promise<unknown> {
       changedFiles: outcome.result.changedFiles,
       notes: outcome.result.notes ?? [],
       changes: outcome.changes,
+      attempted: outcome.attempted,
     };
   } catch (error) {
     if (isUserError(error)) throw error;

@@ -221,8 +221,13 @@ impl NodeHost {
 
     /// Runs one custom rule's deterministic fix and returns what it changed.
     /// With `dry_run`, the SDK records the changes without applying them.
+    ///
+    /// `root` is the folder the fix works on. It is normally the repo root,
+    /// and a scratch copy of it in a dry run of the fix loop. The pack itself
+    /// was loaded from the repo root when the config was read.
     pub fn fix_rule(
         &mut self,
+        root: &Path,
         pack: &str,
         rule_id: &str,
         options: &Options,
@@ -237,6 +242,8 @@ impl NodeHost {
             notes: Vec<String>,
             #[serde(default)]
             changes: Vec<Change>,
+            #[serde(default)]
+            attempted: usize,
         }
         self.start(
             "run custom rule fixes",
@@ -245,7 +252,8 @@ impl NodeHost {
         let result = self.request(
             "fixRule",
             json!({
-                "root": self.root.to_string_lossy(),
+                "root": root.to_string_lossy(),
+                "packRoot": self.root.to_string_lossy(),
                 "pack": pack,
                 "ruleId": rule_id,
                 "options": options,
@@ -263,6 +271,7 @@ impl NodeHost {
                 notes: reply.notes,
             },
             changes: reply.changes,
+            attempted: reply.attempted,
         })
     }
 }

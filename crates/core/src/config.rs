@@ -386,6 +386,7 @@ mod tests {
             description: "stub".to_owned(),
             inputs: Vec::new(),
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

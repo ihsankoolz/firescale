@@ -145,6 +145,7 @@ impl BuiltinRule for NoCommittedEnv {
                 GITIGNORE.to_owned(),
             ],
             has_fix: true,
+            after: Vec::new(),
         }
     }
 

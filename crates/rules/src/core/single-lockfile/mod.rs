@@ -109,6 +109,7 @@ impl BuiltinRule for SingleLockfile {
             .map(|name| (*name).to_owned())
             .collect(),
             has_fix: false,
+            after: Vec::new(),
         }
     }
 
