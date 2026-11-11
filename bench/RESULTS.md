@@ -2,6 +2,21 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## npm launcher overhead (M6)
+
+Installed through npm, `fscale` is a small Node launcher that starts the native binary (ADR 0013). This measures what that costs: `fscale --version` run directly and through the launcher, with `bench/launcher-bench.mjs`. 20 runs each after 3 warm-ups, release build.
+
+### Linux x64, local container (4 vCPUs, Intel Xeon @ 2.10GHz), Node 22.23.4, 2026-11-11
+
+| Path                  | min (ms) | p50 (ms) | p95 (ms) | mean (ms) |
+| --------------------- | -------: | -------: | -------: | --------: |
+| native binary         |      2.0 |      2.3 |      3.0 |       2.3 |
+| npm launcher + binary |     35.8 |     44.7 |     51.5 |      44.4 |
+
+The launcher adds about 42 ms per run here, which is Node's own startup. It is paid once per `fscale` command and does not grow with the repo. Where that matters, such as an agent hook that runs on every stop, call the binary in the platform package directly (see `docs/install.md`).
+
+The CI `package` job runs the same measurement on Linux, macOS and Windows and prints it in the job summary.
+
 ## Check on a 50k-file repo: cold cache, warm cache, no cache (M3)
 
 Measured with `bench/check-bench.mjs` on a fixture from `bench/generate-fixture.mjs --files 50000`: 50,005 tracked files, one enforced rule (`core/no-committed-env`), one violation. 10 runs per row, release build.

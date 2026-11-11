@@ -1,0 +1,99 @@
+# Builds the npm tarballs for all six platforms and uploads them as artifacts.
+#
+# This workflow does NOT publish anything. Publishing to npm is a manual step,
+# documented in DECISIONS.md.
+#
+# Not yet exercised: the linux-arm64 runner and the two cross-compiled targets
+# (darwin-x64 and win32-arm64). Treat their first run as a test of this file.
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build / ${{ matrix.key }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: linux-x64
+            os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            ext: ''
+            cross: false
+          - key: linux-arm64
+            os: ubuntu-24.04-arm
+            triple: aarch64-unknown-linux-gnu
+            ext: ''
+            cross: false
+          - key: darwin-arm64
+            os: macos-latest
+            triple: aarch64-apple-darwin
+            ext: ''
+            cross: false
+          - key: darwin-x64
+            os: macos-latest
+            triple: x86_64-apple-darwin
+            ext: ''
+            cross: true
+          - key: win32-x64
+            os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            ext: .exe
+            cross: false
+          - key: win32-arm64
+            os: windows-latest
+            triple: aarch64-pc-windows-msvc
+            ext: .exe
+            cross: true
+    steps:
+      # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to (ADR 0009).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - name: Add cross-compile target
+        if: ${{ matrix.cross }}
+        run: rustup target add ${{ matrix.triple }}
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm -r run build
+
+      - name: Build release binary
+        run: cargo build --release -p firescale-cli --target ${{ matrix.triple }}
+
+      - name: Pack npm tarballs
+        run: node scripts/pack-npm.mjs --binary target/${{ matrix.triple }}/release/fscale${{ matrix.ext }} --platform ${{ matrix.key }} --out dist-npm
+
+      # Cross-compiled binaries cannot run on the build machine, so they are not smoke tested.
+      - name: Install smoke test (npm)
+        if: ${{ !matrix.cross }}
+        run: node scripts/smoke-npm.mjs --pm npm
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-${{ matrix.key }}
+          path: |
+            dist-npm/*.tgz
+            dist-npm/manifest.json
+          if-no-files-found: error

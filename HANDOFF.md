@@ -4,21 +4,18 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## Where things stand
 
-- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`.
-- **In review:** M5 core rule pack, on branch `m5-core-rules`. If its pull request is merged, M5 is done. If it is still open, read its body: it says what its CI and review showed.
-- **Not started, in order:** M6 npm packaging, M7 `verify` and hooks, M8 guarded agent runner, M9 `init`/`add`/`sync`.
-
-The last session was asked to finish M3 through M9 in one sitting, with a hard stop at 11:45 Singapore time on 11 Nov. It had about 75 minutes, which covered M3, M4 and M5. The M5 rules were written and reviewed in the last half hour, so give them a second look (see DECISIONS.md, decision 0).
+- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack.
+- **In review:** M6 npm packaging, on branch `m6-npm-packaging`. If its pull request is merged, M6 is done. If it is still open, read its body.
+- **Not started, in order:** M7 `verify` and hooks, M8 guarded agent runner, M9 `init`/`add`/`sync`.
 
 ## How to resume
 
 1. Read `SPEC.md`, `PLAN.md`, `AGENTS.md`, `docs/decisions/` and `DECISIONS.md`.
-2. If the M5 pull request is still open, check its CI and its "Not done" section, finish what is listed there, and merge it.
-3. Branch `m6-npm-packaging` from `main` and build M6 from PLAN.md. ADR 0008 §6 has the design: one binary package per platform in `optionalDependencies`, a small JavaScript launcher as `bin`, an optional hard-link step. Starting points:
-   - `packages/cli` is the `firescale` npm package. It has no `bin` yet and is not publishable as is: `@firescale/sdk` is `private` and is a `workspace:*` dependency, so decide whether to publish the SDK or bundle it.
-   - The binary finds the Node host through `FSCALE_NODE_HOST`, then next to itself, then through `import 'firescale/host'` (`crates/core/src/node.rs`). The launcher should set `FSCALE_NODE_HOST`.
-   - A release workflow needs cross-platform builds. The CI `bench` job already builds a release binary on all three OSes.
-   - Do not publish. Write the exact publish steps into DECISIONS.md.
+2. If the M6 pull request is still open, check its CI and its "Not done" section, finish what is listed there, and merge it.
+3. Branch `m7-verify-hooks` from `main` and build M7 from PLAN.md. Starting points:
+   - `fscale facts` already detects the package manager, the `build`/`test`/`lint`/`typecheck` commands and the tools (`nx`, `turbo`): `crates/core/src/facts.rs`. `verify` should pick its commands from there.
+   - Hook formats were researched on 2026-11-11 from primary sources. Claude Code: a `Stop` hook in `.claude/settings.json`, shape `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"..."}]}]}}`; the hook gets JSON on stdin with `stop_hook_active`; it blocks with exit code 2 and its stderr, or with `{"decision":"block","reason":"..."}` on stdout; Claude Code itself ends the turn after 8 blocks in a row. Codex CLI (0.167.1): the same shape and the same blocking contract, in `<repo>/.codex/hooks.json` (confirmed in its source, `codex-rs/hooks/src/engine/discovery.rs`). **Cursor could not be checked**: cursor.com was blocked from the build session. Confirm its `.cursor/hooks.json` format from Cursor's docs before relying on it.
+   - The agent-ready rule pack goes in `crates/rules/src/` next to `core/`.
 
 ## Things to know before changing code
 
