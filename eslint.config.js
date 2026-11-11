@@ -9,8 +9,6 @@ export default defineConfig(
       '**/dist/**',
       '**/node_modules/**',
       'target/**',
-      'crates/napi/index.js',
-      'crates/napi/index.d.ts',
     ],
   },
   js.configs.recommended,

@@ -1,11 +1,23 @@
 [package]
 name = "firescale-core"
-description = "Core engine for firescale: file walking, hashing, caching and the diagnostics model."
+description = "Engine for firescale: diagnostics model, config, git access, rule trait, reports and the Node bridge."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+[features]
+# Fixture-repo helpers for rule tests.
+testing = ["dep:tempfile"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tempfile = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

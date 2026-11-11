@@ -2,8 +2,6 @@ node_modules
 dist
 target
 pnpm-lock.yaml
-crates/napi/index.js
-crates/napi/index.d.ts
 **/__snapshots__
 SPEC.md
 PLAN.md

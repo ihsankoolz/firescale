@@ -1,6 +1,5 @@
 packages:
   - 'packages/*'
-  - 'crates/napi'
 minimumReleaseAgeExclude:
   - '@typescript-eslint/eslint-plugin@8.72.2'
   - '@typescript-eslint/parser@8.72.2'

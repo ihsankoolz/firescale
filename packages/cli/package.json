@@ -1,7 +1,7 @@
 {
   "name": "firescale",
   "version": "0.1.0",
-  "description": "Knock the scale off a repo, and prove it's clean. A conformance and verify engine for any repo.",
+  "description": "Knock the scale off a repo, and prove it's clean. The npm package for the fscale CLI: config helpers and the Node host for TypeScript rules.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -12,15 +12,12 @@
   "engines": {
     "node": ">=22.18.0"
   },
-  "bin": {
-    "fscale": "./dist/bin.js",
-    "firescale": "./dist/bin.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./host": "./dist/host.js",
     "./schemas/check-output.schema.json": "./schemas/check-output.schema.json"
   },
   "files": [
@@ -32,8 +29,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@firescale/native": "workspace:*",
-    "@firescale/rules-core": "workspace:*",
     "@firescale/sdk": "workspace:*"
   },
   "devDependencies": {

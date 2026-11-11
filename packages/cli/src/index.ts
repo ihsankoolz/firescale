@@ -26,4 +26,4 @@ export {
   type CheckReport,
   type ReportedDiagnostic,
   type RuleReport,
-} from './check.js';
+} from './report.js';

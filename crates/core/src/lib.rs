@@ -1,10 +1,25 @@
-//! Core engine for firescale.
+//! Engine for firescale.
 //!
-//! In M0 this crate only exposes its own version, which is enough to prove the
-//! Rust -> Node bridge works. File walking, hashing, the cache and the
-//! scheduler arrive in M2.
+//! This crate holds everything the `fscale` binary needs that is not a rule:
+//! the diagnostics model, config loading, git and file access, the rule
+//! trait, report formatting and the bridge to Node for TypeScript rules.
 
-/// The version of the firescale core, taken from the Cargo workspace version.
+pub mod check;
+pub mod config;
+pub mod error;
+pub mod explain;
+pub mod git;
+pub mod model;
+pub mod node;
+pub mod report;
+pub mod rule;
+pub mod select;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
+pub use error::{Error, Result};
+
+/// The firescale version, taken from the Cargo workspace version.
 #[must_use]
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
