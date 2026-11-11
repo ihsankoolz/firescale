@@ -35,7 +35,7 @@ A running log, newest milestone first. For each milestone: what was built, decis
 - The launcher passes its own Node and host script to the binary, so TypeScript rules use the same Node.
 - `@firescale/sdk` is now publishable (it was private).
 
-**CI was trimmed at your request** (ADR 0009 amendment): each push now runs 4 check jobs instead of 12 jobs. The benchmark and npm install jobs run only when you start the CI workflow by hand from the Actions tab. Do that before a release.
+**CI was trimmed at your request** (ADR 0009 amendment): each push now runs 4 check jobs instead of 12 jobs. The benchmark and npm install jobs run only when you start the CI workflow by hand from the Actions tab, or on a pull request labelled `ci:bench` or `ci:package`. Run them before a release.
 
 **Known limits**
 
@@ -182,14 +182,14 @@ Nothing has been published. The packaging is built and tested (M6); publishing i
    git push origin v0.1.0
    ```
 
-2. Wait for the Release workflow. It builds all six platforms and uploads the tarballs as artifacts. Download and unpack them into one folder. You should have eight `.tgz` files: six `firescale-cli-<platform>-0.1.0.tgz`, one `firescale-sdk-0.1.0.tgz`, one `firescale-0.1.0.tgz`. (Each platform's artifact also carries its own copy of the sdk and firescale tarballs; they are identical, keep one.)
+2. Wait for the Release workflow. It builds all six platforms and uploads the tarballs as artifacts. Download and unpack them into one folder. You should have eight `.tgz` files: six `firescale-cli-<platform>-0.1.0.tgz`, one `firescale-sdk-0.1.0.tgz`, one `firescale-0.1.0.tgz`. (Each platform's artifact also carries its own copy of the sdk and firescale tarballs. Use the ones from the `linux-x64` artifact and discard the rest.)
 3. Check one before publishing anything:
 
    ```bash
    tar -tzf firescale-0.1.0.tgz
    ```
 
-4. Log in:
+4. Log in. With two-factor authentication on, npm asks for a one-time code for each of the eight publishes; add `--otp <code>` to a command to pass it up front:
 
    ```bash
    npm login
@@ -199,6 +199,12 @@ Nothing has been published. The packaging is built and tested (M6); publishing i
 
    ```bash
    for f in firescale-cli-*-0.1.0.tgz; do npm publish "$f" --access public; done
+   ```
+
+   In PowerShell, the same step is:
+
+   ```powershell
+   Get-ChildItem firescale-cli-*-0.1.0.tgz | ForEach-Object { npm publish $_.FullName --access public }
    ```
 
    ```bash

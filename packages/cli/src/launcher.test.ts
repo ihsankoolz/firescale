@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process';
-import { cp, mkdir, readFile, symlink } from 'node:fs/promises';
+import { execFile, spawnSync } from 'node:child_process';
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
@@ -119,4 +120,26 @@ describe('npm launcher', () => {
     expect(result.code).toBe(EXIT_VIOLATIONS);
     expect(result.stdout).toContain('sample/no-todo-file');
   });
+});
+
+describe('launcher and signals', () => {
+  // Signals do not exist on Windows.
+  it.skipIf(process.platform === 'win32')(
+    'exits with 128 + the signal number when the binary is killed by a signal',
+    async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), 'fscale-signal-'));
+      try {
+        // A stand-in binary that kills itself with SIGPIPE, which Node ignores if re-raised.
+        const fake = path.join(dir, 'fake-fscale');
+        await writeFile(fake, '#!/bin/sh\nkill -PIPE $$\n', { mode: 0o755 });
+        const result = spawnSync(process.execPath, [LAUNCHER, '--version'], {
+          encoding: 'utf8',
+          env: { ...process.env, FSCALE_BINARY: fake },
+        });
+        expect(result.status).toBe(128 + 13);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

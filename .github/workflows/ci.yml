@@ -65,8 +65,9 @@ jobs:
         run: pnpm fscale --version
 
   bench:
-    # Costly, and rarely changes the answer: runs only when started by hand.
-    if: github.event_name == 'workflow_dispatch'
+    # Costly, and rarely changes the answer. Runs when the workflow is started by
+    # hand, or on a pull request that carries the label `ci:bench`.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:bench')
     name: bench / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -96,8 +97,9 @@ jobs:
         run: node bench/check-bench.mjs --bin target/release/fscale --fixture "${{ runner.temp }}/fixture-50k" --runs 10 --label "${{ matrix.os }}" --files 50000
 
   package:
-    # Costly, and rarely changes the answer: runs only when started by hand.
-    if: github.event_name == 'workflow_dispatch'
+    # Costly, and rarely changes the answer. Runs when the workflow is started by
+    # hand, or on a pull request that carries the label `ci:package`.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:package')
     name: package / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:

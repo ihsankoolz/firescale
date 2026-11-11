@@ -4,6 +4,7 @@
 //
 // Usage: node scripts/pack-npm.mjs [--binary <path>] [--platform <os>-<arch>] [--out <dir>]
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { chmod, copyFile, cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -65,7 +66,9 @@ async function workspaceVersion() {
 
 /** Runs `npm pack` in `cwd`, writing the tarball to `out`. Returns the tarball file name. */
 function npmPack(cwd, out) {
-  const stdout = execFileSync('npm', ['pack', '--pack-destination', out], {
+  // On Windows npm is a .cmd file and needs a shell, so a path with spaces must be quoted.
+  const destination = process.platform === 'win32' && /\s/.test(out) ? `"${out}"` : out;
+  const stdout = execFileSync('npm', ['pack', '--pack-destination', destination], {
     cwd,
     encoding: 'utf8',
     shell: process.platform === 'win32',
@@ -119,6 +122,20 @@ const without = (object, keys) =>
 
 const notTest = (source) => !/(\.test\.|[\\/]test-helpers\.)/.test(source);
 
+/**
+ * Filter for a package's `dist` folder: skips tests, source maps (their sources
+ * do not ship), and build output whose source file no longer exists. `tsc` never
+ * deletes old output, so a long-lived checkout can hold files for deleted modules.
+ */
+function builtFrom(srcDir) {
+  return (source) => {
+    if (!notTest(source) || source.endsWith('.map')) return false;
+    const match = /^(.*?)(\.d\.ts|\.js)$/.exec(path.basename(source));
+    if (!match) return true; // a folder, or a file tsc did not produce
+    return existsSync(path.join(srcDir, `${match[1]}.ts`));
+  };
+}
+
 try {
   const license = path.join(root, 'LICENSE');
 
@@ -156,7 +173,7 @@ try {
   await writeManifest(sdkDir, { ...sdkPublished, version, publishConfig });
   await cp(path.join(root, 'packages', 'sdk', 'dist'), path.join(sdkDir, 'dist'), {
     recursive: true,
-    filter: notTest,
+    filter: builtFrom(path.join(root, 'packages', 'sdk', 'src')),
   });
   await cp(path.join(root, 'packages', 'sdk', 'templates'), path.join(sdkDir, 'templates'), {
     recursive: true,
@@ -182,7 +199,7 @@ try {
   for (const folder of ['bin', 'dist', 'schemas']) {
     await cp(path.join(root, 'packages', 'cli', folder), path.join(cliDir, folder), {
       recursive: true,
-      filter: notTest,
+      filter: folder === 'dist' ? builtFrom(path.join(root, 'packages', 'cli', 'src')) : notTest,
     });
   }
   await copyFile(license, path.join(cliDir, 'LICENSE'));

@@ -6,8 +6,9 @@
 // file finds that binary and runs it with the same arguments, stdio and exit
 // code. It contains no firescale logic.
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -24,12 +25,33 @@ export const PLATFORM_PACKAGES = {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-/** True on Linux systems that use musl instead of glibc (for example Alpine). */
+let musl;
+
+/** True on Linux systems that use musl instead of glibc (for example Alpine). Worked out once. */
 function isMusl() {
-  if (process.platform !== 'linux') return false;
-  const report = process.report?.getReport();
-  const header = typeof report === 'object' && report !== null ? report.header : undefined;
-  return header !== undefined && !header.glibcVersionRuntime;
+  if (musl !== undefined) return musl;
+  musl = false;
+  if (process.platform === 'linux') {
+    // Alpine marks itself with this file; checking it avoids building a full report.
+    if (existsSync('/etc/alpine-release')) {
+      musl = true;
+    } else if (process.report) {
+      process.report.excludeNetwork = true;
+      const report = process.report.getReport();
+      const header = typeof report === 'object' && report !== null ? report.header : undefined;
+      musl = header !== undefined && !header.glibcVersionRuntime;
+    }
+  }
+  return musl;
+}
+
+/** The version of this firescale package, or undefined when it cannot be read. */
+function ownVersion() {
+  try {
+    return JSON.parse(readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
+  } catch {
+    return undefined;
+  }
 }
 
 function fail(message) {
@@ -57,11 +79,21 @@ function findBinary() {
   }
 
   const file = process.platform === 'win32' ? 'fscale.exe' : 'fscale';
+  const version = ownVersion();
   // Look from this package first, then from the project, which covers package
-  // managers that do not let a package see its optional dependencies.
-  for (const from of [path.join(here, 'fscale.js'), path.join(process.cwd(), 'package.json')]) {
+  // managers that do not let a package see its optional dependencies. A binary
+  // found through the project must be the same version as this launcher, or it
+  // would be paired with the wrong Node host.
+  const places = [
+    { from: path.join(here, 'fscale.js'), sameVersionOnly: false },
+    { from: path.join(process.cwd(), 'package.json'), sameVersionOnly: true },
+  ];
+  for (const { from, sameVersionOnly } of places) {
     try {
       const manifest = createRequire(from).resolve(`${name}/package.json`);
+      if (sameVersionOnly && version !== undefined) {
+        if (JSON.parse(readFileSync(manifest, 'utf8')).version !== version) continue;
+      }
       const binary = path.join(path.dirname(manifest), 'bin', file);
       if (existsSync(binary)) return binary;
     } catch {
@@ -74,6 +106,13 @@ function findBinary() {
 }
 
 const binary = findBinary();
+if (process.env.FSCALE_LOG?.split(',').includes('launcher')) {
+  process.stderr.write(`launcher: binary ${binary}\n`);
+}
+// Ctrl+C reaches the binary directly. Without these listeners this process
+// would die first and leave the binary writing after the prompt came back.
+process.on('SIGINT', () => {});
+process.on('SIGTERM', () => {});
 const result = spawnSync(binary, process.argv.slice(2), {
   stdio: 'inherit',
   windowsHide: true,
@@ -89,8 +128,8 @@ if (result.error) {
   fail(`could not start ${binary}: ${result.error.message}. Reinstall firescale and try again.`);
 }
 if (result.signal) {
-  // Pass the signal on so the caller sees the same outcome as a direct run.
-  process.kill(process.pid, result.signal);
-} else {
-  process.exit(result.status ?? 1);
+  // Report death by signal the way a shell does: 128 plus the signal number.
+  // Re-raising the signal is not reliable, because Node ignores or repurposes some.
+  process.exit(128 + (os.constants.signals[result.signal] ?? 1));
 }
+process.exit(result.status ?? 1);

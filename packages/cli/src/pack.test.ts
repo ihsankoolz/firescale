@@ -47,7 +47,8 @@ async function exists(file: string): Promise<boolean> {
 async function extract(kind: string, tarball: string): Promise<string> {
   const dir = path.join(work, `x-${kind}`);
   await mkdir(dir, { recursive: true });
-  await run('tar', ['-xzf', path.join(work, 'out', tarball), '-C', dir]);
+  // Relative paths with cwd: GNU tar on Windows reads `D:\\...` as a remote host.
+  await run('tar', ['-xzf', path.join('out', tarball), '-C', `x-${kind}`], { cwd: work });
   return path.join(dir, 'package');
 }
 

@@ -5,8 +5,16 @@
 //
 // Only the tarballs and the sample pack source in packages/cli/test-fixtures are
 // read from this repository. Nothing here uses the repo's node_modules or target.
-import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -54,24 +62,35 @@ function parseArgs(argv) {
   return out;
 }
 
+/** On Windows the command goes through a shell, so arguments with spaces need quotes. */
+function quoteForShell(arg) {
+  return /[\s&()^]/.test(arg) ? `"${arg}"` : arg;
+}
+
+// The test must only see what the tarballs installed: drop every FSCALE_* override
+// the caller may have set (a repo binary, a repo Node host), then ask the launcher
+// to say which binary it picked.
+const CLEAN_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('FSCALE_')),
+);
+CLEAN_ENV.FSCALE_LOG = 'launcher';
+
 /** Runs a command and returns { code, stdout, stderr } without throwing on a non-zero exit. */
 function run(command, args, options = {}) {
-  try {
-    const stdout = execFileSync(command, args, {
-      encoding: 'utf8',
-      shell: IS_WIN,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      ...options,
-    });
-    return { code: 0, stdout, stderr: '' };
-  } catch (error) {
-    return {
-      code: typeof error.status === 'number' ? error.status : 1,
-      stdout: String(error.stdout ?? ''),
-      stderr: String(error.stderr ?? '') || String(error.message),
-    };
-  }
+  const result = spawnSync(command, IS_WIN ? args.map(quoteForShell) : args, {
+    encoding: 'utf8',
+    shell: IS_WIN,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: CLEAN_ENV,
+    ...options,
+  });
+  if (result.error) return { code: 1, stdout: '', stderr: result.error.message };
+  return {
+    code: typeof result.status === 'number' ? result.status : 1,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+  };
 }
 
 function must(command, args, options) {
@@ -123,32 +142,36 @@ async function main() {
     `${JSON.stringify({ name: 'firescale-smoke', private: true, type: 'module' }, null, 2)}\n`,
   );
 
-  // Install the three tarballs by absolute path.
+  // Install ONLY the firescale tarball, the way a user would. Its dependencies
+  // (@firescale/sdk, and the platform package through optionalDependencies) are
+  // not on the registry yet, so each package manager is told where those two
+  // names live. The other five platform packages stay unresolvable, as they
+  // would be on any one machine, and must simply be skipped.
+  const [platformTgz, sdkTgz, firescaleTgz] = tarballs;
+  const local = {
+    '@firescale/sdk': `file:${sdkTgz}`,
+    [`@firescale/cli-${manifest.platform}`]: `file:${platformTgz}`,
+  };
+  const writeProject = (extra) =>
+    writeFileSync(
+      path.join(project, 'package.json'),
+      `${JSON.stringify({ name: 'firescale-smoke', private: true, type: 'module', ...extra }, null, 2)}\n`,
+    );
   if (options.pm === 'npm') {
-    must('npm', ['install', '--no-audit', '--no-fund', ...tarballs], { cwd: project });
+    writeProject({ overrides: local });
+    must('npm', ['install', '--no-audit', '--no-fund', firescaleTgz], { cwd: project });
   } else if (options.pm === 'pnpm') {
-    // pnpm resolves firescale's dependency on @firescale/sdk (and the platform
-    // package) from the registry, where they do not exist yet. Overrides point
-    // those names at the tarballs.
-    const [platformTgz, sdkTgz] = tarballs;
-    const overrides = {
-      '@firescale/sdk': `file:${sdkTgz}`,
-      [`@firescale/cli-${manifest.platform}`]: `file:${platformTgz}`,
-    };
     // pnpm 12 reads overrides from pnpm-workspace.yaml. JSON strings are valid YAML scalars.
-    const lines = Object.entries(overrides).map(
+    const lines = Object.entries(local).map(
       ([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`,
     );
     writeFileSync(path.join(project, 'pnpm-workspace.yaml'), `overrides:\n${lines.join('\n')}\n`);
-    // --allow-build lets pnpm run the optional postinstall without an approval prompt.
-    must('pnpm', ['add', '--allow-build=firescale', ...tarballs], { cwd: project });
+    must('pnpm', ['add', firescaleTgz], { cwd: project });
   } else {
-    // Yarn resolves every optional dependency, even for other platforms, and fails on
-    // names missing from the registry. `resolutions` points the registry-only names
-    // (sdk and all six platform packages) at the tarballs; Yarn then skips the
-    // platform packages whose os/cpu do not match.
-    const [platformTgz, sdkTgz] = tarballs;
-    const resolutions = { '@firescale/sdk': `file:${sdkTgz}` };
+    // Yarn Classic fails on an optional dependency that is missing from the
+    // registry, so every platform name gets a resolution. Only the host one is
+    // real; the others point at the same tarball and are never used.
+    const resolutions = { ...local };
     for (const key of [
       'linux-x64',
       'linux-arm64',
@@ -157,14 +180,13 @@ async function main() {
       'win32-x64',
       'win32-arm64',
     ]) {
-      resolutions[`@firescale/cli-${key}`] = `file:${platformTgz}`;
+      resolutions[`@firescale/cli-${key}`] ??= `file:${platformTgz}`;
     }
-    writeFileSync(
-      path.join(project, 'package.json'),
-      `${JSON.stringify({ name: 'firescale-smoke', private: true, type: 'module', resolutions }, null, 2)}\n`,
-    );
+    writeProject({ resolutions });
     // Yarn Classic (1.22.22) on purpose: it uses a normal node_modules folder.
     // Yarn Berry would need PnP or nodeLinker settings, which is a different test.
+    // A fresh cache folder: Yarn caches file: tarballs by name and version, so
+    // without it a rebuilt tarball of the same version is silently not used.
     must(
       'npx',
       [
@@ -172,12 +194,11 @@ async function main() {
         'yarn@1.22.22',
         'add',
         '--non-interactive',
-        '--ignore-optional',
-        ...tarballs.map((t) => `file:${t}`),
+        '--cache-folder',
+        path.join(project, '.yarn-cache'),
+        `file:${firescaleTgz}`,
       ],
-      {
-        cwd: project,
-      },
+      { cwd: project },
     );
   }
 
@@ -191,6 +212,15 @@ async function main() {
     v1.code === 0 && v1.stdout.trim() === manifest.version,
     `exit ${v1.code}\n${v1.stdout}\n${v1.stderr}`,
   );
+  // The launcher reports the binary it picked (FSCALE_LOG=launcher). It must be the
+  // one this install put in the project, not a repo build or a global one. The
+  // native realpath also expands Windows short names such as RUNNER~1.
+  const picked = /^launcher: binary (.+)$/m.exec(v1.stderr)?.[1]?.trim() ?? '';
+  const insideProject =
+    picked !== '' &&
+    realpathSync.native(picked).startsWith(realpathSync.native(project) + path.sep) &&
+    picked.includes(`cli-${manifest.platform}`);
+  check('the launcher runs the binary from the installed platform package', insideProject, picked);
   const v2 = run(bin('firescale'), ['--version'], { cwd: project });
   check(
     'firescale --version (second bin)',
