@@ -37,6 +37,9 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 - The cache costs a repo walk on every run (see decision 1).
 - A rule that reads a file outside its declared `inputs` would be served stale results. Nothing checks this automatically.
+- If an input file changes while a check is running, the result can be stored under the key of the old content. The next run recomputes the key and misses, so the stale entry is not served unless the file is changed back.
+- The "no Node process" test puts a stand-in `node` first on `PATH`. It would not notice Node started by an absolute path.
+- The benchmark CI job records numbers but has no time budget, so a slowdown does not fail it.
 - Benchmarks on macOS and Windows come from shared CI runners, so they vary from run to run.
 - The host lookup next to the binary searches five parent folders, so in an unusual layout it could find a `firescale` package from a different checkout.
 

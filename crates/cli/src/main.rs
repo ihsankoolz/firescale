@@ -166,6 +166,7 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
     let report = outcome.report;
     let mut notes = selection.notes;
+    notes.extend(outcome.warnings);
     // FSCALE_LOG=cache shows, per rule, whether its result came from the cache.
     if env::var("FSCALE_LOG").is_ok_and(|value| value.split(',').any(|part| part == "cache")) {
         notes.extend(

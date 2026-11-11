@@ -40,6 +40,8 @@ impl CacheOutcome {
 pub struct CheckOutcome {
     pub report: CheckReport,
     pub cache: Vec<(String, CacheOutcome)>,
+    /// Problems that did not stop the check, such as a cache that cannot be written.
+    pub warnings: Vec<String>,
 }
 
 enum Planned {
@@ -118,6 +120,7 @@ pub fn run_check(
     let mut rule_reports = Vec::new();
     let mut diagnostics = Vec::new();
     let mut outcomes = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     for ((rule, planned), fresh) in rules.iter().zip(plan).zip(fresh.iter_mut()) {
         let (found, outcome) = match (planned, &rule.source) {
             (Planned::Cached(found), _) => (found, CacheOutcome::Hit),
@@ -125,7 +128,13 @@ pub fn run_check(
                 let found = fresh.take().unwrap_or_else(|| Ok(Vec::new()))?;
                 match key {
                     Some(key) => {
-                        cache.put(&rule.meta.id, &key, &found)?;
+                        // The result is already known: a cache that cannot be
+                        // written must not fail the check.
+                        if let Err(error) = cache.put(&rule.meta.id, &key, &found) {
+                            if warnings.is_empty() {
+                                warnings.push(format!("warning: {}", error.message()));
+                            }
+                        }
                         (found, CacheOutcome::Miss)
                     }
                     None => (found, CacheOutcome::Skipped),
@@ -172,6 +181,7 @@ pub fn run_check(
     Ok(CheckOutcome {
         report,
         cache: outcomes,
+        warnings,
     })
 }
 
@@ -409,6 +419,23 @@ mod tests {
         let recovered = run(&fixture, &rules, true);
         assert_eq!(outcomes(&recovered), [CacheOutcome::Miss]);
         assert_eq!(outcomes(&run(&fixture, &rules, true)), [CacheOutcome::Hit]);
+    }
+
+    #[test]
+    fn a_cache_that_cannot_be_written_is_a_warning_not_a_failure() {
+        let fixture = fixture();
+        // A plain file where the cache folder should be makes every write fail, on every OS.
+        fixture.write(".firescale", "not a folder\n").unwrap();
+        let markdown = CountingRule::new("test/markdown", "md");
+        let outcome = run(&fixture, &[configured(&markdown, json!({}))], true);
+        assert_eq!(outcome.report.summary.violations, 2);
+        assert_eq!(outcome.warnings.len(), 1);
+        assert!(
+            outcome.warnings[0].starts_with("warning: Could not write the cache"),
+            "{}",
+            outcome.warnings[0]
+        );
+        assert!(outcome.warnings[0].contains("--no-cache"));
     }
 
     #[test]
