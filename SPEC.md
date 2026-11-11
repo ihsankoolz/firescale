@@ -184,11 +184,12 @@ Each agent sits behind an adapter interface. Exact CLI flags must be confirmed a
 - It uses `nx affected` or `turbo` when present. Otherwise it falls back to package scripts.
 - Output is one compact summary written for an agent to act on: what failed, where, and the command to re-run.
 - `fscale hooks install` writes hook config for each supported agent so the agent can't stop while verify fails.
-- Hooks must guard against loops: detect a repeated stop attempt and cap retries.
+- A step with no command is skipped, and verify prints a visible warning that names it. A skipped step is not a failure.
+- Hooks must guard against loops: detect a repeated stop attempt and cap retries. The hook releases an agent after 3 blocks in a row.
 
 ### Blame-aware verify
 
-Each failure gets a label, and only `new` blocks:
+Each failure gets a label, and only `new` blocks. The labels are on by default whenever there is a base commit:
 
 | Label          | Meaning                                         |
 | -------------- | ----------------------------------------------- |

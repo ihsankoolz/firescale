@@ -13,14 +13,9 @@ Not yet proven on macOS or Windows:
 
 ## Needs your decision (all milestones, most important first)
 
-- **(Direction) Read the new PLAN.md from M8 onward before anything is built.** It is in its own pull request, which is deliberately not merged. The points most worth your eye are listed under "Direction change" below.
-- **(Direction) Publishing to npm now gates real use.** `doctor` and the group-project pack are for teammates, and teammates can only install firescale once it is on npm. Publishing is yours to do (see "Publishing to npm"). The CI workflow that `init` will generate (M9) also runs `npx firescale verify`. Consider publishing before M9.
-- **(Direction) Blame-aware verify becomes the default behaviour of `fscale verify`** whenever there is a base commit to compare with. A failure that already exists on the base will no longer fail verify or hold an agent back. On the default branch itself every failure still blocks. Say if you would rather have it behind a flag.
-
+- **(Plan) Publish 0.1.0 to npm after M9.** It is now a checkpoint in PLAN.md. The steps are under "Publishing to npm" below. M10 and M11 need it for generated CI to work for a real team.
 - **(M7) The Cursor hook format is unconfirmed.** cursor.com was blocked from the build session, twice. `fscale hooks install` writes `.cursor/hooks.json` from a best reading and prints a note. Someone with access to Cursor's docs should check it (ADR 0014), or allow `cursor.com` in the cloud environment's network settings so a session can.
 - **(M7) The `agent-ready` pack is opt-in**, not on by default. Say if you want it on for every repo.
-- **(M7) A verify step with no command is skipped, not failed.** A repo with no tests passes `fscale verify`. The `agent-ready/single-test-command` rule is how you make that an error.
-- **(M7) The hook lets an agent stop after 3 failed attempts in a row.** `FSCALE_HOOK_MAX_BLOCKS` changes it.
 
 - **(M6) The npm name `fscale` is taken by an unrelated package.** `npx firescale` works; `npx fscale` would run that other package. After `npm install firescale` the command `fscale` is ours. If that risk bothers you, the options are to ask npm about the name or to make `firescale` the only command.
 - **(M6) No postinstall step, so one Node start sits in front of every `fscale` run from npm.** ADR 0013 explains why. Agent hooks can call the binary directly. Say if you want the postinstall optimisation anyway.
@@ -36,6 +31,26 @@ Not yet proven on macOS or Windows:
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## Plan update and your answers (before M8)
+
+**Changed** (ADR 0017)
+
+- The `nextjs` and `python` stack packs moved to directly after M13 (now M14 and M15). Later milestones were renumbered: blame-aware verify is M16 to M18, the tamper guard M19 to M22, the runner M23, adapters and `fscale ledger` M24. `supabase` and `expo` are still M25 and M26. ADR 0017 has the full old-to-new table; the "Direction change" section below still uses the old numbers.
+- A publishing checkpoint after M9: you publish 0.1.0 to npm by hand. M10 and M11 note that generated CI needs it.
+- CI trimmed (ADR 0016, see "CI compute" below). This replaces pull request #11, which was closed unmerged.
+
+**Your answers, now recorded as decisions**
+
+- Blame-aware labels are on by default when there is a base commit. No flag.
+- The stop hook releases an agent after 3 blocks in a row.
+- A verify step with no command is skipped and prints a visible warning.
+
+**Decisions made for you**
+
+- **The warning was built now**, in the same pull request as M8, because it is a small change to what M7 built and would otherwise sit recorded but untrue until the next verify milestone. `fscale verify` prints a `warning:` line under the summary, and `--json` has a `warnings` list. A step you turn off with `false` gives no warning. The verify snapshots changed on purpose.
+- **Next.js is M14 and Python M15**, in the order you named them.
+- **The checkpoint is not numbered**, so no milestone number shifts because of it.
 
 ## Direction change (after M7, docs only)
 
@@ -259,7 +274,7 @@ Not yet proven on macOS or Windows:
 - Decide the items under "Needs your decision" at the top of this file.
 - Commits made by the build sessions use your name and email but are not signed, so GitHub shows them as "Unverified". If you want verified history, sign going forward; re-signing old commits means rewriting history.
 - The branches `m0-skeleton`, `m1-rule-sdk`, `m2-rust-front-door`, `m3-engine-cache` and `m4-fix-sarif-facts` are merged and can be deleted.
-- The manual test with a real agent (now M22) is not reachable yet.
+- The manual test with a real agent (now M24) is not reachable yet.
 
 ## Publishing to npm
 

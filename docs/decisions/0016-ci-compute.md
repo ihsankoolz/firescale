@@ -2,8 +2,6 @@
 
 Status: accepted (2026-11-11). Supersedes the M6 amendment of ADR 0009. The action pinning in ADR 0009 is unchanged.
 
-(Number 0015 is taken by the direction ADR, which is in its own pull request.)
-
 ## Context
 
 CI used too much GitHub Actions compute. The account reached its monthly limit during M6, and M7's first runs could not start. After the M6 amendment of ADR 0009, each push to a pull request still ran four jobs, two of them on macOS and Windows, whose minutes are billed at a multiple of Linux minutes. A second push did not always stop the run of the first.
