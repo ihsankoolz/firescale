@@ -1,0 +1,41 @@
+---
+name: commands-documented
+description: Fixes violations of the firescale rule agent-ready/commands-documented by adding the repo's build, test, lint and typecheck commands to AGENTS.md. Use when fscale check reports agent-ready/commands-documented.
+---
+
+# agent-ready/commands-documented
+
+## What this rule enforces and why
+
+`AGENTS.md` at the repo root mentions every command that `fscale facts` detects for the repo: `build`, `test`, `lint` and `typecheck`, each of which is a script of the root `package.json`. A command counts as mentioned when the file contains it as `fscale facts` prints it (`pnpm run test`) or in the short form that runs the same script (`pnpm test`, `yarn test`, `bun test`; for npm only `npm test`). A longer script name such as `pnpm test:unit` does not count as `pnpm test`.
+
+The rule is silent when there is no `AGENTS.md` (the rule `agent-ready/agents-md` reports that) and when no commands are detected, for example in a repo without a `package.json`.
+
+An agent that has to guess the test command often runs the wrong one, or none. Writing the commands down once makes every agent run behave the same.
+
+## Manual fix
+
+1. Run `fscale facts` and read the `commands` lines.
+2. Add each reported command to `AGENTS.md`, for example in a "Commands" list, with a few words on what it does.
+3. If a command should not be used, remove or rename the script instead of leaving it undocumented.
+
+## Agent fix instructions
+
+### DETERMINISTIC
+
+None.
+
+### REPORT
+
+For each finding, add the exact command from the message to the commands section of `AGENTS.md`, creating a short "Commands" section if there is none. Keep the rest of the file as it is. Read the script in `package.json` first, and describe what it really does in a few words. Report:
+
+- Each command you added and where.
+- Any command that looks broken or unused, so the user can decide whether to remove the script.
+
+## Verify
+
+Run this command. It must report no violations for this rule.
+
+```
+fscale check --rules agent-ready/commands-documented
+```
