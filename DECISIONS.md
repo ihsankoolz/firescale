@@ -15,6 +15,10 @@ A running log, newest milestone first. For each milestone: what was built, decis
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
 
+## M5 — Core rule pack (draft, not merged)
+
+A first pass of the seven remaining core rules is on branch `m5-core-rules`. It was written at the very end of the session, has not been reviewed, and is not on `main`. Nothing about it is decided yet. HANDOFF.md says how to pick it up.
+
 ## M4 — `fix`, SARIF and facts
 
 **Built**
@@ -93,6 +97,13 @@ A running log, newest milestone first. For each milestone: what was built, decis
 **Built:** pnpm and Cargo workspaces, CI on three OSes, lint and test tooling.
 
 **Decisions made for you:** toolchain versions (ADR 0002); planning files renamed to `SPEC.md` and `PLAN.md` (ADR 0004).
+
+## Left for you to do by hand
+
+- Decide the items under "Needs your decision" at the top of this file.
+- Commits made by the build sessions use your name and email but are not signed, so GitHub shows them as "Unverified". If you want verified history, sign going forward; re-signing old commits means rewriting history.
+- The branches `m0-skeleton`, `m1-rule-sdk`, `m2-rust-front-door`, `m3-engine-cache` and `m4-fix-sarif-facts` are merged and can be deleted.
+- The M8 manual test with a real agent is not reachable yet.
 
 ## Publishing to npm
 
