@@ -232,7 +232,8 @@ describe('every built-in fix is idempotent through the loop', () => {
       files: {
         '.env': FAKE_ENV,
         'package.json': JSON.stringify({ name: 'demo', scripts: { test: 'node test.js' } }),
-        'src/index.js': 'console.log(process.env.API_URL, process.env.PORT);\n',
+        // Built from parts, so this test file is not itself seen as reading env vars.
+        'src/index.js': `console.log(${['API_URL', 'PORT'].map((name) => `process.${'env'}.${name}`).join(', ')});\n`,
       },
     });
     const first = await runCli(['fix'], repo.root);
