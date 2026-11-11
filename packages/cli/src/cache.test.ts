@@ -56,6 +56,21 @@ describe('fscale check result cache', () => {
     expect(after.code).toBe(EXIT_VIOLATIONS);
   });
 
+  it('notices a newly tracked env file whose name is in upper case', async () => {
+    const fixture = await fixtures.create({
+      files: { 'sub/.ENV.LOCAL': FAKE_ENV, 'firescale.config.json': ENFORCED_CONFIG },
+      track: ['firescale.config.json'],
+    });
+    expect((await runCli(['check'], fixture.root, LOG)).stdout).toBe(
+      'OK: 1 rule checked, no violations.\n',
+    );
+    await fixture.track(['sub/.ENV.LOCAL']);
+    const after = await runCli(['check'], fixture.root, LOG);
+    expect(after.stderr).toBe(`cache: miss ${RULE}\n`);
+    expect(after.code).toBe(EXIT_VIOLATIONS);
+    expect(after.stdout).toContain('sub/.ENV.LOCAL');
+  });
+
   it('keeps the cache in .firescale/cache and out of git', async () => {
     const fixture = await repo();
     await runCli(['check'], fixture.root);

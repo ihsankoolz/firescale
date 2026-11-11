@@ -32,11 +32,15 @@ struct Entry {
 }
 
 /// Builds a matcher for a rule's `inputs`. `*` stays inside one path segment;
-/// `**` crosses segments.
+/// `**` crosses segments. Letter case is ignored.
 pub fn input_matcher(rule_id: &str, inputs: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for input in inputs {
-        let glob = GlobBuilder::new(input).literal_separator(true).build().map_err(|error| {
+        let glob = GlobBuilder::new(input).literal_separator(true)
+            // Matching more files than needed only costs a cache miss; matching
+            // too few would serve a stale result. So letter case is ignored, as
+            // Windows and macOS file systems do.
+            .case_insensitive(true).build().map_err(|error| {
             Error::internal(format!(
                 "Rule \"{rule_id}\" has an invalid inputs glob \"{input}\" ({error}). Fix the rule's inputs."
             ))
