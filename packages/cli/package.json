@@ -1,0 +1,29 @@
+{
+  "name": "firescale",
+  "version": "0.1.0",
+  "description": "Knock the scale off a repo, and prove it's clean. A conformance and verify engine for any repo.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ihsankoolz/firescale.git",
+    "directory": "packages/cli"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "fscale": "./dist/bin.js",
+    "firescale": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@firescale/native": "workspace:*"
+  }
+}

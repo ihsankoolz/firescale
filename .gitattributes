@@ -1,0 +1,4 @@
+# Normalise every text file to LF in the repo and in working trees, on all OSes.
+* text=auto eol=lf
+*.node binary
+*.png binary

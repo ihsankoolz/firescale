@@ -1,0 +1,8 @@
+{
+  "name": "@firescale/rules-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The core firescale rule pack.",
+  "license": "MIT",
+  "type": "module"
+}

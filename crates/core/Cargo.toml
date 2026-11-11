@@ -1,0 +1,11 @@
+[package]
+name = "firescale-core"
+description = "Core engine for firescale: file walking, hashing, caching and the diagnostics model."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

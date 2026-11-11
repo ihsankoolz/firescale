@@ -1,0 +1,8 @@
+{
+  "name": "@firescale/rules-agent-ready",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The agent-ready firescale rule pack.",
+  "license": "MIT",
+  "type": "module"
+}
