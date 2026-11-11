@@ -627,7 +627,7 @@ describe('fscale sync', () => {
       expect(await snapshot(repo.root), argv.join(' ')).toEqual(before);
     }
     // Doing what the message says brings the staged text back.
-    await run('git', ['restore', 'README.md'], { cwd: repo.root });
+    await run('git', ['-c', 'core.autocrlf=false', 'restore', 'README.md'], { cwd: repo.root });
     expect(await repo.read('README.md')).toContain('STAGED ONLY');
   });
 

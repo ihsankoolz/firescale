@@ -261,7 +261,10 @@ mod untracked_or_unusual_readme {
 }
 
 fn git_out(fixture: &Fixture, args: &[&str]) -> String {
-    let result = firescale_core::git::run_git(fixture.root(), args).unwrap();
+    // Like the fixtures: independent of the machine's line-ending settings.
+    let mut full = vec!["-c", "core.autocrlf=false", "-c", "core.safecrlf=false"];
+    full.extend_from_slice(args);
+    let result = firescale_core::git::run_git(fixture.root(), &full).unwrap();
     assert_eq!(result.code, 0, "git {args:?}: {}", result.stderr);
     result.stdout
 }
