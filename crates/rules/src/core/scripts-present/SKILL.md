@@ -1,0 +1,40 @@
+---
+name: scripts-present
+description: Fixes violations of the firescale rule core/scripts-present by adding the standard lint, test and build scripts to package.json. Use when fscale check reports core/scripts-present.
+---
+
+# core/scripts-present
+
+## What this rule enforces and why
+
+A root `package.json` defines the scripts `lint`, `test` and `build` (or the names in the rule's `required` option). npm's placeholder `echo "Error: no test specified" && exit 1` counts as no test script. A `package.json` that is not valid JSON is also reported.
+
+Standard script names let people, CI and agents run the same commands in every repo without reading the project first.
+
+## Manual fix
+
+1. Open `package.json`.
+2. Add each reported script to `"scripts"`, using the tool the project already has, for example `"lint": "eslint ."`, `"test": "vitest run"`, `"build": "tsc -p ."`.
+3. If the project has no such tool, install one first or tell the team the script is intentionally absent and set the `required` option.
+4. If the file is not valid JSON, fix the syntax first.
+
+## Agent fix instructions
+
+### DETERMINISTIC
+
+None.
+
+### REPORT
+
+For each reported script, find the tool the project already uses (config files, dependencies, CI) and add a script that runs it. Do not install new tools and do not invent a command. Report:
+
+- Each script you added and the command you chose.
+- Each script you left out because no suitable tool exists, so the user can decide.
+
+## Verify
+
+Run this command. It must report no violations for this rule.
+
+```
+fscale check --rules core/scripts-present
+```

@@ -1,0 +1,268 @@
+//! `core/env-example`: If code reads env vars, .env.example lists them.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, LineRange, RuleMeta, Severity,
+};
+use firescale_core::rule::{BuiltinRule, RuleContext};
+use firescale_core::{Error, Result};
+
+#[cfg(test)]
+mod tests;
+
+pub const ID: &str = "core/env-example";
+
+const EXAMPLE: &str = ".env.example";
+const EXTENSIONS: [&str; 12] = [
+    "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "py", "rs", "go", "rb",
+];
+const SKIP_DIRS: [&str; 6] = ["node_modules", "dist", "build", "target", "vendor", ".git"];
+const MAX_BYTES: u64 = 1_000_000;
+
+/// Names that are never project secrets or config.
+const BUILT_IN_IGNORE: [&str; 14] = [
+    "NODE_ENV", "CI", "PATH", "HOME", "PWD", "USER", "SHELL", "TERM", "TMPDIR", "TEMP", "TMP",
+    "LANG", "TZ", "DEBUG",
+];
+const IGNORE_PREFIXES: [&str; 4] = ["npm_", "GITHUB_", "RUNNER_", "FSCALE_"];
+
+/// Patterns where the name follows directly and ends at a non-identifier character.
+const BARE_PATTERNS: [&str; 2] = ["process.env.", "import.meta.env."];
+
+/// Patterns where the name follows directly and must be closed by a quote.
+const QUOTED_PATTERNS: [&str; 18] = [
+    "process.env[\"",
+    "process.env['",
+    "os.environ[\"",
+    "os.environ['",
+    "os.environ.get(\"",
+    "os.environ.get('",
+    "os.getenv(\"",
+    "os.getenv('",
+    "env::var(\"",
+    "env::var_os(\"",
+    "os.Getenv(\"",
+    "ENV[\"",
+    "ENV['",
+    "ENV.fetch(\"",
+    "ENV.fetch('",
+    "import.meta.env[\"",
+    "import.meta.env['",
+    "os.environ.setdefault(\"",
+];
+
+pub struct EnvExample;
+
+fn is_ident(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Reads `[A-Z][A-Z0-9_]*` from the start of `rest`. `quoted` requires a closing quote after it.
+fn parse_name(rest: &str, quoted: bool) -> Option<&str> {
+    let first = rest.chars().next()?;
+    if !first.is_ascii_uppercase() {
+        return None;
+    }
+    let len = rest
+        .find(|c: char| !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))
+        .unwrap_or(rest.len());
+    let after = rest[len..].chars().next();
+    let ok = if quoted {
+        matches!(after, Some('"' | '\''))
+    } else {
+        after.is_none_or(|c| !is_ident(c))
+    };
+    ok.then(|| &rest[..len])
+}
+
+fn names_in_line(line: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    for (patterns, quoted) in [(&BARE_PATTERNS[..], false), (&QUOTED_PATTERNS[..], true)] {
+        for pattern in patterns {
+            let mut from = 0;
+            while let Some(at) = line[from..].find(pattern) {
+                let start = from + at + pattern.len();
+                if let Some(name) = parse_name(&line[start..], quoted) {
+                    found.push(name);
+                }
+                from = start;
+            }
+        }
+    }
+    found
+}
+
+fn ignore_list(ctx: &RuleContext) -> Result<BTreeSet<String>> {
+    let mut ignore: BTreeSet<String> = BUILT_IN_IGNORE.iter().map(|s| (*s).to_owned()).collect();
+    if let Some(option) = ctx.options().get("ignore") {
+        let names: Option<Vec<String>> = option.as_array().and_then(|items| {
+            items
+                .iter()
+                .map(|item| item.as_str().map(str::to_owned))
+                .collect()
+        });
+        let Some(names) = names else {
+            return Err(Error::user(
+                "core/env-example: option \"ignore\" must be a list of variable names, for example [\"EXTRA_VAR\"]. Fix it in your firescale config.",
+            ));
+        };
+        ignore.extend(names);
+    }
+    Ok(ignore)
+}
+
+fn is_ignored(name: &str, ignore: &BTreeSet<String>) -> bool {
+    ignore.contains(name) || IGNORE_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+fn is_source(file: &str) -> bool {
+    let mut parts: Vec<&str> = file.split('/').collect();
+    let name = parts.pop().unwrap_or("");
+    if parts.iter().any(|p| SKIP_DIRS.contains(p)) {
+        return false;
+    }
+    name.rsplit_once('.')
+        .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext))
+}
+
+/// Every env var read in tracked source files: name -> (file, line) of the first read.
+fn scan(ctx: &RuleContext) -> Result<BTreeMap<String, (String, u32)>> {
+    let ignore = ignore_list(ctx)?;
+    let mut found: BTreeMap<String, (String, u32)> = BTreeMap::new();
+    for file in ctx.git().tracked_files()? {
+        if !is_source(&file) {
+            continue;
+        }
+        let path = file
+            .split('/')
+            .fold(ctx.root().to_path_buf(), |p, part| p.join(part));
+        match fs::metadata(&path) {
+            Ok(meta) if meta.is_file() && meta.len() <= MAX_BYTES => {}
+            _ => continue,
+        }
+        // Binary or unreadable files are skipped rather than failing the run.
+        let Ok(bytes) = fs::read(&path) else { continue };
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            for name in names_in_line(line) {
+                if is_ignored(name, &ignore) {
+                    continue;
+                }
+                let line_number = u32::try_from(index + 1).unwrap_or(u32::MAX);
+                found
+                    .entry(name.to_owned())
+                    .or_insert_with(|| (file.clone(), line_number));
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Names listed in `.env.example` text.
+fn listed_names(text: &str) -> BTreeSet<String> {
+    text.trim_start_matches('\u{feff}')
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+            line.split_once('=').map(|(name, _)| name.trim().to_owned())
+        })
+        .collect()
+}
+
+impl BuiltinRule for EnvExample {
+    fn meta(&self) -> RuleMeta {
+        let mut inputs: Vec<String> = EXTENSIONS.iter().map(|e| format!("**/*.{e}")).collect();
+        inputs.push(EXAMPLE.to_owned());
+        RuleMeta {
+            id: ID.to_owned(),
+            severity: Severity::Medium,
+            category: Category::Reliability,
+            description: "If code reads env vars, .env.example lists them.".to_owned(),
+            inputs,
+            has_fix: true,
+        }
+    }
+
+    fn skill(&self) -> &'static str {
+        include_str!("SKILL.md")
+    }
+
+    fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
+        let used = scan(ctx)?;
+        if used.is_empty() {
+            return Ok(Vec::new());
+        }
+        let Some(example) = ctx.read(EXAMPLE)? else {
+            let mut names: Vec<&str> = used.keys().map(String::as_str).take(10).collect();
+            let more = used.len() - names.len();
+            let mut list = names.join(", ");
+            if more > 0 {
+                list.push_str(&format!(" and {more} more"));
+            }
+            names.clear();
+            return Ok(vec![Finding {
+                message: format!(
+                    "Code reads env vars but there is no .env.example: {list}. Create .env.example with one NAME= line per variable (no values)."
+                ),
+                file: EXAMPLE.to_owned(),
+                range: None,
+                project: None,
+                fixable: Fixable::Deterministic,
+            }]);
+        };
+        let listed = listed_names(&example);
+        Ok(used
+            .into_iter()
+            .filter(|(name, _)| !listed.contains(name))
+            .map(|(name, (file, line))| Finding {
+                message: format!(
+                    "{name} is read here but not listed in .env.example. Add a line \"{name}=\" to .env.example."
+                ),
+                file,
+                range: Some(LineRange {
+                    start_line: line,
+                    end_line: line,
+                }),
+                project: None,
+                fixable: Fixable::Deterministic,
+            })
+            .collect())
+    }
+
+    fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
+        // Work from the current state, so a stale diagnostic list cannot cause a second change.
+        let used = scan(ctx)?;
+        let current = ctx.read(EXAMPLE)?;
+        let listed = current.as_deref().map(listed_names).unwrap_or_default();
+        let missing: Vec<&String> = used.keys().filter(|n| !listed.contains(*n)).collect();
+        if missing.is_empty() {
+            return Ok(FixResult::default());
+        }
+        let text = current.unwrap_or_default();
+        let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+        let mut out = text.clone();
+        if !text.is_empty() {
+            if !text.ends_with('\n') {
+                out.push_str(eol);
+            }
+            out.push_str("# Variables read by the code. Add example values or leave empty.");
+            out.push_str(eol);
+        }
+        for name in missing {
+            out.push_str(name);
+            out.push('=');
+            out.push_str(eol);
+        }
+        ctx.write(EXAMPLE, &out)?;
+        Ok(FixResult {
+            changed_files: vec![EXAMPLE.to_owned()],
+            notes: Vec::new(),
+        })
+    }
+}

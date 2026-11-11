@@ -88,8 +88,39 @@ export function runCli(
 /** Fake env file content for fixtures. Never use anything that looks like a real secret. */
 export const FAKE_ENV = 'EXAMPLE=1\n';
 
-export const ENFORCED_CONFIG = `${JSON.stringify(
-  { rules: { 'core/no-committed-env': 'enforced' } },
-  null,
-  2,
-)}\n`;
+/** Every built-in rule of the core pack, sorted. */
+export const ALL_CORE_RULES = [
+  'core/ci-exists',
+  'core/env-example',
+  'core/gitignore-basics',
+  'core/no-committed-env',
+  'core/no-secrets-in-source',
+  'core/readme-setup',
+  'core/scripts-present',
+  'core/single-lockfile',
+] as const;
+
+/** The core rules other than core/no-committed-env. */
+export const OTHER_CORE_RULES = ALL_CORE_RULES.filter((id) => id !== 'core/no-committed-env');
+
+/** The rules map that runs only core/no-committed-env, at the given status. */
+export function onlyEnvRules(
+  status: 'enforced' | 'evaluated' | 'off' = 'enforced',
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...Object.fromEntries(OTHER_CORE_RULES.map((id) => [id, 'off'])),
+    'core/no-committed-env': status,
+    ...extra,
+  };
+}
+
+/** A firescale.config.json that runs only core/no-committed-env, at the given status. */
+export function onlyEnvRule(
+  status: 'enforced' | 'evaluated' | 'off' = 'enforced',
+  extra: Record<string, unknown> = {},
+): string {
+  return `${JSON.stringify({ rules: onlyEnvRules(status), ...extra }, null, 2)}\n`;
+}
+
+export const ENFORCED_CONFIG = onlyEnvRule('enforced');

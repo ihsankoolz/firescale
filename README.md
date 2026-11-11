@@ -21,7 +21,7 @@ fscale facts                          # detected package manager, tools and proj
 fscale explain core/no-committed-env  # what a rule checks and how to fix it
 ```
 
-Built-in rules run with no Node process. Node is started only for a `firescale.config.ts` or custom TypeScript rules.
+The built-in rules are listed in [docs/rules.md](docs/rules.md). Built-in rules run with no Node process. Node is started only for a `firescale.config.ts` or custom TypeScript rules.
 
 Rules are report-only (`evaluated`) by default. Set a rule to `enforced` in `firescale.config.ts` or `firescale.config.json` to make `fscale check` exit 1 when it fails. See [docs/config.md](docs/config.md), [docs/check-json.md](docs/check-json.md) and [docs/writing-rules.md](docs/writing-rules.md).
 

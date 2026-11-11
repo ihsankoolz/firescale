@@ -2,6 +2,7 @@ import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ENFORCED_CONFIG,
+  onlyEnvRule,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_VIOLATIONS,
@@ -79,13 +80,15 @@ describe('fscale fix', () => {
   });
 
   it('fixes rules that are only evaluated, and skips rules that are off', async () => {
-    const evaluated = await fixtures.create({ files: { '.env': FAKE_ENV } });
+    const evaluated = await fixtures.create({
+      files: { '.env': FAKE_ENV, 'firescale.config.json': onlyEnvRule('evaluated') },
+    });
     expect((await runCli(['fix'], evaluated.root)).stdout).toContain('untracked .env');
 
     const off = await fixtures.create({
       files: {
         '.env': FAKE_ENV,
-        'firescale.config.json': JSON.stringify({ rules: { 'core/no-committed-env': 'off' } }),
+        'firescale.config.json': onlyEnvRule('off'),
       },
     });
     expect((await runCli(['fix'], off.root)).stdout).toBe(

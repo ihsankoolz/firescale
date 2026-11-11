@@ -109,7 +109,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M5 — Core rule pack ☐
+## M5 — Core rule pack ☑
 
 **Build**
 
@@ -117,10 +117,10 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 **Done when**
 
-- ☐ All 8 core rules pass their fixture tests on all three OSes.
-- ☐ Every fix is idempotent, proven by tests.
-- ☐ Every SKILL.md passes validation.
-- ☐ Running `fscale check` on this repo itself reports zero violations (dogfooding).
+- ☑ All 8 core rules pass their fixture tests on all three OSes.
+- ☑ Every fix is idempotent, proven by tests.
+- ☑ Every SKILL.md passes validation.
+- ☑ Running `fscale check` on this repo itself reports zero violations (dogfooding).
 
 ---
 

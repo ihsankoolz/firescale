@@ -1,0 +1,37 @@
+---
+name: gitignore-basics
+description: Fixes violations of the firescale rule core/gitignore-basics by creating or extending the root .gitignore for the detected stack. Use when fscale check reports core/gitignore-basics.
+---
+
+# core/gitignore-basics
+
+## What this rule enforces and why
+
+Inside a git repo, the root `.gitignore` exists and ignores the generated folders of each detected language: `node_modules` for JavaScript and TypeScript, `target` for Rust, `__pycache__` and `.venv` for Python. Forms such as `node_modules/`, `/node_modules` and `**/node_modules/` all count.
+
+Without these entries, dependencies and build output get committed by accident. That bloats the repo and slows every clone.
+
+## Manual fix
+
+1. Create `.gitignore` at the repo root if it is missing.
+2. Add one line for each reported entry, for example `node_modules/`.
+3. If the folder was already committed, run `git rm -r --cached <folder>` and commit.
+
+## Agent fix instructions
+
+### DETERMINISTIC
+
+Create `.gitignore` if it is missing. Append the missing entries as `name/` under one comment line. Keep existing lines and the file's line endings (CRLF stays CRLF). Do not add entries that are already covered.
+
+### REPORT
+
+- The entries that were added.
+- Any reported folder that is already tracked by git. Tell the user to untrack it with `git rm -r --cached`; do not do it silently.
+
+## Verify
+
+Run this command. It must report no violations for this rule.
+
+```
+fscale check --rules core/gitignore-basics
+```

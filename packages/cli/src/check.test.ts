@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { CheckReport } from './report.js';
 import {
   ENFORCED_CONFIG,
+  onlyEnvRule,
+  onlyEnvRules,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_VIOLATIONS,
@@ -54,7 +56,7 @@ describe('fscale check', () => {
   });
 
   it('reports but exits 0 by default, because the default status is evaluated', async () => {
-    const repo = await failingRepo();
+    const repo = await failingRepo(onlyEnvRule('evaluated'));
     const result = await runCli(['check'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toMatchSnapshot();
@@ -70,7 +72,7 @@ describe('fscale check', () => {
   });
 
   it('skips rules that are off', async () => {
-    const repo = await failingRepo(JSON.stringify({ rules: { 'core/no-committed-env': 'off' } }));
+    const repo = await failingRepo(onlyEnvRule('off'));
     const result = await runCli(['check'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toBe('OK: 0 rules checked, no violations.\n');
@@ -105,7 +107,7 @@ describe('fscale check', () => {
         '.env': FAKE_ENV,
         'firescale.config.ts': [
           "const status: 'enforced' | 'evaluated' = 'enforced';",
-          "export default { rules: { 'core/no-committed-env': { status } } };",
+          `export default { rules: ${JSON.stringify(onlyEnvRules('off', { 'core/no-committed-env': '__STATUS__' })).replace('"__STATUS__"', '{ status }')} };`,
           '',
         ].join('\n'),
       },
@@ -170,7 +172,7 @@ describe('fscale check --rules', () => {
 });
 
 describe('fscale check --rules on an off rule', () => {
-  const OFF = JSON.stringify({ rules: { 'core/no-committed-env': 'off' } });
+  const OFF = onlyEnvRule('off');
 
   it('skips the rule without --rules', async () => {
     const repo = await failingRepo(OFF);
@@ -243,7 +245,9 @@ describe('fscale check --json', () => {
   });
 
   it('matches the snapshot for a clean repo', async () => {
-    const repo = await fixtures.create({ files: { 'README.md': '# fixture\n' } });
+    const repo = await fixtures.create({
+      files: { 'README.md': '# fixture\n', 'firescale.config.json': onlyEnvRule('evaluated') },
+    });
     const result = await runCli(['check', '--json'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     expect(stableVersion(result.stdout)).toMatchSnapshot();
