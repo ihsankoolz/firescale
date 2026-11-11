@@ -4,6 +4,8 @@
 
 `firescale` is a free, stack-agnostic conformance and verify engine. Every rule ships a **check**, an optional **deterministic fix**, and a portable **SKILL.md**, so a human, a CI job or any coding agent (Claude Code, Codex, Gemini CLI, Cursor) can find what is wrong with a repo and fix it the same way. One `fscale verify` command is the "definition of done" that all of them call. It works on any repo, with or without Nx or Turborepo, on Windows, macOS and Linux.
 
+Install guide: [docs/install.md](docs/install.md) (not published to npm yet).
+
 Status: early development. See [SPEC.md](SPEC.md) for the design and [PLAN.md](PLAN.md) for progress.
 
 ## Usage

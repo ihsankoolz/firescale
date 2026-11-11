@@ -27,8 +27,8 @@ export default defineConfig(
     rules: { 'no-restricted-syntax': 'off' },
   },
   {
-    // Plain Node benchmark scripts.
-    files: ['bench/**/*.mjs'],
+    // Plain Node scripts: benchmarks, packaging, and the npm launcher.
+    files: ['bench/**/*.mjs', 'scripts/**/*.mjs', 'packages/cli/bin/*.js'],
     languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
   },
   prettier,
