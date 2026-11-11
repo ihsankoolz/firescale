@@ -19,10 +19,10 @@ Guidance for any coding agent working in this repo.
 
 ## Commands
 
-Keep this list accurate. Run `pnpm build` before `pnpm typecheck` or `pnpm test`: the native binding and its types are build output.
+Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite runs the built `fscale` binary (`target/debug/fscale`) and the built Node host.
 
 - Install: `pnpm install`
-- Build everything (Rust core, native binding, TS packages): `pnpm build`
+- Build everything (`cargo build`, then the TS packages): `pnpm build`
 - Test everything (`cargo test` + Vitest): `pnpm test`
   - TypeScript only: `pnpm test:ts`. Rust only: `pnpm test:rust`
 - Lint (ESLint, Prettier check, `cargo fmt --check`, clippy): `pnpm lint`
@@ -31,8 +31,10 @@ Keep this list accurate. Run `pnpm build` before `pnpm typecheck` or `pnpm test`
 - Format: `pnpm format`
 - Run the local CLI: `pnpm fscale --version`, `pnpm fscale check`, `pnpm fscale explain <rule>`
 - One test file: `pnpm exec vitest run <path>`. Update snapshots: `pnpm exec vitest run -u`
+- One Rust test: `cargo test -p firescale-rules <name>`
 - Rust only: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
-- Definition of done (from M4 on): `pnpm fscale verify`
+- Startup benchmark: `node bench/startup.mjs --runs 50 -- target/release/fscale --version`
+- Definition of done (from M6 on): `pnpm fscale verify`
 
 ## Hard rules
 
@@ -54,6 +56,7 @@ Keep this list accurate. Run `pnpm build` before `pnpm typecheck` or `pnpm test`
 - Rust: stable toolchain, typed errors, no `unwrap()` outside tests, clippy clean.
 - Errors shown to users name the problem and the next step to take.
 - Every rule has: check, tests with fixtures, and a SKILL.md. A deterministic fix is optional but must be idempotent.
+- Built-in rules are Rust (`crates/rules`). TypeScript is for the SDK, the Node host, generators and agent adapters (ADR 0008).
 
 ## Testing
 

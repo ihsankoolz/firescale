@@ -149,4 +149,64 @@ describe('validateSkill', () => {
     const result = problems(build({ verify: '```\nfscale check --rules core/other\n```' }));
     expect(result).toContainEqual(expect.stringContaining('"Verify" must contain'));
   });
+
+  describe('code fences', () => {
+    const fence = (inner: string, mark = '```'): string => `${mark}\n${inner}\n${mark}`;
+
+    it.each([
+      ['Verify', '## Verify'],
+      ['Manual fix', '## Manual fix'],
+    ])('reports a section whose only heading is inside a fence: %s', (section, heading) => {
+      const sections = [
+        'What this rule enforces and why',
+        'Manual fix',
+        'Agent fix instructions',
+        'Verify',
+      ].filter((s) => s !== section);
+      const doc = `${build({ sections })}\n${fence(heading)}\n`;
+      expect(problems(doc)).toContainEqual(
+        expect.stringContaining(`Missing section "## ${section}"`),
+      );
+    });
+
+    it('reports a REPORT block whose only heading is inside a fence', () => {
+      const doc = build({ report: false }).replace(
+        '1. Step.',
+        `1. Step.\n\n${fence('### REPORT\n\n- Fake.')}`,
+      );
+      expect(problems(doc)).toContainEqual(expect.stringContaining('"### REPORT"'));
+    });
+
+    it('does not cut a section short at a heading-like line inside a fence', () => {
+      const verify = `${fence('## Not a heading\n# Nor this')}\n\n${fence('fscale check --rules core/example-rule')}`;
+      expect(problems(build({ verify }))).toEqual([]);
+      const manual = build().replace('1. Do it.', `1. Do it.\n\n${fence('## Not a heading')}`);
+      expect(problems(manual)).toEqual([]);
+    });
+
+    it('does not treat a fenced heading as the end of an otherwise empty section', () => {
+      const doc = build().replace('1. Do it.', fence('## Not a heading'));
+      expect(problems(doc)).toEqual([]);
+    });
+
+    it('supports tilde fences and indented fences', () => {
+      const verify = `~~~\n## Not a heading\nfscale check --rules core/example-rule\n~~~`;
+      expect(problems(build({ verify }))).toEqual([]);
+      const indented = `   \`\`\`\n## Not a heading\nfscale check --rules core/example-rule\n   \`\`\``;
+      expect(problems(build({ verify: indented }))).toEqual([]);
+      const hidden = build({ sections: ['Manual fix'] }) + `\n~~~\n## Verify\n~~~\n`;
+      expect(problems(hidden)).toContainEqual(
+        expect.stringContaining('Missing section "## Verify"'),
+      );
+    });
+
+    it('closes a fence only with the same character and at least the same length', () => {
+      // The ~~~ and the short ``` lines do not close the four-backtick fence.
+      const verify =
+        '````\n~~~\n```\n## Verify\n````\n\n```\nfscale check --rules core/example-rule\n```';
+      expect(problems(build({ verify }))).toEqual([]);
+      const doc = build({ sections: ['Manual fix'] }) + '\n````\n```\n## Verify\n````\n';
+      expect(problems(doc)).toContainEqual(expect.stringContaining('Missing section "## Verify"'));
+    });
+  });
 });

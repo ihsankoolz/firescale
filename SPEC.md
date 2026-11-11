@@ -28,16 +28,19 @@ A free, stack-agnostic conformance and verify engine.
 5. **Safe by default.** Agents run with allow-lists, deny-lists, budgets, and a diff guard. Nothing is trusted on the agent's word.
 6. **Measured.** Speed and fix success are benchmarked and reported.
 7. **Cross-platform.** Windows, macOS and Linux are all first-class.
+8. **Native front door.** `fscale` is one Rust binary. Built-in rules run with no Node process, so a check starts in milliseconds. Node is started only when a TypeScript rule, a `.ts` config, a generator or an agent adapter is needed.
 
 ## 4. Commands
+
+Every command is served by the native `fscale` binary. Commands marked **Node** start a Node process for part of their work; the rest never do, unless the repo uses a `firescale.config.ts` or custom TypeScript rules.
 
 ### Stage 1 — conform and verify
 
 | Command | Purpose |
 |---|---|
-| `fscale check [--affected] [--rules <glob>] [--json\|--sarif]` | Run rules, report violations. Exit 1 if an enforced rule fails. |
+| `fscale check [--affected] [--rules <glob>] [--json\|--sarif]` | Run rules, report violations. Exit 1 if an enforced rule fails. A rule named exactly in `--rules` runs even when it is `off`, with a note. |
 | `fscale fix [--dry-run] [--rules <glob>]` | Apply deterministic fixes. |
-| `fscale fix --agent <claude\|codex\|gemini> [--rule <id>]` | Hand one rule's remaining violations to an agent, with guardrails. |
+| `fscale fix --agent <claude\|codex\|gemini> [--rule <id>]` | Hand one rule's remaining violations to an agent, with guardrails. **Node** (agent adapter). |
 | `fscale explain <rule>` | Print what a rule checks, why, and how to fix it by hand. |
 | `fscale verify [--affected] [--json]` | Conformance, then lint, typecheck and tests. One compact failure summary. |
 | `fscale hooks install [--agent <name>\|--all]` | Write agent hook config that calls `fscale verify` before the agent may stop. |
@@ -46,10 +49,10 @@ A free, stack-agnostic conformance and verify engine.
 
 | Command | Purpose |
 |---|---|
-| `fscale init [--agents]` | Detect the stack, write config, optionally set up agent skills, hooks and permissions. |
-| `fscale add <generator> [--json <input>] [--dry-run]` | Scaffold an app, package or service. |
-| `fscale schema <generator>` | Print a generator's input JSON schema (so agents can call it correctly). |
-| `fscale sync [--check]` | Regenerate CI workflow and the managed AGENTS.md block. `--check` fails on drift. |
+| `fscale init [--agents]` | Detect the stack, write config, optionally set up agent skills, hooks and permissions. **Node** (generators). |
+| `fscale add <generator> [--json <input>] [--dry-run]` | Scaffold an app, package or service. **Node** (generators). |
+| `fscale schema <generator>` | Print a generator's input JSON schema (so agents can call it correctly). **Node** (generators). |
+| `fscale sync [--check]` | Regenerate CI workflow and the managed AGENTS.md block. `--check` fails on drift. **Node** (generators). |
 | `fscale facts [--json]` | Print detected repo facts: projects, package manager, commands, project graph. |
 
 ### Stage 3 — later
@@ -59,28 +62,47 @@ A free, stack-agnostic conformance and verify engine.
 
 ## 5. Rule format
 
-A rule is a folder:
+There are two kinds of rule. Both produce the same diagnostics, appear in the same report and ship the same SKILL.md.
+
+### Built-in rules (Rust)
+
+Core rule packs are written in Rust and compiled into the `fscale` binary. A rule is a folder:
 
 ```
-rules/<pack>/<rule-id>/
+crates/rules/src/<pack>/<rule-id>/
+  mod.rs           # metadata, check(), optional fix()
+  SKILL.md         # agentskills.io format, embedded in the binary
+  tests.rs         # fixtures: passing repo, failing repo, fixed repo
+```
+
+### Custom rules (TypeScript)
+
+Teams write their own rules with the TypeScript SDK. A rule is a folder inside a pack:
+
+```
+<pack>/rules/<rule-id>/
   rule.ts          # metadata, check(), optional fix()
   SKILL.md         # agentskills.io format
   rule.test.ts     # fixtures: passing repo, failing repo, fixed repo
 ```
 
-`rule.ts` shape (final API decided in Milestone 1):
+`rule.ts` shape (API fixed in Milestone 1, see ADR 0007):
 
 ```ts
 export default defineRule({
-  id: 'core/no-committed-env',
-  severity: 'blocker',            // blocker | high | medium | low
-  category: 'security',           // security | reliability | consistency | maintainability
-  description: 'No .env files are tracked by git.',
-  inputs: ['**/.env*', '.gitignore'],   // globs used for cache hashing
-  check: async (ctx) => Diagnostic[],
+  id: 'team/no-todo-in-main',
+  severity: 'medium',             // blocker | high | medium | low
+  category: 'maintainability',    // security | reliability | consistency | maintainability
+  description: 'No TODO comments in src/main.',
+  inputs: ['src/main/**'],        // globs used for cache hashing
+  check: async (ctx) => Finding[],
   fix:   async (ctx, diagnostics) => FixResult,   // optional, deterministic, idempotent
 });
 ```
+
+A custom pack is listed in the config by path (`packs: ['core', './tools/rules/pack.ts']`). The binary starts Node once per run to load and run custom rules.
+
+### Shared contract
 
 - `ctx` gives read access to files, git state, and `facts` (detected stack and project graph).
 - A `Diagnostic` has: rule id, message, file, optional line range, optional project, and `fixable: 'deterministic' | 'agent' | 'manual'`.
@@ -143,32 +165,38 @@ Each agent sits behind an adapter interface. Exact CLI flags must be confirmed a
 ```
 firescale/
   crates/
-    core/            # Rust: file walk, globbing, hashing, cache, scheduler, diagnostics model
-    napi/            # Rust -> Node bindings
+    core/            # Rust: engine library. Diagnostics model, config, git and file access,
+                     #       rule trait, reports, Node bridge; later walker, hashing, cache, scheduler
+    rules/           # Rust: built-in rule packs (core, agent-ready)
+    cli/             # Rust: the fscale binary
   packages/
-    cli/             # TypeScript: the fscale CLI
-    sdk/             # TypeScript: defineRule, types, test helpers
-    rules-core/      # TypeScript: core rule pack
-    rules-agent-ready/
-    agents/          # TypeScript: agent adapters and the guarded runner
+    cli/             # TypeScript: the `firescale` npm package. Node host for the bridge,
+                     #             defineConfig re-exports, npm launcher
+    sdk/             # TypeScript: defineRule, types, test helpers for custom rules
+    agents/          # TypeScript: agent adapters
     generators/      # TypeScript: init/add/sync (Stage 2)
   bench/             # benchmark harness and fixture repos
   docs/
 ```
 
-**Rust core owns:**
+**Rust owns:**
 
+- The `fscale` command: argument parsing, config, rule selection, output and exit codes.
+- Built-in rules and their deterministic fixes.
 - Parallel, gitignore-aware file walking.
 - Glob matching and content hashing.
 - Rule-result cache, keyed by rule version + hash of the rule's input files + config.
 - Parallel scheduling of rule checks.
 - The diagnostics data model, with JSON and SARIF serialisation.
+- `verify`, hooks, and the agent runner's guardrails.
 
 **TypeScript owns:**
 
-- CLI and UX, rule authoring API, rule packs, agent adapters, generators, Nx plugins.
+- The rule SDK for custom rules, generators, agent adapters, Nx plugins.
 
-**Bridge:** prebuilt native binaries per platform so `npx firescale` works with no Rust toolchain on the user's machine.
+**Bridge:** when a run needs TypeScript, the binary starts one Node child process and exchanges JSON lines over its stdin and stdout (ADR 0008). A repo with only built-in rules and a JSON config never starts Node.
+
+**Distribution:** installed through npm. The `firescale` package depends on one prebuilt binary package per platform, so `npx firescale` works with no Rust toolchain on the user's machine.
 
 **Project graph:** read from Nx when present. Otherwise build a simple one from workspace files (pnpm/npm/yarn workspaces, Cargo workspace, uv workspace).
 

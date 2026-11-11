@@ -10,6 +10,7 @@ export {
   defineConfig,
   definePack,
   defineRule,
+  FirescaleError,
   type Diagnostic,
   type Finding,
   type FirescaleConfig,
@@ -26,4 +27,4 @@ export {
   type CheckReport,
   type ReportedDiagnostic,
   type RuleReport,
-} from './check.js';
+} from './report.js';

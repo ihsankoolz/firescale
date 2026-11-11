@@ -14,28 +14,30 @@ permissions:
 
 jobs:
   check:
-    name: ${{ matrix.os }}
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Reads the pinned pnpm version from `packageManager` in package.json.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
           cache: pnpm
 
       # Installs the toolchain pinned in rust-toolchain.toml.
       - name: Install Rust
         run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -52,5 +54,5 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Bridge smoke test
+      - name: Smoke test
         run: pnpm fscale --version

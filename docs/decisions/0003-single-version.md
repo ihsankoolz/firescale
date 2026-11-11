@@ -1,6 +1,6 @@
 # 0003 — One version, owned by the Rust core
 
-Status: accepted (M0)
+Status: superseded by ADR 0008 (M2)
 
 ## Context
 

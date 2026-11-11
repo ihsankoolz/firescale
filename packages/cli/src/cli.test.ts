@@ -1,35 +1,45 @@
-import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-import { coreVersion } from '@firescale/native';
 import { describe, expect, it } from 'vitest';
-import { EXIT_OK, EXIT_USAGE } from './cli.js';
-import { runCli } from './test-helpers.js';
+import { EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
 
-const execFileAsync = promisify(execFile);
-
-async function readJson(url: URL): Promise<{ version: string }> {
-  return JSON.parse(await readFile(url, 'utf8')) as { version: string };
+async function readVersion(file: URL): Promise<string> {
+  const pkg = JSON.parse(await readFile(file, 'utf8')) as { version: string };
+  return pkg.version;
 }
 
 describe('fscale --version', () => {
-  it('prints the version reported by the Rust core through the binding', async () => {
+  it('prints exactly the version in packages/cli/package.json', async () => {
+    const version = await readVersion(new URL('../package.json', import.meta.url));
     const result = await runCli(['--version']);
     expect(result.code).toBe(EXIT_OK);
-    expect(result.stdout).toBe(`${coreVersion()}\n`);
+    expect(result.stdout).toBe(`${version}\n`);
     expect(result.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
   });
 
-  it('keeps the Rust core and the npm package on the same version', async () => {
-    const pkg = await readJson(new URL('../package.json', import.meta.url));
-    expect(coreVersion()).toBe(pkg.version);
-  });
+  it('keeps every package.json and the Cargo workspace on the same version', async () => {
+    const expected = await readVersion(new URL('../package.json', import.meta.url));
+    const manifests = [new URL('../../../package.json', import.meta.url)];
+    const packagesDir = new URL('../../', import.meta.url);
+    for (const entry of await readdir(packagesDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const manifest = new URL(`${entry.name}/package.json`, packagesDir);
+      try {
+        await readFile(manifest, 'utf8');
+        manifests.push(manifest);
+      } catch {
+        // A folder without a package.json is not a package.
+      }
+    }
+    expect(manifests.length).toBeGreaterThan(1);
+    for (const manifest of manifests) {
+      expect(await readVersion(manifest), fileURLToPath(manifest)).toBe(expected);
+    }
 
-  it('works end to end from the built binary', async () => {
-    const bin = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
-    const { stdout } = await execFileAsync(process.execPath, [bin, '--version']);
-    expect(stdout.trim()).toBe(coreVersion());
+    const cargo = await readFile(new URL('../../../Cargo.toml', import.meta.url), 'utf8');
+    const section = /^\[workspace\.package\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(cargo)?.[1];
+    const cargoVersion = /^version\s*=\s*"([^"]+)"/m.exec(section ?? '')?.[1];
+    expect(cargoVersion).toBe(expected);
   });
 });
 

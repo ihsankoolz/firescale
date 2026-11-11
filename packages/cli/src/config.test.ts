@@ -1,48 +1,86 @@
 import path from 'node:path';
-import { FirescaleError } from '@firescale/sdk';
+import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EXIT_USAGE } from './cli.js';
-import { findRoot, loadConfig, resolveConfig } from './config.js';
-import { runCli } from './test-helpers.js';
+import type { CheckReport } from './report.js';
+import {
+  ENFORCED_CONFIG,
+  EXIT_OK,
+  EXIT_USAGE,
+  EXIT_VIOLATIONS,
+  FAKE_ENV,
+  runCli,
+} from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
 
 const RULE = 'core/no-committed-env';
 
-describe('resolveConfig', () => {
-  it('defaults to the core pack with every rule evaluated', () => {
-    const config = resolveConfig({}, null);
-    expect(config.packs).toEqual(['core']);
-    expect(config.protectedPaths).toEqual([]);
-    expect(config.rules.map((r) => [r.rule.id, r.status, r.options])).toEqual([
-      [RULE, 'evaluated', {}],
-    ]);
+/** A repo with a tracked .env and the given config file content. */
+function repoWith(config: unknown | undefined) {
+  return fixtures.create({
+    files: {
+      '.env': FAKE_ENV,
+      ...(config === undefined
+        ? {}
+        : {
+            'firescale.config.json': typeof config === 'string' ? config : JSON.stringify(config),
+          }),
+    },
+  });
+}
+
+async function checkJson(root: string): Promise<{ code: number; report: CheckReport }> {
+  const result = await runCli(['check', '--json'], root);
+  return { code: result.code, report: JSON.parse(result.stdout) as CheckReport };
+}
+
+describe('config values', () => {
+  it('defaults to the core pack with every rule evaluated', async () => {
+    const repo = await repoWith(undefined);
+    const { code, report } = await checkJson(repo.root);
+    expect(code).toBe(EXIT_OK);
+    expect(report.rules.map((r) => [r.id, r.status])).toEqual([[RULE, 'evaluated']]);
   });
 
-  it('accepts a status string or a { status, options } object', () => {
-    expect(resolveConfig({ rules: { [RULE]: 'enforced' } }, null).rules[0]?.status).toBe(
-      'enforced',
+  it('accepts a status string or a { status, options } object', async () => {
+    const enforced = await checkJson((await repoWith({ rules: { [RULE]: 'enforced' } })).root);
+    expect(enforced.code).toBe(EXIT_VIOLATIONS);
+    expect(enforced.report.rules[0]?.status).toBe('enforced');
+
+    const allowed = await repoWith({
+      rules: { [RULE]: { status: 'enforced', options: { allow: ['.env'] } } },
+    });
+    const withOptions = await checkJson(allowed.root);
+    expect(withOptions.code).toBe(EXIT_OK);
+    expect(withOptions.report.rules[0]?.status).toBe('enforced');
+    expect(withOptions.report.diagnostics).toEqual([]);
+
+    const off = await repoWith({
+      rules: { [RULE]: { status: 'off', options: { allow: ['.env.example'] } } },
+    });
+    const offResult = await runCli(['check'], off.root);
+    expect(offResult.code).toBe(EXIT_OK);
+    expect(offResult.stdout).toBe('OK: 0 rules checked, no violations.\n');
+
+    const optionsOnly = await checkJson(
+      (await repoWith({ rules: { [RULE]: { options: {} } } })).root,
     );
-    const withOptions = resolveConfig(
-      { rules: { [RULE]: { status: 'off', options: { allow: ['.env.example'] } } } },
-      null,
-    );
-    expect(withOptions.rules[0]?.status).toBe('off');
-    expect(withOptions.rules[0]?.options).toEqual({ allow: ['.env.example'] });
-    expect(resolveConfig({ rules: { [RULE]: { options: {} } } }, null).rules[0]?.status).toBe(
-      'evaluated',
-    );
+    expect(optionsOnly.report.rules[0]?.status).toBe('evaluated');
   });
 
-  it('keeps protectedPaths and allows $schema', () => {
-    const config = resolveConfig({ $schema: 'x', protectedPaths: ['infra/**'] }, null);
-    expect(config.protectedPaths).toEqual(['infra/**']);
+  it('keeps protectedPaths and allows $schema', async () => {
+    const repo = await repoWith({ $schema: 'x', protectedPaths: ['infra/**'] });
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stderr).toBe('');
   });
 
-  it('turns off every rule of a pack that is not listed', () => {
-    expect(resolveConfig({ packs: [] }, null).rules).toEqual([]);
+  it('turns off every rule of a pack that is not listed', async () => {
+    const { code, report } = await checkJson((await repoWith({ packs: [] })).root);
+    expect(code).toBe(EXIT_OK);
+    expect(report.rules).toEqual([]);
   });
 
   it.each([
@@ -56,41 +94,49 @@ describe('resolveConfig', () => {
     ['an unknown rule key', { rules: { [RULE]: { level: 'x' } } }, 'unknown key "level"'],
     ['bad options', { rules: { [RULE]: { options: [] } } }, 'options must be an object'],
     ['bad protectedPaths', { protectedPaths: 'x' }, '"protectedPaths" must be a list'],
-  ])('rejects %s with a message that says what to do', (_name, raw, message) => {
-    expect(() => resolveConfig(raw, 'firescale.config.json')).toThrow(FirescaleError);
-    expect(() => resolveConfig(raw, 'firescale.config.json')).toThrow(message);
+  ])('rejects %s with a message that says what to do', async (_name, raw, message) => {
+    const repo = await repoWith(raw);
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toMatch(/^fscale: /);
+    expect(result.stderr).toContain('firescale.config.json');
+    expect(result.stderr).toContain(message);
   });
 });
 
-describe('loadConfig', () => {
+describe('loading the config file', () => {
   it('uses defaults when there is no config file', async () => {
-    const repo = await fixtures.create();
-    const config = await loadConfig(repo.root);
-    expect(config.file).toBeNull();
-    expect(config.rules[0]?.status).toBe('evaluated');
+    const repo = await repoWith(undefined);
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toContain(RULE);
   });
 
   it('loads firescale.config.json, with or without a BOM and with CRLF', async () => {
-    const repo = await fixtures.create({
-      files: {
-        'firescale.config.json': `\uFEFF{\r\n  "rules": { "${RULE}": "enforced" }\r\n}\r\n`,
-      },
-    });
-    const config = await loadConfig(repo.root);
-    expect(config.file).toBe('firescale.config.json');
-    expect(config.rules[0]?.status).toBe('enforced');
+    const plain = `{\r\n  "rules": { "${RULE}": "enforced" }\r\n}\r\n`;
+    for (const content of [plain, `\uFEFF${plain}`]) {
+      const repo = await repoWith(content);
+      const { code, report } = await checkJson(repo.root);
+      expect(code).toBe(EXIT_VIOLATIONS);
+      expect(report.rules[0]?.status).toBe('enforced');
+    }
   });
 
   it('rejects invalid JSON', async () => {
-    const repo = await fixtures.create({ files: { 'firescale.config.json': '{ nope' } });
-    await expect(loadConfig(repo.root)).rejects.toThrow('is not valid JSON');
+    const repo = await repoWith('{ nope');
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('is not valid JSON');
   });
 
   it('rejects having both config files', async () => {
     const repo = await fixtures.create({
       files: { 'firescale.config.json': '{}', 'firescale.config.ts': 'export default {};\n' },
     });
-    await expect(loadConfig(repo.root)).rejects.toThrow('Keep one config file');
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('Keep one config file');
   });
 
   it('surfaces config errors through the CLI with exit code 2', async () => {
@@ -113,24 +159,42 @@ describe('loadConfig error paths', () => {
   });
 });
 
-describe('findRoot', () => {
+describe('finding the repo root', () => {
   it('does not look for a config above the git root', async () => {
     const outer = await fixtures.create({
-      files: { 'firescale.config.json': '{}', 'inner/file.txt': 'x\n' },
+      files: { 'firescale.config.json': ENFORCED_CONFIG, 'inner/.env': FAKE_ENV },
       track: 'no-git',
     });
-    const { runGit } = await import('@firescale/sdk');
     const inner = path.join(outer.root, 'inner');
     await runGit(inner, ['init', '--quiet']);
-    expect(await findRoot(inner)).toBe(inner);
+    await runGit(inner, ['add', '--force', '--', '.env']);
+    const { code, report } = await checkJson(inner);
+    expect(code).toBe(EXIT_OK);
+    expect(report.rules[0]?.status).toBe('evaluated');
+    expect(report.diagnostics.map((d) => d.file)).toEqual(['.env']);
   });
 
-  it('prefers the nearest config file, then the git root, then the folder itself', async () => {
-    const repo = await fixtures.create({ files: { 'a/b/file.txt': 'x\n' } });
+  it('prefers the nearest config file, then the git root', async () => {
+    const repo = await fixtures.create({
+      files: { 'a/b/file.txt': 'x\n', '.env': FAKE_ENV },
+    });
     const nested = path.join(repo.root, 'a', 'b');
-    expect(await findRoot(nested)).toBe(repo.root);
 
-    await repo.write('a/firescale.config.json', '{}');
-    expect(await findRoot(nested)).toBe(path.join(repo.root, 'a'));
+    // No config anywhere: the git root is the root, so its .env is found from a subfolder.
+    const noConfig = await checkJson(nested);
+    expect(noConfig.report.diagnostics.map((d) => d.file)).toEqual(['.env']);
+    expect(noConfig.report.rules[0]?.status).toBe('evaluated');
+
+    // A config at the git root applies from a subfolder.
+    await repo.write('firescale.config.json', ENFORCED_CONFIG);
+    const rootConfig = await checkJson(nested);
+    expect(rootConfig.code).toBe(EXIT_VIOLATIONS);
+
+    // A nearer config wins over the one at the git root.
+    await repo.write('a/firescale.config.json', JSON.stringify({ rules: { [RULE]: 'off' } }));
+    const nearest = await checkJson(nested);
+    expect(nearest.code).toBe(EXIT_OK);
+    expect(nearest.report.rules).toEqual([]);
+    expect((await checkJson(repo.root)).code).toBe(EXIT_VIOLATIONS);
   });
 });

@@ -1,6 +1,6 @@
 # 0005 — Config format and loader
 
-Status: accepted (M1)
+Status: accepted (M1). Amended by ADR 0008: validation now lives in the Rust binary, `.ts` configs are loaded through the Node host, and `packs` may list custom pack paths.
 
 ## Context
 
