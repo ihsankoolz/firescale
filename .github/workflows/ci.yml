@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run by hand from the Actions tab to also get the benchmark and npm package jobs.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -18,9 +20,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Linux covers both supported Node versions. macOS and Windows minutes
+      # cost more, so they run the newer one only.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [22, 24]
+        include:
+          - { os: ubuntu-latest, node: 22 }
+          - { os: ubuntu-latest, node: 24 }
+          - { os: macos-latest, node: 24 }
+          - { os: windows-latest, node: 24 }
     steps:
       # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,6 +65,8 @@ jobs:
         run: pnpm fscale --version
 
   bench:
+    # Costly, and rarely changes the answer: runs only when started by hand.
+    if: github.event_name == 'workflow_dispatch'
     name: bench / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -87,6 +96,8 @@ jobs:
         run: node bench/check-bench.mjs --bin target/release/fscale --fixture "${{ runner.temp }}/fixture-50k" --runs 10 --label "${{ matrix.os }}" --files 50000
 
   package:
+    # Costly, and rarely changes the answer: runs only when started by hand.
+    if: github.event_name == 'workflow_dispatch'
     name: package / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:

@@ -20,3 +20,12 @@ ADR 0002 left two gaps open: `engines.node` says `>=22.18.0` but CI only ran Nod
 
 - An action update is now an explicit change in a pull request. Nothing updates them automatically yet; Dependabot or Renovate can be added later.
 - CI runs six jobs per push instead of three.
+
+## Amendment (M6): fewer jobs per push
+
+The owner asked to reduce GitHub Actions usage. From M6:
+
+- `check` runs four jobs per push, not six: Linux on Node 22 and 24, macOS and Windows on Node 24 only. Node only affects the TypeScript packages and the bridge, so one OS is enough to cover the older version.
+- The `bench` and `package` jobs run only when the workflow is started by hand (`workflow_dispatch`). Their last full runs on all three OSes are linked from the M3 and M6 pull requests.
+
+The cost: a change that breaks the npm install or slows `check` on macOS or Windows is not caught on every push. Run the workflow by hand before a release.

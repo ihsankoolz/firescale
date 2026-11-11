@@ -35,6 +35,8 @@ A running log, newest milestone first. For each milestone: what was built, decis
 - The launcher passes its own Node and host script to the binary, so TypeScript rules use the same Node.
 - `@firescale/sdk` is now publishable (it was private).
 
+**CI was trimmed at your request** (ADR 0009 amendment): each push now runs 4 check jobs instead of 12 jobs. The benchmark and npm install jobs run only when you start the CI workflow by hand from the Actions tab. Do that before a release.
+
 **Known limits**
 
 - No musl (Alpine) build. Yarn Berry with Plug'n'Play is untested.
