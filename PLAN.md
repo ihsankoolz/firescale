@@ -160,42 +160,264 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M8 — Guarded agent runner ☐ (finish and test locally)
+## Direction change after M7
+
+On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit for small teams, the rules become the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Everything below was rewritten then. Milestones are sized for one session each. Themes, in order:
+
+| Theme                         | Milestones |
+| ----------------------------- | ---------- |
+| Rules are the scaffold        | M8, M9     |
+| Group-project mode            | M10, M11   |
+| Born agent-ready              | M12, M13   |
+| Referee: blame-aware verify   | M14, M15   |
+| Referee: tamper guard         | M16, M17   |
+| Guarded agent runner, ledger  | M18, M19   |
+| Stack packs                   | M20 to M23 |
+
+---
+
+## M8 — The fix loop ☐
+
+The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is left to fix.
+
+**Build**
+
+- A rule can declare the rules that must be fixed before it (`after`), for built-in rules and in the TypeScript SDK. A cycle or an unknown id is a config-time error that names the rules.
+- A fixed-point loop in `crates/core`: check, run every enabled rule's deterministic fix in dependency order, repeat until no deterministic violation is left or a pass changes nothing.
+- A pass limit. When it is reached, or when two fixes keep rewriting the same file, stop with an error that names the rules and files.
+- `fscale fix` uses the loop. `fscale fix --dry-run` shows the combined diff of all passes.
+- An ADR for the loop: ordering, the limit, and how a dry run sees files that earlier fixes would have written (a known limit from M4).
+
+**Done when**
+
+- ☐ Two fixture rules where B must run after A are fixed in one `fscale fix`, in that order, proven by a test.
+- ☐ A dependency cycle and an unknown `after` id are each rejected with a clear error, proven by tests.
+- ☐ Two fixture rules that undo each other stop the loop with an error naming both, and the exit code is not 0.
+- ☐ Running `fscale fix` a second time changes nothing, for every built-in rule with a fix.
+
+---
+
+## M9 — `init`, `adopt` and `sync` ☐
+
+**Build**
+
+- `fscale init [--packs <list>]`: in an empty or new folder, run `git init` if needed, write `firescale.config.json`, then run the fix loop until `fscale check` passes. No templates.
+- Fixes that create files for the core rules that lack one and can have one safely: a starter CI workflow that runs `fscale verify` (`ci-exists`), a README skeleton with install and run sections (`readme-setup`). Rules that need a real decision stay agent or manual.
+- `fscale adopt`: the same loop on an existing repo. Shows the plan as a diff first (`--dry-run`), never overwrites a file it did not create, and lists what is left for a person or an agent.
+- `fscale sync` and `fscale sync --check`: run the loop again to repair drift; `--check` changes nothing and exits 1 when a fix would change something.
+- `docs/init.md`.
+
+**Done when**
+
+- ☐ `fscale init` in an empty folder yields a repo where `fscale check` passes with every core rule enforced except those listed as needing a person.
+- ☐ `fscale adopt --dry-run` on a fixture repo prints a diff and changes nothing; `fscale adopt` then makes `fscale check` report no deterministic violations.
+- ☐ `fscale sync --check` exits 1 after a generated file is deleted, and 0 after `fscale sync`.
+- ☐ `init`, `adopt` and `sync` start no Node process in a repo with only built-in packs, proven by a test.
+
+---
+
+## M10 — The group-project pack ☐
+
+**Build**
+
+- A `group-project` pack, in Rust, opt-in. Rules, each with a fix that creates the file: a pull request template, a contributing guide, a CI workflow that runs `fscale verify` on pull requests, and a branch naming rule (checks the current branch against a pattern from the rule's options; no fix).
+- Each rule has a SKILL.md and fixture tests: passing, failing, fixed, fixed twice.
+- `fscale init --packs core,group-project` builds a group-project repo through the fix loop alone.
+
+**Done when**
+
+- ☐ All group-project rules pass their fixture tests, and every fix is idempotent.
+- ☐ `fscale init --packs core,group-project` in an empty folder yields a repo where `fscale check` passes for the pack.
+- ☐ The generated CI workflow is valid YAML that runs `fscale verify`, with a snapshot test.
+
+---
+
+## M11 — `fscale doctor` ☐
+
+**Build**
+
+- `fscale doctor [--json]`: checks the machine, not the repo. Tool versions against what the repo declares (`packageManager`, `engines`, `rust-toolchain.toml`, `.nvmrc`, `.python-version`), every variable named in `.env.example` (set in the environment or present in a local env file; names only, values are never read out or printed), and whether dependencies are installed and match the lockfile.
+- Each problem comes with the command that fixes it. Exit 1 when something is wrong.
+- A JSON schema for `--json`, and `docs/doctor.md`.
+
+**Done when**
+
+- ☐ `fscale doctor` reports a missing tool, a wrong version, a missing env variable and missing dependencies in fixture setups, each with a next step, proven by tests.
+- ☐ `fscale doctor` exits 0 on this repo on a machine that can build it.
+- ☐ No test and no output ever contains the value of an env variable.
+- ☐ `--json` output validates against its schema, with a snapshot test.
+
+---
+
+## M12 — Born agent-ready: agent files from `init` ☐
+
+**Build**
+
+- Confirm the current Claude Code, Codex and Cursor formats for skills, hooks and permissions from their official docs first (Cursor's hook format is still unconfirmed from M7). Record them in an ADR.
+- Fixes for the `agent-ready` rules: an AGENTS.md **managed block** (commands from `fscale facts`, the verify rule; text outside the block is never touched), the verify hooks, and safe default permissions (deny reading env files and secrets; allow the repo's own check commands).
+- A new rule with a fix that installs the SKILL.md of every enabled rule where each agent looks for skills.
+- `fscale init --packs core,agent-ready` writes all of it through the fix loop. `fscale sync` repairs a hand-edited managed block.
+
+**Done when**
+
+- ☐ `fscale init` with `agent-ready` on yields a repo where the whole `agent-ready` pack passes, for all three agents.
+- ☐ Text outside the AGENTS.md managed block survives `fscale sync` unchanged, proven by a test.
+- ☐ Generated agent files have snapshot tests, and an existing agent settings file keeps its other settings.
+- ☐ `fscale sync --check` fails after a hand edit inside the managed block.
+
+---
+
+## M13 — Generators: `add` and `schema` ☐
+
+**Build**
+
+- `packages/generators`: the generator interface in TypeScript, called through the bridge.
+- `fscale add <generator> --json <input> [--dry-run]` and `fscale schema <generator>`. Input is validated against the schema before anything is written.
+- Two real generators to prove the interface: a workspace package and a rule (rule folder with check, SKILL.md and test).
+- A skill, installed by M12's mechanism, telling agents to call `fscale add` instead of hand-writing boilerplate.
+
+**Done when**
+
+- ☐ `fscale schema <generator>` prints a valid JSON Schema, and `fscale add` rejects input that does not match it with an error naming the field.
+- ☐ `fscale add --dry-run` prints a diff and changes nothing.
+- ☐ Each generator has snapshot tests, and its output passes `fscale check`.
+
+---
+
+## M14 — Blame-aware verify: the base run ☐
+
+**Build**
+
+- Study trustbut, goodhart and skylos first. Write the referee ADR: what each does, what firescale does differently, and how the false-positive rate will be measured.
+- Run verify on the base commit in a temporary git worktree. Never touch the user's working tree or index.
+- Cache base results under `.firescale/` keyed by base SHA + toolchain versions + lockfile hash.
+- Label at step level and for rule diagnostics: `new`, `pre-existing`, `fixed`. Only `new` makes `fscale verify` exit 1. The base is `--base <ref>`, or the merge base with the default branch.
+- With no base that differs from the head (on the default branch itself, or outside git), verify behaves as it does today: every failure blocks.
+- The summary and `--json` carry the labels (schema version bump).
+
+**Done when**
+
+- ☐ In a fixture repo whose test already fails on the base commit, `fscale verify` exits 0 and labels the failure `pre-existing`.
+- ☐ A failure introduced on the head is labelled `new` and exits 1; one repaired on the head is labelled `fixed`.
+- ☐ A second run with the same base makes no base run, proven by a test; changing the lockfile invalidates the cache.
+- ☐ The user's working tree and index are byte-for-byte unchanged after a run, proven by a test.
+- ☐ On the default branch, with no separate base, a failing test still exits 1.
+
+---
+
+## M15 — Blame-aware verify: per-test labels and reruns ☐
+
+**Build**
+
+- Failure identity below step level: read test results per test from the common runners' machine-readable output (start with Vitest or Jest, `cargo test` and pytest), so one new failing test is not hidden by ten old ones.
+- Rerun a `new` failure once before blocking. A pass on the rerun is labelled `flaky` and does not block. No flaky history is stored.
+- The stop hook (`fscale hooks run`) uses blame-aware verify, so an agent is only sent back for failures it introduced.
+- p50 and p99 of blame-aware verify, with a cold and a warm base cache, in `bench/RESULTS.md`.
+
+**Done when**
+
+- ☐ With two failing tests, one old and one new, only the new one is labelled `new` and named in the summary.
+- ☐ A test that fails once and then passes is labelled `flaky` and does not block, proven with a fixture that fails on its first run only.
+- ☐ Nothing about past flaky results is written to disk, proven by a test.
+- ☐ The stop hook lets an agent stop when every failure is `pre-existing`.
+
+---
+
+## M16 — Tamper guard: tests and assertions ☐
+
+**Build**
+
+- An ADR for tree-sitter: which grammars, binary size and build time before and after.
+- Parse base and head with tree-sitter for JavaScript and TypeScript, Rust and Python. Count, per file and in total: tests, skipped tests, assertions.
+- Compare by net counts, so a moved or renamed test is not a finding. Hard-fail: tests deleted or newly skipped, and a net loss of assertions.
+- Policy (protected paths, allowed exceptions) is read from the base commit's firescale config.
+- Runs as part of `fscale verify`, reported with file and line.
+
+**Done when**
+
+- ☐ Skipping a test, deleting a test and removing an assertion are each caught in fixture repos for all three languages.
+- ☐ Moving a test to another file, renaming it, and adding tests are not findings.
+- ☐ Loosening the policy in the same change has no effect, proven by a test.
+- ☐ Binary size and build time before and after are in `bench/RESULTS.md`.
+
+---
+
+## M17 — Tamper guard: config, CI and approvals ☐
+
+**Build**
+
+- More detectors, same base-versus-head method: new lint-disable comments and `allow` attributes, lowered coverage thresholds, CI steps removed or made unable to fail (`continue-on-error`, `|| true`, a deleted verify step), and `--no-verify` in scripts, hooks or CI.
+- Human approval for the ambiguous cases, changed expected values and changed snapshots: verify blocks until a person records an approval. An ADR decides where approvals live so that an agent cannot write its own.
+- A labelled corpus of honest and cheating changes, and a script that measures the false-positive and miss rates. Results in `bench/RESULTS.md`.
+
+**Done when**
+
+- ☐ Each detector has a caught case and a not-a-finding case in fixture repos.
+- ☐ A changed snapshot blocks until approved, and an approval written by the change under review does not count, proven by tests.
+- ☐ The false-positive rate on the corpus is measured and recorded.
+
+---
+
+## M18 — Guarded agent runner ☐
 
 **Build**
 
 - The runner and every guardrail in SPEC §7, in Rust, each with its own test.
-- `packages/agents`: the adapter interface plus Claude Code and Codex adapters, in TypeScript, called through the bridge.
-- A fake agent adapter for tests, so CI never calls a real model.
-- The fix ledger.
+- A fake agent adapter, so tests and CI never call a real model.
+- The re-check after a run is the referee (SPEC §8): blame-aware verify plus the tamper guard.
 
 **Done when**
 
-- ☐ With the fake agent: a good fix is committed, a bad fix is rolled back, a fix touching a protected path is rejected.
+- ☐ With the fake agent: a good fix is committed, a bad fix is rolled back, a fix touching a protected path is rejected, and a fix that skips a test is rejected by the tamper guard.
 - ☐ The runner refuses to start on a dirty tree or when secrets are tracked.
+- ☐ Every guardrail in SPEC §7 has a test named after it.
+
+---
+
+## M19 — Agent adapters and the ledger ☐ (finish and test locally)
+
+**Build**
+
+- `packages/agents`: the adapter interface plus Claude Code and Codex adapters, in TypeScript, called through the bridge. Confirm each CLI's flags from its current docs and pin them in tests.
+- The ledger: every fix run appends one line to `.firescale/ledger.jsonl` with rule, agent, pass or fail, diff size, duration and cost (when the agent reports it).
+- `fscale ledger [--json]`: runs, pass rate and total cost, per rule and per agent.
+
+**Done when**
+
+- ☐ A fake-agent run appends one schema-valid ledger line, for a pass and for a fail.
+- ☐ `fscale ledger` summarises a fixture ledger, with a snapshot test, and copes with a damaged line.
 - ☐ Manual local test: a real agent fixes one real violation end to end. Result noted in the PR.
 
 ---
 
-## M9 — `init`, `add`, `sync` ☐
+## M20 to M23 — Stack packs ☐
+
+| Milestone | Pack       | Status |
+| --------- | ---------- | ------ |
+| M20       | `python`   | ☐      |
+| M21       | `nextjs`   | ☐      |
+| M22       | `supabase` | ☐      |
+| M23       | `expo`     | ☐      |
+
+One milestone and one pull request per pack, in this order (simplest toolchain first). Each follows the same shape.
 
 **Build**
 
-- `fscale init` and `fscale init --agents`.
-- JSON-first generators in TypeScript, called through the bridge, with `fscale schema` and `--dry-run`.
-- `fscale sync` for the CI workflow and the managed AGENTS.md block. `--check` for CI.
-- A skill telling agents to use `fscale add` instead of hand-writing boilerplate.
+- Research the stack's current official setup docs first, and record what the pack assumes in an ADR.
+- Five to eight rules whose fixes create or repair files, each with a SKILL.md and fixture tests.
+- `fscale init --packs core,<stack>` builds a working starter through the fix loop.
 
 **Done when**
 
-- ☐ `fscale init` on an empty folder yields a repo where `fscale check` and `fscale verify` both pass.
-- ☐ `fscale sync --check` fails after a hand edit to a generated file.
-- ☐ Generators are covered by snapshot tests.
+- ☐ `fscale init --packs core,<stack>` in an empty folder yields a repo where `fscale check` passes and the stack's own build or test command succeeds (run by hand where CI cannot install the stack; noted in the PR).
+- ☐ `fscale adopt` on a fixture repo of that stack reports only real gaps.
+- ☐ Every fix is idempotent, proven by tests.
 
 ---
 
-## Later
+## Later (not ordered)
 
-- M10: publish to npm; docs site.
-- M11: rule packs for Expo, Supabase, Next.js, Python, group projects.
-- M12: thin MCP server; Nx plugins for EAS and Supabase.
+- Publish to npm; docs site. Publishing is a manual step for the owner (see DECISIONS.md), and group-project mode needs it before real teammates can use it.
+- Ingest alint output when alint is installed, and report it as diagnostics.
+- A public benchmark built from fix ledgers.
+- A thin MCP server; Nx plugins for EAS and Supabase.
