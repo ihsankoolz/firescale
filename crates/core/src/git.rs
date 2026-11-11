@@ -178,18 +178,26 @@ impl Git {
         Ok(())
     }
 
-    /// True when the index holds `file` with the content it has on disk.
-    pub fn is_staged_as_on_disk(&self, file: &str) -> Result<bool> {
+    /// True when the index has an entry for `file`.
+    pub fn is_tracked(&self, file: &str) -> Result<bool> {
         let args = ["--literal-pathspecs", "ls-files", "--cached", "--", file];
-        if run_git(&self.root, &args)?.stdout.trim().is_empty() {
-            return Ok(false);
+        Ok(!run_git(&self.root, &args)?.stdout.trim().is_empty())
+    }
+
+    /// True when a `.gitignore` rule (or another exclude) ignores `file`.
+    pub fn is_ignored(&self, file: &str) -> Result<bool> {
+        // check-ignore takes plain paths and does not accept pathspec magic.
+        // Exit code 0: ignored. 1: not ignored. Anything else: git could not
+        // say, which must not be read as "free to create".
+        let result = run_git(&self.root, &["check-ignore", "--quiet", "--", file])?;
+        match result.code {
+            0 => Ok(true),
+            1 => Ok(false),
+            _ => Err(Error::user(format!(
+                "git check-ignore failed for {file}: {}. Fix the git error above, then run this again.",
+                result.stderr.trim()
+            ))),
         }
-        // Exit code 1 means the file differs from the index.
-        let diff = run_git(
-            &self.root,
-            &["--literal-pathspecs", "diff-files", "--quiet", "--", file],
-        )?;
-        Ok(diff.code == 0)
     }
 
     /// Removes paths from the index and keeps the files on disk.

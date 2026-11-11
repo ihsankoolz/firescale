@@ -66,24 +66,27 @@ fn occupied(path: &Path) -> bool {
     path.symlink_metadata().is_ok()
 }
 
-/// Names of the entries of `.github/workflows/` on disk, sorted.
-fn workflow_folder_names(root: &Path) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(on_disk(root, WORKFLOWS))
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
+/// Names of the entries of `.github/workflows/` on disk, sorted. Empty when
+/// the folder does not exist; `None` when it exists and cannot be listed.
+fn workflow_folder_names(root: &Path) -> Option<Vec<String>> {
+    let entries = match fs::read_dir(on_disk(root, WORKFLOWS)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+        Err(_) => return None,
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        names.push(entry.ok()?.file_name().to_string_lossy().into_owned());
+    }
     names.sort();
-    names
+    Some(names)
 }
 
 /// CI configs that are on disk, tracked or not: workflow files first, then
 /// the configs of other CI systems. Sorted within each group.
 fn ci_files_on_disk(root: &Path) -> Vec<String> {
     let mut files: Vec<String> = workflow_folder_names(root)
+        .unwrap_or_default()
         .into_iter()
         .map(|name| format!("{WORKFLOWS}/{name}"))
         .filter(|file| is_workflow(file) && on_disk(root, file).is_file())
@@ -102,14 +105,20 @@ fn ci_files_on_disk(root: &Path) -> Vec<String> {
 /// only marked deterministic when the fix will act: nothing on disk is, or
 /// could be mistaken for, a workflow, and the starter's path is free.
 fn starter_can_be_created(root: &Path) -> bool {
-    let no_workflow = workflow_folder_names(root).iter().all(|name| {
+    // A folder that cannot be listed may hold anything.
+    let Some(names) = workflow_folder_names(root) else {
+        return false;
+    };
+    let no_workflow = names.iter().all(|name| {
         let lower = name.to_lowercase();
         !(lower.ends_with(".yml") || lower.ends_with(".yaml"))
     });
-    // A file where a folder must go would make the write fail.
+    // Each folder on the way is a real folder or absent: not a file, and not
+    // a link, which would lead the write out of the repo.
     let folders_free = [".github", WORKFLOWS].iter().all(|folder| {
-        let path = on_disk(root, folder);
-        path.is_dir() || !occupied(&path)
+        on_disk(root, folder)
+            .symlink_metadata()
+            .map_or(true, |meta| meta.is_dir())
     });
     no_workflow
         && folders_free
@@ -117,6 +126,56 @@ fn starter_can_be_created(root: &Path) -> bool {
         && OTHER_CI
             .iter()
             .all(|other| !occupied(&on_disk(root, other)))
+}
+
+/// A CI config that git tracks but the disk does not have. It may hold
+/// staged work, so nothing is created while there is one.
+fn tracked_but_missing(ctx: &RuleContext) -> Result<Option<String>> {
+    Ok(ctx
+        .git()
+        .tracked_files()?
+        .into_iter()
+        .filter(|file| is_workflow(file) || OTHER_CI.contains(&file.as_str()))
+        .find(|file| !occupied(&on_disk(ctx.root(), file))))
+}
+
+/// Why the starter cannot be created, as `(message, fixable)`, or `None`
+/// when it can. Asked by the check and again by the fix.
+fn starter_blocker(ctx: &RuleContext) -> Result<Option<(String, Fixable)>> {
+    let in_repo = ctx.git().is_repo()?;
+    if in_repo {
+        if let Some(missing) = tracked_but_missing(ctx)? {
+            return Ok(Some((
+                format!(
+                    "\"{missing}\" is tracked by git but missing from disk. Restore it with `git restore {missing}`, or commit its deletion."
+                ),
+                Fixable::Manual,
+            )));
+        }
+        if let Some(untracked) = ci_files_on_disk(ctx.root()).first() {
+            return Ok(Some((
+                format!(
+                    "\"{untracked}\" exists but is not tracked by git, so it does not count as CI. Run `git add {untracked}` and commit it."
+                ),
+                Fixable::Manual,
+            )));
+        }
+    }
+    if !starter_can_be_created(ctx.root()) {
+        return Ok(Some((
+            "No CI workflow found in .github/workflows. Add a workflow that runs your build and tests on pull requests (see SKILL.md).".to_owned(),
+            Fixable::Agent,
+        )));
+    }
+    if in_repo && ctx.git().is_ignored(STARTER)? {
+        return Ok(Some((
+            format!(
+                "No CI workflow found in .github/workflows, and a .gitignore rule ignores {STARTER}, so one could not be committed. Remove that rule, then add a workflow."
+            ),
+            Fixable::Manual,
+        )));
+    }
+    Ok(None)
 }
 
 /// CI configs that count. In a git repo: tracked files that are also on disk
@@ -303,25 +362,13 @@ impl BuiltinRule for CiExists {
                 project: None,
                 fixable,
             };
-            // Only reached in a git repo: outside one, a file on disk counts.
-            if let Some(untracked) = ci_files_on_disk(ctx.root()).first() {
-                return Ok(vec![finding(
-                    format!(
-                        "\"{untracked}\" exists but is not tracked by git, so it does not count as CI. Run `git add {untracked}` and commit it."
-                    ),
-                    Fixable::Manual,
-                )]);
-            }
-            if starter_can_be_created(ctx.root()) {
-                return Ok(vec![finding(
+            let (message, fixable) = starter_blocker(ctx)?.unwrap_or_else(|| {
+                (
                     "No CI workflow found in .github/workflows. Add a workflow that runs your build and tests on pull requests; `fscale fix` can add a starter one.".to_owned(),
                     Fixable::Deterministic,
-                )]);
-            }
-            return Ok(vec![finding(
-                "No CI workflow found in .github/workflows. Add a workflow that runs your build and tests on pull requests (see SKILL.md).".to_owned(),
-                Fixable::Agent,
-            )]);
+                )
+            });
+            return Ok(vec![finding(message, fixable)]);
         }
         for file in &workflows {
             if let Some(text) = ctx.read(file)? {
@@ -345,7 +392,7 @@ impl BuiltinRule for CiExists {
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         // Never trust the diagnostics alone: look at the disk again, and only
         // create a file where there is none.
-        if !starter_can_be_created(ctx.root()) {
+        if !candidate_files(ctx)?.is_empty() || starter_blocker(ctx)?.is_some() {
             return Ok(FixResult::default());
         }
         let facts = detect_facts(ctx.root())?;
@@ -354,11 +401,10 @@ impl BuiltinRule for CiExists {
             .as_deref()
             .and_then(|manager| ci_install_commands(manager, &facts.lockfiles));
         let has_package_manager = facts.package_manager.is_some();
-        ctx.write(
+        ctx.create_tracked(
             STARTER,
             &starter_workflow(install.as_deref(), has_package_manager),
         )?;
-        ctx.track(STARTER)?;
         let mut notes = vec![format!(
             "Review {STARTER}: it runs `npx firescale verify`. Add anything your project needs before that step (services, secrets, other toolchains)."
         )];

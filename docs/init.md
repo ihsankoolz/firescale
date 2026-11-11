@@ -9,14 +9,16 @@ These three commands are the same thing: the fix loop of [`fscale fix`](fix.md),
 | `fscale sync`         | in a firescale repo, any time    | Runs the fixes again, to repair drift.                                         |
 | `fscale sync --check` | in CI                            | Changes nothing. Exit code 1 when `fscale sync` would change something.        |
 
-Every command prints two things: what it changed, and what is left for a person or an agent.
+Every command prints the repo root it works in (`Repo root: ...`, which can be a parent of the folder you are in), what it changed, and what is left for a person or an agent.
 
 ## What these commands will never do
 
-- **Overwrite or delete a file.** The fixes that ship with firescale create a file only when it is absent, or add lines to the end of one (`.gitignore`, `.env.example`). The config file is created with a call that fails if the file exists.
+- **Overwrite or delete a file.** The fixes that ship with firescale create a file only when it is absent, or add lines to the end of one (`.gitignore`, `.env.example`). The config file, the starter workflow and the README skeleton are created with a call that fails if anything is at that path.
+- **Write outside the repo.** A fix does not write to a symbolic link or below one. With a linked `.github` no workflow is created; with a linked `.gitignore` the run stops and says so.
+- **Replace what is in the git index.** If git tracks a README or a workflow that is missing from disk, nothing is created in its place: the index may hold work you staged. The rule tells you to `git restore` the file or commit its deletion.
 - **Edit a README, a CI workflow or an AGENTS.md that you wrote.** If your README has no install steps, or your workflow does not run on pull requests, that is reported as left for you. It is not rewritten.
 - **Put a second file beside yours.** With a `ReadMe.MD`, a `README.adoc` or an untracked `README.md` in the repo, no `README.md` is created. With any workflow file in `.github/workflows`, tracked or not, or another CI system's config, no workflow is created.
-- **Commit.** Two fixes run `git add` on the one file they have just created (see "Staging" below). Nothing else is staged, and nothing is committed.
+- **Commit.** Two fixes run `git add` on the one file they have just created (see "Staging" below). Nothing else is staged, and nothing is committed. If that `git add` fails, the new file is removed again.
 
 One fix changes the git index of a file you wrote: `core/no-committed-env` untracks a committed `.env` file (`git rm --cached`). The file stays on disk, and the change is printed.
 
@@ -32,7 +34,7 @@ fscale init --packs core       # choose the packs
 
 In an empty folder (a folder that holds nothing, or only `.git`), `init`:
 
-1. runs `git init` if the folder is not in a git repo,
+1. checks the packs and the rules' order, then runs `git init` if the folder is not in a git repo,
 2. writes `firescale.config.json` with the chosen packs,
 3. runs every fix until nothing is left to fix,
 4. prints the changes, then the violations that no fix can repair.
@@ -51,7 +53,7 @@ fscale: This folder is not empty (2 entries: notes.txt, src) and is not a firesc
 
 - `fscale init --force` runs anyway. It is exactly as careful as `adopt`; the only difference is that the new config gets init's packs (`core` and `agent-ready`, or `--packs`).
 - In a folder that already has a firescale config, `init` keeps the config and runs the fixes, like `sync`. `--packs` is an error there, because it would be ignored.
-- In an empty folder inside a firescale repo, `init` refuses, so a second repo is not started by accident. `--force` overrides this too.
+- In an empty folder inside another git repo or firescale repo, `init` refuses: the files would land in a subfolder of that repo and be staged in its index. `--force` overrides this too.
 
 ## `fscale adopt`
 
@@ -87,7 +89,7 @@ fscale sync --check    # CI: exit 1 if sync would change something
 
 `sync` needs a firescale config. Without one it tells you to run `adopt` or `init`.
 
-Drift is anything a fix would repair again: a generated file that was deleted, a `.gitignore` that lost a required line. `sync --check` is a dry run of `sync` whose exit code is 1 when there is at least one change, and it prints the changes as a diff.
+Drift is anything a fix would repair again: a generated file that is gone from disk and from git, a `.gitignore` that lost a required line. A file that is deleted from disk but still tracked is not recreated (see above); `git rm` it, or `git restore` it. `sync --check` is a dry run of `sync` whose exit code is 1 when there is at least one change, and it prints the changes as a diff.
 
 ## Staging
 
@@ -98,7 +100,7 @@ core/readme-setup
   created README.md (staged with git add)
 ```
 
-If such a file exists but is untracked, nothing is created or staged. The rule reports it as a manual fix: run `git add` on it yourself.
+If such a file exists but is untracked, nothing is created or staged. The rule reports it as a manual fix: run `git add` on it yourself. The same holds when a `.gitignore` rule ignores `README.md` or `.github/`: the rule says so and creates nothing.
 
 ## Exit codes
 
@@ -114,7 +116,8 @@ A bad config, an unknown pack and a bad `after` declaration are all found before
 
 - `init` and `adopt` only write `firescale.config.json`, never `firescale.config.ts`.
 - In a dry run, what custom TypeScript rules would still report afterwards is not listed, because the Node host reads the real repo, not the scratch copy. Their fixes are previewed.
-- A generated file that was committed and then deleted from disk is created again by `sync`. That holds for a README or workflow you wrote yourself and then deleted without committing the deletion: `sync` creates the starter version. `git restore <file>` brings yours back.
+- The preview of `adopt --dry-run` and `sync --check` runs in a copy of the repo that holds tracked files, files git does not ignore, folders and symbolic links. Files that git ignores are not in it, and neither are the repo's own git settings (`.git/info/exclude`, sparse checkout), so in such repos the preview can differ from the real run.
+- Files are written in place, not through a temporary file. If the disk fills up or the process is killed while a fix appends to `.gitignore`, that file can be left cut short.
 - The starter workflow calls `npx firescale verify`, which needs firescale on npm. Until 0.1.0 is published it fails at that step.
 - The starter workflow has an install step only for npm and pnpm. For anything else it says so under "To review".
 - These commands print text only. There is no `--json` output yet.

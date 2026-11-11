@@ -1,7 +1,9 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`fscale adopt > --dry-run prints a diff and changes nothing; adopt then leaves no deterministic violation 1`] = `
-"firescale
+"Repo root: <root>
+
+firescale
   would create firescale.config.json
 
 --- /dev/null
@@ -84,7 +86,9 @@ To review afterwards:
 `;
 
 exports[`fscale adopt > --dry-run prints a diff and changes nothing; adopt then leaves no deterministic violation 2`] = `
-"firescale
+"Repo root: <root>
+
+firescale
   created firescale.config.json
 
 core/ci-exists
@@ -113,7 +117,8 @@ Next: review the changes with \`git status\` and \`git diff\`, then commit them.
 `;
 
 exports[`fscale init > builds a repo with the core pack in an empty folder and leaves no deterministic violation 1`] = `
-"Initialised a git repository (git init).
+"Repo root: <root>
+Initialised a git repository (git init).
 
 firescale
   created firescale.config.json
@@ -140,7 +145,8 @@ Next: review the changes with \`git status\` and \`git diff\`, then commit them.
 `;
 
 exports[`fscale init > turns on core and agent-ready by default and prints the violations left for a person 1`] = `
-"Initialised a git repository (git init).
+"Repo root: <root>
+Initialised a git repository (git init).
 
 firescale
   created firescale.config.json

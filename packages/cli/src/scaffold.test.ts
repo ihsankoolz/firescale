@@ -8,7 +8,7 @@
  * every file byte for byte before and after.
  */
 import { execFile } from 'node:child_process';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
@@ -87,6 +87,13 @@ async function exists(file: string): Promise<boolean> {
   );
 }
 
+/** The command's output with the repo's own path replaced, so it can be compared across machines. */
+const portable = (stdout: string, repo: FixtureRepo): string =>
+  stdout.replaceAll(repo.root.replaceAll('\\', '/'), '<root>');
+
+/** Symbolic links need a privilege on Windows that CI runners and most people do not have. */
+const LINKS = process.platform !== 'win32';
+
 /** An empty folder that is not a git repo. */
 const emptyFolder = (): Promise<FixtureRepo> => fixtures.create({ track: 'no-git' });
 
@@ -96,7 +103,7 @@ describe('fscale init', () => {
     const result = await runCli(['init', '--packs', 'core'], repo.root);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(EXIT_OK);
-    expect(result.stdout).toMatchSnapshot();
+    expect(portable(result.stdout, repo)).toMatchSnapshot();
 
     expect(await exists(path.join(repo.root, '.git'))).toBe(true);
     expect(await repo.read('firescale.config.json')).toBe('{\n  "packs": ["core"]\n}\n');
@@ -129,7 +136,7 @@ describe('fscale init', () => {
       expect(result.stdout).toContain(`  ${rule}\n`);
       expect(result.stdout).toContain(`How to fix: fscale explain ${rule}`);
     }
-    expect(result.stdout).toMatchSnapshot();
+    expect(portable(result.stdout, repo)).toMatchSnapshot();
   });
 
   it('is repeatable: a second init keeps the config and changes nothing', async () => {
@@ -190,6 +197,36 @@ describe('fscale init', () => {
     const after = await snapshot(repo.root);
     for (const [file, content] of before) expect(after.get(file)).toEqual(content);
     expect(after.has('firescale.config.json')).toBe(true);
+  });
+
+  it('names the folder it works in on the first line', async () => {
+    const repo = await emptyFolder();
+    const result = await runCli(['init', '--packs', 'core'], repo.root);
+    expect(portable(result.stdout, repo).split('\n')[0]).toBe('Repo root: <root>');
+  });
+
+  it('leaves no git repo behind when the config it finds is broken', async () => {
+    const repo = await fixtures.create({
+      files: { 'firescale.config.json': '{bad' },
+      track: 'no-git',
+    });
+    const result = await runCli(['init'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('is not valid JSON');
+    expect(await readdir(repo.root)).toEqual(['firescale.config.json']);
+  });
+
+  it('refuses an empty folder inside a git repo that is not a firescale repo', async () => {
+    const repo = await fixtures.create({ files: { 'main.py': 'print(1)\n' } });
+    const inner = path.join(repo.root, 'sub');
+    await mkdir(inner);
+    const indexBefore = await index(repo.root);
+    const result = await runCli(['init'], inner);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('is inside the git repo at');
+    expect(result.stderr).toContain('fscale adopt');
+    expect(await readdir(inner)).toEqual([]);
+    expect(await index(repo.root)).toBe(indexBefore);
   });
 
   it('refuses to start a second repo inside a firescale repo', async () => {
@@ -368,6 +405,72 @@ describe('existing work survives', () => {
     }
   });
 
+  it('nothing is created where a .gitignore rule would keep it out of git', async () => {
+    const repo = await fixtures.create({
+      files: { '.gitignore': 'node_modules/\nREADME.md\n.github/\n', 'package.json': '{}\n' },
+    });
+    const result = await runCli(['adopt'], repo.root);
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toContain('a .gitignore rule ignores README.md');
+    expect(result.stdout).toContain('a .gitignore rule ignores .github/workflows/ci.yml');
+    expect([...(await snapshot(repo.root)).keys()].sort()).toEqual([
+      '.gitignore',
+      'firescale.config.json',
+      'package.json',
+    ]);
+  });
+
+  it.runIf(LINKS)('never writes through a link that leads out of the repo', async () => {
+    const outside = await fixtures.create({
+      files: { 'shared-ignore': '# shared by many repos\n*.bak' },
+      track: 'no-git',
+    });
+    const outsideBefore = await snapshot(outside.root);
+
+    // A linked .github: no workflow appears on the other side.
+    const linkedFolder = await fixtures.create({ files: { 'package.json': '{}\n' } });
+    await symlink(outside.root, path.join(linkedFolder.root, '.github'));
+    for (const argv of [['adopt', '--dry-run'], ['adopt'], ['sync'], ['sync', '--check']]) {
+      const result = await runCli(argv, linkedFolder.root);
+      expect(result.code, argv.join(' ')).toBe(EXIT_OK);
+      expect(result.stdout, argv.join(' ')).not.toContain('.github/workflows/ci.yml');
+      expect(await snapshot(outside.root), argv.join(' ')).toEqual(outsideBefore);
+    }
+
+    // A linked .gitignore: the run stops and says why; the file it leads to is not edited.
+    const linkedFile = await fixtures.create({ files: { 'package.json': '{}\n' } });
+    await symlink(
+      path.join(outside.root, 'shared-ignore'),
+      path.join(linkedFile.root, '.gitignore'),
+    );
+    for (const argv of [['adopt', '--dry-run'], ['adopt']]) {
+      const result = await runCli(argv, linkedFile.root);
+      expect(result.code, argv.join(' ')).toBe(EXIT_USAGE);
+      expect(result.stderr, argv.join(' ')).toContain('firescale does not write through links');
+      expect(await snapshot(outside.root), argv.join(' ')).toEqual(outsideBefore);
+    }
+  });
+
+  // Folder permissions do not bind root, and Windows has no such mode bits.
+  const canLock = LINKS && process.getuid?.() !== 0;
+  it.runIf(canLock)('an untracked README survives when the folder cannot be listed', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': '{}',
+        '.github/workflows/build.yml': 'on: pull_request\njobs: {}\n',
+      },
+    });
+    await writeFile(path.join(repo.root, 'README.md'), ODD_README);
+    await chmod(repo.root, 0o311);
+    try {
+      await runCli(['sync'], repo.root);
+    } finally {
+      await chmod(repo.root, 0o755);
+    }
+    expect(await repo.read('README.md')).toBe(ODD_README);
+  });
+
   it('the line check itself notices a removed, changed or reordered line', () => {
     const text = (value: string): Buffer => Buffer.from(value, 'utf8');
     expect(everyLineSurvives(text('a\nb\n'), text('a\nb\nc\n'))).toBe(true);
@@ -396,7 +499,7 @@ describe('fscale adopt', () => {
     const preview = await runCli(['adopt', '--dry-run'], repo.root);
     expect(preview.stderr).toBe('');
     expect(preview.code).toBe(EXIT_OK);
-    expect(preview.stdout).toMatchSnapshot();
+    expect(portable(preview.stdout, repo)).toMatchSnapshot();
     expect(preview.stdout).toContain('--- /dev/null\n+++ b/firescale.config.json\n');
     expect(preview.stdout).toContain('+++ b/.github/workflows/ci.yml\n');
     expect(preview.stdout).toContain('Nothing was changed. Run `fscale adopt` to apply.');
@@ -407,7 +510,7 @@ describe('fscale adopt', () => {
     const real = await runCli(['adopt'], repo.root);
     expect(real.stderr).toBe('');
     expect(real.code).toBe(EXIT_OK);
-    expect(real.stdout).toMatchSnapshot();
+    expect(portable(real.stdout, repo)).toMatchSnapshot();
     expect((await diagnostics(repo.root)).filter((d) => d.fixable === 'deterministic')).toEqual([]);
 
     // The preview showed exactly the files the real run then wrote.
@@ -471,7 +574,11 @@ describe('fscale sync', () => {
 
     for (const file of ['.github/workflows/ci.yml', 'README.md', '.gitignore']) {
       const generated = await repo.read(file);
+      // Deleted for good: from disk and from the git index.
       await rm(path.join(repo.root, ...file.split('/')));
+      await run('git', ['rm', '--cached', '--quiet', '--ignore-unmatch', '--', file], {
+        cwd: repo.root,
+      });
       const before = await snapshot(repo.root);
       const indexBefore = await index(repo.root);
 
@@ -491,21 +598,72 @@ describe('fscale sync', () => {
     }
   });
 
-  it('also repairs a generated file that was committed and then deleted', async () => {
-    const repo = await emptyFolder();
-    await runCli(['init', '--packs', 'core'], repo.root);
-    const git = (...args: string[]): Promise<unknown> =>
-      run('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], {
-        cwd: repo.root,
-      });
-    await git('add', '-A');
-    await git('commit', '--quiet', '-m', 'init');
+  it('does not recreate a file git still tracks: staged work in the index is never replaced', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': '{}',
+        '.gitignore': '# nothing yet\n',
+        'README.md': '# mine\n\n## Install\n\n## Usage\n',
+        '.github/workflows/build.yml': 'on: pull_request\njobs: {}\n',
+      },
+    });
+    // The staged version of the README exists nowhere but in the index.
+    await writeFile(
+      path.join(repo.root, 'README.md'),
+      '# mine\n\nSTAGED ONLY\n\n## Install\n\n## Usage\n',
+    );
+    await repo.track(['README.md']);
+    await rm(path.join(repo.root, 'README.md'));
     await rm(path.join(repo.root, '.github'), { recursive: true });
-    expect((await runCli(['sync', '--check'], repo.root)).code).toBe(EXIT_VIOLATIONS);
-    expect((await runCli(['sync'], repo.root)).code).toBe(EXIT_OK);
-    expect((await runCli(['sync', '--check'], repo.root)).code).toBe(EXIT_OK);
-    // Back to what was committed: git sees no difference.
-    expect((await run('git', ['status', '--porcelain'], { cwd: repo.root })).stdout).toBe('');
+    const indexBefore = await index(repo.root);
+    const before = await snapshot(repo.root);
+
+    for (const argv of [['sync', '--check'], ['sync'], ['adopt'], ['init', '--force']]) {
+      const result = await runCli(argv, repo.root);
+      expect(result.code, argv.join(' ')).toBe(EXIT_OK);
+      expect(result.stdout, argv.join(' ')).toContain('git restore README.md');
+      expect(result.stdout, argv.join(' ')).toContain('git restore .github/workflows/build.yml');
+      expect(await index(repo.root), argv.join(' ')).toBe(indexBefore);
+      expect(await snapshot(repo.root), argv.join(' ')).toEqual(before);
+    }
+    // Doing what the message says brings the staged text back.
+    await run('git', ['restore', 'README.md'], { cwd: repo.root });
+    expect(await repo.read('README.md')).toContain('STAGED ONLY');
+  });
+
+  it('sync followed by sync --check is always in sync, also around links and ignored paths', async () => {
+    const cases: Record<string, (repo: FixtureRepo) => Promise<void>> = {
+      'an ignored README and .github': async (repo) => {
+        await repo.write('.gitignore', 'node_modules/\nREADME.md\n.github/\n');
+      },
+      'an empty folder named like a readme': async (repo) => {
+        await mkdir(path.join(repo.root, 'readme-assets'));
+      },
+    };
+    if (LINKS) {
+      cases['a README that is a broken link'] = (repo) =>
+        symlink(path.join(repo.root, 'gone.md'), path.join(repo.root, 'README.md'));
+      cases['a workflow that is a broken link'] = async (repo) => {
+        await mkdir(path.join(repo.root, '.github', 'workflows'), { recursive: true });
+        await symlink('gone.yml', path.join(repo.root, '.github', 'workflows', 'ci.yml'));
+      };
+      cases['a README that links to a folder'] = async (repo) => {
+        await mkdir(path.join(repo.root, 'docs'));
+        await symlink('docs', path.join(repo.root, 'README.md'));
+      };
+    }
+    for (const [name, arrange] of Object.entries(cases)) {
+      const repo = await fixtures.create({
+        files: { 'firescale.config.json': '{}', 'package.json': '{ "name": "x" }\n' },
+      });
+      await arrange(repo);
+      await run('git', ['add', '-A'], { cwd: repo.root });
+      const first = await runCli(['sync'], repo.root);
+      expect(first.code, name).toBe(EXIT_OK);
+      const check = await runCli(['sync', '--check'], repo.root);
+      expect(check.stdout, name).toContain('In sync');
+      expect(check.code, name).toBe(EXIT_OK);
+    }
   });
 
   it('needs a config, and says how to get one', async () => {

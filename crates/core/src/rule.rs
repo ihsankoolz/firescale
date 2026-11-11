@@ -1,7 +1,7 @@
 //! The contract a built-in rule implements, and the helpers that run one.
 
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -86,21 +86,98 @@ impl RuleContext {
         Ok(())
     }
 
-    /// Adds a file to the git index, so that rules which look at tracked
-    /// files see it. Only `fix` may call this, and only for a file the fix
-    /// itself created. Does nothing outside a git repo, or when the index
-    /// already holds the file with this content.
-    pub fn track(&self, file: &str) -> Result<()> {
-        validate_relative(file)?;
-        if !self.git.is_repo()? || self.git.is_staged_as_on_disk(file)? {
-            return Ok(());
+    /// Creates a file that must not exist yet and, in a git repo, adds it to
+    /// the index, so that rules which look at tracked files see it. Only
+    /// `fix` may call this. It is how a fix scaffolds a file.
+    ///
+    /// It cannot overwrite anything: the file is opened with `create_new`,
+    /// which fails if anything is at that path, and it refuses when git
+    /// already has the path in its index (a tracked file that is missing from
+    /// disk may hold staged work). It does not write through a symbolic link.
+    /// If `git add` fails, the file is removed again, so a failed fix leaves
+    /// nothing behind that was not reported.
+    pub fn create_tracked(&self, file: &str, content: &str) -> Result<()> {
+        let target = self.resolve(file)?;
+        self.refuse_links(file)?;
+        let exists = || {
+            Error::user(format!(
+                "{file} already exists, so it was not created. firescale never overwrites a file."
+            ))
+        };
+        if target.symlink_metadata().is_ok() {
+            return Err(exists());
+        }
+        let in_repo = self.git.is_repo()?;
+        if in_repo && self.git.is_tracked(file)? {
+            return Err(Error::user(format!(
+                "{file} is tracked by git but missing from disk, so it was not created. Restore it with `git restore {file}`, or commit its deletion, then run this again."
+            )));
         }
         if !self.dry_run {
-            self.git.track(file)?;
+            let failed = |error: std::io::Error| {
+                if error.kind() == ErrorKind::AlreadyExists {
+                    exists()
+                } else {
+                    Error::user(format!(
+                        "Could not create {file} ({error}). Check the folder's permissions."
+                    ))
+                }
+            };
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(failed)?;
+            }
+            let mut created = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&target)
+                .map_err(failed)?;
+            created.write_all(content.as_bytes()).map_err(failed)?;
+            drop(created);
+            if in_repo {
+                let staged = self.git.track(file).and_then(|()| {
+                    if self.git.is_tracked(file)? {
+                        Ok(())
+                    } else {
+                        Err(Error::user(format!(
+                            "git add did not add {file} to the index. Check `git status` in this folder, then run this again."
+                        )))
+                    }
+                });
+                if let Err(error) = staged {
+                    // The file is ours, made a moment ago: take it back.
+                    let _ = fs::remove_file(&target);
+                    return Err(error);
+                }
+            }
         }
-        self.record(Change::Track {
+        self.record(Change::Write {
             file: file.to_owned(),
+            before: None,
+            after: content.to_owned(),
         });
+        if in_repo {
+            self.record(Change::Track {
+                file: file.to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Refuses a path that is, or lies below, a symbolic link inside the
+    /// repo. Writing through a link would change a file somewhere else.
+    fn refuse_links(&self, file: &str) -> Result<()> {
+        let mut path = self.root.clone();
+        for part in file.split('/') {
+            path.push(part);
+            if path
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                return Err(Error::user(format!(
+                    "{file} was not written, because it is or lies below a symbolic link, and firescale does not write through links. Replace the link with a real file or folder, or turn this rule off in the firescale config."
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -142,6 +219,7 @@ impl RuleContext {
         if before.as_deref() == Some(content) {
             return Ok(());
         }
+        self.refuse_links(file)?;
         self.record(Change::Write {
             file: file.to_owned(),
             before,

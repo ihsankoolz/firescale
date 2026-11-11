@@ -28,7 +28,7 @@ Without CI on pull requests, broken builds and failing tests reach the main bran
 
 ## Agent fix instructions
 
-`fscale fix` only ever creates a file that is absent. It never overwrites, edits or renames a file that exists on disk, tracked or not.
+`fscale fix` only ever creates a file that is absent. It never overwrites, edits or renames a file that exists on disk, tracked or not. It also creates nothing when git still tracks a CI config that is missing from disk, when a `.gitignore` rule ignores the workflow path, or when `.github` is a symbolic link.
 
 ### DETERMINISTIC
 
@@ -40,6 +40,8 @@ Create `.github/workflows/ci.yml` and stage it with `git add`. The starter workf
 
 - After the starter is created: tell the user to review `.github/workflows/ci.yml` and add what the project needs before the verify step (services, secrets, other toolchains). If the install step is a comment, say so.
 - A workflow or another CI config that exists but is not tracked by git: tell the user to `git add` it. Do not replace it.
+- A CI config that git tracks but that is missing from disk: tell the user to restore it with `git restore <file>` or to commit its deletion. Do not create a new one.
+- A `.gitignore` rule that ignores `.github/workflows/ci.yml`: tell the user. Do not force-add the file.
 - Workflows exist but none runs on pull requests: add `pull_request:` under `on:` in the most suitable one, change nothing else in it, and report which file you changed. `fscale fix` never does this.
 - Do not add secrets, deploy steps or paths outside `.github/workflows/`.
 

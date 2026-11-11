@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{Error, Result};
 use crate::git::{ignore_inherited_repo, run_git, run_git_with_input, Git};
-use crate::walk::walk_files;
+use crate::walk::{walk_entries, EntryKind};
 
 /// A scratch copy of a repo root. The folder is deleted when this is dropped.
 #[derive(Debug)]
@@ -33,6 +33,32 @@ fn failed(what: &str, error: &std::io::Error) -> Error {
 fn join(root: &Path, file: &str) -> PathBuf {
     file.split('/')
         .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+/// Recreates the symbolic link `source` at `target`, pointing at the same
+/// place. False when that is not possible (Windows without the right to make
+/// links); the caller then falls back to copying what the link leads to.
+fn copy_link(source: &Path, target: &Path) -> bool {
+    let Ok(destination) = fs::read_link(source) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&destination, target).is_ok()
+    }
+    #[cfg(windows)]
+    {
+        if source.is_dir() {
+            std::os::windows::fs::symlink_dir(&destination, target).is_ok()
+        } else {
+            std::os::windows::fs::symlink_file(&destination, target).is_ok()
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (destination, target);
+        false
+    }
 }
 
 /// Makes a new, empty folder in the OS temp folder.
@@ -100,7 +126,18 @@ impl Scratch {
         };
         ignore_inherited_repo();
 
-        let mut files = walk_files(root)?;
+        // Folders first, so that an empty one exists in the copy too. Links
+        // are handled with the files below, as links.
+        let walked = walk_entries(root)?;
+        for (folder, _) in walked.iter().filter(|(_, kind)| *kind == EntryKind::Folder) {
+            fs::create_dir_all(join(&scratch.root, folder))
+                .map_err(|error| failed(folder, &error))?;
+        }
+        let mut files: Vec<String> = walked
+            .into_iter()
+            .filter(|(_, kind)| *kind != EntryKind::Folder)
+            .map(|(path, _)| path)
+            .collect();
         files.extend(tracked.iter().cloned());
         files.sort();
         files.dedup();
@@ -109,12 +146,26 @@ impl Scratch {
         let mut present: Vec<&str> = Vec::new();
         for file in &files {
             let source = join(root, file);
+            let target = join(&scratch.root, file);
+            // A link is copied as a link, also when it is broken or leads to
+            // a folder: fixes refuse to write through one, and the preview
+            // must refuse in the same places.
+            if source
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.file_type().is_symlink())
+            {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).map_err(|error| failed(file, &error))?;
+                }
+                if copy_link(&source, &target) {
+                    continue;
+                }
+            }
             // A tracked file can be gone from disk, and anything can vanish
             // while we copy. Neither is an error for a preview.
             if !source.is_file() {
                 continue;
             }
-            let target = join(&scratch.root, file);
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent).map_err(|error| failed(file, &error))?;
             }

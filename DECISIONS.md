@@ -48,8 +48,11 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 **How "never destroys work" is ensured**
 
-- The config is created with a call that fails if the file exists.
+- The config, the starter workflow and the README skeleton are created with a call that fails if anything is at that path.
 - The two new fixes look at the disk again before writing, and write only where nothing is: no workflow file of any name, tracked or not; no root entry whose name starts with "readme" in any case.
+- A path git already tracks is never created or staged, so staged work in the index cannot be replaced.
+- No fix writes to a symbolic link or below one, so nothing outside the repo is touched.
+- If a folder cannot be listed, or git cannot answer, nothing is created.
 - A README without install steps and a workflow without a pull request trigger are reported, not edited.
 - Tests run `adopt`, `sync` and `init --force` over repos whose README, workflow, `.gitignore` and AGENTS.md contain CRLF, a BOM, no final newline, non-ASCII text and look-alike markers, tracked, untracked and outside git, and compare every file byte for byte.
 
@@ -57,9 +60,12 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 - **`init` refuses a folder that is not empty and has no firescale config.** "Empty" means nothing, or only `.git`. It exits 2, changes nothing and prints the two `adopt` commands. `--force` runs anyway and is as careful as `adopt`.
 - **`init` in a folder that already has a config keeps the config** and runs the fixes, like `sync`. `--packs` is an error there.
-- **`init` in an empty folder inside a firescale repo refuses**, so a nested repo is not started by accident. `--force` overrides it.
+- **`init` in an empty folder inside another git repo or firescale repo refuses**, because its files would be staged in that repo. `--force` overrides it.
 - **Fixes stage the file they create** (`git add` on that one file), because the two rules count tracked files only, and an existing test pins that an untracked workflow does not count.
-- **Both rules now treat a tracked file that is missing from disk as missing**, so a deleted generated file is drift that `sync` repairs.
+- **A README or workflow that git tracks but that is missing from disk is not recreated.** It is reported as a manual fix (`git restore` it, or commit the deletion). A file gone from disk and from git is drift, and `sync` recreates it.
+- **A fix that meets a symbolic link stops with an error** instead of writing through it. For a linked `.gitignore` that means `adopt` exits 2 until the link is replaced or the rule is turned off.
+- **A path that `.gitignore` ignores is not created**; the rule says which path.
+- **Every run prints `Repo root: <path>` first**, since `adopt` and `sync` work on the root found by walking up from the current folder.
 - **A file that exists but is untracked is a manual fix** ("run `git add`"). Nothing is created beside it.
 - **No generic "no line may change" guard in the loop.** It would break honest merges into JSON files and M12's managed block. The property is proven by tests instead.
 - **Exit code 0 when the fixes settled, whatever is left**, as `fscale fix` does. 1 only for `sync --check` with drift. 2 for refusals and errors.
@@ -75,8 +81,12 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 - The generated workflow fails at `npx firescale verify` until 0.1.0 is on npm.
 - The starter workflow has an install step for npm and pnpm only. For yarn, bun and others it leaves a comment and says so under "To review".
 - In a dry run, what custom TypeScript rules would still report afterwards is not listed.
-- A README or workflow you wrote, committed and then deleted from disk without committing the deletion is created again by `sync` as the starter version. `git restore` brings yours back.
-- If `.gitignore` ignores `README.md` or `.github/`, the fix writes the file and then fails at `git add` with a message that says so.
+- `adopt --dry-run` and `sync --check` work in a copy that lacks files git ignores and the repo's own git settings (`.git/info/exclude`, sparse checkout). In such repos the preview can differ from the real run.
+- Writes are not atomic. If the disk fills up or the process is killed while a fix appends to `.gitignore`, the file can be left cut short.
+- The cached result of the two rules does not notice a new folder or link named like a README, or `.github` changing from a folder to a file. `fscale check` can then show a stale fix hint until `--no-cache`; `init`, `adopt` and `sync` do not use the cache.
+- On a file system that ignores case, a workflow tracked under `.GitHub/` is reported as untracked. Not tested.
+- With `GIT_DIR` set in the environment, `init` and `adopt` stage their two files in that repository, as any git command would.
+- An independent review before the pull request found ten issues, three of them serious: `sync` could replace a staged README in the git index with the skeleton; an untracked README could be overwritten in a folder that could not be listed; and a linked `.github` or `.gitignore` led a fix to write outside the repo. The others: a file left on disk unreported when `git add` failed, previews that disagreed with the real run around links, empty folders and ignored paths, a `.git` left behind by `init` on a broken config, and output that never named the repo root. All are fixed with tests, except the limits listed above.
 - The three commands print text only; no `--json`.
 - The pinned action versions in the generated workflow will age. They are in one place, `crates/rules/src/core/ci-exists/mod.rs`.
 

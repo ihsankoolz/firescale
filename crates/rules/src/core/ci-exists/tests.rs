@@ -275,15 +275,48 @@ mod untracked_ci {
     }
 
     #[test]
-    fn a_tracked_workflow_deleted_from_disk_counts_as_absent() {
+    fn a_tracked_workflow_missing_from_disk_is_manual_and_its_staged_content_survives() {
         let f = Fixture::new(&[(STARTER, PR_WORKFLOW)], Track::All).unwrap();
+        let stage = |f: &Fixture| {
+            firescale_core::git::run_git(f.root(), &["ls-files", "--stage"])
+                .unwrap()
+                .stdout
+        };
+        let staged = stage(&f);
         std::fs::remove_file(f.root().join(".github").join("workflows").join("ci.yml")).unwrap();
         let d = check(&f);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].file, ".github/workflows");
-        assert_eq!(d[0].fixable, Fixable::Deterministic);
-        assert_eq!(fix(&f).changed_files, [STARTER]);
-        assert!(check(&f).is_empty());
+        assert_eq!(d[0].fixable, Fixable::Manual);
+        assert!(d[0].message.contains(&format!("git restore {STARTER}")));
+        // Nothing is created, and the index still holds the person's workflow.
+        assert!(fix(&f).changed_files.is_empty());
+        assert!(files_on_disk(&f).is_empty());
+        assert_eq!(stage(&f), staged);
+    }
+
+    #[test]
+    fn a_workflow_path_that_gitignore_ignores_is_manual_and_nothing_is_created() {
+        let f = Fixture::new(&[(".gitignore", ".github/\n")], Track::All).unwrap();
+        let d = check(&f);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].fixable, Fixable::Manual);
+        assert!(d[0].message.contains(".gitignore rule ignores"));
+        assert!(fix(&f).changed_files.is_empty());
+        assert_eq!(files_on_disk(&f), [".gitignore"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_github_folder_is_never_written_through() {
+        let outside = Fixture::new(&[], Track::NoGit).unwrap();
+        let f = Fixture::new(&[("package.json", "{}\n")], Track::All).unwrap();
+        std::os::unix::fs::symlink(outside.root(), f.root().join(".github")).unwrap();
+        let d = check(&f);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].fixable, Fixable::Agent);
+        assert!(fix(&f).changed_files.is_empty());
+        assert_eq!(std::fs::read_dir(outside.root()).unwrap().count(), 0);
     }
 
     #[test]

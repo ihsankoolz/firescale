@@ -215,18 +215,55 @@ mod untracked_or_unusual_readme {
     }
 
     #[test]
-    fn a_tracked_readme_deleted_from_disk_counts_as_absent() {
+    fn a_tracked_readme_missing_from_disk_is_manual_and_its_staged_content_survives() {
         let f = Fixture::new(&[("README.md", GOOD), ("package.json", "{}\n")], Track::All).unwrap();
+        // The index holds the only copy of this text.
+        let staged = git_out(&f, &["ls-files", "--stage", "--", "README.md"]);
         std::fs::remove_file(f.root().join("README.md")).unwrap();
+
         let d = run_check(&f);
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].fixable, Fixable::Deterministic);
-        assert_eq!(
-            f.fix(&ReadmeSetup, &Options::new()).unwrap().changed_files,
-            ["README.md"]
+        assert_eq!(d[0].file, "README.md");
+        assert_eq!(d[0].fixable, Fixable::Manual);
+        assert!(
+            d[0].message.contains("git restore README.md"),
+            "{}",
+            d[0].message
         );
+
+        let outcome = fix_rule_with(&ReadmeSetup, f.root(), &Options::new(), false).unwrap();
+        assert!(outcome.changes.is_empty());
+        let ctx = RuleContext::for_fix(f.root(), Options::new(), false);
+        assert!(ReadmeSetup.fix(&ctx, &[]).unwrap().changed_files.is_empty());
+        assert!(!f.root().join("README.md").exists());
+        assert_eq!(
+            git_out(&f, &["ls-files", "--stage", "--", "README.md"]),
+            staged
+        );
+
+        // What the message says to do brings the person's text back.
+        git_out(&f, &["restore", "README.md"]);
+        assert_eq!(f.read("README.md").as_deref(), Some(GOOD));
         assert!(run_check(&f).is_empty());
     }
+
+    #[test]
+    fn a_readme_that_gitignore_ignores_is_manual_and_nothing_is_created() {
+        let f = Fixture::new(&[(".gitignore", "README.md\n")], Track::All).unwrap();
+        let d = run_check(&f);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].fixable, Fixable::Manual);
+        assert!(d[0].message.contains(".gitignore rule ignores README.md"));
+        let outcome = fix_rule_with(&ReadmeSetup, f.root(), &Options::new(), false).unwrap();
+        assert!(outcome.changes.is_empty());
+        assert!(!f.root().join("README.md").exists());
+    }
+}
+
+fn git_out(fixture: &Fixture, args: &[&str]) -> String {
+    let result = firescale_core::git::run_git(fixture.root(), args).unwrap();
+    assert_eq!(result.code, 0, "git {args:?}: {}", result.stderr);
+    result.stdout
 }
 
 mod fixed_repo {

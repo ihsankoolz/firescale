@@ -20,7 +20,7 @@ New contributors and agents cannot work on a project if they cannot tell how to 
 
 ## Agent fix instructions
 
-`fscale fix` only ever creates a file that is absent. It never overwrites or edits a README that exists on disk, tracked or not.
+`fscale fix` only ever creates a file that is absent. It never overwrites or edits a README that exists on disk, tracked or not. It also creates nothing when git still tracks a README that is missing from disk, or when a `.gitignore` rule ignores `README.md`.
 
 ### DETERMINISTIC
 
@@ -34,6 +34,8 @@ Take the commands from the project's manifests and scripts (`package.json`, `Car
 
 - After the skeleton is created: tell the user it is a skeleton, and that the project description and the Install and Usage sections still need to be completed.
 - A README that exists but is not tracked by git: tell the user to `git add` it. Do not replace it.
+- A README that git tracks but that is missing from disk: tell the user to restore it with `git restore <file>` or to commit its deletion. Do not write a new one.
+- A `.gitignore` rule that ignores `README.md`: tell the user. Do not force-add the file.
 - A README under another name (for example `README.adoc`): do not add a second README beside it. Report it, and ask whether to rename it or add the steps there.
 - The README exists but lacks a section: add only the missing section, keep the existing text and its line endings, and report which sections you added. `fscale fix` never does this.
 - Write real commands that you confirmed exist. Do not invent scripts. Report any command you could not confirm.

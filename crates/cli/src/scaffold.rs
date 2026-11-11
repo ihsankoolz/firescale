@@ -66,6 +66,9 @@ struct Job<'a> {
     new_config: Option<Vec<String>>,
     /// Work in a scratch copy and change nothing (`adopt --dry-run`, `sync --check`).
     dry_run: bool,
+    /// Run `git init` first. Done after the config and the fix order have
+    /// been validated, so that a refusal leaves nothing behind.
+    git_init: bool,
     /// Lines to print before the list of changes.
     preface: Vec<String>,
 }
@@ -184,12 +187,21 @@ pub(crate) fn init(cwd: &Path, args: &Args, extra: &[String]) -> Result<Output> 
             ));
         }
     } else if !args.force {
-        // A folder inside a firescale repo belongs to that repo.
+        // A folder inside another repo belongs to that repo: the files
+        // would land in a subfolder of it and be staged in its index.
         let outer = find_root(cwd);
-        if outer != cwd && has_config(&outer) {
+        if outer != cwd {
+            let (what, instead) = if has_config(&outer) {
+                (
+                    "firescale repo",
+                    "Run `fscale sync` there to repair that repo",
+                )
+            } else {
+                ("git repo", "Run `fscale adopt` there to bring that repo in")
+            };
             return Err(Error::user(format!(
-                "This folder is inside the firescale repo at {}, so `fscale init` will not start a second one here. Run `fscale sync` to repair that repo, or pass --force to make this folder a firescale repo of its own.",
-                outer.display()
+                "This folder is inside the {what} at {}, so `fscale init` will not start a second one here. {instead}, or pass --force to make this folder a firescale repo of its own.",
+                shown(&outer)
             )));
         }
         let existing = entries(cwd)?;
@@ -217,16 +229,7 @@ pub(crate) fn init(cwd: &Path, args: &Args, extra: &[String]) -> Result<Output> 
     };
 
     let mut preface = Vec::new();
-    if !Git::new(cwd).is_repo()? {
-        let result = run_git(cwd, &["init", "--quiet"])?;
-        if result.code != 0 {
-            return Err(Error::user(format!(
-                "git init failed: {}. Fix the git error above, then run `fscale init` again.",
-                result.stderr.trim()
-            )));
-        }
-        preface.push("Initialised a git repository (git init).".to_owned());
-    }
+    let git_init = !Git::new(cwd).is_repo()?;
     if configured {
         preface
             .push("This folder already has a firescale config. It was kept as it is.".to_owned());
@@ -236,6 +239,7 @@ pub(crate) fn init(cwd: &Path, args: &Args, extra: &[String]) -> Result<Output> 
         root: cwd,
         new_config: (!configured).then_some(packs),
         dry_run: false,
+        git_init,
         preface,
     })
 }
@@ -250,6 +254,7 @@ pub(crate) fn adopt(root: &Path, args: &Args, extra: &[String]) -> Result<Output
         root,
         new_config,
         dry_run: args.dry_run,
+        git_init: false,
         preface: Vec::new(),
     })
 }
@@ -260,7 +265,7 @@ pub(crate) fn sync(root: &Path, args: &Args, extra: &[String]) -> Result<Output>
     if !has_config(root) {
         return Err(Error::user(format!(
             "No firescale config found in {}, so there is nothing to sync with. Run `fscale adopt` in a project that already exists, or `fscale init` in an empty folder.",
-            root.display()
+            shown(root)
         )));
     }
     run(Job {
@@ -268,8 +273,14 @@ pub(crate) fn sync(root: &Path, args: &Args, extra: &[String]) -> Result<Output>
         root,
         new_config: None,
         dry_run: args.check,
+        git_init: false,
         preface: Vec::new(),
     })
+}
+
+/// A path for output: forward slashes on every OS.
+fn shown(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
 }
 
 /// Creates the config file. Fails when a file is already there: `create_new`
@@ -366,7 +377,8 @@ fn run(job: Job<'_>) -> Result<Output> {
         root,
         new_config,
         dry_run,
-        preface,
+        git_init,
+        mut preface,
     } = job;
     let name = format!("fscale {}", command.name());
     let packs = firescale_rules::builtin_packs();
@@ -382,6 +394,20 @@ fn run(job: Job<'_>) -> Result<Output> {
         None => (load_config(root, &packs, &mut host)?, None),
     };
     let plan = plan_fixes(config.rules, &packs, None)?;
+
+    // The folder everything below happens in. It can be an ancestor of the
+    // folder the command was started in, so it is always named.
+    preface.insert(0, format!("Repo root: {}", shown(root)));
+    if git_init {
+        let result = run_git(root, &["init", "--quiet"])?;
+        if result.code != 0 {
+            return Err(Error::user(format!(
+                "git init failed: {}. Fix the git error above, then run `{name}` again.",
+                result.stderr.trim()
+            )));
+        }
+        preface.push("Initialised a git repository (git init).".to_owned());
+    }
 
     let scratch = if dry_run {
         Some(Scratch::copy_of(root)?)
@@ -412,7 +438,13 @@ fn run(job: Job<'_>) -> Result<Output> {
         Ok(report) => with_setup(report),
         Err(mut failure) => {
             failure.report = with_setup(failure.report);
-            return Err(loop_failure(&failure, dry_run, &name));
+            // What happened before the loop is part of what happened.
+            let error = loop_failure(&failure, dry_run, &name);
+            return Err(Error::user(format!(
+                "{}\n\n{}",
+                preface.join("\n"),
+                error.message()
+            )));
         }
     };
 
@@ -433,9 +465,7 @@ fn run(job: Job<'_>) -> Result<Output> {
     for line in &preface {
         out.push_str(&format!("{line}\n"));
     }
-    if !preface.is_empty() {
-        out.push('\n');
-    }
+    out.push('\n');
     out.push_str(&done.text);
     let changes = plural(done.changes, "change");
     let headline = match (done.changes, dry_run, command) {
