@@ -3,6 +3,7 @@
 //! `firescale.config.json` is read here. `firescale.config.ts` is loaded by
 //! the Node host; both end up as a JSON value validated by `resolve_config`.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,7 @@ use crate::error::{Error, Result};
 use crate::model::{RuleMeta, Status};
 use crate::node::NodeHost;
 use crate::rule::{BuiltinPack, BuiltinRule, Options};
+use crate::verify::StepOverride;
 
 pub const TS_CONFIG: &str = "firescale.config.ts";
 pub const JSON_CONFIG: &str = "firescale.config.json";
@@ -20,7 +22,7 @@ pub const JSON_CONFIG: &str = "firescale.config.json";
 /// Status of a rule that the config does not mention.
 pub const DEFAULT_STATUS: Status = Status::Evaluated;
 
-const TOP_LEVEL_KEYS: [&str; 4] = ["$schema", "packs", "rules", "protectedPaths"];
+const TOP_LEVEL_KEYS: [&str; 5] = ["$schema", "packs", "rules", "protectedPaths", "verify"];
 
 /// Where a rule's code lives.
 pub enum RuleSource<'a> {
@@ -50,6 +52,8 @@ pub struct ResolvedConfig<'a> {
     /// Every rule of every enabled pack, including ones that are off. Sorted by id.
     pub rules: Vec<ConfiguredRule<'a>>,
     pub protected_paths: Vec<String>,
+    /// Per-step settings for `fscale verify`, keyed by `lint`, `typecheck` or `test`.
+    pub verify: BTreeMap<String, StepOverride>,
 }
 
 /// One custom rule, as described by the Node host.
@@ -176,7 +180,7 @@ pub fn resolve_config<'a>(
         .find(|key| !TOP_LEVEL_KEYS.contains(&key.as_str()))
     {
         return Err(Error::user(format!(
-            "{name}: unknown key \"{key}\". Allowed keys: packs, rules, protectedPaths."
+            "{name}: unknown key \"{key}\". Allowed keys: packs, rules, protectedPaths, verify."
         )));
     }
 
@@ -284,12 +288,44 @@ pub fn resolve_config<'a>(
         })?,
     };
 
+    let mut verify = BTreeMap::new();
+    match object.get("verify") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(steps)) => {
+            for (step, value) in steps {
+                let setting = match value {
+                    Value::String(command) if !command.trim().is_empty() => {
+                        StepOverride::Command(command.clone())
+                    }
+                    Value::Bool(false) => StepOverride::Skip,
+                    _ => {
+                        return Err(Error::user(format!(
+                            "{name}: verify.{step} must be a command (a string) or false to skip the step."
+                        )));
+                    }
+                };
+                if !crate::verify::STEPS.contains(&step.as_str()) {
+                    return Err(Error::user(format!(
+                        "{name}: unknown verify step \"{step}\". Allowed steps: lint, typecheck, test."
+                    )));
+                }
+                verify.insert(step.clone(), setting);
+            }
+        }
+        Some(_) => {
+            return Err(Error::user(format!(
+                "{name}: \"verify\" must be an object, for example {{ \"test\": \"pnpm test\" }}."
+            )));
+        }
+    }
+
     rules.sort_by(|a, b| a.meta.id.cmp(&b.meta.id));
     Ok(ResolvedConfig {
         file: file.map(str::to_owned),
         packs,
         rules,
         protected_paths,
+        verify,
     })
 }
 

@@ -4,6 +4,7 @@ use std::env;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
 
 use firescale_core::affected::{changed_files, narrow_report, Changed};
 use firescale_core::check::run_check;
@@ -11,11 +12,17 @@ use firescale_core::config::{find_root, load_config, RuleSource};
 use firescale_core::diff::unified_diff;
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
+use firescale_core::hooks::{
+    decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent, AGENTS,
+};
 use firescale_core::node::NodeHost;
 use firescale_core::report::{format_human, format_json};
 use firescale_core::rule::{fix_rule_with, Change};
 use firescale_core::sarif::format_sarif;
 use firescale_core::select::select_rules;
+use firescale_core::verify::{
+    format_verify_human, format_verify_json, plan_verify, run_verify, CheckStep, VerifyReport,
+};
 use firescale_core::{version, Error, Result};
 
 /// Success, and no enforced rule failed.
@@ -30,24 +37,29 @@ const HELP: &str = "fscale - knock the scale off a repo, and prove it's clean.
 Usage:
   fscale check [options]       Run rules and report violations
   fscale fix [options]         Apply deterministic fixes
+  fscale verify [options]      Check, then lint, typecheck and test: the definition of done
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
+  fscale hooks install         Make an agent run verify before it may stop (--agent, --all)
   fscale --version             Print the firescale version
   fscale --help                Print this help
 
 Options:
   --rules <glob>   check, fix: only matching rules, e.g. \"core/*\" (comma-separated)
-  --json           check, facts: print JSON (see docs/check-json.md, docs/facts.md)
+  --json           check, verify, facts: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
-  --affected       check: only report files that changed, and projects that depend on them
+  --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>
   --no-cache       check: run every rule again, ignoring .firescale/cache
   --dry-run        fix: print what would change as a diff, and change nothing
+  --agent <name>   hooks: claude, codex or cursor
+  --all            hooks install: every supported agent
+  --bin <command>  hooks install: how the hook starts fscale (default: fscale)
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:
   0  no enforced rule failed
-  1  an enforced rule has violations
+  1  an enforced rule has violations, or verify failed
   2  bad usage, bad config, or an internal error
 ";
 
@@ -61,7 +73,10 @@ struct Args {
     base: Option<String>,
     no_cache: bool,
     dry_run: bool,
+    all: bool,
     rules: Option<String>,
+    agent: Option<String>,
+    bin: Option<String>,
     cwd: Option<String>,
     positionals: Vec<String>,
 }
@@ -98,7 +113,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
         };
         match name.as_str() {
             "--version" | "--help" | "--json" | "--sarif" | "--no-cache" | "--dry-run"
-            | "--affected" => {
+            | "--affected" | "--all" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -111,10 +126,11 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--dry-run" => args.dry_run = true,
                     "--sarif" => args.sarif = true,
                     "--affected" => args.affected = true,
+                    "--all" => args.all = true,
                     _ => args.json = true,
                 }
             }
-            "--rules" | "--cwd" | "--base" => {
+            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -127,6 +143,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 match name.as_str() {
                     "--rules" => args.rules = Some(value),
                     "--base" => args.base = Some(value),
+                    "--agent" => args.agent = Some(value),
+                    "--bin" => args.bin = Some(value),
                     _ => args.cwd = Some(value),
                 }
             }
@@ -369,6 +387,152 @@ fn facts(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }))
 }
 
+/// Runs check and then the planned lint, typecheck and test commands.
+fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)> {
+    let packs = firescale_rules::builtin_packs();
+    let mut host = NodeHost::new(root);
+    let config = load_config(root, &packs, &mut host)?;
+    let overrides = config.verify.clone();
+    let selection = select_rules(config.rules, None)?;
+    let started = Instant::now();
+    let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
+    let mut report = outcome.report;
+    let facts = detect_facts(root)?;
+    if args.affected {
+        narrow_report(
+            &mut report,
+            &facts,
+            &changed_files(root, args.base.as_deref())?,
+        );
+    }
+    let check = CheckStep {
+        ok: report.ok,
+        detail: format!(
+            "{}, {}",
+            plural(report.summary.rules, "rule"),
+            if report.summary.enforced_violations == 0 {
+                "no enforced violations".to_owned()
+            } else {
+                plural(report.summary.enforced_violations, "enforced violation")
+            }
+        ),
+        output: format_human(&report).lines().map(str::to_owned).collect(),
+        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        command: if args.affected {
+            "fscale check --affected"
+        } else {
+            "fscale check"
+        }
+        .to_owned(),
+    };
+    let plan = plan_verify(root, &facts, &overrides, args.affected);
+    let verify = run_verify(root, version(), check, &plan)?;
+    Ok((verify, outcome.warnings))
+}
+
+/// `fscale verify`: the one command that says whether the work is done.
+fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
+    if !extra.is_empty() {
+        return Err(Error::usage(format!(
+            "verify takes no arguments, got \"{}\".",
+            extra.join(" ")
+        )));
+    }
+    if args.base.is_some() && !args.affected {
+        return Err(Error::usage(
+            "--base only works together with --affected. Add --affected.",
+        ));
+    }
+    let (report, notes) = verify_report(root, args)?;
+    Ok(Output {
+        stdout: if args.json {
+            format_verify_json(&report)
+        } else {
+            format_verify_human(&report)
+        },
+        notes,
+        code: if report.ok { EXIT_OK } else { EXIT_VIOLATIONS },
+    })
+}
+
+/// `fscale hooks install` and `fscale hooks run`.
+fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
+    match rest {
+        [action] if action == "install" => {
+            let agents: Vec<Agent> = match (&args.agent, args.all) {
+                (Some(_), true) => {
+                    return Err(Error::usage("pass either --agent <name> or --all, not both."));
+                }
+                (Some(name), false) => vec![Agent::parse(name)?],
+                (None, true) => AGENTS.to_vec(),
+                (None, false) => {
+                    return Err(Error::usage(
+                        "hooks install needs --agent <claude|codex|cursor> or --all.",
+                    ));
+                }
+            };
+            let bin = args.bin.as_deref().unwrap_or("fscale");
+            let mut out = String::new();
+            let mut notes = Vec::new();
+            for agent in agents {
+                let changed = install_hook(root, agent, bin)?;
+                out.push_str(&format!(
+                    "{:<17} {}\n",
+                    if changed { "installed" } else { "already installed" },
+                    agent.config_file()
+                ));
+                if agent == Agent::Cursor && changed {
+                    notes.push(
+                        "note: the Cursor hook format could not be checked against Cursor's docs when this was written. Confirm that .cursor/hooks.json matches your Cursor version."
+                            .to_owned(),
+                    );
+                }
+            }
+            out.push_str(&format!(
+                "\nEach agent now runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n"
+            ));
+            Ok(Output { stdout: out, notes, code: EXIT_OK })
+        }
+        [action] if action == "run" => {
+            let Some(name) = &args.agent else {
+                return Err(Error::usage("hooks run needs --agent <claude|codex|cursor>."));
+            };
+            let agent = Agent::parse(name)?;
+            let stdin = std::io::read_to_string(std::io::stdin()).unwrap_or_default();
+            let input = parse_hook_input(&stdin);
+            // A hook that cannot run verify must not trap the agent: report and let it stop.
+            let report = match verify_report(root, args) {
+                Ok((report, _)) => report,
+                Err(error) => {
+                    return Ok(Output {
+                        stdout: String::new(),
+                        notes: vec![format!(
+                            "fscale: the stop hook could not run verify, so the agent is not held back: {}",
+                            error.message()
+                        )],
+                        code: 1,
+                    });
+                }
+            };
+            let max_blocks = max_blocks_from_env();
+            let decision = decide(root, agent, &input, report.ok, max_blocks);
+            let answer = reply(agent, &decision, &format_verify_human(&report), max_blocks);
+            Ok(Output {
+                stdout: answer.stdout,
+                notes: if answer.stderr.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![answer.stderr.trim_end().to_owned()]
+                },
+                code: answer.exit_code,
+            })
+        }
+        _ => Err(Error::usage(
+            "hooks needs an action: `fscale hooks install --all` or `fscale hooks run --agent <name>`.",
+        )),
+    }
+}
+
 fn run() -> Result<Output> {
     let args = parse_args(env::args().skip(1))?;
     let base = env::current_dir().map_err(|error| {
@@ -403,6 +567,8 @@ fn run() -> Result<Output> {
         "fix" => fix(&root, &args, rest),
         "explain" => explain(&root, rest),
         "facts" => facts(&root, &args, rest),
+        "verify" => verify(&root, &args, rest),
+        "hooks" => hooks(&root, &args, rest),
         _ => Err(Error::usage(format!("unknown command \"{command}\"."))),
     }
 }
