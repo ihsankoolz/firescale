@@ -174,7 +174,10 @@ impl NodeHost {
     /// Imports a `.ts` config file from the repo root and returns its value.
     pub fn load_config(&mut self, file: &str) -> Result<Value> {
         self.start(&format!("load {file}"), "use firescale.config.json instead")?;
-        self.request("loadConfig", json!({ "root": self.root, "file": file }))
+        self.request(
+            "loadConfig",
+            json!({ "root": self.root.to_string_lossy(), "file": file }),
+        )
     }
 
     /// Imports custom packs and returns their rules' metadata.
@@ -185,7 +188,7 @@ impl NodeHost {
         )?;
         let result = self.request(
             "describePacks",
-            json!({ "root": self.root, "packs": specs }),
+            json!({ "root": self.root.to_string_lossy(), "packs": specs }),
         )?;
         serde_json::from_value(result).map_err(|error| {
             Error::user(format!(
@@ -207,7 +210,7 @@ impl NodeHost {
         )?;
         let result = self.request(
             "checkRule",
-            json!({ "root": self.root, "pack": pack, "ruleId": rule_id, "options": options }),
+            json!({ "root": self.root.to_string_lossy(), "pack": pack, "ruleId": rule_id, "options": options }),
         )?;
         serde_json::from_value(result).map_err(|error| {
             Error::internal(format!(

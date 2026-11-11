@@ -153,7 +153,14 @@ impl BuiltinRule for NoCommittedEnv {
 
     fn fix(&self, ctx: &RuleContext, diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let allow = allow_list(ctx.options())?;
-        let files: Vec<String> = diagnostics.iter().map(|d| d.file.clone()).collect();
+        // Diagnostics can be stale: only untrack what is still in the index, so
+        // calling fix twice with the same diagnostics changes nothing the second time.
+        let tracked = ctx.git().tracked_files()?;
+        let files: Vec<String> = diagnostics
+            .iter()
+            .map(|d| d.file.clone())
+            .filter(|file| tracked.binary_search(file).is_ok())
+            .collect();
         ctx.git().untrack(&files)?;
         let mut changed_files = files.clone();
 
