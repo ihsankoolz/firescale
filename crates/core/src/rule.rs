@@ -15,7 +15,8 @@ use crate::model::{Diagnostic, Finding, FixResult, Fixable, RuleMeta};
 pub type Options = Map<String, Value>;
 
 /// One change a fix made, or in a dry run would make.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Change {
     /// A file was written. `before` is `None` when the file did not exist.
     Write {

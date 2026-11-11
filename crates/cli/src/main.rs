@@ -5,13 +5,16 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
+use firescale_core::affected::{changed_files, narrow_report, Changed};
 use firescale_core::check::run_check;
 use firescale_core::config::{find_root, load_config, RuleSource};
 use firescale_core::diff::unified_diff;
 use firescale_core::explain::{explain_rule, find_rule};
+use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
 use firescale_core::node::NodeHost;
 use firescale_core::report::{format_human, format_json};
 use firescale_core::rule::{fix_rule_with, Change};
+use firescale_core::sarif::format_sarif;
 use firescale_core::select::select_rules;
 use firescale_core::{version, Error, Result};
 
@@ -25,17 +28,21 @@ const EXIT_USAGE: u8 = 2;
 const HELP: &str = "fscale - knock the scale off a repo, and prove it's clean.
 
 Usage:
-  fscale check [--rules <glob>] [--json]   Run rules and report violations
-  fscale fix [--rules <glob>] [--dry-run]  Apply deterministic fixes
-  fscale explain <rule>                    Print what a rule checks and how to fix it
-  fscale --version                         Print the firescale version
-  fscale --help                            Print this help
+  fscale check [options]       Run rules and report violations
+  fscale fix [options]         Apply deterministic fixes
+  fscale explain <rule>        Print what a rule checks and how to fix it
+  fscale facts [--json]        Print detected repo facts
+  fscale --version             Print the firescale version
+  fscale --help                Print this help
 
 Options:
-  --rules <glob>   Only run matching rules, e.g. \"core/*\" (comma-separated)
-  --json           Print the report as JSON (see docs/check-json.md)
-  --no-cache       Run every rule again, without reading or writing .firescale/cache
-  --dry-run        With fix: print what would change as a diff, and change nothing
+  --rules <glob>   check, fix: only matching rules, e.g. \"core/*\" (comma-separated)
+  --json           check, facts: print JSON (see docs/check-json.md, docs/facts.md)
+  --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
+  --affected       check: only report files that changed, and projects that depend on them
+  --base <ref>     With --affected: also count commits since the merge base with <ref>
+  --no-cache       check: run every rule again, ignoring .firescale/cache
+  --dry-run        fix: print what would change as a diff, and change nothing
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:
@@ -49,6 +56,9 @@ struct Args {
     version: bool,
     help: bool,
     json: bool,
+    sarif: bool,
+    affected: bool,
+    base: Option<String>,
     no_cache: bool,
     dry_run: bool,
     rules: Option<String>,
@@ -87,7 +97,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
             None => (arg.clone(), None),
         };
         match name.as_str() {
-            "--version" | "--help" | "--json" | "--no-cache" | "--dry-run" => {
+            "--version" | "--help" | "--json" | "--sarif" | "--no-cache" | "--dry-run"
+            | "--affected" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -98,10 +109,12 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--help" => args.help = true,
                     "--no-cache" => args.no_cache = true,
                     "--dry-run" => args.dry_run = true,
+                    "--sarif" => args.sarif = true,
+                    "--affected" => args.affected = true,
                     _ => args.json = true,
                 }
             }
-            "--rules" | "--cwd" => {
+            "--rules" | "--cwd" | "--base" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -111,10 +124,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     }
                     None => return Err(Error::usage(format!("option {name} needs a value."))),
                 };
-                if name == "--rules" {
-                    args.rules = Some(value);
-                } else {
-                    args.cwd = Some(value);
+                match name.as_str() {
+                    "--rules" => args.rules = Some(value),
+                    "--base" => args.base = Some(value),
+                    _ => args.cwd = Some(value),
                 }
             }
             _ => return Err(Error::usage(format!("unknown option \"{name}\"."))),
@@ -165,13 +178,33 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             extra.join(" ")
         )));
     }
+    if args.base.is_some() && !args.affected {
+        return Err(Error::usage(
+            "--base only works together with --affected. Add --affected.",
+        ));
+    }
+    if args.json && args.sarif {
+        return Err(Error::usage(
+            "--json and --sarif cannot be used together. Pass only one of them.",
+        ));
+    }
     let packs = firescale_rules::builtin_packs();
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
     let selection = select_rules(config.rules, args.rules.as_deref())?;
     let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
-    let report = outcome.report;
+    let mut report = outcome.report;
     let mut notes = selection.notes;
+    if args.affected {
+        let changed = changed_files(root, args.base.as_deref())?;
+        if changed == Changed::Everything {
+            notes.push(
+                "note: --affected found no commit to compare with, so every file counts as changed."
+                    .to_owned(),
+            );
+        }
+        narrow_report(&mut report, &detect_facts(root)?, &changed);
+    }
     notes.extend(outcome.warnings);
     // FSCALE_LOG=cache shows, per rule, whether its result came from the cache.
     if env::var("FSCALE_LOG").is_ok_and(|value| value.split(',').any(|part| part == "cache")) {
@@ -185,6 +218,8 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     Ok(Output {
         stdout: if args.json {
             format_json(&report)
+        } else if args.sarif {
+            format_sarif(&report)
         } else {
             format_human(&report)
         },
@@ -209,24 +244,21 @@ fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
     let selection = select_rules(config.rules, args.rules.as_deref())?;
-    let mut notes = selection.notes;
+    let notes = selection.notes;
 
     let mut out = String::new();
     let (mut total, mut rules_changed) = (0, 0);
     for rule in &selection.rules {
-        let builtin = match &rule.source {
-            RuleSource::Builtin(builtin) => *builtin,
-            RuleSource::Custom { .. } => {
-                if rule.meta.has_fix {
-                    notes.push(format!(
-                        "note: {} has a fix, but fixes for custom rules are not supported yet. Follow `fscale explain {}`.",
-                        rule.meta.id, rule.meta.id
-                    ));
-                }
-                continue;
+        let outcome = match &rule.source {
+            RuleSource::Builtin(builtin) => {
+                fix_rule_with(*builtin, root, &rule.options, args.dry_run)?
             }
+            // A custom rule's fix runs in the Node host, through the SDK.
+            RuleSource::Custom { pack, .. } if rule.meta.has_fix => {
+                host.fix_rule(pack, &rule.meta.id, &rule.options, args.dry_run)?
+            }
+            RuleSource::Custom { .. } => continue,
         };
-        let outcome = fix_rule_with(builtin, root, &rule.options, args.dry_run)?;
         if outcome.changes.is_empty() {
             continue;
         }
@@ -308,6 +340,22 @@ fn explain(root: &Path, rest: &[String]) -> Result<Output> {
     Ok(Output::ok(explain_rule(find_rule(&config, query)?)?))
 }
 
+/// `fscale facts`: detected stack and project graph. Needs no config and no Node.
+fn facts(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
+    if !extra.is_empty() {
+        return Err(Error::usage(format!(
+            "facts takes no arguments, got \"{}\".",
+            extra.join(" ")
+        )));
+    }
+    let facts = detect_facts(root)?;
+    Ok(Output::ok(if args.json {
+        format_facts_json(&facts)
+    } else {
+        format_facts_human(&facts)
+    }))
+}
+
 fn run() -> Result<Output> {
     let args = parse_args(env::args().skip(1))?;
     let base = env::current_dir().map_err(|error| {
@@ -341,6 +389,7 @@ fn run() -> Result<Output> {
         "check" => check(&root, &args, rest),
         "fix" => fix(&root, &args, rest),
         "explain" => explain(&root, rest),
+        "facts" => facts(&root, &args, rest),
         _ => Err(Error::usage(format!("unknown command \"{command}\"."))),
     }
 }

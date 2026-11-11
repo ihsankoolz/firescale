@@ -379,3 +379,67 @@ describe('custom pack errors', () => {
     expect(result.stderr).toContain('is named "core", which is a built-in pack');
   });
 });
+
+describe('fscale fix with a custom TypeScript rule', () => {
+  const FIX_PACK = fileURLToPath(new URL('../test-fixtures/fix-pack/', import.meta.url));
+  const RULE = 'fixable/no-tracked-log';
+
+  async function fixableRepo(): Promise<FixtureRepo> {
+    const repo = await fixtures.create({
+      files: {
+        'debug.log': 'line\n',
+        'logs/app.log': 'line\n',
+        'README.md': '# fixture\n',
+        '.gitignore': 'dist\n',
+        'firescale.config.json': JSON.stringify({
+          packs: ['./tools/fix-pack/pack.ts'],
+          rules: { [RULE]: 'enforced' },
+        }),
+      },
+    });
+    await cp(FIX_PACK, path.join(repo.root, 'tools', 'fix-pack'), { recursive: true });
+    await linkPackages(repo);
+    return repo;
+  }
+
+  it('--dry-run shows the changes through the bridge and changes nothing', async () => {
+    const repo = await fixableRepo();
+    const tracked = await repo.trackedFiles();
+    const result = await runCli(['fix', '--dry-run'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toMatchSnapshot();
+    expect(result.stdout).toContain('would untrack debug.log');
+    expect(result.stdout).toContain(
+      '--- a/.gitignore\n+++ b/.gitignore\n@@ -1,1 +1,2 @@\n dist\n+*.log\n',
+    );
+    expect(await repo.trackedFiles()).toEqual(tracked);
+    expect(await repo.read('.gitignore')).toBe('dist\n');
+  });
+
+  it('applies the fix, and a second run changes nothing', async () => {
+    const repo = await fixableRepo();
+    expect((await runCli(['check'], repo.root)).code).toBe(EXIT_VIOLATIONS);
+
+    const first = await runCli(['fix'], repo.root);
+    expect(first.code).toBe(EXIT_OK);
+    expect(first.stdout).toMatchSnapshot();
+    expect(await repo.trackedFiles()).not.toContain('debug.log');
+    expect(await repo.trackedFiles()).not.toContain('logs/app.log');
+    expect(await repo.read('debug.log')).toBe('line\n');
+    expect(await repo.read('.gitignore')).toBe('dist\n*.log\n');
+    expect((await runCli(['check'], repo.root)).code).toBe(EXIT_OK);
+
+    const second = await runCli(['fix'], repo.root);
+    expect(second.stdout).toBe(
+      'Nothing to fix: no enabled rule has a deterministic fix to apply.\n',
+    );
+    expect(await repo.read('.gitignore')).toBe('dist\n*.log\n');
+  });
+
+  it('does not start Node for fix when only built-in rules are enabled', async () => {
+    const repo = await fixtures.create({ files: { '.env': FAKE_ENV } });
+    const result = await runCli(['fix'], repo.root, NO_NODE);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toContain('untracked .env');
+  });
+});

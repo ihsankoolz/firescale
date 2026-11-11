@@ -4,17 +4,21 @@ exports[`fscale usage > prints help with no arguments 1`] = `
 "fscale - knock the scale off a repo, and prove it's clean.
 
 Usage:
-  fscale check [--rules <glob>] [--json]   Run rules and report violations
-  fscale fix [--rules <glob>] [--dry-run]  Apply deterministic fixes
-  fscale explain <rule>                    Print what a rule checks and how to fix it
-  fscale --version                         Print the firescale version
-  fscale --help                            Print this help
+  fscale check [options]       Run rules and report violations
+  fscale fix [options]         Apply deterministic fixes
+  fscale explain <rule>        Print what a rule checks and how to fix it
+  fscale facts [--json]        Print detected repo facts
+  fscale --version             Print the firescale version
+  fscale --help                Print this help
 
 Options:
-  --rules <glob>   Only run matching rules, e.g. "core/*" (comma-separated)
-  --json           Print the report as JSON (see docs/check-json.md)
-  --no-cache       Run every rule again, without reading or writing .firescale/cache
-  --dry-run        With fix: print what would change as a diff, and change nothing
+  --rules <glob>   check, fix: only matching rules, e.g. "core/*" (comma-separated)
+  --json           check, facts: print JSON (see docs/check-json.md, docs/facts.md)
+  --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
+  --affected       check: only report files that changed, and projects that depend on them
+  --base <ref>     With --affected: also count commits since the merge base with <ref>
+  --no-cache       check: run every rule again, ignoring .firescale/cache
+  --dry-run        fix: print what would change as a diff, and change nothing
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:

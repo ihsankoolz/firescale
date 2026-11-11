@@ -11,10 +11,13 @@ Status: early development. See [SPEC.md](SPEC.md) for the design and [PLAN.md](P
 ```
 fscale check                          # run the rules, report violations
 fscale check --json                   # the same, as JSON for CI and agents
+fscale check --sarif                  # the same, as SARIF 2.1.0 (docs/sarif.md)
 fscale check --rules "core/*"         # only some rules
 fscale check --no-cache               # ignore the result cache in .firescale/
 fscale fix --dry-run                  # show what the deterministic fixes would change
 fscale fix                            # apply them
+fscale check --affected               # only report what your changes touch
+fscale facts                          # detected package manager, tools and projects
 fscale explain core/no-committed-env  # what a rule checks and how to fix it
 ```
 

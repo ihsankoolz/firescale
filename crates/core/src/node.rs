@@ -12,8 +12,8 @@ use serde_json::{json, Value};
 
 use crate::config::PackDescription;
 use crate::error::{Error, Result};
-use crate::model::Diagnostic;
-use crate::rule::Options;
+use crate::model::{Diagnostic, FixResult};
+use crate::rule::{Change, FixOutcome, Options};
 
 /// Version of the JSON-lines protocol. The host must report the same number.
 pub const PROTOCOL_VERSION: u64 = 1;
@@ -216,6 +216,53 @@ impl NodeHost {
             Error::internal(format!(
                 "Rule \"{rule_id}\" returned diagnostics in an unexpected shape ({error}). Please report this."
             ))
+        })
+    }
+
+    /// Runs one custom rule's deterministic fix and returns what it changed.
+    /// With `dry_run`, the SDK records the changes without applying them.
+    pub fn fix_rule(
+        &mut self,
+        pack: &str,
+        rule_id: &str,
+        options: &Options,
+        dry_run: bool,
+    ) -> Result<FixOutcome> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Reply {
+            #[serde(default)]
+            changed_files: Vec<String>,
+            #[serde(default)]
+            notes: Vec<String>,
+            #[serde(default)]
+            changes: Vec<Change>,
+        }
+        self.start(
+            "run custom rule fixes",
+            "remove the custom packs from your firescale config",
+        )?;
+        let result = self.request(
+            "fixRule",
+            json!({
+                "root": self.root.to_string_lossy(),
+                "pack": pack,
+                "ruleId": rule_id,
+                "options": options,
+                "dryRun": dry_run,
+            }),
+        )?;
+        let reply: Reply = serde_json::from_value(result).map_err(|error| {
+            Error::internal(format!(
+                "The fix of rule \"{rule_id}\" returned an unexpected shape ({error}). Please report this."
+            ))
+        })?;
+        Ok(FixOutcome {
+            result: FixResult {
+                changed_files: reply.changed_files,
+                notes: reply.notes,
+            },
+            changes: reply.changes,
         })
     }
 }

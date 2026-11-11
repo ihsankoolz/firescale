@@ -91,7 +91,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M4 — `fix`, SARIF and facts ◐
+## M4 — `fix`, SARIF and facts ☑
 
 **Build**
 
@@ -104,8 +104,8 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 - ☑ `fscale fix` fixes `core/no-committed-env` in a fixture repo, and a second run changes nothing.
 - ☑ `fscale fix --dry-run` prints a diff and changes nothing.
-- ☐ `--sarif` output validates against the SARIF 2.1.0 schema, with a snapshot test.
-- ☐ `fscale facts --json` has a documented schema and a snapshot test.
+- ☑ `--sarif` output validates against the SARIF 2.1.0 schema, with a snapshot test.
+- ☑ `fscale facts --json` has a documented schema and a snapshot test.
 
 ---
 

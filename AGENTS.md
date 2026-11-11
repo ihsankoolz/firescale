@@ -29,7 +29,7 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
   - Parts: `pnpm lint:ts`, `pnpm lint:format`, `pnpm lint:rust`
 - Typecheck: `pnpm typecheck`
 - Format: `pnpm format`
-- Run the local CLI: `pnpm fscale --version`, `pnpm fscale check`, `pnpm fscale fix --dry-run`, `pnpm fscale explain <rule>`
+- Run the local CLI: `pnpm fscale --version`, `pnpm fscale check`, `pnpm fscale fix --dry-run`, `pnpm fscale facts`, `pnpm fscale explain <rule>`
 - One test file: `pnpm exec vitest run <path>`. Update snapshots: `pnpm exec vitest run -u`
 - One Rust test: `cargo test -p firescale-rules <name>`
 - Rust only: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`

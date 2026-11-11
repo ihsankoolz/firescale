@@ -8,9 +8,38 @@ A running log, newest milestone first. For each milestone: what was built, decis
 2. **Removing the napi binding outright.** (M2, ADR 0008 §3) Nothing calls from Node into Rust any more. If you want the TypeScript SDK to reuse the Rust walker or hasher in-process, a thin binding would have to come back.
 3. **"No Node process" under an npm install.** (M2, ADR 0008 §6) The usual npm layout puts a small Node launcher in front of the binary. The design adds an optional hard-link step that removes it where install scripts are allowed. Decide whether that is acceptable when M6 (npm packaging) is built.
 4. **Custom rule packs are listed by path only.** (M2, ADR 0008 §5) Loading a pack by npm package name is not supported.
-5. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
-6. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
-7. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+5. **`fscale fix` also fixes rules that are only `evaluated`, and exits 0 when violations remain.** (M4, ADR 0011) If you would rather fix only `enforced` rules, or fail when something is left, say so.
+6. **`--affected` has no default base.** (M4, ADR 0011) Without `--base` it only looks at uncommitted and untracked files. A default such as `origin/main` could be added.
+7. **No TOML or YAML parser.** (M4, ADR 0011) `fscale facts` reads `Cargo.toml` and `pnpm-workspace.yaml` with small hand-written readers. Adding the `toml` crate would be more robust at the cost of a dependency.
+8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
+9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
+10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M4 — `fix`, SARIF and facts
+
+**Built**
+
+- `fscale fix` and `fscale fix --dry-run`, for built-in rules and, through the bridge, for custom TypeScript rules.
+- `fscale check --sarif` (SARIF 2.1.0, validated against the official schema in tests).
+- `fscale facts` and `fscale facts --json`, with a JSON schema: package manager, lockfiles, languages, tools, commands and a project graph from workspace files.
+- `fscale check --affected [--base <ref>]`.
+
+**Decisions made for you** (all ADR 0011)
+
+- A dry run is the real fix running in record-only mode, not a separate plan.
+- `fscale fix` exits 0 even when violations remain, and fixes rules that are only `evaluated`.
+- SARIF levels: report-only rules are `note`; enforced rules are `error` (blocker, high), `warning` (medium) or `note` (low).
+- `facts` uses small hand-written readers for `Cargo.toml` and `pnpm-workspace.yaml`, with no TOML or YAML dependency.
+- `--affected` filters what is reported and does not skip rules. It has no default base ref.
+- The help text was reorganised around `[options]`, which changed the help snapshot on purpose.
+
+**Known limits**
+
+- Nx's project graph and uv workspaces are not read. `nx.json` is only reported as a tool.
+- A custom rule that writes files without using its context cannot be previewed by `--dry-run`.
+- The diff in a dry run has one hunk per file.
+- `--affected` does not make `check` faster.
+- The facts readers handle common `Cargo.toml` and workspace forms only; see `docs/facts.md`.
 
 ## M3 — Engine: walk, hash, cache
 

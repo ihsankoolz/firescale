@@ -1,9 +1,9 @@
 export { defineConfig, definePack, defineRule } from './define.js';
-export { createContext, type ContextInit } from './context.js';
+export { createContext, type Change, type ContextInit, type FixMode } from './context.js';
 export { runGit } from './git.js';
 export { FirescaleError } from './errors.js';
 export { normalizeRelative, toPosix } from './paths.js';
-export { checkRule, fixRule } from './run.js';
+export { checkRule, fixRule, fixRuleWithChanges, type FixOutcome } from './run.js';
 export {
   parseSkill,
   validateSkill,

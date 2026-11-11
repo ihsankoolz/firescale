@@ -1,0 +1,59 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale facts > prints human output 1`] = `
+"Package manager: pnpm
+Lockfiles: none
+Languages: javascript
+Tools: pnpm-workspace
+Commands:
+  build: pnpm run build
+  test: pnpm run test
+Projects (3):
+  @x/a [node] packages/a
+  @x/b [node] packages/b
+    depends on: @x/a
+  root [node] .
+"
+`;
+
+exports[`fscale facts > prints schema-valid JSON for a pnpm monorepo 1`] = `
+"{
+  "schemaVersion": 1,
+  "packageManager": "pnpm",
+  "lockfiles": [],
+  "languages": [
+    "javascript"
+  ],
+  "tools": [
+    "pnpm-workspace"
+  ],
+  "commands": {
+    "build": "pnpm run build",
+    "test": "pnpm run test"
+  },
+  "projects": [
+    {
+      "name": "@x/a",
+      "root": "packages/a",
+      "kind": "node",
+      "dependsOn": []
+    },
+    {
+      "name": "@x/b",
+      "root": "packages/b",
+      "kind": "node",
+      "dependsOn": [
+        "@x/a"
+      ]
+    },
+    {
+      "name": "root",
+      "root": ".",
+      "kind": "node",
+      "dependsOn": []
+    }
+  ],
+  "warnings": []
+}
+"
+`;

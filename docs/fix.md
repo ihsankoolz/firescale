@@ -21,7 +21,11 @@ fscale fix --rules "core/*"
 
 Removing a file from the git index is not a text change, so it appears as a `would untrack` line, not in the diff.
 
+## Custom rules
+
+A custom TypeScript rule's `fix()` runs in the Node host, through the SDK. The SDK records every `ctx.files.write` and `ctx.git.untrack` call, so `--dry-run` works for custom rules too: in a dry run those calls are recorded and not applied. A fix that changes things by any other route (for example `node:fs` directly) cannot be previewed or reported, so use the context.
+
 ## Limits
 
-- Fixes of custom TypeScript rules are not run yet. `fscale fix` prints a note for a custom rule that has one.
 - The diff shows all of a file's changes in a single hunk.
+- A dry run of a custom rule is only as honest as the rule: see above.

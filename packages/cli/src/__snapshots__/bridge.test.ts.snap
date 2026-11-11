@@ -1,0 +1,28 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale fix with a custom TypeScript rule > --dry-run shows the changes through the bridge and changes nothing 1`] = `
+"fixable/no-tracked-log
+  would untrack debug.log (the file stays on disk)
+  would untrack logs/app.log (the file stays on disk)
+  would edit .gitignore
+
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,1 +1,2 @@
+ dist
++*.log
+
+Dry run: 3 changes in 1 rule. Nothing was changed. Run \`fscale fix\` to apply.
+"
+`;
+
+exports[`fscale fix with a custom TypeScript rule > applies the fix, and a second run changes nothing 1`] = `
+"fixable/no-tracked-log
+  untracked debug.log (the file stays on disk)
+  untracked logs/app.log (the file stays on disk)
+  edited .gitignore
+  note: Untracked 2 log file(s).
+
+Fixed: 3 changes in 1 rule. Run \`fscale check\` to see what is left.
+"
+`;

@@ -15,6 +15,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   checkRule,
+  fixRuleWithChanges,
   FirescaleError,
   type Diagnostic,
   type Rule,
@@ -195,6 +196,30 @@ async function check(params: Record<string, unknown>): Promise<Diagnostic[]> {
   }
 }
 
+async function fix(params: Record<string, unknown>): Promise<unknown> {
+  const root = stringParam(params, 'root');
+  const ruleId = stringParam(params, 'ruleId');
+  const rule = await findRule(root, stringParam(params, 'pack'), ruleId);
+  const options = isRecord(params['options']) ? params['options'] : {};
+  try {
+    const outcome = await fixRuleWithChanges(
+      rule,
+      { root, options },
+      { dryRun: params['dryRun'] === true },
+    );
+    return {
+      changedFiles: outcome.result.changedFiles,
+      notes: outcome.result.notes ?? [],
+      changes: outcome.changes,
+    };
+  } catch (error) {
+    if (isUserError(error)) throw error;
+    throw new FirescaleError(
+      `The fix of rule "${ruleId}" crashed: ${reasonOf(error)}. This is a bug in the rule. Report it to the rule's author; nothing else was changed by firescale.`,
+    );
+  }
+}
+
 async function handle(request: Request): Promise<unknown> {
   switch (request.method) {
     case 'hello':
@@ -205,6 +230,8 @@ async function handle(request: Request): Promise<unknown> {
       return describePacks(request.params);
     case 'checkRule':
       return check(request.params);
+    case 'fixRule':
+      return fix(request.params);
     default:
       throw new Error(`unknown bridge method "${request.method}"`);
   }
