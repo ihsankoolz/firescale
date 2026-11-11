@@ -12,6 +12,7 @@ Usage:
 Options:
   --rules <glob>   Only run matching rules, e.g. "core/*" (comma-separated)
   --json           Print the report as JSON (see docs/check-json.md)
+  --no-cache       Run every rule again, without reading or writing .firescale/cache
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:

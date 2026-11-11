@@ -1,4 +1,16 @@
-import { cp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
@@ -11,11 +23,18 @@ import {
   EXIT_USAGE,
   EXIT_VIOLATIONS,
   FAKE_ENV,
+  NODE_STUB,
   runCli,
 } from './test-helpers.js';
 
 const fixtures = fixtureSet();
-afterEach(fixtures.cleanup);
+const tempDirs: string[] = [];
+afterEach(async () => {
+  await fixtures.cleanup();
+  for (const dir of tempDirs.splice(0)) {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const CUSTOM_PACK = fileURLToPath(new URL('../test-fixtures/custom-pack/', import.meta.url));
@@ -156,7 +175,118 @@ describe('custom pack through the Node bridge', () => {
   });
 });
 
+interface StubNode {
+  marker: string;
+  env: Record<string, string | undefined>;
+}
+
+/** A temp dir holding a copy of the node stand-in named `node`, first on PATH. */
+async function stubNode(): Promise<StubNode> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'firescale-stub-'));
+  tempDirs.push(dir);
+  const names = process.platform === 'win32' ? ['node.exe', 'node'] : ['node'];
+  for (const name of names) {
+    const target = path.join(dir, name);
+    await copyFile(NODE_STUB, target);
+    await chmod(target, 0o755);
+  }
+  // On Windows the key may be `Path`: set the key that already exists.
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+  const marker = path.join(dir, 'marker.txt');
+  return {
+    marker,
+    env: {
+      [pathKey]: `${dir}${path.delimiter}${process.env[pathKey] ?? ''}`,
+      FSCALE_NODE: undefined,
+      FSCALE_STUB_MARKER: marker,
+    },
+  };
+}
+
+async function exists(file: string): Promise<boolean> {
+  return stat(file).then(
+    () => true,
+    () => false,
+  );
+}
+
 describe('no Node process for built-in rules', () => {
+  it('runs check, check --json and explain with a JSON config without starting node', async () => {
+    const stub = await stubNode();
+    const repo = await fixtures.create({
+      files: { '.env': FAKE_ENV, 'firescale.config.json': ENFORCED_CONFIG },
+    });
+
+    const json = await runCli(['check', '--json'], repo.root, stub.env);
+    expect(json.code).toBe(EXIT_VIOLATIONS);
+    expect(json.stderr).toBe('');
+    const report = parseReport(json.stdout);
+    expect(report.rules.map((r) => [r.id, r.status])).toEqual([[ENV_RULE, 'enforced']]);
+    expect(report.diagnostics.map((d) => d.file)).toEqual(['.env']);
+
+    const text = await runCli(['check'], repo.root, stub.env);
+    expect(text.code).toBe(EXIT_VIOLATIONS);
+    expect(text.stdout).toContain('.env');
+
+    const explain = await runCli(['explain', ENV_RULE], repo.root, stub.env);
+    expect(explain.code).toBe(EXIT_OK);
+    expect(explain.stdout).toContain(ENV_RULE);
+
+    expect(await exists(stub.marker)).toBe(false);
+  });
+
+  it('runs check, check --json and explain with no config without starting node', async () => {
+    const stub = await stubNode();
+    const repo = await fixtures.create({ files: { '.env': FAKE_ENV } });
+
+    const text = await runCli(['check'], repo.root, stub.env);
+    expect(text.code).toBe(EXIT_OK);
+    expect(text.stdout).toContain('.env');
+
+    const json = await runCli(['check', '--json'], repo.root, stub.env);
+    expect(json.code).toBe(EXIT_OK);
+    const report = parseReport(json.stdout);
+    expect(report.rules.map((r) => r.id)).toContain(ENV_RULE);
+
+    const explain = await runCli(['explain', ENV_RULE], repo.root, stub.env);
+    expect(explain.code).toBe(EXIT_OK);
+    expect(explain.stdout).toContain(ENV_RULE);
+
+    expect(await exists(stub.marker)).toBe(false);
+  });
+
+  it('control: a custom pack does start node, and the stub intercepts it', async () => {
+    const stub = await stubNode();
+    const repo = await sampleRepo();
+    const result = await runCli(['check'], repo.root, stub.env);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(await exists(stub.marker)).toBe(true);
+  });
+
+  it('control: firescale.config.ts starts node', async () => {
+    const stub = await stubNode();
+    const repo = await fixtures.create({
+      files: { 'firescale.config.ts': 'export default {};\n' },
+    });
+    const result = await runCli(['check'], repo.root, stub.env);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(await exists(stub.marker)).toBe(true);
+  });
+
+  it('honours FSCALE_NODE for a .ts config', async () => {
+    const stub = await stubNode();
+    const repo = await fixtures.create({
+      files: { 'firescale.config.ts': 'export default {};\n' },
+    });
+    // PATH is left alone: only FSCALE_NODE can lead to the stub.
+    const env = { FSCALE_NODE: NODE_STUB, FSCALE_STUB_MARKER: stub.marker };
+    const result = await runCli(['check'], repo.root, env);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(await exists(stub.marker)).toBe(true);
+  });
+});
+
+describe('when Node cannot be started', () => {
   it('runs built-in rules with a JSON config when Node cannot be started', async () => {
     const repo = await fixtures.create({
       files: { '.env': FAKE_ENV, 'firescale.config.json': ENFORCED_CONFIG },

@@ -4,6 +4,7 @@
 //! the diagnostics model, config loading, git and file access, the rule
 //! trait, report formatting and the bridge to Node for TypeScript rules.
 
+pub mod cache;
 pub mod check;
 pub mod config;
 pub mod error;
@@ -16,6 +17,7 @@ pub mod rule;
 pub mod select;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod walk;
 
 pub use error::{Error, Result};
 

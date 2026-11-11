@@ -31,6 +31,7 @@ Usage:
 Options:
   --rules <glob>   Only run matching rules, e.g. \"core/*\" (comma-separated)
   --json           Print the report as JSON (see docs/check-json.md)
+  --no-cache       Run every rule again, without reading or writing .firescale/cache
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:
@@ -44,6 +45,7 @@ struct Args {
     version: bool,
     help: bool,
     json: bool,
+    no_cache: bool,
     rules: Option<String>,
     cwd: Option<String>,
     positionals: Vec<String>,
@@ -80,7 +82,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
             None => (arg.clone(), None),
         };
         match name.as_str() {
-            "--version" | "--help" | "--json" => {
+            "--version" | "--help" | "--json" | "--no-cache" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -89,6 +91,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 match name.as_str() {
                     "--version" => args.version = true,
                     "--help" => args.help = true,
+                    "--no-cache" => args.no_cache = true,
                     _ => args.json = true,
                 }
             }
@@ -160,14 +163,25 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
     let selection = select_rules(config.rules, args.rules.as_deref())?;
-    let report = run_check(root, &selection.rules, version(), &mut host)?;
+    let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
+    let report = outcome.report;
+    let mut notes = selection.notes;
+    // FSCALE_LOG=cache shows, per rule, whether its result came from the cache.
+    if env::var("FSCALE_LOG").is_ok_and(|value| value.split(',').any(|part| part == "cache")) {
+        notes.extend(
+            outcome
+                .cache
+                .iter()
+                .map(|(id, outcome)| format!("cache: {} {id}", outcome.as_str())),
+        );
+    }
     Ok(Output {
         stdout: if args.json {
             format_json(&report)
         } else {
             format_human(&report)
         },
-        notes: selection.notes,
+        notes,
         code: if report.ok { EXIT_OK } else { EXIT_VIOLATIONS },
     })
 }
