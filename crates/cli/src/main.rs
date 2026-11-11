@@ -1,7 +1,7 @@
 //! The `fscale` command.
 
 use std::env;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -368,7 +368,21 @@ fn explain(root: &Path, rest: &[String]) -> Result<Output> {
     let packs = firescale_rules::builtin_packs();
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
-    Ok(Output::ok(explain_rule(find_rule(&config, query)?)?))
+    let rule = find_rule(&config, query).map_err(|error| {
+        // A rule of a built-in pack that is not on gets a pointer to the pack.
+        let pack = packs.iter().find(|pack| {
+            !config.packs.iter().any(|enabled| enabled == pack.name)
+                && pack.rules.iter().any(|rule| rule.meta().id == *query)
+        });
+        match pack {
+            Some(pack) => Error::user(format!(
+                "Rule \"{query}\" is in the \"{}\" pack, which is not on. Add \"{}\" to \"packs\" in your firescale config, then run this again.",
+                pack.name, pack.name
+            )),
+            None => error,
+        }
+    })?;
+    Ok(Output::ok(explain_rule(rule)?))
 }
 
 /// `fscale facts`: detected stack and project graph. Needs no config and no Node.
@@ -498,7 +512,13 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                 return Err(Error::usage("hooks run needs --agent <claude|codex|cursor>."));
             };
             let agent = Agent::parse(name)?;
-            let stdin = std::io::read_to_string(std::io::stdin()).unwrap_or_default();
+            // An agent pipes JSON in. A person running this by hand has a
+            // terminal on stdin, and must not be left waiting for input.
+            let stdin = if std::io::stdin().is_terminal() {
+                String::new()
+            } else {
+                std::io::read_to_string(std::io::stdin()).unwrap_or_default()
+            };
             let input = parse_hook_input(&stdin);
             // A hook that cannot run verify must not trap the agent: report and let it stop.
             let report = match verify_report(root, args) {

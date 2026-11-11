@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ihsankoolz/firescale/blob/main/packages/cli/schemas/verify-output.schema.json",
+  "title": "fscale verify --json output",
+  "description": "The report printed by `fscale verify --json`. Steps are listed in the order they run: check, lint, typecheck, test.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "version", "ok", "runner", "steps"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of this format. Changes only on a breaking change.",
+      "const": 1
+    },
+    "version": {
+      "description": "The firescale version that produced the report.",
+      "type": "string"
+    },
+    "ok": {
+      "description": "True when no step failed. Skipped steps do not count as failures.",
+      "type": "boolean"
+    },
+    "runner": {
+      "description": "How the lint, typecheck and test commands were chosen: all three from the config, Nx, Turborepo, package.json scripts, Cargo, or none found.",
+      "enum": ["config", "nx", "turbo", "scripts", "cargo", "none"]
+    },
+    "failedStep": {
+      "description": "Name of the first step that failed. Absent when ok is true.",
+      "enum": ["check", "lint", "typecheck", "test"]
+    },
+    "rerun": {
+      "description": "The command to run again after fixing the failure. Absent when ok is true.",
+      "type": "string"
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "durationMs", "detail"],
+        "properties": {
+          "name": { "enum": ["check", "lint", "typecheck", "test"] },
+          "status": {
+            "description": "not-run means an earlier step failed, so this one was not started.",
+            "enum": ["passed", "failed", "skipped", "not-run"]
+          },
+          "command": {
+            "description": "The command that ran, or would have. Absent for a skipped step.",
+            "type": "string"
+          },
+          "exitCode": {
+            "description": "Exit code of the command. Absent when the step did not run or was killed by a signal.",
+            "type": "integer"
+          },
+          "durationMs": { "type": "integer", "minimum": 0 },
+          "detail": {
+            "description": "One line about the outcome: a count, the command, or why the step was skipped.",
+            "type": "string"
+          },
+          "outputTail": {
+            "description": "The last lines of a failed step's output, without colour codes. Absent unless the step failed.",
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
