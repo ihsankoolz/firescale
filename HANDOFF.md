@@ -21,7 +21,8 @@ Notes for M9 (`init`, `adopt`, `sync`), which stands on M8:
 - The loop is `crates/core/src/fixloop.rs`: `plan_order` (order and validation) and `run_fix_loop` (passes and convergence). `fix()` in `crates/cli/src/main.rs` shows how to drive it for built-in and custom rules, and `render_fixes` how to print the result. `init`, `adopt` and `sync` should call the same pieces, not copy them.
 - `sync --check` is a dry run whose exit code is 1 when the report has changes. `crates/core/src/scratch.rs` (`Scratch::copy_of`) is the scratch copy the dry run uses.
 - Fixes that create files must mark their finding `deterministic` and really repair it, or the loop fails with "changed nothing".
-- If a new fix edits a file another fix creates, declare `after`. No built-in rule does yet.
+- If a new fix edits a file another fix creates, declare `after`, as `core/no-committed-env` does for `core/gitignore-basics`. A test in `crates/rules/src/lib.rs` rejects a built-in `after` that names no built-in rule, and cycles.
+- A write that does not change a file is not a change: `RuleContext::write` and the SDK's `ctx.files.write` skip it.
 - Cursor's hook format is still unconfirmed (cursor.com is blocked from the cloud build environment). M12 needs it.
 
 ## Things to know before changing code

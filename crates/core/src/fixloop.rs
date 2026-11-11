@@ -197,12 +197,13 @@ pub fn run_fix_loop(
     mut fix: impl FnMut(&LoopRule) -> Result<FixOutcome>,
 ) -> std::result::Result<LoopReport, LoopFailure> {
     let mut report = LoopReport::default();
-    // What each rule has written to each file so far: `(rule, file) -> contents`.
-    let mut written: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    // Rules whose fix changed nothing in the pass before, though they had
+    // violations to repair.
+    let mut stuck_before: Vec<String> = Vec::new();
 
     for pass in 1..=max_passes {
         report.passes = pass;
-        let mut stuck: Vec<&str> = Vec::new();
+        let mut stuck: Vec<String> = Vec::new();
         let mut changed_in_pass: Vec<(&str, String)> = Vec::new();
 
         for rule in rules {
@@ -211,7 +212,7 @@ pub fn run_fix_loop(
                 Err(error) => return Err(LoopFailure { error, report }),
             };
             if outcome.attempted > 0 && outcome.changes.is_empty() {
-                stuck.push(&rule.id);
+                stuck.push(rule.id.clone());
             }
             for note in outcome.result.notes {
                 report.notes.push((rule.id.clone(), note));
@@ -219,34 +220,18 @@ pub fn run_fix_loop(
             for change in outcome.changes {
                 let file = file_of(&change).to_owned();
                 changed_in_pass.push((&rule.id, file.clone()));
-                let repeated = match &change {
-                    Change::Write { after, .. } => {
-                        let earlier = written.entry((rule.id.clone(), file.clone())).or_default();
-                        let repeated = earlier.contains(after);
-                        earlier.push(after.clone());
-                        repeated
-                    }
-                    Change::Untrack { .. } => false,
-                };
+                let fight: Option<Vec<String>> = fighters(&report.changes, &rule.id, &change)
+                    .map(|ids| ids.into_iter().map(str::to_owned).collect());
                 report.changes.push(LoopChange {
                     pass,
                     rule: rule.id.clone(),
                     change,
                 });
-                if repeated {
-                    // Someone undid this rule's write: every rule that wrote
-                    // the file is part of the fight.
-                    let fighters: BTreeSet<&str> = report
-                        .changes
-                        .iter()
-                        .filter(|earlier| file_of(&earlier.change) == file)
-                        .map(|earlier| earlier.rule.as_str())
-                        .collect();
-                    let fighters: Vec<&str> = fighters.into_iter().collect();
+                if let Some(fighters) = fight {
                     let error = Error::user(format!(
-                        "The fixes do not settle: in pass {pass}, {} wrote the same content to {file} that it had already written, so another fix keeps undoing it. Rules that write {file}: {}. Turn one of them off, or change one fix so that both can be satisfied at once.",
+                        "The fixes do not settle: in pass {pass}, {} wrote the same content to {file} that it had already written, because another fix changed the file in between. Rules that write {file}: {}. Turn one of them off, or change one fix so that both can be satisfied at once.",
                         quoted(&[rule.id.as_str()]),
-                        quoted(&fighters)
+                        quoted(&fighters.iter().map(String::as_str).collect::<Vec<_>>())
                     ));
                     return Err(LoopFailure { error, report });
                 }
@@ -254,33 +239,88 @@ pub fn run_fix_loop(
         }
 
         if changed_in_pass.is_empty() {
+            // A fix may repair things without reporting a change (a custom
+            // fix that writes files by itself). So a rule only counts as
+            // stuck when a second pass finds the same violations still there.
+            let still: Vec<&str> = stuck
+                .iter()
+                .filter(|id| stuck_before.contains(id))
+                .map(String::as_str)
+                .collect();
             if stuck.is_empty() {
                 return Ok(report);
             }
-            let error = Error::user(format!(
-                "The fix of {} changed nothing, but the rule still reports violations it says its fix can repair. This is a bug in the rule: its fix does not do what its check asks for. Run `fscale check --rules {}` to see the violations, and fix them by hand.",
-                quoted(&stuck),
-                stuck[0]
-            ));
-            return Err(LoopFailure { error, report });
+            if !still.is_empty() {
+                let error = Error::user(format!(
+                    "The fix of {} changed nothing, but the rule still reports violations it says its fix can repair. This is a bug in the rule: its fix does not do what its check asks for. Run `fscale check --rules {}` to see the violations, and fix them by hand.",
+                    quoted(&still),
+                    still[0]
+                ));
+                return Err(LoopFailure { error, report });
+            }
         }
 
         if pass == max_passes {
-            let rules_in_pass: BTreeSet<&str> =
-                changed_in_pass.iter().map(|(rule, _)| *rule).collect();
+            let rules_in_pass: BTreeSet<&str> = changed_in_pass
+                .iter()
+                .map(|(rule, _)| *rule)
+                .chain(stuck.iter().map(String::as_str))
+                .collect();
             let files_in_pass: BTreeSet<&str> = changed_in_pass
                 .iter()
                 .map(|(_, file)| file.as_str())
                 .collect();
-            let error = Error::user(format!(
-                "The fixes did not settle after {max_passes} passes. Still changing files in the last pass: {} (files: {}). A fix that is run twice must change nothing the second time; one of these does not. Turn the rule off, or repair its fix.",
-                quoted(&rules_in_pass.into_iter().collect::<Vec<_>>()),
+            let files = if files_in_pass.is_empty() {
+                "none reported".to_owned()
+            } else {
                 files_in_pass.into_iter().collect::<Vec<_>>().join(", ")
+            };
+            let error = Error::user(format!(
+                "The fixes did not settle after {max_passes} passes. Still changing files in the last pass: {} (files: {files}). A fix that is run twice must change nothing the second time; one of these does not. Turn the rule off, or repair its fix.",
+                quoted(&rules_in_pass.into_iter().collect::<Vec<_>>()),
             ));
             return Err(LoopFailure { error, report });
         }
+        stuck_before = stuck;
     }
     Ok(report)
+}
+
+/// Decides whether `change`, about to be made by `rule`, shows that fixes are
+/// undoing each other: the rule writes content to a file that it has already
+/// written there, and since then another rule has written the same file.
+/// Returns the rules that write the file.
+///
+/// A rule that rewrites its own file, with nobody else touching it, is not a
+/// fight. If it never settles, the pass limit stops it.
+fn fighters<'a>(earlier: &'a [LoopChange], rule: &'a str, change: &Change) -> Option<Vec<&'a str>> {
+    let Change::Write { file, after, .. } = change else {
+        return None;
+    };
+    let writes_of_file = || {
+        earlier.iter().filter_map(move |entry| match &entry.change {
+            Change::Write {
+                file: other, after, ..
+            } if other == file => Some((entry.rule.as_str(), after)),
+            _ => None,
+        })
+    };
+    let last_same = writes_of_file()
+        .enumerate()
+        .filter(|(_, (writer, content))| *writer == rule && *content == after)
+        .map(|(position, _)| position)
+        .last()?;
+    let others_since: BTreeSet<&str> = writes_of_file()
+        .skip(last_same + 1)
+        .map(|(writer, _)| writer)
+        .filter(|writer| *writer != rule)
+        .collect();
+    if others_since.is_empty() {
+        return None;
+    }
+    let mut all: BTreeSet<&str> = writes_of_file().map(|(writer, _)| writer).collect();
+    all.insert(rule);
+    Some(all.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -465,6 +505,10 @@ mod tests {
         assert!(message.contains("The fixes do not settle"), "{message}");
         assert!(message.contains("in pass 2"), "{message}");
         assert!(
+            message.contains("another fix changed the file in between"),
+            "{message}"
+        );
+        assert!(
             message.contains("Rules that write style.txt: \"p/a\", \"p/b\""),
             "{message}"
         );
@@ -499,13 +543,74 @@ mod tests {
             Ok(outcome(Vec::new(), usize::from(rule.id == "p/lazy")))
         })
         .unwrap_err();
-        assert_eq!(failure.report.passes, 1);
+        // One pass to see it do nothing, one more to see the violations remain.
+        assert_eq!(failure.report.passes, 2);
         let message = failure.error.message();
         assert!(
             message.starts_with("The fix of \"p/lazy\" changed nothing"),
             "{message}"
         );
         assert!(message.contains("fscale check --rules p/lazy"), "{message}");
+    }
+
+    #[test]
+    fn a_fix_that_repairs_without_reporting_changes_is_not_an_error() {
+        // The fix did its work by a route the loop cannot see: the first
+        // call had a violation and reported no change, the second has none.
+        let a = rule("p/quiet", &[]);
+        let mut calls = 0;
+        let report = run_fix_loop(&[&a], MAX_PASSES, |_| {
+            calls += 1;
+            Ok(outcome(Vec::new(), usize::from(calls == 1)))
+        })
+        .unwrap();
+        assert_eq!(report.passes, 2);
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn one_rule_rewriting_its_own_file_is_not_a_fight() {
+        // The same rule writes the same content twice in one pass (once per
+        // violation, say), and nobody else touches the file.
+        let a = rule("p/twice", &[]);
+        let mut done = false;
+        let report = run_fix_loop(&[&a], MAX_PASSES, |_| {
+            if done {
+                return Ok(outcome(Vec::new(), 0));
+            }
+            done = true;
+            Ok(outcome(
+                vec![
+                    write("list.txt", None, "a\nb\n"),
+                    write("list.txt", Some("a\nb\n"), "a\nb\n"),
+                ],
+                2,
+            ))
+        })
+        .unwrap();
+        assert_eq!(report.passes, 2);
+    }
+
+    #[test]
+    fn a_second_rule_editing_a_file_compatibly_is_not_a_fight() {
+        // p/a creates the file; p/b appends to it; p/a is still satisfied.
+        let (a, b) = (rule("p/a", &[]), rule("p/b", &[]));
+        let mut state = 0;
+        let report = run_fix_loop(&[&a, &b], MAX_PASSES, |rule| {
+            Ok(match (rule.id.as_str(), state) {
+                ("p/a", 0) => {
+                    state = 1;
+                    outcome(vec![write("f.txt", None, "a\n")], 1)
+                }
+                ("p/b", 1) => {
+                    state = 2;
+                    outcome(vec![write("f.txt", Some("a\n"), "a\nb\n")], 1)
+                }
+                _ => outcome(Vec::new(), 0),
+            })
+        })
+        .unwrap();
+        assert_eq!(report.changes.len(), 2);
     }
 
     #[test]

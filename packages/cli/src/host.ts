@@ -17,6 +17,7 @@ import {
   checkRule,
   fixRuleWithChanges,
   FirescaleError,
+  ignoreInheritedGitRepo,
   type Diagnostic,
   type Rule,
   type RulePack,
@@ -203,6 +204,7 @@ async function fix(params: Record<string, unknown>): Promise<unknown> {
   // scratch copy of the repo, while the pack is still loaded from the repo.
   const root = stringParam(params, 'root');
   const packRoot = typeof params['packRoot'] === 'string' ? params['packRoot'] : root;
+  if (path.resolve(packRoot) !== path.resolve(root)) ignoreInheritedGitRepo();
   const ruleId = stringParam(params, 'ruleId');
   const rule = await findRule(packRoot, stringParam(params, 'pack'), ruleId);
   const options = isRecord(params['options']) ? params['options'] : {};

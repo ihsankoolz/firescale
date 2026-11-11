@@ -63,6 +63,8 @@ export function createContext(init: ContextInit, mode: FixMode = {}): FixContext
       ...files,
       async write(file: string, content: string) {
         const before = (await files.exists(file)) ? await files.read(file) : null;
+        // Writing what is already there is not a change.
+        if (before === content) return;
         mode.record?.({ kind: 'write', file: normalizeRelative(file), before, after: content });
         if (!mode.dryRun) await files.write(file, content);
       },

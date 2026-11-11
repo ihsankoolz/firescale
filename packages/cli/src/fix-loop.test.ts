@@ -129,7 +129,7 @@ describe('fixes that do not settle', () => {
   it('stops when two fixes undo each other, and names both', async () => {
     const repo = await loopRepo('fight');
     const result = await runCli(['fix'], repo.root);
-    expect(result.code).not.toBe(EXIT_OK);
+    expect(result.code).toBe(EXIT_USAGE);
     expect(result.stdout).toBe('');
     expect(result.stderr).toMatchSnapshot();
     expect(result.stderr).toContain('Rules that write style.txt: "fight/spaces", "fight/tabs"');
@@ -139,7 +139,7 @@ describe('fixes that do not settle', () => {
   it('stops at the pass limit when a fix never settles', async () => {
     const repo = await loopRepo('restless', { 'restless/lazy': 'off' });
     const result = await runCli(['fix'], repo.root);
-    expect(result.code).not.toBe(EXIT_OK);
+    expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toContain(
       'The fixes did not settle after 10 passes. Still changing files in the last pass: "restless/counter" (files: count.txt).',
     );
@@ -149,7 +149,7 @@ describe('fixes that do not settle', () => {
   it('stops when a fix does nothing about the violations it claims', async () => {
     const repo = await loopRepo('restless', { 'restless/counter': 'off' });
     const result = await runCli(['fix'], repo.root);
-    expect(result.code).not.toBe(EXIT_OK);
+    expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toBe(
       'fscale: The fix of "restless/lazy" changed nothing, but the rule still reports violations it says its fix can repair. This is a bug in the rule: its fix does not do what its check asks for. Run `fscale check --rules restless/lazy` to see the violations, and fix them by hand.\n',
     );
@@ -159,10 +159,81 @@ describe('fixes that do not settle', () => {
     const repo = await loopRepo('fight');
     const before = await rootFiles(repo);
     const result = await runCli(['fix', '--dry-run'], repo.root);
-    expect(result.code).not.toBe(EXIT_OK);
+    expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toContain('The fixes do not settle');
     expect(result.stderr).toContain('This was a dry run, so nothing was changed.');
     expect(await rootFiles(repo)).toEqual(before);
+  });
+});
+
+describe('fixes that are fine', () => {
+  it('does not mistake one rule writing its file twice, or a fix that works outside its context, for a problem', async () => {
+    const repo = await loopRepo('quiet');
+    const result = await runCli(['fix'], repo.root);
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(EXIT_OK);
+    // The second, identical write is not a change. The fix that wrote by
+    // itself has nothing to show, and is not an error either.
+    expect(result.stdout).toBe(
+      [
+        'quiet/twice',
+        '  created list.txt',
+        '',
+        'Fixed: 1 change in 1 rule. Run `fscale check` to see what is left.',
+        '',
+      ].join('\n'),
+    );
+    expect(await repo.read('list.txt')).toBe('alpha\nbeta\n');
+    expect(await repo.read('own.txt')).toBe('made without the context\n');
+    expect((await runCli(['fix'], repo.root)).stdout).toBe(NOTHING);
+  });
+});
+
+describe('a dry run never reaches the real repo', () => {
+  /** What git gives a hook in a linked worktree, or under `git commit -a`: absolute paths. */
+  const hookEnv = (repo: FixtureRepo): Record<string, string> => ({
+    GIT_DIR: path.join(repo.root, '.git'),
+    GIT_INDEX_FILE: path.join(repo.root, '.git', 'index'),
+    GIT_WORK_TREE: repo.root,
+  });
+
+  it('leaves the git index alone when git itself says which repo and index to use', async () => {
+    const repo = await fixtures.create({ files: { '.env': FAKE_ENV, 'README.md': '# x\n' } });
+    const tracked = await repo.trackedFiles();
+    expect(tracked).toContain('.env');
+
+    const dry = await runCli(['fix', '--dry-run'], repo.root, hookEnv(repo));
+    expect(dry.code).toBe(EXIT_OK);
+    expect(dry.stdout).toContain('would untrack .env');
+    expect(await repo.trackedFiles()).toEqual(tracked);
+    expect(await repo.read('.gitignore')).toBeNull();
+  });
+
+  it('holds for a custom rule that untracks files through the bridge', async () => {
+    const fixPack = fileURLToPath(new URL('../test-fixtures/fix-pack/', import.meta.url));
+    const repo = await loopRepo('order', {}, { 'debug.log': 'line\n', '.gitignore': 'dist\n' });
+    await cp(fixPack, path.join(repo.root, 'tools', 'fix-pack'), { recursive: true });
+    await repo.write(
+      'firescale.config.json',
+      JSON.stringify({ packs: ['./tools/fix-pack/pack.ts'] }),
+    );
+    const tracked = await repo.trackedFiles();
+    expect(tracked).toContain('debug.log');
+
+    for (const env of [{}, hookEnv(repo)]) {
+      const dry = await runCli(['fix', '--dry-run'], repo.root, env);
+      expect(dry.stderr).toBe('');
+      expect(dry.code).toBe(EXIT_OK);
+      expect(dry.stdout).toContain('would untrack debug.log');
+      expect(dry.stdout).toContain('would edit .gitignore');
+      expect(await repo.trackedFiles()).toEqual(tracked);
+      expect(await repo.read('.gitignore')).toBe('dist\n');
+    }
+
+    // And the real run does what the dry run said.
+    const real = await runCli(['fix'], repo.root);
+    expect(real.stdout).toContain('untracked debug.log');
+    expect(await repo.trackedFiles()).not.toContain('debug.log');
   });
 });
 

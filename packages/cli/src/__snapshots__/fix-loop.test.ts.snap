@@ -50,7 +50,7 @@ Dry run: 3 changes in 2 rules. Nothing was changed. Run \`fscale fix\` to apply.
 `;
 
 exports[`fixes that do not settle > stops when two fixes undo each other, and names both 1`] = `
-"fscale: The fixes do not settle: in pass 2, "fight/spaces" wrote the same content to style.txt that it had already written, so another fix keeps undoing it. Rules that write style.txt: "fight/spaces", "fight/tabs". Turn one of them off, or change one fix so that both can be satisfied at once.
+"fscale: The fixes do not settle: in pass 2, "fight/spaces" wrote the same content to style.txt that it had already written, because another fix changed the file in between. Rules that write style.txt: "fight/spaces", "fight/tabs". Turn one of them off, or change one fix so that both can be satisfied at once.
 
 The fix stopped after these changes had already been made:
 

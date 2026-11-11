@@ -22,11 +22,11 @@ fscale fix --rules "core/*"
 
 The loop stops with an error, and exit code 2, when the fixes do not settle:
 
-| What happened                                                                | The error names                          |
-| ---------------------------------------------------------------------------- | ---------------------------------------- |
-| A fix changed nothing, but its rule still reports fixable violations.        | The rule.                                |
-| A rule wrote the same content to a file twice: another fix keeps undoing it. | The file, and every rule that writes it. |
-| Files are still changing after 10 passes.                                    | The rules and files of the last pass.    |
+| What happened                                                                        | The error names                          |
+| ------------------------------------------------------------------------------------ | ---------------------------------------- |
+| A fix changed nothing twice in a row, but its rule still reports fixable violations. | The rule.                                |
+| A rule wrote the same content to a file again, after another rule changed it.        | The file, and every rule that writes it. |
+| Files are still changing after 10 passes.                                            | The rules and files of the last pass.    |
 
 In each case the changes already made stay in your working tree and are listed in the error. Review them with `git status` and `git diff`. The usual cause is a bug in a custom rule; turn the rule `off` to continue.
 
@@ -39,11 +39,11 @@ In each case the changes already made stay in your working tree and are listed i
 
 Removing a file from the git index is not a text change, so it appears as a `would untrack` line, not in the diff.
 
-The copy holds every file git does not ignore, plus every tracked file. Ignored files such as `node_modules` are not copied.
+The copy holds every file git does not ignore, plus every tracked file. Ignored files such as `node_modules` are not copied. The copy is its own git repo, and git's `GIT_DIR` and `GIT_INDEX_FILE` variables are ignored during a dry run, so it is safe to run from a git hook.
 
 ## Custom rules
 
-A custom TypeScript rule's `fix()` runs in the Node host, through the SDK. The SDK records every `ctx.files.write` and `ctx.git.untrack` call, and those records are what `fscale fix` reports. A fix that changes things by any other route (for example `node:fs` directly) is not reported, and the loop cannot see whether it settles, so use the context. In a dry run the fix works on the scratch copy, while the pack itself is loaded from your repo.
+A custom TypeScript rule's `fix()` runs in the Node host, through the SDK. The SDK records every `ctx.files.write` and `ctx.git.untrack` call, and those records are what `fscale fix` reports. A fix that changes things by any other route (for example `node:fs` directly) still works, but its changes are not listed and a dry run cannot show them, so use the context. In a dry run the fix works on the scratch copy, while the pack itself is loaded from your repo.
 
 ## Limits
 

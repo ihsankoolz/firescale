@@ -15,7 +15,7 @@ CI used too much GitHub Actions compute. The account reached its monthly limit d
 | Started by hand                | All four of the above, plus the `bench` and `package` jobs |
 
 - **Linux runs on every push**, to any branch. It is the cheapest runner and catches most failures.
-- **macOS and Windows run only for pull requests into `main`, and for manual runs.** A pull request into another branch (a stacked pull request) gets Linux only, until it is pointed at `main`.
+- **macOS and Windows run only for pull requests into `main`, and for manual runs.** A pull request into another branch (a stacked pull request) gets Linux only. Pointing it at `main` later does not start a run by itself: macOS and Windows run on its next push, or when the workflow is started by hand. (Reacting to the retarget would mean reacting to every edit of a pull request's title or text, and each such run would cancel the one in progress.)
 - **Both Node versions are tested on Linux only.** macOS and Windows use Node 24. Node only affects the TypeScript packages and the bridge.
 - **No job runs twice for one commit.** A pull request from this repository already has a push run for its head commit, so the pull request event adds only macOS and Windows. A pull request from a fork has no push run here, so it gets Linux from the pull request event as well.
 - **Benchmarks run only when the workflow is started by hand.** That covers the `bench` job and the `package` job (npm install smoke tests, which end with the launcher benchmark and run on three OSes). The `ci:bench` and `ci:package` labels no longer do anything.
@@ -31,4 +31,5 @@ CI used too much GitHub Actions compute. The account reached its monthly limit d
 - **A commit on `main` is tested on Linux only.** macOS and Windows were tested on the pull request's merge result before it merged. If two pull requests that pass alone break each other on macOS or Windows, the next pull request shows it, or a manual run does.
 - A change to the npm packaging or to performance is checked only when someone starts the workflow by hand. Do that before a release.
 - The two job step lists must be kept identical by hand.
-- Each OS keeps its own caches. A new branch or pull request starts from the caches saved on `main`.
+- Each OS keeps its own caches. A new branch starts from the Linux caches saved on `main`. macOS and Windows never run on `main` by themselves, so a new pull request builds cold there unless someone has started the workflow by hand on `main`, which saves their caches. Later pushes to the same pull request reuse the caches of its earlier runs.
+- Linux tests the branch head. Only macOS and Windows test the result of merging the pull request into `main`.

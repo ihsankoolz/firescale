@@ -117,6 +117,11 @@ impl RuleContext {
     pub fn write(&self, file: &str, content: &str) -> Result<()> {
         let target = self.resolve(file)?;
         let before = self.read(file)?;
+        // Writing what is already there is not a change: nothing to record,
+        // nothing to do.
+        if before.as_deref() == Some(content) {
+            return Ok(());
+        }
         self.record(Change::Write {
             file: file.to_owned(),
             before,

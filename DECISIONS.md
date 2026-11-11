@@ -49,6 +49,9 @@ Not yet proven on macOS or Windows:
 - **Nothing is rolled back when the loop stops with an error.** The changes made so far stay and are listed in the error.
 - **An `after` entry that names a rule which exists but is off places no constraint.** Only an id that no rule has is an error. Turning one rule of a cycle off breaks the cycle.
 - **`after` only orders fixes.** It has no effect on `check`.
+- **`core/no-committed-env` now declares `after: core/gitignore-basics`.** It is the first built-in use, and it is true: one creates `.gitignore`, the other adds to it.
+- **A write that does not change a file's content is no longer reported as a change**, for built-in and custom fixes.
+- **A fix counts as stuck only after two passes in a row** with violations and no change, so that a custom fix writing files by itself is not called broken.
 - **One existing test changed its fixture, not its assertion:** "shows a new file as a diff against /dev/null" asserted a preview that the old dry run got wrong when two rules touch `.gitignore`. It now turns on one rule; a new test covers two.
 
 **Known limits**
@@ -57,7 +60,8 @@ Not yet proven on macOS or Windows:
 - A fix that depends on a file git ignores (and does not track) can preview differently from the real run.
 - If `fscale` is killed during a dry run, a `firescale-dry-run-*` folder stays in the temp folder.
 - A custom fix that writes files without using its context is invisible to the loop.
-- No built-in rule declares `after` yet. `core/no-committed-env` and `core/gitignore-basics` both write `.gitignore` and work in id order today.
+- An `after` id that no rule has stops `fscale fix`, also when it belongs to a custom pack the repo has not listed.
+- An independent review before the pull request found three real defects, all fixed with tests: a dry run started from a git hook could untrack files in the real index (git's `GIT_DIR` and `GIT_INDEX_FILE` variables were inherited); the "fixes undo each other" check fired on one rule writing its own file twice; and a custom fix that writes files without its context failed the run.
 
 ## Plan update and your answers (before M8)
 
@@ -153,6 +157,11 @@ Not yet proven on macOS or Windows:
 - The benchmark job runs only when you start the workflow by hand.
 - A new push cancels the run still in progress for the same branch or pull request.
 - pnpm and cargo caching are unchanged.
+
+**Known limits**
+
+- A new pull request builds cold on macOS and Windows, because those jobs never run on `main` and so save no cache there. Start the workflow by hand on `main` now and then to seed their caches.
+- Pointing a stacked pull request at `main` does not start macOS and Windows; its next push does.
 
 **Decisions made for you**
 

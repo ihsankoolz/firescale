@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::error::{Error, Result};
-use crate::git::{run_git, run_git_with_input, Git};
+use crate::git::{ignore_inherited_repo, run_git, run_git_with_input, Git};
 use crate::walk::walk_files;
 
 /// A scratch copy of a repo root. The folder is deleted when this is dropped.
@@ -49,13 +49,9 @@ fn create_scratch_dir() -> Result<PathBuf> {
         );
         let dir = std::env::temp_dir().join(name);
         match fs::create_dir(&dir) {
-            // Canonical, like every other root: macOS temp folders are
-            // symlinks and Windows may hand out 8.3 names.
-            Ok(()) => {
-                return dir
-                    .canonicalize()
-                    .map_err(|error| failed("temp folder", &error))
-            }
+            // Not canonicalized: on Windows that gives a `\\?\` path, which
+            // would then be handed to git and to Node as their working folder.
+            Ok(()) => return Ok(dir),
             Err(error) => last = Some(error),
         }
     }
@@ -92,6 +88,9 @@ impl Scratch {
         let scratch = Self {
             root: create_scratch_dir()?,
         };
+        // Read the real repo first, with whatever repo and index git itself
+        // was told to use. After that, nothing in this process may follow
+        // those variables any more: they would lead out of the copy.
         let git = Git::new(root);
         let is_repo = git.is_repo()?;
         let tracked = if is_repo {
@@ -99,6 +98,7 @@ impl Scratch {
         } else {
             Vec::new()
         };
+        ignore_inherited_repo();
 
         let mut files = walk_files(root)?;
         files.extend(tracked.iter().cloned());
@@ -166,7 +166,7 @@ impl Scratch {
         Ok(scratch)
     }
 
-    /// Absolute, canonical path of the copy.
+    /// Absolute path of the copy.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
