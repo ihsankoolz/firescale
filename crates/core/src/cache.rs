@@ -20,7 +20,7 @@ use crate::rule::Options;
 use crate::walk::walk_files;
 
 /// Bumped when the entry format or the key recipe changes, so old entries are ignored.
-const CACHE_FORMAT: u32 = 1;
+const CACHE_FORMAT: u32 = 2;
 
 /// The cache folder, relative to the repo root.
 pub const CACHE_DIR: [&str; 2] = [".firescale", "cache"];
@@ -60,6 +60,9 @@ pub struct RepoSnapshot {
     /// Every file git would not ignore, plus every tracked file. Sorted.
     files: Vec<String>,
     tracked: BTreeSet<String>,
+    /// Whether the root is inside a git work tree. Rules ask git about this,
+    /// so `git init` on a folder must change every key.
+    is_repo: bool,
     hashes: HashMap<String, String>,
 }
 
@@ -77,6 +80,7 @@ impl RepoSnapshot {
             });
             (walked, tracked)
         });
+        let is_repo = Git::new(root).is_repo()?;
         let tracked: BTreeSet<String> = tracked?.into_iter().collect();
         let mut files: BTreeSet<String> = walked?.into_iter().collect();
         // A tracked file can be ignored (added with --force), so the walk alone misses it.
@@ -85,6 +89,7 @@ impl RepoSnapshot {
             root: root.to_path_buf(),
             files: files.into_iter().collect(),
             tracked,
+            is_repo,
             hashes: HashMap::new(),
         })
     }
@@ -128,6 +133,7 @@ impl RepoSnapshot {
         };
         field(&CACHE_FORMAT.to_string());
         field(version);
+        field(if self.is_repo { "git" } else { "no-git" });
         field(&meta.id);
         field(&serde_json::to_string(options).unwrap_or_default());
         for input in &meta.inputs {

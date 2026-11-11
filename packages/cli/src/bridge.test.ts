@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { CheckReport } from './report.js';
 import {
   ENFORCED_CONFIG,
+  onlyEnvRules,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_VIOLATIONS,
@@ -70,7 +71,7 @@ interface SampleOptions {
 async function sampleRepo(options: SampleOptions = {}): Promise<FixtureRepo> {
   const config = options.config ?? {
     packs: ['core', './tools/rules/pack.ts'],
-    rules: { [SAMPLE]: 'enforced' },
+    rules: onlyEnvRules('evaluated', { [SAMPLE]: 'enforced' }),
   };
   const repo = await fixtures.create({
     files: {
@@ -163,7 +164,7 @@ describe('custom pack through the Node bridge', () => {
         "const status: 'enforced' | 'evaluated' = 'enforced';",
         'export default defineConfig({',
         "  packs: ['core', './tools/rules/pack.ts'],",
-        `  rules: { '${SAMPLE}': status, '${ENV_RULE}': 'off' },`,
+        `  rules: ${JSON.stringify(onlyEnvRules('off', { [SAMPLE]: '__STATUS__' })).replace('"__STATUS__"', 'status')},`,
         '});',
         '',
       ].join('\n'),

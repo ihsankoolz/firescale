@@ -4,7 +4,10 @@ import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CheckReport } from './report.js';
 import {
+  ALL_CORE_RULES,
   ENFORCED_CONFIG,
+  onlyEnvRule,
+  onlyEnvRules,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_VIOLATIONS,
@@ -31,42 +34,45 @@ function repoWith(config: unknown | undefined) {
   });
 }
 
+function statusOf(report: CheckReport, id: string): string | undefined {
+  return report.rules.find((r) => r.id === id)?.status;
+}
+
 async function checkJson(root: string): Promise<{ code: number; report: CheckReport }> {
   const result = await runCli(['check', '--json'], root);
   return { code: result.code, report: JSON.parse(result.stdout) as CheckReport };
 }
+
+/** A config that runs only core/no-committed-env, with this value for it. */
+const onlyEnv = (value: unknown) => ({ rules: onlyEnvRules('off', { [RULE]: value }) });
 
 describe('config values', () => {
   it('defaults to the core pack with every rule evaluated', async () => {
     const repo = await repoWith(undefined);
     const { code, report } = await checkJson(repo.root);
     expect(code).toBe(EXIT_OK);
-    expect(report.rules.map((r) => [r.id, r.status])).toEqual([[RULE, 'evaluated']]);
+    expect(report.rules.map((r) => [r.id, r.status])).toEqual(
+      ALL_CORE_RULES.map((id) => [id, 'evaluated']),
+    );
   });
 
   it('accepts a status string or a { status, options } object', async () => {
-    const enforced = await checkJson((await repoWith({ rules: { [RULE]: 'enforced' } })).root);
+    const enforced = await checkJson((await repoWith(onlyEnv('enforced'))).root);
     expect(enforced.code).toBe(EXIT_VIOLATIONS);
     expect(enforced.report.rules[0]?.status).toBe('enforced');
 
-    const allowed = await repoWith({
-      rules: { [RULE]: { status: 'enforced', options: { allow: ['.env'] } } },
-    });
+    const allowed = await repoWith(onlyEnv({ status: 'enforced', options: { allow: ['.env'] } }));
     const withOptions = await checkJson(allowed.root);
     expect(withOptions.code).toBe(EXIT_OK);
     expect(withOptions.report.rules[0]?.status).toBe('enforced');
     expect(withOptions.report.diagnostics).toEqual([]);
 
-    const off = await repoWith({
-      rules: { [RULE]: { status: 'off', options: { allow: ['.env.example'] } } },
-    });
+    const off = await repoWith(onlyEnv({ status: 'off', options: { allow: ['.env.example'] } }));
     const offResult = await runCli(['check'], off.root);
     expect(offResult.code).toBe(EXIT_OK);
     expect(offResult.stdout).toBe('OK: 0 rules checked, no violations.\n');
 
-    const optionsOnly = await checkJson(
-      (await repoWith({ rules: { [RULE]: { options: {} } } })).root,
-    );
+    const optionsOnly = await checkJson((await repoWith(onlyEnv({ options: {} }))).root);
     expect(optionsOnly.report.rules[0]?.status).toBe('evaluated');
   });
 
@@ -88,7 +94,11 @@ describe('config values', () => {
     ['an unknown top-level key', { rulez: {} }, 'unknown key "rulez"'],
     ['a bad packs value', { packs: 'core' }, '"packs" must be a list'],
     ['an unknown pack', { packs: ['nope'] }, 'Available packs: core'],
-    ['an unknown rule', { rules: { 'core/nope': 'off' } }, `Rules in the enabled packs: ${RULE}`],
+    [
+      'an unknown rule',
+      { rules: { 'core/nope': 'off' } },
+      `Rules in the enabled packs: ${ALL_CORE_RULES.join(', ')}`,
+    ],
     ['a bad status', { rules: { [RULE]: 'on' } }, 'must be "off", "evaluated", "enforced"'],
     ['a bad status in an object', { rules: { [RULE]: { status: 'on' } } }, 'invalid status'],
     ['an unknown rule key', { rules: { [RULE]: { level: 'x' } } }, 'unknown key "level"'],
@@ -114,7 +124,7 @@ describe('loading the config file', () => {
   });
 
   it('loads firescale.config.json, with or without a BOM and with CRLF', async () => {
-    const plain = `{\r\n  "rules": { "${RULE}": "enforced" }\r\n}\r\n`;
+    const plain = JSON.stringify(onlyEnv('enforced'), null, 2).replace(/\n/g, '\r\n') + '\r\n';
     for (const content of [plain, `\uFEFF${plain}`]) {
       const repo = await repoWith(content);
       const { code, report } = await checkJson(repo.root);
@@ -170,8 +180,10 @@ describe('finding the repo root', () => {
     await runGit(inner, ['add', '--force', '--', '.env']);
     const { code, report } = await checkJson(inner);
     expect(code).toBe(EXIT_OK);
-    expect(report.rules[0]?.status).toBe('evaluated');
-    expect(report.diagnostics.map((d) => d.file)).toEqual(['.env']);
+    expect(statusOf(report, RULE)).toBe('evaluated');
+    expect(report.diagnostics.filter((d) => d.ruleId === RULE).map((d) => d.file)).toEqual([
+      '.env',
+    ]);
   });
 
   it('prefers the nearest config file, then the git root', async () => {
@@ -182,8 +194,10 @@ describe('finding the repo root', () => {
 
     // No config anywhere: the git root is the root, so its .env is found from a subfolder.
     const noConfig = await checkJson(nested);
-    expect(noConfig.report.diagnostics.map((d) => d.file)).toEqual(['.env']);
-    expect(noConfig.report.rules[0]?.status).toBe('evaluated');
+    expect(noConfig.report.diagnostics.filter((d) => d.ruleId === RULE).map((d) => d.file)).toEqual(
+      ['.env'],
+    );
+    expect(statusOf(noConfig.report, RULE)).toBe('evaluated');
 
     // A config at the git root applies from a subfolder.
     await repo.write('firescale.config.json', ENFORCED_CONFIG);
@@ -191,7 +205,7 @@ describe('finding the repo root', () => {
     expect(rootConfig.code).toBe(EXIT_VIOLATIONS);
 
     // A nearer config wins over the one at the git root.
-    await repo.write('a/firescale.config.json', JSON.stringify({ rules: { [RULE]: 'off' } }));
+    await repo.write('a/firescale.config.json', onlyEnvRule('off'));
     const nearest = await checkJson(nested);
     expect(nearest.code).toBe(EXIT_OK);
     expect(nearest.report.rules).toEqual([]);

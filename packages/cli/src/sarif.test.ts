@@ -4,6 +4,7 @@ import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ENFORCED_CONFIG,
+  onlyEnvRule,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_VIOLATIONS,
@@ -70,7 +71,9 @@ describe('fscale check --sarif', () => {
 
   it('validates for a clean repo and exits 0', async () => {
     const validate = await validator();
-    const repo = await fixtures.create({ files: { 'README.md': '# fixture\n' } });
+    const repo = await fixtures.create({
+      files: { 'README.md': '# fixture\n', 'firescale.config.json': onlyEnvRule('evaluated') },
+    });
     const { result, doc } = await sarif(repo.root);
     expect(validate(doc), JSON.stringify(validate.errors)).toBe(true);
     expect(result.code).toBe(EXIT_OK);

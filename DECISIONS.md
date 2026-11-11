@@ -4,6 +4,7 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## Needs your decision (all milestones, most important first)
 
+0. **Are the core rules' heuristics right for you?** (M5, ADR 0012) Seven rules were written quickly, tuned to avoid false alarms. The table in ADR 0012 says exactly what each one flags. The ones most worth your eye: `no-secrets-in-source` (which formats, what is skipped), `readme-setup` (what counts as install and run steps), and whether `single-lockfile` and `scripts-present` should cover Rust and Python.
 1. **Should the result cache be on by default right now?** (M3, ADR 0010) With the one cheap rule that exists today, a warm cached `check` on a 50k-file repo is slower than `--no-cache` on every OS (p50: 64 ms against 33 ms locally; on CI runners 109 against 27 ms on Linux, 102 against 49 ms on macOS, 370 against 144 ms on Windows), because proving "nothing changed" means walking the repo. The cache will pay off for content-scanning rules in M5. Options: (a) keep it on, as now; (b) make it opt-in until M5; (c) let each rule declare whether it is worth caching. I kept (a) because PLAN.md's "Done when" describes a cache that is simply on.
 2. **Removing the napi binding outright.** (M2, ADR 0008 §3) Nothing calls from Node into Rust any more. If you want the TypeScript SDK to reuse the Rust walker or hasher in-process, a thin binding would have to come back.
 3. **"No Node process" under an npm install.** (M2, ADR 0008 §6) The usual npm layout puts a small Node launcher in front of the binary. The design adds an optional hard-link step that removes it where install scripts are allowed. Decide whether that is acceptable when M6 (npm packaging) is built.
@@ -15,9 +16,35 @@ A running log, newest milestone first. For each milestone: what was built, decis
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
 
-## M5 — Core rule pack (draft, not merged)
+## M5 — Core rule pack
 
-A first pass of the seven remaining core rules is on branch `m5-core-rules`. It was written at the very end of the session, has not been reviewed, and is not on `main`. Nothing about it is decided yet. HANDOFF.md says how to pick it up.
+**Built**
+
+- The seven remaining `core` rules, in Rust, each with a check, a SKILL.md and fixture tests: `gitignore-basics`, `single-lockfile`, `scripts-present`, `ci-exists`, `readme-setup`, `env-example`, `no-secrets-in-source`.
+- Deterministic fixes for `gitignore-basics` and `env-example`.
+- `fscale check` on this repo reports nothing with all eight rules, and a test keeps it that way.
+
+**Decisions made for you** (all ADR 0012)
+
+- Every heuristic prefers missing a problem to raising a false alarm.
+- `single-lockfile` and `scripts-present` only look at JavaScript projects for now.
+- `no-secrets-in-source` matches well-known token formats only; no entropy scoring, no generic password patterns. Findings never contain the secret.
+- `ci-exists` understands GitHub Actions only and stays silent when another CI system's config is present.
+- Only `gitignore-basics` and `env-example` have fixes. The others are marked for an agent or a person.
+- This repo now has a `firescale.config.json`. It excludes the `env-example` rule's own test fixtures from that rule, because they contain env reads on purpose. Dogfooding found this in CI.
+
+**Known limits**
+
+- These rules were written and reviewed in the last half hour of the session. They have tests and passed a short review, but less scrutiny than M2 to M4. Treat the heuristics as a first version.
+- No Rust or Python equivalents of the lockfile and scripts rules.
+- `no-secrets-in-source` hashes every tracked file for its cache key, so the cache gives it little on large repos.
+- The secrets rule misses tokens in formats it does not know.
+- Raised by the review and not fixed:
+  - `no-secrets-in-source` does not scan `dist/`, `build/` or `vendor/` folders, so a secret committed there is missed.
+  - `env-example` scans test files too, so variables only tests use are reported.
+  - `env-example` can still pick up an env read written inside a multi-line string, and misses destructuring and computed names.
+  - `single-lockfile` looks at parent folders up to the repo root, which are not in its cache inputs when firescale runs inside a workspace member.
+  - `gitignore-basics`' fix writes only its comment line when no language is detected.
 
 ## M4 — `fix`, SARIF and facts
 

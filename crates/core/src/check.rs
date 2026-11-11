@@ -365,6 +365,21 @@ mod tests {
     }
 
     #[test]
+    fn turning_a_folder_into_a_git_repo_invalidates_every_rule() {
+        // A rule can behave differently inside a repo even when no file changed.
+        let fixture = Fixture::new(&[("a.md", "one\n")], Track::NoGit).unwrap();
+        let markdown = CountingRule::new("test/markdown", "md");
+        let rules = [configured(&markdown, json!({}))];
+        assert_eq!(outcomes(&run(&fixture, &rules, true)), [CacheOutcome::Miss]);
+        assert_eq!(outcomes(&run(&fixture, &rules, true)), [CacheOutcome::Hit]);
+
+        let init = crate::git::run_git(fixture.root(), &["init", "--quiet"]).unwrap();
+        assert_eq!(init.code, 0, "{}", init.stderr);
+        assert_eq!(outcomes(&run(&fixture, &rules, true)), [CacheOutcome::Miss]);
+        assert_eq!(outcomes(&run(&fixture, &rules, true)), [CacheOutcome::Hit]);
+    }
+
+    #[test]
     fn options_and_version_are_part_of_the_key() {
         let fixture = fixture();
         let markdown = CountingRule::new("test/markdown", "md");

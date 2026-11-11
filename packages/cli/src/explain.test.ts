@@ -1,6 +1,6 @@
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ENFORCED_CONFIG, EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
+import { ALL_CORE_RULES, ENFORCED_CONFIG, EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
@@ -30,7 +30,7 @@ describe('fscale explain', () => {
     const result = await runCli(['explain', 'core/nope'], repo.root);
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toBe(
-      'fscale: Unknown rule "core/nope". Available rules: core/no-committed-env.\n',
+      `fscale: Unknown rule "core/nope". Available rules: ${ALL_CORE_RULES.join(', ')}.\n`,
     );
   });
 

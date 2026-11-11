@@ -1,0 +1,10 @@
+{
+  "packs": ["core"],
+  "rules": {
+    "core/env-example": {
+      "options": {
+        "excludePaths": ["crates/rules/src/core/env-example/"]
+      }
+    }
+  }
+}
