@@ -1,33 +1,40 @@
 name: CI
 
+# What runs when (ADR 0016):
+#   push to any branch         Linux, Node 22 and 24
+#   pull request into main     macOS and Windows, Node 24 (Linux comes from the push)
+#   started by hand            all of the above, plus the benchmark and npm package jobs
 on:
   push:
-    branches: [main]
+    # Branches only: a version tag starts the Release workflow, not this one.
+    branches: ['**']
   pull_request:
-  # Run by hand from the Actions tab to also get the benchmark and npm package jobs.
+    branches: [main]
   workflow_dispatch:
 
+# A new push to a branch, or to a pull request, cancels the run still in
+# progress for it. Push runs and pull request runs are separate groups, so
+# they never cancel each other.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  check:
-    name: ${{ matrix.os }} / node ${{ matrix.node }}
-    runs-on: ${{ matrix.os }}
+  linux:
+    # Every push, and manual runs. A pull request from this repository already
+    # has a push run for the same commit, so only pull requests from forks,
+    # whose pushes do not run here, get Linux from the pull request event.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    name: ubuntu-latest / node ${{ matrix.node }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # Linux covers both supported Node versions. macOS and Windows minutes
-      # cost more, so they run the newer one only.
+      # Linux covers both supported Node versions.
       matrix:
-        include:
-          - { os: ubuntu-latest, node: 22 }
-          - { os: ubuntu-latest, node: 24 }
-          - { os: macos-latest, node: 24 }
-          - { os: windows-latest, node: 24 }
+        node: [22, 24]
     steps:
       # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,6 +42,7 @@ jobs:
       # Reads the pinned pnpm version from `packageManager` in package.json.
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
+      # Also restores and saves the pnpm store cache.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
@@ -44,6 +52,55 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install
 
+      # Restores and saves the cargo registry and the target folder.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Smoke test
+        run: pnpm fscale --version
+
+  desktop:
+    # macOS and Windows minutes cost more than Linux ones, so these run only
+    # for pull requests into main and for manual runs, on one Node version.
+    if: github.event_name != 'push'
+    name: ${{ matrix.os }} / node 24
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The same steps as the linux job. Keep the two lists identical.
+      # Reads the pinned pnpm version from `packageManager` in package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      # Also restores and saves the pnpm store cache.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # Restores and saves the cargo registry and the target folder.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install
@@ -65,9 +122,9 @@ jobs:
         run: pnpm fscale --version
 
   bench:
-    # Costly, and rarely changes the answer. Runs when the workflow is started by
-    # hand, or on a pull request that carries the label `ci:bench`.
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:bench')
+    # Costly, and rarely changes the answer. Runs only when the workflow is
+    # started by hand.
+    if: github.event_name == 'workflow_dispatch'
     name: bench / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -97,9 +154,9 @@ jobs:
         run: node bench/check-bench.mjs --bin target/release/fscale --fixture "${{ runner.temp }}/fixture-50k" --runs 10 --label "${{ matrix.os }}" --files 50000
 
   package:
-    # Costly, and rarely changes the answer. Runs when the workflow is started by
-    # hand, or on a pull request that carries the label `ci:package`.
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:package')
+    # Costly, and it ends with a benchmark. Runs only when the workflow is
+    # started by hand.
+    if: github.event_name == 'workflow_dispatch'
     name: package / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
