@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde_json::{Map, Value};
 
@@ -13,22 +14,74 @@ use crate::model::{Diagnostic, Finding, FixResult, Fixable, RuleMeta};
 /// Per-rule options from the config file.
 pub type Options = Map<String, Value>;
 
+/// One change a fix made, or in a dry run would make.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Change {
+    /// A file was written. `before` is `None` when the file did not exist.
+    Write {
+        file: String,
+        before: Option<String>,
+        after: String,
+    },
+    /// A file was removed from the git index and kept on disk.
+    Untrack { file: String },
+}
+
 /// What a rule's `check` and `fix` receive.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RuleContext {
     root: PathBuf,
     options: Options,
     git: Git,
+    /// In a dry run, changes are recorded but not applied.
+    dry_run: bool,
+    changes: Mutex<Vec<Change>>,
 }
 
 impl RuleContext {
     #[must_use]
     pub fn new(root: &Path, options: Options) -> Self {
+        Self::for_fix(root, options, false)
+    }
+
+    /// A context for running a fix. With `dry_run`, writes and git changes
+    /// are recorded but nothing is touched.
+    #[must_use]
+    pub fn for_fix(root: &Path, options: Options, dry_run: bool) -> Self {
         Self {
             root: root.to_path_buf(),
             options,
             git: Git::new(root),
+            dry_run,
+            changes: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every change made through this context, in order.
+    #[must_use]
+    pub fn changes(&self) -> Vec<Change> {
+        self.changes
+            .lock()
+            .map(|changes| changes.clone())
+            .unwrap_or_default()
+    }
+
+    fn record(&self, change: Change) {
+        if let Ok(mut changes) = self.changes.lock() {
+            changes.push(change);
+        }
+    }
+
+    /// Removes paths from the git index and keeps the files on disk. Only `fix` may call this.
+    pub fn untrack(&self, paths: &[String]) -> Result<()> {
+        if !self.dry_run {
+            self.git.untrack(paths)?;
+        }
+        for file in paths {
+            self.record(Change::Untrack { file: file.clone() });
+        }
+        Ok(())
     }
 
     /// Absolute path of the repo root.
@@ -63,6 +116,15 @@ impl RuleContext {
     /// Writes a repo-relative file, creating parent folders as needed. Only `fix` may call this.
     pub fn write(&self, file: &str, content: &str) -> Result<()> {
         let target = self.resolve(file)?;
+        let before = self.read(file)?;
+        self.record(Change::Write {
+            file: file.to_owned(),
+            before,
+            after: content.to_owned(),
+        });
+        if self.dry_run {
+            return Ok(());
+        }
         let failed = |error: std::io::Error| {
             Error::user(format!(
                 "Could not write {file} ({error}). Check the folder's permissions."
@@ -172,21 +234,43 @@ pub fn check_rule(
     Ok(diagnostics)
 }
 
+/// The result of running one rule's fix: what it reported and what it changed.
+#[derive(Debug, Clone, Default)]
+pub struct FixOutcome {
+    pub result: FixResult,
+    pub changes: Vec<Change>,
+}
+
 /// Runs one built-in rule's deterministic fix on its current diagnostics.
 /// Returns an empty result when the rule has no fix or nothing is fixable.
 pub fn fix_rule(rule: &dyn BuiltinRule, root: &Path, options: &Options) -> Result<FixResult> {
+    Ok(fix_rule_with(rule, root, options, false)?.result)
+}
+
+/// Like `fix_rule`, and also returns every change. With `dry_run`, the
+/// changes are worked out but nothing is written and git is not touched.
+pub fn fix_rule_with(
+    rule: &dyn BuiltinRule,
+    root: &Path,
+    options: &Options,
+    dry_run: bool,
+) -> Result<FixOutcome> {
     if !rule.meta().has_fix {
-        return Ok(FixResult::default());
+        return Ok(FixOutcome::default());
     }
     let diagnostics: Vec<Diagnostic> = check_rule(rule, root, options)?
         .into_iter()
         .filter(|diagnostic| diagnostic.fixable == Fixable::Deterministic)
         .collect();
     if diagnostics.is_empty() {
-        return Ok(FixResult::default());
+        return Ok(FixOutcome::default());
     }
-    let mut result = rule.fix(&RuleContext::new(root, options.clone()), &diagnostics)?;
+    let ctx = RuleContext::for_fix(root, options.clone(), dry_run);
+    let mut result = rule.fix(&ctx, &diagnostics)?;
     result.changed_files.sort();
     result.changed_files.dedup();
-    Ok(result)
+    Ok(FixOutcome {
+        result,
+        changes: ctx.changes(),
+    })
 }

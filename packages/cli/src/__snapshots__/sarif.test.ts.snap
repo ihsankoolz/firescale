@@ -1,0 +1,82 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale check --sarif > matches the snapshot 1`] = `
+"{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "firescale",
+          "version": "<version>",
+          "informationUri": "https://github.com/ihsankoolz/firescale",
+          "rules": [
+            {
+              "id": "core/no-committed-env",
+              "shortDescription": {
+                "text": "No .env files are tracked by git, except example files such as .env.example."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "category": "security",
+                "severity": "blocker",
+                "status": "enforced"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "core/no-committed-env",
+          "level": "error",
+          "message": {
+            "text": "\\".env\\" is tracked by git. Env files usually hold secrets and must not be committed."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".env",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixable": "deterministic",
+            "status": "enforced"
+          },
+          "ruleIndex": 0
+        },
+        {
+          "ruleId": "core/no-committed-env",
+          "level": "error",
+          "message": {
+            "text": "\\"apps/web/.env.local\\" is tracked by git. Env files usually hold secrets and must not be committed."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "apps/web/.env.local",
+                  "uriBaseId": "%SRCROOT%"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixable": "deterministic",
+            "status": "enforced"
+          },
+          "ruleIndex": 0
+        }
+      ]
+    }
+  ]
+}
+"
+`;

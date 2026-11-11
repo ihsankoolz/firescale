@@ -6,3 +6,4 @@ pnpm-lock.yaml
 SPEC.md
 PLAN.md
 KICKOFF.md
+packages/cli/test-fixtures/sarif-schema-2.1.0.json

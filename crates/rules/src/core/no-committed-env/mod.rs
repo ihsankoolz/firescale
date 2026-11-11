@@ -181,7 +181,7 @@ impl BuiltinRule for NoCommittedEnv {
             .map(|d| d.file.clone())
             .filter(|file| tracked.binary_search(file).is_ok())
             .collect();
-        ctx.git().untrack(&files)?;
+        ctx.untrack(&files)?;
         let mut changed_files = files.clone();
 
         let current = ctx.read(GITIGNORE)?.unwrap_or_default();

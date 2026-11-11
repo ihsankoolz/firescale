@@ -4,16 +4,20 @@
 //! the diagnostics model, config loading, git and file access, the rule
 //! trait, report formatting and the bridge to Node for TypeScript rules.
 
+pub mod affected;
 pub mod cache;
 pub mod check;
 pub mod config;
+pub mod diff;
 pub mod error;
 pub mod explain;
+pub mod facts;
 pub mod git;
 pub mod model;
 pub mod node;
 pub mod report;
 pub mod rule;
+pub mod sarif;
 pub mod select;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

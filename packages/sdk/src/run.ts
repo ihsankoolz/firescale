@@ -1,4 +1,4 @@
-import { type ContextInit, createContext } from './context.js';
+import { type Change, type ContextInit, createContext } from './context.js';
 import { FirescaleError } from './errors.js';
 import { normalizeRelative } from './paths.js';
 import { FIXABLE, type Diagnostic, type Finding, type FixResult, type Rule } from './types.js';
@@ -55,10 +55,36 @@ export async function checkRule(rule: Rule, init: ContextInit): Promise<Diagnost
  * empty result when the rule has no fix or nothing is deterministically fixable.
  */
 export async function fixRule(rule: Rule, init: ContextInit): Promise<FixResult> {
-  if (!rule.fix) return { changedFiles: [] };
+  return (await fixRuleWithChanges(rule, init)).result;
+}
+
+/** The result of running one rule's fix: what it reported and what it changed. */
+export interface FixOutcome {
+  result: FixResult;
+  changes: Change[];
+}
+
+/**
+ * Like `fixRule`, and also returns every change. With `dryRun`, the changes
+ * are worked out but no file is written and the git index is not touched.
+ */
+export async function fixRuleWithChanges(
+  rule: Rule,
+  init: ContextInit,
+  options: { dryRun?: boolean } = {},
+): Promise<FixOutcome> {
+  if (!rule.fix) return { result: { changedFiles: [] }, changes: [] };
   const diagnostics = (await checkRule(rule, init)).filter((d) => d.fixable === 'deterministic');
-  if (diagnostics.length === 0) return { changedFiles: [] };
-  const result = await rule.fix(createContext(init), diagnostics);
+  if (diagnostics.length === 0) return { result: { changedFiles: [] }, changes: [] };
+  const changes: Change[] = [];
+  const context = createContext(init, {
+    dryRun: options.dryRun ?? false,
+    record: (change) => changes.push(change),
+  });
+  const result = await rule.fix(context, diagnostics);
   const changedFiles = [...new Set(result.changedFiles.map(normalizeRelative))].sort();
-  return result.notes ? { changedFiles, notes: result.notes } : { changedFiles };
+  return {
+    result: result.notes ? { changedFiles, notes: result.notes } : { changedFiles },
+    changes,
+  };
 }
