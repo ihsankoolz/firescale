@@ -102,6 +102,24 @@ Not yet proven on macOS or Windows:
 - An independent review before the pull request found eight issues; all were fixed with tests (listed in ADR 0014, "Consequences"). The most important: the loop guard did not cap an agent that omits `stop_hook_active`, and quoted commands were mangled on Windows.
 - A subagent started the `agent-ready` pack and stopped at a usage limit after the first rule; the other three were written in the main session.
 
+## CI compute (after M7, at your request)
+
+**Changed** (ADR 0016)
+
+- A push to any branch runs Linux only, on Node 22 and 24.
+- macOS and Windows run only on pull requests into `main` and when you start the workflow by hand, on Node 24.
+- The benchmark job runs only when you start the workflow by hand.
+- A new push cancels the run still in progress for the same branch or pull request.
+- pnpm and cargo caching are unchanged.
+
+**Decisions made for you**
+
+- **The npm install job (`package`) is also manual-only now.** It runs on three OSes and ends with the launcher benchmark, so I counted it as a benchmark job. The `ci:bench` and `ci:package` labels no longer do anything. Say if you want the label back for `package`.
+- **No job runs twice for one commit.** On a pull request, Linux comes from the push and macOS and Windows from the pull request, so you still see the same four checks.
+- **`main` itself is tested on Linux only** after a merge. macOS and Windows ran on the pull request before it merged.
+- **Cancelling also applies to `main`.** Two merges close together leave one finished run, for the later commit.
+- A pull request into a branch other than `main` gets Linux only.
+
 ## M6 — npm packaging
 
 **Built**
@@ -118,7 +136,7 @@ Not yet proven on macOS or Windows:
 - The launcher passes its own Node and host script to the binary, so TypeScript rules use the same Node.
 - `@firescale/sdk` is now publishable (it was private).
 
-**CI was trimmed at your request** (ADR 0009 amendment): each push now runs 4 check jobs instead of 12 jobs. The benchmark and npm install jobs run only when you start the CI workflow by hand from the Actions tab, or on a pull request labelled `ci:bench` or `ci:package`. Run them before a release.
+**CI was trimmed at your request** (ADR 0009 amendment): each push ran 4 check jobs instead of 12 jobs. This was trimmed again later; see "CI compute" above and ADR 0016 for what runs now.
 
 **Known limits**
 
