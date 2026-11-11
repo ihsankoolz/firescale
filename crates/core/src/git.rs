@@ -166,6 +166,32 @@ impl Git {
         Ok(files)
     }
 
+    /// Adds one file to the index.
+    pub fn track(&self, file: &str) -> Result<()> {
+        let result = run_git(&self.root, &["--literal-pathspecs", "add", "--", file])?;
+        if result.code != 0 {
+            return Err(Error::user(format!(
+                "git add failed for {file}: {}. If a .gitignore rule ignores the file, remove that rule, then run this again.",
+                result.stderr.trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// True when the index holds `file` with the content it has on disk.
+    pub fn is_staged_as_on_disk(&self, file: &str) -> Result<bool> {
+        let args = ["--literal-pathspecs", "ls-files", "--cached", "--", file];
+        if run_git(&self.root, &args)?.stdout.trim().is_empty() {
+            return Ok(false);
+        }
+        // Exit code 1 means the file differs from the index.
+        let diff = run_git(
+            &self.root,
+            &["--literal-pathspecs", "diff-files", "--quiet", "--", file],
+        )?;
+        Ok(diff.code == 0)
+    }
+
     /// Removes paths from the index and keeps the files on disk.
     pub fn untrack(&self, paths: &[String]) -> Result<()> {
         for batch in paths.chunks(UNTRACK_BATCH) {

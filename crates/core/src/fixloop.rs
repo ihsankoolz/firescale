@@ -182,7 +182,7 @@ fn cycle_path(enabled: &[LoopRule], placed: &[bool], index_of: &BTreeMap<&str, u
 
 fn file_of(change: &Change) -> &str {
     match change {
-        Change::Write { file, .. } | Change::Untrack { file } => file,
+        Change::Write { file, .. } | Change::Untrack { file } | Change::Track { file } => file,
     }
 }
 

@@ -1,0 +1,173 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale adopt > --dry-run prints a diff and changes nothing; adopt then leaves no deterministic violation 1`] = `
+"firescale
+  would create firescale.config.json
+
+--- /dev/null
++++ b/firescale.config.json
+@@ -0,0 +1,3 @@
++{
++  "packs": ["core"]
++}
+
+core/ci-exists
+  would create .github/workflows/ci.yml (and stage it with git add)
+
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,22 @@
++# Created by firescale (core/ci-exists). This file belongs to your team:
++# edit it freely. firescale will not rewrite it.
++name: CI
++
++on:
++  pull_request:
++  push:
++    branches: [main, master]
++
++permissions:
++  contents: read
++
++jobs:
++  verify:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: 24
++      # Runs check, lint, typecheck and test.
++      - run: npx firescale verify
+
+core/gitignore-basics
+  would create .gitignore
+
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++# Generated files and dependencies
++node_modules/
+
+core/readme-setup
+  would create README.md (and stage it with git add)
+
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,13 @@
++# bare
++
++<!-- A skeleton created by firescale (core/readme-setup). It is your team's to edit. -->
++
++## Install
++
++Describe how to install the project here.
++
++## Usage
++
++\`\`\`sh
++npm run test
++\`\`\`
+
+Dry run: 4 changes. Nothing was changed. Run \`fscale adopt\` to apply.
+
+Left for you afterwards: 2 violations that a fix cannot repair. A person or an agent has to.
+  core/scripts-present
+    package.json: package.json has no "build" script. Add a "build" entry to "scripts" that runs this project's build command. [agent-fixable]
+    package.json: package.json has no "lint" script. Add a "lint" entry to "scripts" that runs this project's lint command. [agent-fixable]
+    How to fix: fscale explain core/scripts-present
+
+To review afterwards:
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
+"
+`;
+
+exports[`fscale adopt > --dry-run prints a diff and changes nothing; adopt then leaves no deterministic violation 2`] = `
+"firescale
+  created firescale.config.json
+
+core/ci-exists
+  created .github/workflows/ci.yml (staged with git add)
+
+core/gitignore-basics
+  created .gitignore
+
+core/readme-setup
+  created README.md (staged with git add)
+
+Done: 4 changes.
+
+Left for you: 2 violations that a fix cannot repair. A person or an agent has to.
+  core/scripts-present
+    package.json: package.json has no "build" script. Add a "build" entry to "scripts" that runs this project's build command. [agent-fixable]
+    package.json: package.json has no "lint" script. Add a "lint" entry to "scripts" that runs this project's lint command. [agent-fixable]
+    How to fix: fscale explain core/scripts-present
+
+To review:
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
+
+Next: review the changes with \`git status\` and \`git diff\`, then commit them.
+"
+`;
+
+exports[`fscale init > builds a repo with the core pack in an empty folder and leaves no deterministic violation 1`] = `
+"Initialised a git repository (git init).
+
+firescale
+  created firescale.config.json
+
+core/ci-exists
+  created .github/workflows/ci.yml (staged with git add)
+
+core/gitignore-basics
+  created .gitignore
+
+core/readme-setup
+  created README.md (staged with git add)
+
+Done: 4 changes.
+
+Left for you: no violations.
+
+To review:
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
+
+Next: review the changes with \`git status\` and \`git diff\`, then commit them.
+"
+`;
+
+exports[`fscale init > turns on core and agent-ready by default and prints the violations left for a person 1`] = `
+"Initialised a git repository (git init).
+
+firescale
+  created firescale.config.json
+
+core/ci-exists
+  created .github/workflows/ci.yml (staged with git add)
+
+core/gitignore-basics
+  created .gitignore
+
+core/readme-setup
+  created README.md (staged with git add)
+
+Done: 4 changes.
+
+Left for you: 2 violations that a fix cannot repair. A person or an agent has to.
+  agent-ready/agents-md
+    AGENTS.md: No AGENTS.md at the repo root. Create one that describes this project: what it is, the commands to build, test and lint it, and the rules a coding agent must follow. [agent-fixable]
+    How to fix: fscale explain agent-ready/agents-md
+  agent-ready/verify-hook
+    .claude/settings.json: No coding agent is set up to run fscale verify before it stops. Run \`fscale hooks install --all\` (or \`--agent <claude|codex|cursor>\`) and commit the files it writes. [manual fix]
+    How to fix: fscale explain agent-ready/verify-hook
+
+To review:
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
+
+Next: review the changes with \`git status\` and \`git diff\`, then commit them.
+"
+`;

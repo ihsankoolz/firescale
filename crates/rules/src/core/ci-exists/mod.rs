@@ -2,9 +2,16 @@
 
 use std::fs;
 
-use firescale_core::model::{Category, Finding, Fixable, RuleMeta, Severity};
+use std::path::{Path, PathBuf};
+
+use firescale_core::facts::detect_facts;
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
+};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
+
+use super::install::ci_install_commands;
 
 #[cfg(test)]
 mod tests;
@@ -12,6 +19,15 @@ mod tests;
 pub const ID: &str = "core/ci-exists";
 
 const WORKFLOWS: &str = ".github/workflows";
+
+/// The only file the fix ever creates.
+const STARTER: &str = ".github/workflows/ci.yml";
+
+/// Pinned to commit SHAs. The comment is the tag the SHA belongs to.
+const CHECKOUT: &str = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1";
+const SETUP_NODE: &str = "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0";
+
+const INSTALL_PLACEHOLDER: &str = "# Add the step that installs your dependencies here.";
 
 /// Configs of other CI systems. The rule only understands GitHub Actions
 /// triggers, so any of these at the root means there is nothing to report.
@@ -40,29 +56,130 @@ fn is_workflow(file: &str) -> bool {
     })
 }
 
-/// Tracked files in a git repo; otherwise a plain listing of the folders that matter.
+fn on_disk(root: &Path, file: &str) -> PathBuf {
+    file.split('/')
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+/// True when something is at this path, whatever it is. A broken symlink counts.
+fn occupied(path: &Path) -> bool {
+    path.symlink_metadata().is_ok()
+}
+
+/// Names of the entries of `.github/workflows/` on disk, sorted.
+fn workflow_folder_names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(on_disk(root, WORKFLOWS))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// CI configs that are on disk, tracked or not: workflow files first, then
+/// the configs of other CI systems. Sorted within each group.
+fn ci_files_on_disk(root: &Path) -> Vec<String> {
+    let mut files: Vec<String> = workflow_folder_names(root)
+        .into_iter()
+        .map(|name| format!("{WORKFLOWS}/{name}"))
+        .filter(|file| is_workflow(file) && on_disk(root, file).is_file())
+        .collect();
+    let mut others: Vec<String> = OTHER_CI
+        .iter()
+        .filter(|other| on_disk(root, other).is_file())
+        .map(|other| (*other).to_owned())
+        .collect();
+    others.sort();
+    files.extend(others);
+    files
+}
+
+/// The fix's own precondition, also used by the check so that a finding is
+/// only marked deterministic when the fix will act: nothing on disk is, or
+/// could be mistaken for, a workflow, and the starter's path is free.
+fn starter_can_be_created(root: &Path) -> bool {
+    let no_workflow = workflow_folder_names(root).iter().all(|name| {
+        let lower = name.to_lowercase();
+        !(lower.ends_with(".yml") || lower.ends_with(".yaml"))
+    });
+    // A file where a folder must go would make the write fail.
+    let folders_free = [".github", WORKFLOWS].iter().all(|folder| {
+        let path = on_disk(root, folder);
+        path.is_dir() || !occupied(&path)
+    });
+    no_workflow
+        && folders_free
+        && !occupied(&on_disk(root, STARTER))
+        && OTHER_CI
+            .iter()
+            .all(|other| !occupied(&on_disk(root, other)))
+}
+
+/// CI configs that count. In a git repo: tracked files that are also on disk
+/// (a tracked file deleted from the working tree is absent). Otherwise a
+/// plain listing of the places that matter.
 fn candidate_files(ctx: &RuleContext) -> Result<Vec<String>> {
     if ctx.git().is_repo()? {
-        return ctx.git().tracked_files();
+        return Ok(ctx
+            .git()
+            .tracked_files()?
+            .into_iter()
+            .filter(|file| is_workflow(file) || OTHER_CI.contains(&file.as_str()))
+            .filter(|file| on_disk(ctx.root(), file).is_file())
+            .collect());
     }
-    let mut files = Vec::new();
-    if let Ok(entries) = fs::read_dir(ctx.root().join(".github").join("workflows")) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                files.push(format!("{WORKFLOWS}/{name}"));
-            }
-        }
-    }
-    for other in OTHER_CI {
-        let path = other
-            .split('/')
-            .fold(ctx.root().to_path_buf(), |p, part| p.join(part));
-        if path.is_file() {
-            files.push(other.to_owned());
-        }
-    }
+    let mut files = ci_files_on_disk(ctx.root());
     files.sort();
     Ok(files)
+}
+
+/// The starter workflow. LF line endings.
+fn starter_workflow(install: Option<&[&str]>, has_package_manager: bool) -> String {
+    let mut lines: Vec<String> = [
+        "# Created by firescale (core/ci-exists). This file belongs to your team:",
+        "# edit it freely. firescale will not rewrite it.",
+        "name: CI",
+        "",
+        "on:",
+        "  pull_request:",
+        "  push:",
+        "    branches: [main, master]",
+        "",
+        "permissions:",
+        "  contents: read",
+        "",
+        "jobs:",
+        "  verify:",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+    ]
+    .iter()
+    .map(|line| (*line).to_owned())
+    .collect();
+    lines.push(format!("      - uses: {CHECKOUT}"));
+    lines.push(format!("      - uses: {SETUP_NODE}"));
+    lines.push("        with:".to_owned());
+    lines.push("          node-version: 24".to_owned());
+    match install {
+        Some(commands) => {
+            lines.extend(
+                commands
+                    .iter()
+                    .map(|command| format!("      - run: {command}")),
+            );
+        }
+        None if has_package_manager => lines.push(format!("      {INSTALL_PLACEHOLDER}")),
+        None => {}
+    }
+    lines.push("      # Runs check, lint, typecheck and test.".to_owned());
+    lines.push("      - run: npx firescale verify".to_owned());
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text
 }
 
 /// Removes a `#` comment: a `#` at the start of the text or after whitespace.
@@ -163,7 +280,7 @@ impl BuiltinRule for CiExists {
                 .chain(OTHER_CI.iter())
                 .map(|s| (*s).to_owned())
                 .collect(),
-            has_fix: false,
+            has_fix: true,
             after: Vec::new(),
         }
     }
@@ -179,13 +296,32 @@ impl BuiltinRule for CiExists {
             if files.iter().any(|f| OTHER_CI.contains(&f.as_str())) {
                 return Ok(Vec::new());
             }
-            return Ok(vec![Finding {
-                message: "No CI workflow found in .github/workflows. Add a workflow that runs your build and tests on pull requests (see SKILL.md).".to_owned(),
+            let finding = |message: String, fixable: Fixable| Finding {
+                message,
                 file: WORKFLOWS.to_owned(),
                 range: None,
                 project: None,
-                fixable: Fixable::Agent,
-            }]);
+                fixable,
+            };
+            // Only reached in a git repo: outside one, a file on disk counts.
+            if let Some(untracked) = ci_files_on_disk(ctx.root()).first() {
+                return Ok(vec![finding(
+                    format!(
+                        "\"{untracked}\" exists but is not tracked by git, so it does not count as CI. Run `git add {untracked}` and commit it."
+                    ),
+                    Fixable::Manual,
+                )]);
+            }
+            if starter_can_be_created(ctx.root()) {
+                return Ok(vec![finding(
+                    "No CI workflow found in .github/workflows. Add a workflow that runs your build and tests on pull requests; `fscale fix` can add a starter one.".to_owned(),
+                    Fixable::Deterministic,
+                )]);
+            }
+            return Ok(vec![finding(
+                "No CI workflow found in .github/workflows. Add a workflow that runs your build and tests on pull requests (see SKILL.md).".to_owned(),
+                Fixable::Agent,
+            )]);
         }
         for file in &workflows {
             if let Some(text) = ctx.read(file)? {
@@ -204,5 +340,36 @@ impl BuiltinRule for CiExists {
             project: None,
             fixable: Fixable::Agent,
         }])
+    }
+
+    fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
+        // Never trust the diagnostics alone: look at the disk again, and only
+        // create a file where there is none.
+        if !starter_can_be_created(ctx.root()) {
+            return Ok(FixResult::default());
+        }
+        let facts = detect_facts(ctx.root())?;
+        let install = facts
+            .package_manager
+            .as_deref()
+            .and_then(|manager| ci_install_commands(manager, &facts.lockfiles));
+        let has_package_manager = facts.package_manager.is_some();
+        ctx.write(
+            STARTER,
+            &starter_workflow(install.as_deref(), has_package_manager),
+        )?;
+        ctx.track(STARTER)?;
+        let mut notes = vec![format!(
+            "Review {STARTER}: it runs `npx firescale verify`. Add anything your project needs before that step (services, secrets, other toolchains)."
+        )];
+        if install.is_none() && has_package_manager {
+            notes.push(format!(
+                "{STARTER} has no install step: firescale does not know the install command for CI with your package manager. Add it where the comment says."
+            ));
+        }
+        Ok(FixResult {
+            changed_files: vec![STARTER.to_owned()],
+            notes,
+        })
     }
 }

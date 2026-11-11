@@ -26,6 +26,8 @@ pub enum Change {
     },
     /// A file was removed from the git index and kept on disk.
     Untrack { file: String },
+    /// A file the fix created was added to the git index.
+    Track { file: String },
 }
 
 /// What a rule's `check` and `fix` receive.
@@ -81,6 +83,24 @@ impl RuleContext {
         for file in paths {
             self.record(Change::Untrack { file: file.clone() });
         }
+        Ok(())
+    }
+
+    /// Adds a file to the git index, so that rules which look at tracked
+    /// files see it. Only `fix` may call this, and only for a file the fix
+    /// itself created. Does nothing outside a git repo, or when the index
+    /// already holds the file with this content.
+    pub fn track(&self, file: &str) -> Result<()> {
+        validate_relative(file)?;
+        if !self.git.is_repo()? || self.git.is_staged_as_on_disk(file)? {
+            return Ok(());
+        }
+        if !self.dry_run {
+            self.git.track(file)?;
+        }
+        self.record(Change::Track {
+            file: file.to_owned(),
+        });
         Ok(())
     }
 

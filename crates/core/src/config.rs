@@ -342,6 +342,28 @@ fn read_json(root: &Path) -> Result<Value> {
     })
 }
 
+/// The text of a new `firescale.config.json` that turns on `packs`, and the
+/// config it resolves to. Only built-in packs are accepted, so this never
+/// starts Node. `init` and `adopt` write the text when a repo has no config.
+pub fn starter_config<'a>(
+    packs: &[String],
+    builtin: &'a [BuiltinPack],
+) -> Result<(String, ResolvedConfig<'a>)> {
+    let raw = serde_json::json!({ "packs": packs });
+    let config = resolve_config(&raw, Some(JSON_CONFIG), builtin, &mut |specs| {
+        Err(Error::user(format!(
+            "A new config can only list built-in packs, not \"{}\". Add custom packs to {JSON_CONFIG} by hand afterwards.",
+            specs.join("\", \"")
+        )))
+    })?;
+    let list = packs
+        .iter()
+        .map(|pack| format!("\"{pack}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok((format!("{{\n  \"packs\": [{list}]\n}}\n"), config))
+}
+
 /// Loads the config from the repo root. Defaults apply when no file exists.
 /// Node is started only for a `.ts` config or for custom packs.
 pub fn load_config<'a>(

@@ -256,6 +256,32 @@ describe('no Node process for built-in rules', () => {
     expect(await exists(stub.marker)).toBe(false);
   });
 
+  it('runs init, adopt and sync with built-in packs without starting node', async () => {
+    const stub = await stubNode();
+    const fresh = await fixtures.create({ track: 'no-git' });
+    const init = await runCli(['init'], fresh.root, stub.env);
+    expect(init.stderr).toBe('');
+    expect(init.code).toBe(EXIT_OK);
+    expect(await fresh.read('firescale.config.json')).toContain('"agent-ready"');
+
+    const existing = await fixtures.create({
+      files: { 'package.json': '{ "name": "x" }\n', '.env': FAKE_ENV },
+    });
+    for (const argv of [
+      ['adopt', '--dry-run'],
+      ['adopt'],
+      ['sync', '--check'],
+      ['sync'],
+      ['init', '--force'],
+    ]) {
+      const result = await runCli(argv, existing.root, stub.env);
+      expect(result.stderr, argv.join(' ')).toBe('');
+      expect(result.code, argv.join(' ')).toBe(EXIT_OK);
+    }
+    expect(await existing.read('.github/workflows/ci.yml')).toContain('npx firescale verify');
+    expect(await exists(stub.marker)).toBe(false);
+  });
+
   it('control: a custom pack does start node, and the stub intercepts it', async () => {
     const stub = await stubNode();
     const repo = await sampleRepo();
