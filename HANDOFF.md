@@ -4,9 +4,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## Where things stand
 
-- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M7 `verify` and hooks.
+- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M7 `verify` and hooks, M8 the fix loop (pull request #12, with the plan update of ADR 0017 and the CI trim of ADR 0016).
 - **Merged without full CI:** M6 npm packaging. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
-- **M8 the fix loop:** built on branch `m8-fix-loop`, with the plan update (ADR 0017) and the CI trim (ADR 0016) in the same pull request.
 - **Not started, in order:** M9 `init`/`adopt`/`sync`, then the owner's publishing checkpoint, M10 group-project pack, M11 `doctor`, M12 agent files from `init`, M13 generators, M14 Next.js pack, M15 Python pack, M16 to M18 blame-aware verify, M19 to M22 tamper guard, M23 guarded agent runner, M24 adapters and `fscale ledger`, M25 Supabase pack, M26 Expo pack.
 
 ## How to resume
