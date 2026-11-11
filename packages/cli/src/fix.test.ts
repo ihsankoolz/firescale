@@ -72,7 +72,10 @@ describe('fscale fix', () => {
   });
 
   it('shows a new file as a diff against /dev/null', async () => {
-    const repo = await fixtures.create({ files: { '.env': FAKE_ENV } });
+    // Only core/no-committed-env runs, so its fix is the one that creates .gitignore.
+    const repo = await fixtures.create({
+      files: { '.env': FAKE_ENV, 'firescale.config.json': ENFORCED_CONFIG },
+    });
     const result = await runCli(['fix', '--dry-run'], repo.root);
     expect(result.stdout).toContain('would create .gitignore');
     expect(result.stdout).toContain('--- /dev/null\n+++ b/.gitignore\n@@ -0,0 +1,4 @@\n');
