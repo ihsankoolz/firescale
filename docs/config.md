@@ -24,11 +24,12 @@ export default defineConfig({
 }
 ```
 
-| Key              | Type                    | Default    | Meaning                                                                              |
-| ---------------- | ----------------------- | ---------- | ------------------------------------------------------------------------------------ |
-| `packs`          | string[]                | `["core"]` | Rule packs that are on: built-in names, or paths to custom packs.                    |
-| `rules`          | object keyed by rule id | `{}`       | Per rule: a status, or `{ status, options }`.                                        |
-| `protectedPaths` | string[]                | `[]`       | Globs an agent fix run may never change. Stored now, used by the diff guard from M5. |
+| Key              | Type                    | Default    | Meaning                                                                                                                      |
+| ---------------- | ----------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `packs`          | string[]                | `["core"]` | Rule packs that are on: built-in names (`core`, `agent-ready`), or paths to custom packs.                                    |
+| `rules`          | object keyed by rule id | `{}`       | Per rule: a status, or `{ status, options }`.                                                                                |
+| `protectedPaths` | string[]                | `[]`       | Globs an agent fix run may never change. Stored now, used by the diff guard from M5.                                         |
+| `verify`         | object                  | `{}`       | Per step (`lint`, `typecheck`, `test`): the command `fscale verify` runs, or `false` to skip it. See [verify.md](verify.md). |
 
 Rule status:
 

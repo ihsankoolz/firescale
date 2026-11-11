@@ -13,6 +13,7 @@ pub mod error;
 pub mod explain;
 pub mod facts;
 pub mod git;
+pub mod hooks;
 pub mod model;
 pub mod node;
 pub mod report;
@@ -21,6 +22,7 @@ pub mod sarif;
 pub mod select;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod verify;
 pub mod walk;
 
 pub use error::{Error, Result};

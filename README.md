@@ -21,7 +21,11 @@ fscale fix                            # apply them
 fscale check --affected               # only report what your changes touch
 fscale facts                          # detected package manager, tools and projects
 fscale explain core/no-committed-env  # what a rule checks and how to fix it
+fscale verify                         # check, lint, typecheck, test: the definition of done
+fscale hooks install --all            # agents must pass verify before they stop
 ```
+
+`fscale verify` is described in [docs/verify.md](docs/verify.md) and the agent hooks in [docs/hooks.md](docs/hooks.md).
 
 The built-in rules are listed in [docs/rules.md](docs/rules.md). Built-in rules run with no Node process. Node is started only for a `firescale.config.ts` or custom TypeScript rules.
 

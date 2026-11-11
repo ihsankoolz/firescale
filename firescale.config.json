@@ -1,5 +1,5 @@
 {
-  "packs": ["core"],
+  "packs": ["core", "agent-ready"],
   "rules": {
     "core/env-example": {
       "options": {

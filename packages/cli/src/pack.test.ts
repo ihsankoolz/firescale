@@ -125,6 +125,7 @@ describe('npm packaging', () => {
       'dist/host.js',
       'dist/index.js',
       'schemas/check-output.schema.json',
+      'schemas/verify-output.schema.json',
     ]) {
       expect(await exists(path.join(extracted['firescale'] ?? '', file)), file).toBe(true);
     }

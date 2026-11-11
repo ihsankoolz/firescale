@@ -32,6 +32,8 @@ export interface RunOptions {
   bin?: string;
   /** Use exactly this environment instead of `process.env` plus the defaults. */
   fullEnv?: NodeJS.ProcessEnv;
+  /** Text written to the command's stdin. Stdin is always closed afterwards. */
+  input?: string;
 }
 
 export interface CliResult {
@@ -61,7 +63,7 @@ export function runCli(
     if (value !== undefined && !removed.has(key.toLowerCase())) childEnv[key] = value;
   }
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       bin,
       argv,
       {
@@ -82,6 +84,10 @@ export function runCli(
         resolve({ code: error && typeof error.code === 'number' ? error.code : 0, stdout, stderr });
       },
     );
+    // A command that reads stdin (the stop hook) must see its end. Closing can
+    // race with a child that already exited, which is not an error here.
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(options.input ?? '');
   });
 }
 
@@ -98,6 +104,14 @@ export const ALL_CORE_RULES = [
   'core/readme-setup',
   'core/scripts-present',
   'core/single-lockfile',
+] as const;
+
+/** Every built-in rule of the agent-ready pack, sorted. */
+export const ALL_AGENT_READY_RULES = [
+  'agent-ready/agents-md',
+  'agent-ready/commands-documented',
+  'agent-ready/single-test-command',
+  'agent-ready/verify-hook',
 ] as const;
 
 /** The core rules other than core/no-committed-env. */

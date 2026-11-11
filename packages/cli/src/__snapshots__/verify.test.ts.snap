@@ -1,0 +1,72 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale verify > exits 0 when every step passes 1`] = `
+"verify: OK
+  check      passed   8 rules, no enforced violations
+  lint       passed   node lint.js
+  typecheck  skipped  turned off in your firescale config
+  test       passed   node test.js
+"
+`;
+
+exports[`fscale verify > exits 1 with a compact summary when a test fails 1`] = `
+"verify: FAILED at test
+  check      passed   8 rules, no enforced violations
+  lint       passed   node lint.js
+  typecheck  skipped  turned off in your firescale config
+  test       FAILED   node test.js (exit 1)
+
+Last lines of test:
+  running 2 tests
+  FAIL adds two numbers: expected 4, got 5
+
+Fix the failure, then run again: node test.js
+"
+`;
+
+exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
+{
+  "failedStep": "test",
+  "ok": false,
+  "rerun": "node test.js",
+  "runner": "config",
+  "schemaVersion": 1,
+  "steps": [
+    {
+      "command": "fscale check",
+      "detail": "8 rules, no enforced violations",
+      "durationMs": 0,
+      "exitCode": 0,
+      "name": "check",
+      "status": "passed",
+    },
+    {
+      "command": "node lint.js",
+      "detail": "node lint.js",
+      "durationMs": 0,
+      "exitCode": 0,
+      "name": "lint",
+      "status": "passed",
+    },
+    {
+      "detail": "turned off in your firescale config",
+      "durationMs": 0,
+      "name": "typecheck",
+      "status": "skipped",
+    },
+    {
+      "command": "node test.js",
+      "detail": "node test.js (exit 1)",
+      "durationMs": 0,
+      "exitCode": 1,
+      "name": "test",
+      "outputTail": [
+        "running 2 tests",
+        "FAIL adds two numbers: expected 4, got 5",
+      ],
+      "status": "failed",
+    },
+  ],
+  "version": "<version>",
+}
+`;

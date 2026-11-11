@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "pnpm --silent fscale hooks run --agent cursor"
+      }
+    ]
+  }
+}

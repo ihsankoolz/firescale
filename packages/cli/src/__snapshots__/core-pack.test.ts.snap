@@ -1,0 +1,16 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the agent-ready pack > reports an empty repo as not agent-ready, and passes once the hook is installed 1`] = `
+"agent-ready/agents-md  (enforced, medium)
+  AGENTS.md
+    No AGENTS.md at the repo root. Create one that describes this project: what it is, the commands to build, test and lint it, and the rules a coding agent must follow. [agent-fixable]
+  How to fix: fscale explain agent-ready/agents-md
+
+agent-ready/verify-hook  (enforced, medium)
+  .claude/settings.json
+    No coding agent is set up to run fscale verify before it stops. Run \`fscale hooks install --all\` (or \`--agent <claude|codex|cursor>\`) and commit the files it writes. [manual fix]
+  How to fix: fscale explain agent-ready/verify-hook
+
+FAILED: 4 rules checked, 2 violations (2 enforced, 0 report-only).
+"
+`;

@@ -38,7 +38,8 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - See cache hits and misses: `FSCALE_LOG=cache pnpm fscale check`
 - Build npm tarballs for this platform: `cargo build --release -p firescale-cli`, `pnpm -r run build`, `node scripts/pack-npm.mjs`
 - Smoke-test an install from those tarballs: `node scripts/smoke-npm.mjs --pm npm` (also `pnpm`, `yarn`)
-- Definition of done (from M7 on): `pnpm fscale verify`
+- Definition of done (from M7 on): `pnpm fscale verify`. The agent hooks in `.claude/`, `.codex/` and `.cursor/` run it when you try to stop.
+- Verify latency benchmark: `cargo build --release -p firescale-cli`, then `node bench/verify-bench.mjs`
 
 ## Hard rules
 

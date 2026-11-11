@@ -131,7 +131,7 @@ A custom pack is listed in the config by path (`packs: ['core', './tools/rules/p
 7. `scripts-present` — standard scripts exist: lint, test, build (per detected stack).
 8. `no-secrets-in-source` — no obvious keys or tokens in tracked files.
 
-**agent-ready** (Milestone 4): AGENTS.md exists, commands are documented, tests run with one command, verify hook installed.
+**agent-ready** (Milestone 7, opt-in): `agents-md` (AGENTS.md exists), `commands-documented`, `single-test-command`, `verify-hook`.
 
 Later: `expo`, `supabase`, `nextjs`, `python`, `group-project`.
 

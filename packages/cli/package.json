@@ -23,7 +23,8 @@
     },
     "./host": "./dist/host.js",
     "./schemas/check-output.schema.json": "./schemas/check-output.schema.json",
-    "./schemas/facts-output.schema.json": "./schemas/facts-output.schema.json"
+    "./schemas/facts-output.schema.json": "./schemas/facts-output.schema.json",
+    "./schemas/verify-output.schema.json": "./schemas/verify-output.schema.json"
   },
   "files": [
     "bin",

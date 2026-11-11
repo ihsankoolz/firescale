@@ -2,6 +2,26 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## `fscale verify` latency (M7)
+
+`fscale verify` runs inside agent stop hooks, so what firescale itself adds must stay small. Measured with `bench/verify-bench.mjs`: a small git repo (two files, the eight core rules), 200 runs per row after 3 warm-ups, release build.
+
+- **Overhead:** every step is turned off in the config, so this is the `check` step, planning and output.
+- **Commands:** `lint`, `typecheck` and `test` each run `node -e ""`. That adds three shells and three Node starts, the floor for a repo whose steps are Node tools.
+- **Stop hook:** `fscale hooks run --agent claude` around the same repo: verify plus the loop guard.
+
+### Linux x64, local container (4 vCPUs, Intel Xeon @ 2.10GHz), Node 22, 2026-11-11
+
+| Scenario                                                |      p50 |      p99 |      max |
+| ------------------------------------------------------- | -------: | -------: | -------: |
+| overhead: `fscale verify`, every step off               |   8.8 ms |  18.0 ms |  19.2 ms |
+| commands: `fscale verify`, three `node -e ""` steps     |  99.6 ms | 131.6 ms | 139.1 ms |
+| stop hook: `fscale hooks run --agent claude`, same repo | 101.8 ms | 132.4 ms | 133.8 ms |
+
+firescale's own share is about 9 ms. Everything above that is the repo's commands: about 30 ms per step just to start a shell and Node. On this repo itself, a full `fscale verify` (ESLint, Prettier, clippy, `tsc`, `cargo test` and Vitest) takes about 22 s warm, nearly all of it in those tools.
+
+Not measured: macOS and Windows (no CI was available, see DECISIONS.md), and a large repo. On a 50k-file repo the `check` step costs what the section below shows.
+
 ## npm launcher overhead (M6)
 
 Installed through npm, `fscale` is a small Node launcher that starts the native binary (ADR 0013). This measures what that costs: `fscale --version` run directly and through the launcher, with `bench/launcher-bench.mjs`. 20 runs each after 3 warm-ups, release build.

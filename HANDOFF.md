@@ -5,17 +5,23 @@ Current state of the project, so a new session can resume cold. Updated in every
 ## Where things stand
 
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack.
-- **Merged without full CI:** M6 npm packaging. GitHub Actions stopped starting jobs (monthly limit), and the owner asked to continue without it. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
-- **Not started, in order:** M7 `verify` and hooks, M8 guarded agent runner, M9 `init`/`add`/`sync`.
+- **Merged without full CI:** M6 npm packaging. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
+- **M7 `verify` and hooks:** done, pull request #9, CI green on Linux, macOS and Windows.
+- **Next:** the direction changed on 2026-11-11. A docs-only pull request rewrites PLAN.md from M8 onward. Read the merged PLAN.md, not this line, for what comes next.
 
 ## How to resume
 
 1. Read `SPEC.md`, `PLAN.md`, `AGENTS.md`, `docs/decisions/` and `DECISIONS.md`.
-2. Do not rely on CI: Actions is unavailable. Verify locally (`pnpm build && pnpm lint && pnpm typecheck && pnpm test`), push with `[skip ci]` in the commit message, and add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
-3. Branch `m7-verify-hooks` from `main` and build M7 from PLAN.md. Starting points:
-   - `fscale facts` already detects the package manager, the `build`/`test`/`lint`/`typecheck` commands and the tools (`nx`, `turbo`): `crates/core/src/facts.rs`. `verify` should pick its commands from there.
-   - Hook formats were researched on 2026-11-11 from primary sources. Claude Code: a `Stop` hook in `.claude/settings.json`, shape `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"..."}]}]}}`; the hook gets JSON on stdin with `stop_hook_active`; it blocks with exit code 2 and its stderr, or with `{"decision":"block","reason":"..."}` on stdout; Claude Code itself ends the turn after 8 blocks in a row. Codex CLI (0.167.1): the same shape and the same blocking contract, in `<repo>/.codex/hooks.json` (confirmed in its source, `codex-rs/hooks/src/engine/discovery.rs`). **Cursor could not be checked**: cursor.com was blocked from the build session. Confirm its `.cursor/hooks.json` format from Cursor's docs before relying on it.
-   - The agent-ready rule pack goes in `crates/rules/src/` next to `core/`.
+2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
+3. GitHub Actions ran again from 2026-11-11 (it had stopped at the account's monthly limit). If jobs end within seconds with no logs, the limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
+4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`.
+
+Notes from M7 that the next milestones build on:
+
+- `fscale verify` lives in `crates/core/src/verify.rs` (planning and running steps) and `crates/cli/src/main.rs` (`verify_report`). The blame-aware referee will wrap `run_verify`.
+- Hooks live in `crates/core/src/hooks.rs`: `merge_hook` (file formats), `decide` (loop guard), `reply` (per-agent answers).
+- **Cursor's hook format is unconfirmed.** cursor.com is blocked from the cloud build environment. Confirm `.cursor/hooks.json` from Cursor's docs before building more on it.
+- The `agent-ready` pack is in `crates/rules/src/agent-ready/`, opt-in, with no fixes yet. Rules whose fixes create files are the next step.
 
 ## Things to know before changing code
 
@@ -24,6 +30,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 - Commits must use the owner's git identity with no co-author or tool attribution. Check `git config user.name` and `user.email` in a fresh clone.
 - The result cache is on by default. Use `--no-cache` when debugging a rule, and see decision 1 in `DECISIONS.md`.
 - CI runs four `check` jobs per push. The `bench` and `package` jobs (benchmarks, npm install smoke tests) only run when the workflow is started by hand, or on a pull request labelled `ci:bench` / `ci:package` (label it before pushing). The owner is short on Actions minutes and tokens: push once per milestone, keep subagent use modest.
+- This repo's agent hooks (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`) run `pnpm --silent fscale hooks run`, which runs the whole of `fscale verify` (about 22 s) when an agent tries to stop, and sends it back up to 3 times while it fails.
+- `fscale explain` only knows rules of packs that are on. Tests that explain an `agent-ready` rule need a config that lists the pack.
 - After changing the help text or a SKILL.md, update the affected snapshot on purpose (`pnpm build`, then `pnpm exec vitest run -u <that test file>`), and check that no other snapshot changed.
 
 ## Left for the owner to do by hand

@@ -1,0 +1,81 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale hooks install > writes a hook file for each of the three agents > claude 1`] = `
+"{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fscale hooks run --agent claude"
+          }
+        ]
+      }
+    ]
+  }
+}
+"
+`;
+
+exports[`fscale hooks install > writes a hook file for each of the three agents > codex 1`] = `
+"{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "fscale hooks run --agent codex"
+          }
+        ]
+      }
+    ]
+  }
+}
+"
+`;
+
+exports[`fscale hooks install > writes a hook file for each of the three agents > cursor 1`] = `
+"{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "fscale hooks run --agent cursor"
+      }
+    ]
+  }
+}
+"
+`;
+
+exports[`fscale hooks install > writes a hook file for each of the three agents > stderr 1`] = `
+"note: the Cursor hook format could not be checked against Cursor's docs when this was written. Confirm that .cursor/hooks.json matches your Cursor version.
+"
+`;
+
+exports[`fscale hooks install > writes a hook file for each of the three agents > stdout 1`] = `
+"installed         .claude/settings.json
+installed         .codex/hooks.json
+installed         .cursor/hooks.json
+
+Each agent now runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+"
+`;
+
+exports[`fscale hooks run (the stop hook) > blocks Claude Code with exit code 2 and the verify summary on stderr 1`] = `
+"fscale verify failed, so the work is not done yet (attempt 1 of 3).
+
+verify: FAILED at test
+  check      passed   8 rules, no enforced violations
+  lint       skipped  turned off in your firescale config
+  typecheck  skipped  turned off in your firescale config
+  test       FAILED   node test.js (exit 1)
+
+Last lines of test:
+  1 test failed
+
+Fix the failure, then run again: node test.js
+"
+`;
