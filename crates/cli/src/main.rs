@@ -6,10 +6,12 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use firescale_core::check::run_check;
-use firescale_core::config::{find_root, load_config};
+use firescale_core::config::{find_root, load_config, RuleSource};
+use firescale_core::diff::unified_diff;
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::node::NodeHost;
 use firescale_core::report::{format_human, format_json};
+use firescale_core::rule::{fix_rule_with, Change};
 use firescale_core::select::select_rules;
 use firescale_core::{version, Error, Result};
 
@@ -24,6 +26,7 @@ const HELP: &str = "fscale - knock the scale off a repo, and prove it's clean.
 
 Usage:
   fscale check [--rules <glob>] [--json]   Run rules and report violations
+  fscale fix [--rules <glob>] [--dry-run]  Apply deterministic fixes
   fscale explain <rule>                    Print what a rule checks and how to fix it
   fscale --version                         Print the firescale version
   fscale --help                            Print this help
@@ -32,6 +35,7 @@ Options:
   --rules <glob>   Only run matching rules, e.g. \"core/*\" (comma-separated)
   --json           Print the report as JSON (see docs/check-json.md)
   --no-cache       Run every rule again, without reading or writing .firescale/cache
+  --dry-run        With fix: print what would change as a diff, and change nothing
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:
@@ -46,6 +50,7 @@ struct Args {
     help: bool,
     json: bool,
     no_cache: bool,
+    dry_run: bool,
     rules: Option<String>,
     cwd: Option<String>,
     positionals: Vec<String>,
@@ -82,7 +87,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
             None => (arg.clone(), None),
         };
         match name.as_str() {
-            "--version" | "--help" | "--json" | "--no-cache" => {
+            "--version" | "--help" | "--json" | "--no-cache" | "--dry-run" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -92,6 +97,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--version" => args.version = true,
                     "--help" => args.help = true,
                     "--no-cache" => args.no_cache = true,
+                    "--dry-run" => args.dry_run = true,
                     _ => args.json = true,
                 }
             }
@@ -187,6 +193,109 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     })
 }
 
+fn plural(count: usize, word: &str) -> String {
+    format!("{count} {word}{}", if count == 1 { "" } else { "s" })
+}
+
+/// `fscale fix`: applies the deterministic fix of every selected rule.
+fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
+    if !extra.is_empty() {
+        return Err(Error::usage(format!(
+            "fix takes no arguments, got \"{}\".",
+            extra.join(" ")
+        )));
+    }
+    let packs = firescale_rules::builtin_packs();
+    let mut host = NodeHost::new(root);
+    let config = load_config(root, &packs, &mut host)?;
+    let selection = select_rules(config.rules, args.rules.as_deref())?;
+    let mut notes = selection.notes;
+
+    let mut out = String::new();
+    let (mut total, mut rules_changed) = (0, 0);
+    for rule in &selection.rules {
+        let builtin = match &rule.source {
+            RuleSource::Builtin(builtin) => *builtin,
+            RuleSource::Custom { .. } => {
+                if rule.meta.has_fix {
+                    notes.push(format!(
+                        "note: {} has a fix, but fixes for custom rules are not supported yet. Follow `fscale explain {}`.",
+                        rule.meta.id, rule.meta.id
+                    ));
+                }
+                continue;
+            }
+        };
+        let outcome = fix_rule_with(builtin, root, &rule.options, args.dry_run)?;
+        if outcome.changes.is_empty() {
+            continue;
+        }
+        total += outcome.changes.len();
+        rules_changed += 1;
+        out.push_str(&format!("{}\n", rule.meta.id));
+        let mut diffs = String::new();
+        for change in &outcome.changes {
+            match change {
+                Change::Untrack { file } => {
+                    let verb = if args.dry_run {
+                        "would untrack"
+                    } else {
+                        "untracked"
+                    };
+                    out.push_str(&format!("  {verb} {file} (the file stays on disk)\n"));
+                }
+                Change::Write {
+                    file,
+                    before,
+                    after,
+                } => {
+                    let verb = match (args.dry_run, before.is_some()) {
+                        (true, true) => "would edit",
+                        (true, false) => "would create",
+                        (false, true) => "edited",
+                        (false, false) => "created",
+                    };
+                    out.push_str(&format!("  {verb} {file}\n"));
+                    if args.dry_run {
+                        diffs.push_str(&unified_diff(file, before.as_deref(), after));
+                    }
+                }
+            }
+        }
+        // Notes describe what was done, so they only make sense after a real fix.
+        if !args.dry_run {
+            for note in &outcome.result.notes {
+                out.push_str(&format!("  note: {note}\n"));
+            }
+        }
+        if !diffs.is_empty() {
+            out.push_str(&format!("\n{diffs}"));
+        }
+        out.push('\n');
+    }
+
+    if total == 0 {
+        out.push_str("Nothing to fix: no enabled rule has a deterministic fix to apply.\n");
+    } else if args.dry_run {
+        out.push_str(&format!(
+            "Dry run: {} in {}. Nothing was changed. Run `fscale fix` to apply.\n",
+            plural(total, "change"),
+            plural(rules_changed, "rule")
+        ));
+    } else {
+        out.push_str(&format!(
+            "Fixed: {} in {}. Run `fscale check` to see what is left.\n",
+            plural(total, "change"),
+            plural(rules_changed, "rule")
+        ));
+    }
+    Ok(Output {
+        stdout: out,
+        notes,
+        code: EXIT_OK,
+    })
+}
+
 fn explain(root: &Path, rest: &[String]) -> Result<Output> {
     let [query] = rest else {
         return Err(Error::usage(
@@ -230,6 +339,7 @@ fn run() -> Result<Output> {
     let root = find_root(&cwd);
     match command.as_str() {
         "check" => check(&root, &args, rest),
+        "fix" => fix(&root, &args, rest),
         "explain" => explain(&root, rest),
         _ => Err(Error::usage(format!("unknown command \"{command}\"."))),
     }

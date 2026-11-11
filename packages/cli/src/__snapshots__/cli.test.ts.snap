@@ -5,6 +5,7 @@ exports[`fscale usage > prints help with no arguments 1`] = `
 
 Usage:
   fscale check [--rules <glob>] [--json]   Run rules and report violations
+  fscale fix [--rules <glob>] [--dry-run]  Apply deterministic fixes
   fscale explain <rule>                    Print what a rule checks and how to fix it
   fscale --version                         Print the firescale version
   fscale --help                            Print this help
@@ -13,6 +14,7 @@ Options:
   --rules <glob>   Only run matching rules, e.g. "core/*" (comma-separated)
   --json           Print the report as JSON (see docs/check-json.md)
   --no-cache       Run every rule again, without reading or writing .firescale/cache
+  --dry-run        With fix: print what would change as a diff, and change nothing
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:

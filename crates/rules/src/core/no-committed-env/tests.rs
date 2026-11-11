@@ -438,3 +438,55 @@ mod gitignore_lines {
         assert_eq!(gitignore_literal(".ENV.x "), ".ENV.x\\ ");
     }
 }
+
+mod dry_run {
+    use firescale_core::rule::{fix_rule_with, Change, Options};
+    use firescale_core::testing::{Fixture, Track};
+
+    use super::super::NoCommittedEnv;
+
+    const EXAMPLE: &str = "EXAMPLE=1\n";
+
+    #[test]
+    fn a_dry_run_reports_the_changes_and_touches_nothing() {
+        let fixture =
+            Fixture::new(&[(".env", EXAMPLE), (".gitignore", "dist\n")], Track::All).unwrap();
+        let outcome =
+            fix_rule_with(&NoCommittedEnv, fixture.root(), &Options::new(), true).unwrap();
+
+        assert_eq!(
+            outcome.changes,
+            [
+                Change::Untrack { file: ".env".to_owned() },
+                Change::Write {
+                    file: ".gitignore".to_owned(),
+                    before: Some("dist\n".to_owned()),
+                    after: "dist\n# Env files hold secrets. Commit an example file instead.\n.env\n.env.*\n!.env.example\n"
+                        .to_owned(),
+                },
+            ]
+        );
+        assert_eq!(fixture.tracked().unwrap(), [".env", ".gitignore"]);
+        assert_eq!(fixture.read(".gitignore").as_deref(), Some("dist\n"));
+        assert_eq!(
+            fixture
+                .check(&NoCommittedEnv, &Options::new())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_real_fix_reports_the_same_changes_as_the_dry_run() {
+        let fixture = Fixture::new(&[(".env", EXAMPLE)], Track::All).unwrap();
+        let planned =
+            fix_rule_with(&NoCommittedEnv, fixture.root(), &Options::new(), true).unwrap();
+        let applied =
+            fix_rule_with(&NoCommittedEnv, fixture.root(), &Options::new(), false).unwrap();
+        assert_eq!(planned.changes, applied.changes);
+        assert!(fixture.tracked().unwrap().is_empty());
+        let again = fix_rule_with(&NoCommittedEnv, fixture.root(), &Options::new(), false).unwrap();
+        assert!(again.changes.is_empty());
+    }
+}

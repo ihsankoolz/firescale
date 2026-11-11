@@ -13,6 +13,8 @@ fscale check                          # run the rules, report violations
 fscale check --json                   # the same, as JSON for CI and agents
 fscale check --rules "core/*"         # only some rules
 fscale check --no-cache               # ignore the result cache in .firescale/
+fscale fix --dry-run                  # show what the deterministic fixes would change
+fscale fix                            # apply them
 fscale explain core/no-committed-env  # what a rule checks and how to fix it
 ```
 

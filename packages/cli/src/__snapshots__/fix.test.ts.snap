@@ -1,0 +1,31 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale fix > --dry-run prints a diff and changes nothing 1`] = `
+"core/no-committed-env
+  would untrack .env (the file stays on disk)
+  would untrack apps/web/.env.local (the file stays on disk)
+  would edit .gitignore
+
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,1 +1,5 @@
+ dist
++# Env files hold secrets. Commit an example file instead.
++.env
++.env.*
++!.env.example
+
+Dry run: 3 changes in 1 rule. Nothing was changed. Run \`fscale fix\` to apply.
+"
+`;
+
+exports[`fscale fix > fixes core/no-committed-env, and a second run changes nothing 1`] = `
+"core/no-committed-env
+  untracked .env (the file stays on disk)
+  untracked apps/web/.env.local (the file stays on disk)
+  edited .gitignore
+  note: Untracked 2 env file(s). They are still on disk and still in git history: rotate any secret they contained.
+
+Fixed: 3 changes in 1 rule. Run \`fscale check\` to see what is left.
+"
+`;
