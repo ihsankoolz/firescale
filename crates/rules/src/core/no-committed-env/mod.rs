@@ -72,20 +72,40 @@ fn is_allowed(file: &str, allow: &[String]) -> bool {
 ///
 /// `.gitignore` matching is case-sensitive on Linux, so a flagged file whose
 /// name is not lowercase (`.ENV`) gets its own exact line.
+/// Escapes a file name so `.gitignore` reads it as a literal name.
+fn gitignore_literal(name: &str) -> String {
+    let mut line = String::new();
+    for c in name.chars() {
+        if matches!(c, '\\' | '*' | '?' | '[') {
+            line.push('\\');
+        }
+        line.push(c);
+    }
+    // Trailing spaces are dropped by git unless they are escaped.
+    let trimmed = line.trim_end_matches(' ');
+    let spaces = line.len() - trimmed.len();
+    format!("{trimmed}{}", "\\ ".repeat(spaces))
+}
+
 fn lines_to_append(gitignore: &str, allow: &[String], flagged: &[String]) -> Vec<String> {
     let lines: Vec<&str> = gitignore
         .trim_start_matches('\u{feff}')
         .lines()
         .map(str::trim_end)
         .collect();
-    let position = |line: &str| lines.iter().rposition(|existing| *existing == line);
+    let position = |line: &str| {
+        lines
+            .iter()
+            .rposition(|existing| *existing == line.trim_end())
+    };
 
     let mut ignore: Vec<String> = IGNORE_LINES.iter().map(|line| (*line).to_owned()).collect();
     for file in flagged {
         let name = basename(file);
         let covered = name == ".env" || name.starts_with(".env.");
-        if !covered && !ignore.iter().any(|line| line == name) {
-            ignore.push(name.to_owned());
+        let line = gitignore_literal(name);
+        if !covered && !ignore.contains(&line) {
+            ignore.push(line);
         }
     }
 

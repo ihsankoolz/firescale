@@ -10,6 +10,7 @@ export {
   defineConfig,
   definePack,
   defineRule,
+  FirescaleError,
   type Diagnostic,
   type Finding,
   type FirescaleConfig,

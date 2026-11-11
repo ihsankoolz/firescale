@@ -58,6 +58,14 @@ function stringParam(params: Record<string, unknown>, name: string): string {
   return value;
 }
 
+/**
+ * True for the SDK's FirescaleError. Checked by name, not `instanceof`: a pack
+ * can load its own copy of the SDK, whose error class is a different object.
+ */
+function isUserError(error: unknown): error is Error {
+  return error instanceof Error && error.name === 'FirescaleError';
+}
+
 function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -180,7 +188,7 @@ async function check(params: Record<string, unknown>): Promise<Diagnostic[]> {
   try {
     return await checkRule(rule, { root, options });
   } catch (error) {
-    if (error instanceof FirescaleError) throw error;
+    if (isUserError(error)) throw error;
     throw new FirescaleError(
       `Rule "${ruleId}" crashed: ${reasonOf(error)}. This is a bug in the rule. Set it to "off" in your firescale config to continue, and report it to the rule's author.`,
     );

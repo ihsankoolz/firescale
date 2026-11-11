@@ -61,13 +61,13 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 **Done when**
 
-- ☐ `fscale` is a Rust binary, and the M1 CLI snapshot tests for `check`, `explain` and `--version` pass against it unchanged.
-- ☐ `fscale check --json` output validates against the unchanged JSON schema.
-- ☐ A repo with only built-in rules runs with no Node process, proven by a test.
-- ☐ `core/no-committed-env` is built in, with tests for: passing repo, failing repo, fixed repo, fix run twice.
-- ☐ A sample custom TypeScript rule runs through the bridge, and a `.ts` config loads through Node, each proven by a test.
-- ☐ Startup time for `fscale --version` and `fscale check`, before and after, is recorded in `bench/RESULTS.md`.
-- ☐ CI is green on all three OSes, on Node 22 and Node 24.
+- ☑ `fscale` is a Rust binary, and the M1 CLI snapshot tests for `check`, `explain` and `--version` pass against it unchanged.
+- ☑ `fscale check --json` output validates against the unchanged JSON schema.
+- ☑ A repo with only built-in rules runs with no Node process, proven by a test.
+- ☑ `core/no-committed-env` is built in, with tests for: passing repo, failing repo, fixed repo, fix run twice.
+- ☑ A sample custom TypeScript rule runs through the bridge, and a `.ts` config loads through Node, each proven by a test.
+- ☑ Startup time for `fscale --version` and `fscale check`, before and after, is recorded in `bench/RESULTS.md`.
+- ☑ CI is green on all three OSes, on Node 22 and Node 24.
 
 ---
 

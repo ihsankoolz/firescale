@@ -130,6 +130,27 @@ describe('fscale check errors', () => {
   });
 });
 
+describe('fscale check --cwd', () => {
+  it('resolves ".." before looking for the repo root', async () => {
+    // A config in a subfolder must not be picked up when --cwd points back out of it.
+    const repo = await fixtures.create({
+      files: {
+        '.env': FAKE_ENV,
+        'firescale.config.json': ENFORCED_CONFIG,
+        'x/y/firescale.config.json': JSON.stringify({ packs: [] }),
+      },
+    });
+    const inside = await runCli(['check'], path.join(repo.root, 'x', 'y'));
+    expect(inside.stdout).toBe('OK: 0 rules checked, no violations.\n');
+    const backOut = await runCli(
+      ['check', '--cwd', path.join('..', '..')],
+      path.join(repo.root, 'x', 'y'),
+    );
+    expect(backOut.code).toBe(EXIT_VIOLATIONS);
+    expect(backOut.stdout).toContain('.env');
+  });
+});
+
 describe('fscale check --rules', () => {
   it('runs rules matching a glob', async () => {
     const repo = await failingRepo(ENFORCED_CONFIG);

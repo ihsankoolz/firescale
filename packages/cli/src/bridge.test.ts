@@ -196,6 +196,31 @@ describe('no Node process for built-in rules', () => {
 });
 
 describe('custom pack errors', () => {
+  it('keeps a rule error readable when the pack loads its own copy of the SDK', async () => {
+    // A real install has the SDK as files in node_modules, not a link to this checkout,
+    // so the rule's FirescaleError class is a different object from the host's.
+    const repo = await fixtures.create({
+      files: {
+        'TODO.md': '- item\n',
+        'firescale.config.json': JSON.stringify({
+          packs: ['./tools/rules/pack.ts'],
+          rules: { [SAMPLE]: { options: { names: 'TODO.md' } } },
+        }),
+      },
+    });
+    await cp(CUSTOM_PACK, path.join(repo.root, 'tools', 'rules'), { recursive: true });
+    const sdkCopy = path.join(repo.root, 'node_modules', '@firescale', 'sdk');
+    await mkdir(sdkCopy, { recursive: true });
+    const sdk = path.join(REPO_ROOT, 'packages', 'sdk');
+    await cp(path.join(sdk, 'package.json'), path.join(sdkCopy, 'package.json'));
+    await cp(path.join(sdk, 'dist'), path.join(sdkCopy, 'dist'), { recursive: true });
+
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('option "names" must be a list of file names');
+    expect(result.stderr).not.toContain('crashed');
+  });
+
   it('names a pack path that does not exist', async () => {
     const repo = await fixtures.create({
       files: { 'firescale.config.json': JSON.stringify({ packs: ['core', './tools/missing.ts'] }) },

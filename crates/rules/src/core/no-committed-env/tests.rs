@@ -395,7 +395,12 @@ mod review_regressions {
         );
         // Second direct call with the same diagnostics: already untracked, lines exist.
         let second = NoCommittedEnv.fix(&ctx, &diagnostics).unwrap();
-        assert!(!second.changed_files.contains(&".gitignore".to_owned()));
+        assert!(
+            second.changed_files.is_empty(),
+            "second fix changed {:?}",
+            second.changed_files
+        );
+        assert!(second.notes.is_empty());
         assert_eq!(f.read(".gitignore").unwrap(), after_first);
     }
 
@@ -419,5 +424,17 @@ mod review_regressions {
         let result = f.fix(&NoCommittedEnv, &Options::new()).unwrap();
         assert_eq!(result.changed_files, vec![".env"]);
         assert_eq!(f.read(".gitignore").as_deref(), Some(bom_text));
+    }
+}
+
+mod gitignore_lines {
+    use super::super::gitignore_literal;
+
+    #[test]
+    fn escapes_characters_gitignore_treats_as_patterns() {
+        assert_eq!(gitignore_literal(".ENV"), ".ENV");
+        assert_eq!(gitignore_literal(".ENV.[x]"), ".ENV.\\[x]");
+        assert_eq!(gitignore_literal(".ENV.a*b?"), ".ENV.a\\*b\\?");
+        assert_eq!(gitignore_literal(".ENV.x "), ".ENV.x\\ ");
     }
 }

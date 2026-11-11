@@ -79,7 +79,7 @@ The Cargo workspace version is the firescale version. `fscale --version` prints 
 
 ### 9. Dependencies
 
-Rust: `serde` and `serde_json` only. Argument parsing, glob matching for `--rules` and error types are small and hand-written. `tempfile` is a dev dependency for tests.
+Rust: `serde` and `serde_json` only. `serde_json` is built with `preserve_order` (which brings in `indexmap`), so config errors name keys in the order the user wrote them. Argument parsing, glob matching for `--rules` and error types are small and hand-written. `tempfile` is a dev dependency for tests.
 
 ## Consequences
 

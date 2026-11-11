@@ -130,7 +130,7 @@ fn rule_setting(name: &str, id: &str, value: &Value) -> Result<(Status, Options)
                 )));
             }
             let status = match object.get("status") {
-                None => DEFAULT_STATUS,
+                None | Some(Value::Null) => DEFAULT_STATUS,
                 Some(value) => value.as_str().and_then(Status::parse).ok_or_else(|| {
                     Error::user(format!(
                         "{name}: rule \"{id}\" has an invalid status. Use \"off\", \"evaluated\" or \"enforced\"."
@@ -138,7 +138,7 @@ fn rule_setting(name: &str, id: &str, value: &Value) -> Result<(Status, Options)
                 })?,
             };
             let options = match object.get("options") {
-                None => Map::new(),
+                None | Some(Value::Null) => Map::new(),
                 Some(Value::Object(options)) => options.clone(),
                 Some(_) => {
                     return Err(Error::user(format!(
@@ -180,8 +180,9 @@ pub fn resolve_config<'a>(
         )));
     }
 
+    // A key set to null means "use the default", the same as leaving it out.
     let packs = match object.get("packs") {
-        None => vec!["core".to_owned()],
+        None | Some(Value::Null) => vec!["core".to_owned()],
         Some(value) => string_list(value).ok_or_else(|| {
             Error::user(format!(
                 "{name}: \"packs\" must be a list of pack names, for example [\"core\"]."
@@ -253,7 +254,7 @@ pub fn resolve_config<'a>(
     }
 
     match object.get("rules") {
-        None => {}
+        None | Some(Value::Null) => {}
         Some(Value::Object(settings)) => {
             for (id, value) in settings {
                 let known = sorted_ids(&rules);
@@ -275,7 +276,7 @@ pub fn resolve_config<'a>(
     }
 
     let protected_paths = match object.get("protectedPaths") {
-        None => Vec::new(),
+        None | Some(Value::Null) => Vec::new(),
         Some(value) => string_list(value).ok_or_else(|| {
             Error::user(format!(
                 "{name}: \"protectedPaths\" must be a list of globs."
@@ -706,5 +707,33 @@ mod tests {
         let (_guard, root) = canonical_temp();
         // Assumes no config or .git exists above the OS temp folder.
         assert_eq!(canonical(&find_root(&root)), root);
+    }
+
+    #[test]
+    fn null_values_mean_the_default() {
+        let packs = builtin();
+        let raw = json!({
+            "packs": null,
+            "rules": { "core/no-committed-env": { "status": null, "options": null } },
+            "protectedPaths": null
+        });
+        let config = resolve(&raw, &packs).expect("nulls are accepted");
+        assert_eq!(config.packs, ["core"]);
+        assert_eq!(config.rules[0].status, Status::Evaluated);
+        assert!(config.rules[0].options.is_empty());
+        assert!(config.protected_paths.is_empty());
+        let config = resolve(&json!({ "rules": null }), &packs).expect("null rules are accepted");
+        assert_eq!(config.rules.len(), 1);
+    }
+
+    #[test]
+    fn the_first_unknown_key_in_file_order_is_reported() {
+        let raw: Value = serde_json::from_str(r#"{"zzz": 1, "aaa": 2}"#).expect("valid JSON");
+        let error = rejection(&raw);
+        assert!(
+            error.message().contains("unknown key \"zzz\""),
+            "{}",
+            error.message()
+        );
     }
 }

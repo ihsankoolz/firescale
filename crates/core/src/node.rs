@@ -151,9 +151,9 @@ impl NodeHost {
         if read == 0 {
             return Err(gone());
         }
-        let response: Value = serde_json::from_str(response.trim()).map_err(|error| {
-            Error::internal(format!(
-                "The Node host sent a line that is not JSON ({error}). A rule or config may be writing to stdout directly; use console.log, which the host redirects."
+        let response: Value = serde_json::from_str(response.trim()).map_err(|_| {
+            Error::user(format!(
+                "Node printed text that is not a bridge message while handling \"{method}\". A config or custom rule is probably writing to process.stdout directly. Use console.log there (firescale sends it to stderr), then run again."
             ))
         })?;
         if response.get("id").and_then(Value::as_u64) != Some(id) {
