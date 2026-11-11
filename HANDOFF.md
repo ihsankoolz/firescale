@@ -4,10 +4,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## Where things stand
 
-- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M7 `verify` and hooks.
-- **Merged without full CI:** M6 npm packaging. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
-- **M8 the fix loop:** built on branch `m8-fix-loop`, with the plan update (ADR 0017) and the CI trim (ADR 0016) in the same pull request.
-- **Not started, in order:** M9 `init`/`adopt`/`sync`, then the owner's publishing checkpoint, M10 group-project pack, M11 `doctor`, M12 agent files from `init`, M13 generators, M14 Next.js pack, M15 Python pack, M16 to M18 blame-aware verify, M19 to M22 tamper guard, M23 guarded agent runner, M24 adapters and `fscale ledger`, M25 Supabase pack, M26 Expo pack.
+- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M7 `verify` and hooks, M8 the fix loop (pull request #12, with the plan update of ADR 0017 and the CI trim of ADR 0016), M9 `init`, `adopt` and `sync`.
+- **CI owed:** nothing. M6's Windows npm install test passed in a manual run on `main` on 2026-11-11.
+- **Waiting on the owner:** the publishing checkpoint. 0.1.0 is not on npm yet. Check with `npm view firescale version` before starting M10; if it is not published, say so at the top of the M10 pull request.
+- **Not started, in order:** M10 group-project pack, M11 `doctor`, M12 agent files from `init`, M13 generators, M14 Next.js pack, M15 Python pack, M16 to M18 blame-aware verify, M19 to M22 tamper guard, M23 guarded agent runner, M24 adapters and `fscale ledger`, M25 Supabase pack, M26 Expo pack.
 
 ## How to resume
 
@@ -16,13 +16,15 @@ Current state of the project, so a new session can resume cold. Updated in every
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
 
-Notes for M9 (`init`, `adopt`, `sync`), which stands on M8:
+Notes for M10 (the group-project pack) and M12 (agent files), which stand on M9:
 
-- The loop is `crates/core/src/fixloop.rs`: `plan_order` (order and validation) and `run_fix_loop` (passes and convergence). `fix()` in `crates/cli/src/main.rs` shows how to drive it for built-in and custom rules, and `render_fixes` how to print the result. `init`, `adopt` and `sync` should call the same pieces, not copy them.
-- `sync --check` is a dry run whose exit code is 1 when the report has changes. `crates/core/src/scratch.rs` (`Scratch::copy_of`) is the scratch copy the dry run uses.
-- Fixes that create files must mark their finding `deterministic` and really repair it, or the loop fails with "changed nothing".
-- If a new fix edits a file another fix creates, declare `after`, as `core/no-committed-env` does for `core/gitignore-basics`. A test in `crates/rules/src/lib.rs` rejects a built-in `after` that names no built-in rule, and cycles.
-- A write that does not change a file is not a change: `RuleContext::write` and the SDK's `ctx.files.write` skip it.
+- `init`, `adopt` and `sync` are `crates/cli/src/scaffold.rs`. They share one function, `run`, which uses `plan_fixes`, `FixPlan::run` and `render_fixes` from `crates/cli/src/main.rs`, the same pieces as `fscale fix`. A new pack needs no change there: give its rules fixes and `fscale init --packs core,<pack>` builds it.
+- A fix that creates a file must look at the disk itself before writing and write only where nothing is. `core/ci-exists` (`starter_can_be_created`) and `core/readme-setup` are the models. The check uses the same precondition, so a finding is `deterministic` only when the fix will act; otherwise the loop stops with "changed nothing".
+- A fix creates a file with `ctx.create_tracked(file, content)`, never with `ctx.write`: it fails if anything is at the path or git tracks the path, refuses symbolic links, stages the file (rules that count tracked files need that), and removes the file again if staging fails. `ctx.write` is for appending to or merging into a file that exists.
+- A fix tells a person what to look at through `FixResult.notes`; `init`, `adopt` and `sync` print them under "To review".
+- M10's CI rule runs after `core/ci-exists`, whose fix now writes `.github/workflows/ci.yml` with `npx firescale verify`. A hand-written workflow is never rewritten; there are tests to copy in `packages/cli/src/scaffold.test.ts` ("existing work survives").
+- M12's managed block is the first fix that rewrites lines. The byte-for-byte tests in `scaffold.test.ts` use an AGENTS.md with look-alike markers; keep them passing for text outside the real block.
+- `fscale init` refuses a folder that is not empty. Tests that need a new repo use `fixtures.create({ track: 'no-git' })` with no files.
 - Cursor's hook format is still unconfirmed (cursor.com is blocked from the cloud build environment). M12 needs it.
 
 ## Things to know before changing code
@@ -40,5 +42,5 @@ Notes for M9 (`init`, `adopt`, `sync`), which stands on M8:
 ## Left for the owner to do by hand
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
-- Nothing can be published to npm yet (M6).
+- Publish 0.1.0 to npm: the checkpoint after M9. The steps are under "Publishing to npm" in `DECISIONS.md`.
 - The manual test with a real agent (now M24) is not reachable yet.

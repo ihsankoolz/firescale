@@ -24,11 +24,29 @@ fn to_relative(root: &Path, path: &Path) -> Option<String> {
     }
 }
 
+/// What a walked entry is. A link is never followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Folder,
+    Link,
+}
+
 /// Lists every file under `root` that git would not ignore, as sorted
 /// repo-relative paths with forward slashes. Dotfiles are included. Runs on
 /// all available cores.
 pub fn walk_files(root: &Path) -> Result<Vec<String>> {
-    let files: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    Ok(walk_entries(root)?
+        .into_iter()
+        .filter(|(_, kind)| *kind == EntryKind::File)
+        .map(|(path, _)| path)
+        .collect())
+}
+
+/// Like `walk_files`, and also lists folders and symbolic links. A dry run's
+/// scratch copy needs them: an empty folder or a link changes what a fix does.
+pub fn walk_entries(root: &Path) -> Result<Vec<(String, EntryKind)>> {
+    let entries: Mutex<Vec<(String, EntryKind)>> = Mutex::new(Vec::new());
     let failure: Mutex<Option<String>> = Mutex::new(None);
 
     WalkBuilder::new(root)
@@ -42,15 +60,25 @@ pub fn walk_files(root: &Path) -> Result<Vec<String>> {
         })
         .build_parallel()
         .run(|| {
-            let files = &files;
+            let entries = &entries;
             let failure = &failure;
             Box::new(move |entry| {
                 match entry {
                     Ok(entry) => {
-                        let is_file = entry.file_type().is_some_and(|kind| kind.is_file());
-                        if let (true, Some(path)) = (is_file, to_relative(root, entry.path())) {
-                            if let Ok(mut files) = files.lock() {
-                                files.push(path);
+                        let kind = entry.file_type().and_then(|kind| {
+                            if kind.is_symlink() {
+                                Some(EntryKind::Link)
+                            } else if kind.is_file() {
+                                Some(EntryKind::File)
+                            } else if kind.is_dir() {
+                                Some(EntryKind::Folder)
+                            } else {
+                                None
+                            }
+                        });
+                        if let (Some(kind), Some(path)) = (kind, to_relative(root, entry.path())) {
+                            if let Ok(mut entries) = entries.lock() {
+                                entries.push((path, kind));
                             }
                         }
                     }
@@ -69,9 +97,9 @@ pub fn walk_files(root: &Path) -> Result<Vec<String>> {
             "Could not read part of the repo ({reason}). Check folder permissions, or run with --no-cache to skip the file walk."
         )));
     }
-    let mut files = files.into_inner().unwrap_or_default();
-    files.sort();
-    Ok(files)
+    let mut entries = entries.into_inner().unwrap_or_default();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(entries)
 }
 
 #[cfg(test)]

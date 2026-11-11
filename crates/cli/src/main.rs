@@ -1,5 +1,7 @@
 //! The `fscale` command.
 
+mod scaffold;
+
 use std::collections::BTreeSet;
 use std::env;
 use std::io::{IsTerminal, Write};
@@ -9,21 +11,23 @@ use std::time::Instant;
 
 use firescale_core::affected::{changed_files, narrow_report, Changed};
 use firescale_core::check::run_check;
-use firescale_core::config::{find_root, load_config, RuleSource};
+use firescale_core::config::{find_root, load_config, ConfiguredRule, RuleSource};
 use firescale_core::diff::unified_diff;
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
-use firescale_core::fixloop::{plan_order, run_fix_loop, LoopReport, LoopRule, MAX_PASSES};
+use firescale_core::fixloop::{
+    plan_order, run_fix_loop, LoopFailure, LoopReport, LoopRule, MAX_PASSES,
+};
 use firescale_core::hooks::{
     decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent, AGENTS,
 };
 use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
 use firescale_core::report::{format_human, format_json, CheckReport};
-use firescale_core::rule::{fix_rule_with, Change, FixOutcome};
+use firescale_core::rule::{fix_rule_with, BuiltinPack, Change, FixOutcome};
 use firescale_core::sarif::format_sarif;
 use firescale_core::scratch::Scratch;
-use firescale_core::select::select_rules;
+use firescale_core::select::{select_rules, Selection};
 use firescale_core::verify::{
     format_verify_human, format_verify_json, plan_verify, run_verify, CheckStep, VerifyReport,
     TAIL_LINES,
@@ -42,6 +46,9 @@ const HELP: &str = "fscale - knock the scale off a repo, and prove it's clean.
 Usage:
   fscale check [options]       Run rules and report violations
   fscale fix [options]         Apply deterministic fixes
+  fscale init [--packs <list>] Start a repo in an empty folder: config, then every fix
+  fscale adopt [--dry-run]     Bring an existing repo in: add what is missing, overwrite nothing
+  fscale sync [--check]        Repair drift: run the fixes again
   fscale verify [options]      Check, then lint, typecheck and test: the definition of done
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
@@ -56,7 +63,10 @@ Options:
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>
   --no-cache       check: run every rule again, ignoring .firescale/cache
-  --dry-run        fix: print what would change as a diff, and change nothing
+  --dry-run        fix, adopt: print what would change as a diff, and change nothing
+  --packs <list>   init: rule packs to turn on, comma-separated (default: core,agent-ready)
+  --force          init: run in a folder that is not empty (nothing is overwritten)
+  --check          sync: change nothing, and exit 1 when sync would change something
   --agent <name>   hooks: claude, codex or cursor
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
@@ -64,7 +74,7 @@ Options:
 
 Exit codes:
   0  no enforced rule failed
-  1  an enforced rule has violations, or verify failed
+  1  an enforced rule has violations, verify failed, or sync --check found drift
   2  bad usage, bad config, or an internal error
 ";
 
@@ -79,6 +89,9 @@ struct Args {
     no_cache: bool,
     dry_run: bool,
     all: bool,
+    force: bool,
+    check: bool,
+    packs: Option<String>,
     rules: Option<String>,
     agent: Option<String>,
     bin: Option<String>,
@@ -118,7 +131,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
         };
         match name.as_str() {
             "--version" | "--help" | "--json" | "--sarif" | "--no-cache" | "--dry-run"
-            | "--affected" | "--all" => {
+            | "--affected" | "--all" | "--force" | "--check" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -132,10 +145,12 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--sarif" => args.sarif = true,
                     "--affected" => args.affected = true,
                     "--all" => args.all = true,
+                    "--force" => args.force = true,
+                    "--check" => args.check = true,
                     _ => args.json = true,
                 }
             }
-            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" => {
+            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -150,6 +165,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--base" => args.base = Some(value),
                     "--agent" => args.agent = Some(value),
                     "--bin" => args.bin = Some(value),
+                    "--packs" => args.packs = Some(value),
                     _ => args.cwd = Some(value),
                 }
             }
@@ -178,10 +194,10 @@ fn normalize(path: &Path) -> PathBuf {
 }
 
 /// Text for stdout and stderr, plus the exit code.
-struct Output {
-    stdout: String,
-    notes: Vec<String>,
-    code: u8,
+pub(crate) struct Output {
+    pub(crate) stdout: String,
+    pub(crate) notes: Vec<String>,
+    pub(crate) code: u8,
 }
 
 impl Output {
@@ -251,21 +267,21 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     })
 }
 
-fn plural(count: usize, word: &str) -> String {
+pub(crate) fn plural(count: usize, word: &str) -> String {
     format!("{count} {word}{}", if count == 1 { "" } else { "s" })
 }
 
 /// One rule's part of a fix run: its change lines, and in a dry run the diffs.
-struct RenderedFixes {
-    text: String,
-    changes: usize,
-    rules: usize,
+pub(crate) struct RenderedFixes {
+    pub(crate) text: String,
+    pub(crate) changes: usize,
+    pub(crate) rules: usize,
 }
 
 /// Renders what the loop changed, grouped by rule in the order the rules
 /// first changed something. A file a rule wrote in several passes is listed
 /// once, with the content from before its first write and after its last.
-fn render_fixes(report: &LoopReport, dry_run: bool) -> RenderedFixes {
+pub(crate) fn render_fixes(report: &LoopReport, dry_run: bool, show_notes: bool) -> RenderedFixes {
     let mut rules: Vec<&str> = Vec::new();
     for change in &report.changes {
         if !rules.contains(&change.rule.as_str()) {
@@ -293,6 +309,8 @@ fn render_fixes(report: &LoopReport, dry_run: bool) -> RenderedFixes {
                     };
                     text.push_str(&format!("  {verb} {file} (the file stays on disk)\n"));
                 }
+                // Staging goes with the file's "created" line.
+                Change::Track { .. } => {}
                 Change::Write { file, before, .. } => {
                     if seen.contains(&(true, file.as_str())) {
                         continue;
@@ -304,7 +322,16 @@ fn render_fixes(report: &LoopReport, dry_run: bool) -> RenderedFixes {
                         (false, true) => "edited",
                         (false, false) => "created",
                     };
-                    text.push_str(&format!("  {verb} {file}\n"));
+                    // A fix may add the file it made to the git index.
+                    let staged = own().any(|other| {
+                        matches!(&other.change, Change::Track { file: tracked } if tracked == file)
+                    });
+                    let staged = match (staged, dry_run) {
+                        (false, _) => "",
+                        (true, true) => " (and stage it with git add)",
+                        (true, false) => " (staged with git add)",
+                    };
+                    text.push_str(&format!("  {verb} {file}{staged}\n"));
                     if dry_run {
                         let last = own()
                             .filter_map(|later| match &later.change {
@@ -323,7 +350,7 @@ fn render_fixes(report: &LoopReport, dry_run: bool) -> RenderedFixes {
         }
         total += seen.len();
         // Notes describe what was done, so they only make sense after a real fix.
-        if !dry_run {
+        if show_notes {
             let mut shown: Vec<&str> = Vec::new();
             for (_, note) in report.notes.iter().filter(|(owner, _)| owner == rule) {
                 if !shown.contains(&note.as_str()) {
@@ -344,6 +371,120 @@ fn render_fixes(report: &LoopReport, dry_run: bool) -> RenderedFixes {
     }
 }
 
+/// The fix loop, planned: the rules that take part and the order of their fixes.
+pub(crate) struct FixPlan<'a> {
+    pub(crate) selection: Selection<'a>,
+    selected: Vec<LoopRule>,
+    /// Indices into `selected` of the rules that have a fix, in run order.
+    with_fix: Vec<usize>,
+}
+
+/// Validates the rules' `after` declarations and works out the fix order.
+/// Bad declarations are found here, before anything is written, over every
+/// rule that is on, whatever `rules_glob` selects.
+pub(crate) fn plan_fixes<'a>(
+    rules: Vec<ConfiguredRule<'a>>,
+    packs: &[BuiltinPack],
+    rules_glob: Option<&str>,
+) -> Result<FixPlan<'a>> {
+    let loop_rule = |meta: &firescale_core::model::RuleMeta| LoopRule {
+        id: meta.id.clone(),
+        after: meta.after.clone(),
+    };
+    let known: BTreeSet<String> = packs
+        .iter()
+        .flat_map(|pack| pack.rules.iter().map(|rule| rule.meta().id))
+        .chain(rules.iter().map(|rule| rule.meta.id.clone()))
+        .collect();
+    let enabled: Vec<LoopRule> = rules
+        .iter()
+        .filter(|rule| rule.status != Status::Off)
+        .map(|rule| loop_rule(&rule.meta))
+        .collect();
+    plan_order(&enabled, &known)?;
+
+    let selection = select_rules(rules, rules_glob)?;
+    let selected: Vec<LoopRule> = selection
+        .rules
+        .iter()
+        .map(|rule| loop_rule(&rule.meta))
+        .collect();
+    let order = plan_order(&selected, &known)?;
+    // Rules without a fix take no part in the loop.
+    let with_fix = order
+        .into_iter()
+        .filter(|index| selection.rules[*index].meta.has_fix)
+        .collect();
+    Ok(FixPlan {
+        selection,
+        selected,
+        with_fix,
+    })
+}
+
+impl FixPlan<'_> {
+    pub(crate) fn has_fixes(&self) -> bool {
+        !self.with_fix.is_empty()
+    }
+
+    /// Runs the loop in `work_root`: the repo, or a scratch copy of it.
+    pub(crate) fn run(
+        &self,
+        work_root: &Path,
+        host: &mut NodeHost,
+    ) -> std::result::Result<LoopReport, LoopFailure> {
+        let with_fix: Vec<&LoopRule> = self
+            .with_fix
+            .iter()
+            .map(|index| &self.selected[*index])
+            .collect();
+        run_fix_loop(&with_fix, MAX_PASSES, |entry| {
+            let Some(rule) = self
+                .selection
+                .rules
+                .iter()
+                .find(|rule| rule.meta.id == entry.id)
+            else {
+                return Ok(FixOutcome::default());
+            };
+            match &rule.source {
+                RuleSource::Builtin(builtin) => {
+                    fix_rule_with(*builtin, work_root, &rule.options, false)
+                }
+                // A custom rule's fix runs in the Node host, through the SDK.
+                RuleSource::Custom { pack, .. } => {
+                    host.fix_rule(work_root, pack, &rule.meta.id, &rule.options, false)
+                }
+            }
+        })
+    }
+}
+
+/// The error for a loop that stopped. It must not hide what earlier fixes
+/// already changed. `command` is what the person ran, such as `fscale fix`.
+pub(crate) fn loop_failure(failure: &LoopFailure, dry_run: bool, command: &str) -> Error {
+    if failure.report.changes.is_empty() {
+        return Error::user(failure.error.message());
+    }
+    let done = render_fixes(&failure.report, dry_run, !dry_run);
+    let (lead, next) = if dry_run {
+        (
+            "This was a dry run, so nothing was changed. It had got this far:".to_owned(),
+            "Fix the problem above, then run the dry run again.".to_owned(),
+        )
+    } else {
+        (
+            "The fix stopped after these changes had already been made:".to_owned(),
+            format!("Review them with `git status` and `git diff`, then run `{command}` again."),
+        )
+    };
+    Error::user(format!(
+        "{}\n\n{lead}\n\n{}\n\n{next}",
+        failure.error.message(),
+        done.text.trim_end()
+    ))
+}
+
 /// `fscale fix`: runs the deterministic fixes in dependency order, pass after
 /// pass, until nothing is left to fix (ADR 0018).
 fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
@@ -356,91 +497,22 @@ fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let packs = firescale_rules::builtin_packs();
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
-
-    // Bad `after` declarations are found before anything is written, over
-    // every rule that is on, whatever --rules selects.
-    let loop_rule = |meta: &firescale_core::model::RuleMeta| LoopRule {
-        id: meta.id.clone(),
-        after: meta.after.clone(),
-    };
-    let known: BTreeSet<String> = packs
-        .iter()
-        .flat_map(|pack| pack.rules.iter().map(|rule| rule.meta().id))
-        .chain(config.rules.iter().map(|rule| rule.meta.id.clone()))
-        .collect();
-    let enabled: Vec<LoopRule> = config
-        .rules
-        .iter()
-        .filter(|rule| rule.status != Status::Off)
-        .map(|rule| loop_rule(&rule.meta))
-        .collect();
-    plan_order(&enabled, &known)?;
-
-    let selection = select_rules(config.rules, args.rules.as_deref())?;
-    let notes = selection.notes;
-    let selected: Vec<LoopRule> = selection
-        .rules
-        .iter()
-        .map(|rule| loop_rule(&rule.meta))
-        .collect();
-    let order = plan_order(&selected, &known)?;
-    // Rules without a fix take no part in the loop.
-    let with_fix: Vec<&LoopRule> = order
-        .iter()
-        .filter(|index| selection.rules[**index].meta.has_fix)
-        .map(|index| &selected[*index])
-        .collect();
+    let plan = plan_fixes(config.rules, &packs, args.rules.as_deref())?;
 
     // A dry run is the real loop in a scratch copy of the repo, so every fix
     // sees what the fixes before it wrote, and the repo itself is not touched.
-    let scratch = if args.dry_run && !with_fix.is_empty() {
+    let scratch = if args.dry_run && plan.has_fixes() {
         Some(Scratch::copy_of(root)?)
     } else {
         None
     };
     let work_root = scratch.as_ref().map_or(root, Scratch::root);
 
-    let outcome = run_fix_loop(&with_fix, MAX_PASSES, |entry| {
-        let Some(rule) = selection.rules.iter().find(|rule| rule.meta.id == entry.id) else {
-            return Ok(FixOutcome::default());
-        };
-        match &rule.source {
-            RuleSource::Builtin(builtin) => {
-                fix_rule_with(*builtin, work_root, &rule.options, false)
-            }
-            // A custom rule's fix runs in the Node host, through the SDK.
-            RuleSource::Custom { pack, .. } => {
-                host.fix_rule(work_root, pack, &rule.meta.id, &rule.options, false)
-            }
-        }
-    });
+    let report = plan
+        .run(work_root, &mut host)
+        .map_err(|failure| loop_failure(&failure, args.dry_run, "fscale fix"))?;
 
-    let report = match outcome {
-        Ok(report) => report,
-        // A failure must not hide what earlier fixes already changed.
-        Err(failure) if failure.report.changes.is_empty() => return Err(failure.error),
-        Err(failure) => {
-            let done = render_fixes(&failure.report, args.dry_run);
-            let (lead, next) = if args.dry_run {
-                (
-                    "This was a dry run, so nothing was changed. It had got this far:",
-                    "Fix the problem above, then run the dry run again.",
-                )
-            } else {
-                (
-                    "The fix stopped after these changes had already been made:",
-                    "Review them with `git status` and `git diff`, then run `fscale fix` again.",
-                )
-            };
-            return Err(Error::user(format!(
-                "{}\n\n{lead}\n\n{}\n\n{next}",
-                failure.error.message(),
-                done.text.trim_end()
-            )));
-        }
-    };
-
-    let done = render_fixes(&report, args.dry_run);
+    let done = render_fixes(&report, args.dry_run, !args.dry_run);
     let mut out = done.text;
     if done.changes == 0 {
         out.push_str("Nothing to fix: no deterministic fix has anything left to do.\n");
@@ -459,7 +531,7 @@ fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }
     Ok(Output {
         stdout: out,
-        notes,
+        notes: plan.selection.notes,
         code: EXIT_OK,
     })
 }
@@ -722,8 +794,15 @@ fn run() -> Result<Output> {
     if args.help {
         return Ok(Output::ok(HELP));
     }
+    // `init` makes a repo root out of the folder it is run in. Every other
+    // command works on the root found from there.
+    if command == "init" {
+        return scaffold::init(&cwd, &args, rest);
+    }
     let root = find_root(&cwd);
     match command.as_str() {
+        "adopt" => scaffold::adopt(&root, &args, rest),
+        "sync" => scaffold::sync(&root, &args, rest),
         "check" => check(&root, &args, rest),
         "fix" => fix(&root, &args, rest),
         "explain" => explain(&root, rest),

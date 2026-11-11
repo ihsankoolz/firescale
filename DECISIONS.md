@@ -4,16 +4,19 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## CI owed
 
-GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), and you asked for work to continue without it. From that point everything is verified on Linux only, on the build machine. M6 pushes carried `[skip ci]`; the M7 pull request did not. Actions started running jobs again on 2026-11-11 during M7, so pushes no longer need `[skip ci]`. The M6 item below is still owed. To clear it, start the CI workflow by hand on `main` (Actions tab, "CI", "Run workflow"); that runs the checks, the benchmarks and the npm install tests on all three OSes.
+Nothing is owed. The last open item, M6's npm install test on Windows, passed on 2026-11-11 in the CI run you started by hand on `main` (run 42, commit `9190058`): all ten jobs were green, the checks on Linux, macOS and Windows, the three benchmark jobs and the three npm install jobs.
 
-Not yet proven on macOS or Windows:
+History: GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), so M6 was merged on Linux results only, and M7's first two runs did not execute. Both were made up later the same day. If jobs ever end within seconds with no logs again, list here what is unproven on macOS or Windows.
 
-- **M7:** nothing owed. Its first two CI runs on 2026-11-11 did not execute (all jobs ended within seconds with no logs, the Actions limit). The jobs were re-run later that day and passed on Linux (Node 22 and 24), macOS and Windows, including the Windows command-line handling in `crates/core/src/verify.rs` and the stop-hook tests. Still not measured: verify latency on macOS and Windows (the `bench` job only runs by hand).
-- **M6:** the reworked npm install test (`scripts/smoke-npm.mjs`) on Windows. The earlier version passed on Linux and macOS; on Windows the install, `--version` and `check` passed and the script then failed on its own quoting bug, which is fixed but unconfirmed. The launcher changes from the review are also Linux-only so far.
+Still not measured anywhere: verify latency on macOS and Windows. The `bench` job runs the 50k-file check benchmark, not `bench/verify-bench.mjs`.
 
 ## Needs your decision (all milestones, most important first)
 
-- **(Plan) Publish 0.1.0 to npm after M9.** It is now a checkpoint in PLAN.md. The steps are under "Publishing to npm" below. M10 and M11 need it for generated CI to work for a real team.
+- **(Plan) Publish 0.1.0 to npm now.** M9 is merged, so this is the next step, and it is yours. The steps are under "Publishing to npm" below. Until it is done, the CI workflow that `fscale init` and `fscale adopt` generate fails at `npx firescale verify`, and M10 and M11 only work in tests.
+- **(M9) `init` and `adopt` run `git add` on the README and the workflow they create.** Nothing else is staged and nothing is committed (ADR 0019). The alternative is to make the two rules count untracked files. Say if you would rather have that.
+- **(M9) `adopt` writes a config with `core` only; `init` uses `core` and `agent-ready`.** That follows SPEC §6. Say if `adopt` should turn on `agent-ready` too.
+- **(M9) `fscale init` takes no folder argument.** It works on the current folder: `mkdir my-app && cd my-app && fscale init`. `fscale init my-app` could be added.
+- **(M9) What the starter workflow contains.** It runs on pull requests and on pushes to `main` and `master`, sets up Node 24, installs with npm or pnpm when it can tell, and runs `npx firescale verify` with no version pinned. Read it once in `docs/init.md` or by running `fscale init` in an empty folder.
 - **(M7) The Cursor hook format is unconfirmed.** cursor.com was blocked from the build session, twice. `fscale hooks install` writes `.cursor/hooks.json` from a best reading and prints a note. Someone with access to Cursor's docs should check it (ADR 0014), or allow `cursor.com` in the cloud environment's network settings so a session can.
 - **(M7) The `agent-ready` pack is opt-in**, not on by default. Say if you want it on for every repo.
 
@@ -31,6 +34,61 @@ Not yet proven on macOS or Windows:
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M9 — `init`, `adopt` and `sync`
+
+**Built**
+
+- `fscale init [--packs <list>] [--force]`: in an empty folder, runs `git init` if needed, writes `firescale.config.json`, then runs every fix. No templates.
+- `fscale adopt [--dry-run]`: the same loop on an existing repo. Writes a config if there is none.
+- `fscale sync` and `fscale sync --check`: the loop again. `--check` changes nothing and exits 1 when `sync` would change something.
+- Two new fixes, each creating a file only when it is absent: `core/ci-exists` writes a starter workflow that runs `npx firescale verify`; `core/readme-setup` writes a README skeleton with Install and Usage sections.
+- Every command prints what it changed, then "Left for you" (violations no fix can repair) and "To review" (what to look at in a file a fix created).
+- `docs/init.md` and ADR 0019.
+
+**How "never destroys work" is ensured**
+
+- The config, the starter workflow and the README skeleton are created with a call that fails if anything is at that path.
+- The two new fixes look at the disk again before writing, and write only where nothing is: no workflow file of any name, tracked or not; no root entry whose name starts with "readme" in any case.
+- A path git already tracks is never created or staged, so staged work in the index cannot be replaced.
+- No fix writes to a symbolic link or below one, so nothing outside the repo is touched.
+- If a folder cannot be listed, or git cannot answer, nothing is created.
+- A README without install steps and a workflow without a pull request trigger are reported, not edited.
+- Tests run `adopt`, `sync` and `init --force` over repos whose README, workflow, `.gitignore` and AGENTS.md contain CRLF, a BOM, no final newline, non-ASCII text and look-alike markers, tracked, untracked and outside git, and compare every file byte for byte.
+
+**Decisions made for you** (all ADR 0019)
+
+- **`init` refuses a folder that is not empty and has no firescale config.** "Empty" means nothing, or only `.git`. It exits 2, changes nothing and prints the two `adopt` commands. `--force` runs anyway and is as careful as `adopt`.
+- **`init` in a folder that already has a config keeps the config** and runs the fixes, like `sync`. `--packs` is an error there.
+- **`init` in an empty folder inside another git repo or firescale repo refuses**, because its files would be staged in that repo. `--force` overrides it.
+- **Fixes stage the file they create** (`git add` on that one file), because the two rules count tracked files only, and an existing test pins that an untracked workflow does not count.
+- **A README or workflow that git tracks but that is missing from disk is not recreated.** It is reported as a manual fix (`git restore` it, or commit the deletion). A file gone from disk and from git is drift, and `sync` recreates it.
+- **A fix that meets a symbolic link stops with an error** instead of writing through it. For a linked `.gitignore` that means `adopt` exits 2 until the link is replaced or the rule is turned off.
+- **A path that `.gitignore` ignores is not created**; the rule says which path.
+- **Every run prints `Repo root: <path>` first**, since `adopt` and `sync` work on the root found by walking up from the current folder.
+- **A file that exists but is untracked is a manual fix** ("run `git add`"). Nothing is created beside it.
+- **No generic "no line may change" guard in the loop.** It would break honest merges into JSON files and M12's managed block. The property is proven by tests instead.
+- **Exit code 0 when the fixes settled, whatever is left**, as `fscale fix` does. 1 only for `sync --check` with drift. 2 for refusals and errors.
+- **`--rules` is rejected by all three**, and an option that belongs to another command is an error that names the right one.
+- **`init` has no `--dry-run`.** In an existing folder, `adopt --dry-run` is the preview.
+- **The README title is the root project's name, or "Project name".** Not the folder name, which would differ in a dry run.
+- **The branch name of `git init` is left to your git settings.**
+- **Four existing assertions changed on purpose**, none weakened: a missing workflow and a missing README are now `deterministic` instead of `agent` (PLAN.md asks for these fixes), both rules' metadata tests now expect `has_fix`, and the README rule's cache inputs became case-insensitive. One fix-loop test got a README and a workflow added to its fixture so the two new fixes stay out of its `.gitignore` diff; its assertions are unchanged. The help snapshot changed because the help text gained the three commands.
+
+**Known limits**
+
+- `agent-ready` has no fixes until M12, so a default `fscale init` lists two violations under "Left for you".
+- The generated workflow fails at `npx firescale verify` until 0.1.0 is on npm.
+- The starter workflow has an install step for npm and pnpm only. For yarn, bun and others it leaves a comment and says so under "To review".
+- In a dry run, what custom TypeScript rules would still report afterwards is not listed.
+- `adopt --dry-run` and `sync --check` work in a copy that lacks files git ignores and the repo's own git settings (`.git/info/exclude`, sparse checkout). In such repos the preview can differ from the real run.
+- Writes are not atomic. If the disk fills up or the process is killed while a fix appends to `.gitignore`, the file can be left cut short.
+- The cached result of the two rules does not notice a new folder or link named like a README, or `.github` changing from a folder to a file. `fscale check` can then show a stale fix hint until `--no-cache`; `init`, `adopt` and `sync` do not use the cache.
+- On a file system that ignores case, a workflow tracked under `.GitHub/` is reported as untracked. Not tested.
+- With `GIT_DIR` set in the environment, `init` and `adopt` stage their two files in that repository, as any git command would.
+- An independent review before the pull request found ten issues, three of them serious: `sync` could replace a staged README in the git index with the skeleton; an untracked README could be overwritten in a folder that could not be listed; and a linked `.github` or `.gitignore` led a fix to write outside the repo. The others: a file left on disk unreported when `git add` failed, previews that disagreed with the real run around links, empty folders and ignored paths, a `.git` left behind by `init` on a broken config, and output that never named the repo root. All are fixed with tests, except the limits listed above.
+- The three commands print text only; no `--json`.
+- The pinned action versions in the generated workflow will age. They are in one place, `crates/rules/src/core/ci-exists/mod.rs`.
 
 ## M8 — The fix loop
 
@@ -314,7 +372,7 @@ Not yet proven on macOS or Windows:
 
 ## Publishing to npm
 
-Nothing has been published. The packaging is built and tested (M6); publishing is yours to do. Exact steps:
+Nothing has been published. The packaging is built and tested (M6), on all three OSes; publishing is yours to do, and with M9 merged it is the next step in PLAN.md. Exact steps:
 
 **Once, before the first publish**
 
@@ -372,5 +430,7 @@ Nothing has been published. The packaging is built and tested (M6); publishing i
    ```bash
    npx firescale@0.1.0 --version
    ```
+
+7. Check the second box of the checkpoint: in an empty folder run `npx firescale@0.1.0 init`, commit, push to a new GitHub repo, open a pull request, and see the generated CI pass. Then tick both boxes of the checkpoint in PLAN.md.
 
 A published version cannot be replaced, only deprecated. If a publish fails halfway, publish the missing packages; do not bump the version to retry.

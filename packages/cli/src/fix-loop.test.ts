@@ -272,7 +272,16 @@ describe('fix --dry-run across dependent fixes', () => {
 
   it('shows one rule editing the file another rule creates, for built-in rules', async () => {
     // No .gitignore: core/gitignore-basics creates it, then core/no-committed-env adds to it.
-    const repo = await fixtures.create({ files: { '.env': FAKE_ENV, 'package.json': '{}\n' } });
+    // A README and a workflow are there, so the two fixes that create those files stay out of
+    // this test: it is about the two rules that share .gitignore.
+    const repo = await fixtures.create({
+      files: {
+        '.env': FAKE_ENV,
+        'package.json': '{}\n',
+        'README.md': '# fixture\n',
+        '.github/workflows/ci.yml': 'on: pull_request\njobs: {}\n',
+      },
+    });
     const dry = await runCli(['fix', '--dry-run'], repo.root);
     expect(dry.code).toBe(EXIT_OK);
     expect(dry.stdout).toMatchSnapshot();
@@ -298,7 +307,8 @@ describe('fix --dry-run across dependent fixes', () => {
 
 describe('every built-in fix is idempotent through the loop', () => {
   it('a second `fscale fix` changes nothing', async () => {
-    // Triggers all three built-in fixes: gitignore-basics, env-example, no-committed-env.
+    // Triggers every built-in fix: gitignore-basics, env-example, no-committed-env, and the
+    // two that create a missing file, ci-exists and readme-setup.
     const repo = await fixtures.create({
       files: {
         '.env': FAKE_ENV,
@@ -309,16 +319,29 @@ describe('every built-in fix is idempotent through the loop', () => {
     });
     const first = await runCli(['fix'], repo.root);
     expect(first.code).toBe(EXIT_OK);
-    for (const rule of ['core/gitignore-basics', 'core/env-example', 'core/no-committed-env']) {
+    for (const rule of [
+      'core/ci-exists',
+      'core/env-example',
+      'core/gitignore-basics',
+      'core/no-committed-env',
+      'core/readme-setup',
+    ]) {
       expect(first.stdout).toContain(`${rule}\n`);
     }
     const snapshot = async (): Promise<Record<string, string | null>> => ({
       gitignore: await repo.read('.gitignore'),
       example: await repo.read('.env.example'),
+      workflow: await repo.read('.github/workflows/ci.yml'),
+      readme: await repo.read('README.md'),
       tracked: (await repo.trackedFiles()).join(','),
     });
     const after = await snapshot();
     expect(after.example).toContain('API_URL');
+    expect(after.workflow).toContain('- run: npx firescale verify\n');
+    expect(after.readme).toContain('# demo\n');
+    expect((after.tracked ?? '').split(',')).toEqual(
+      expect.arrayContaining(['.github/workflows/ci.yml', 'README.md']),
+    );
 
     const second = await runCli(['fix'], repo.root);
     expect(second.code).toBe(EXIT_OK);

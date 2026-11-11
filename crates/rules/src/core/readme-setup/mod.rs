@@ -2,14 +2,24 @@
 
 use std::fs;
 
-use firescale_core::model::{Category, Finding, Fixable, RuleMeta, Severity};
+use std::path::Path;
+
+use firescale_core::facts::{detect_facts, RepoFacts};
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
+};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
+
+use super::install::install_command;
 
 #[cfg(test)]
 mod tests;
 
 pub const ID: &str = "core/readme-setup";
+
+/// The only file the fix ever creates.
+const SKELETON: &str = "README.md";
 
 /// Heading words and phrases, matched as whole words.
 const INSTALL_HEADINGS: [&str; 13] = [
@@ -86,38 +96,162 @@ const RUN_COMMANDS: [&str; 17] = [
 
 pub struct ReadmeSetup;
 
-/// The root README's name: tracked files in a git repo, a folder listing otherwise.
+fn is_recognised(name: &str) -> bool {
+    matches!(
+        name.to_lowercase().as_str(),
+        "readme.md" | "readme" | "readme.rst" | "readme.txt"
+    )
+}
+
+/// Markdown first when there are several, then by name.
+fn preferred(mut readmes: Vec<String>) -> Option<String> {
+    readmes.sort();
+    let markdown = readmes.iter().find(|n| n.to_lowercase() == "readme.md");
+    markdown.or_else(|| readmes.first()).cloned()
+}
+
+/// Names of everything at the repo root on disk: files, folders and links.
+/// `None` when the folder cannot be listed: then nothing can be said about
+/// what is in it, and nothing may be created in it.
+fn root_entries(root: &Path) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(root).ok()? {
+        names.push(entry.ok()?.file_name().to_string_lossy().into_owned());
+    }
+    Some(names)
+}
+
+/// Root entries on disk that are, or could be meant as, a README: anything
+/// whose name starts with "readme", in any letter case, whatever it is.
+fn readme_like_entries(root: &Path) -> Option<Vec<String>> {
+    Some(
+        root_entries(root)?
+            .into_iter()
+            .filter(|name| name.to_lowercase().starts_with("readme"))
+            .collect(),
+    )
+}
+
+/// Why the skeleton cannot be created, as `(message, file, fixable)`, or
+/// `None` when it can. The check and the fix both ask this, so a finding is
+/// deterministic exactly when the fix will act.
+fn skeleton_blocker(ctx: &RuleContext) -> Result<Option<(String, String, Fixable)>> {
+    const NO_README: &str = "No README found at the repo root. Add a README.md that explains how to install and run the project.";
+    let agent = || Some((NO_README.to_owned(), SKELETON.to_owned(), Fixable::Agent));
+    let Some(like) = readme_like_entries(ctx.root()) else {
+        return Ok(agent());
+    };
+    if !ctx.git().is_repo()? {
+        return Ok(if like.is_empty() { None } else { agent() });
+    }
+    // A README git knows but the disk does not have may hold staged work.
+    let missing: Vec<String> = ctx
+        .git()
+        .tracked_files()?
+        .into_iter()
+        .filter(|f| !f.contains('/') && is_recognised(f))
+        .filter(|f| ctx.root().join(f).symlink_metadata().is_err())
+        .collect();
+    if let Some(name) = preferred(missing) {
+        return Ok(Some((
+            format!(
+                "\"{name}\" is tracked by git but missing from disk. Restore it with `git restore {name}`, or commit its deletion."
+            ),
+            name,
+            Fixable::Manual,
+        )));
+    }
+    let untracked: Vec<String> = like
+        .iter()
+        .filter(|name| is_recognised(name) && ctx.root().join(name).is_file())
+        .cloned()
+        .collect();
+    if let Some(name) = preferred(untracked) {
+        return Ok(Some((
+            format!(
+                "\"{name}\" exists but is not tracked by git, so it does not count as the README. Run `git add {name}` and commit it."
+            ),
+            name,
+            Fixable::Manual,
+        )));
+    }
+    if !like.is_empty() {
+        // Something README-like is there; a second README beside it would be wrong.
+        return Ok(agent());
+    }
+    if ctx.git().is_ignored(SKELETON)? {
+        return Ok(Some((
+            format!(
+                "No README found at the repo root, and a .gitignore rule ignores {SKELETON}, so one could not be committed. Remove that rule, then add a README.md."
+            ),
+            SKELETON.to_owned(),
+            Fixable::Manual,
+        )));
+    }
+    Ok(None)
+}
+
+/// The root README's name. In a git repo it must be tracked and on disk;
+/// otherwise a folder listing decides.
 fn find_readme(ctx: &RuleContext) -> Result<Option<String>> {
     let names: Vec<String> = if ctx.git().is_repo()? {
         ctx.git()
             .tracked_files()?
             .into_iter()
-            .filter(|f| !f.contains('/'))
+            .filter(|f| !f.contains('/') && is_recognised(f))
+            .filter(|f| ctx.root().join(f).is_file())
             .collect()
     } else {
-        match fs::read_dir(ctx.root()) {
-            Ok(entries) => entries
-                .flatten()
-                .filter(|e| e.path().is_file())
-                .filter_map(|e| e.file_name().to_str().map(str::to_owned))
-                .collect(),
-            Err(_) => Vec::new(),
-        }
+        root_entries(ctx.root())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| is_recognised(name) && ctx.root().join(name).is_file())
+            .collect()
     };
-    let mut readmes: Vec<String> = names
+    Ok(preferred(names))
+}
+
+/// The heading of the skeleton: the root project's name. Never the folder
+/// name, so a dry run in a scratch copy writes the same file.
+fn project_name(facts: &RepoFacts) -> String {
+    facts
+        .projects
+        .iter()
+        .filter(|project| project.root == ".")
+        .map(|project| project.name.trim())
+        .find(|name| !name.is_empty() && !name.chars().any(char::is_control))
+        .unwrap_or("Project name")
+        .to_owned()
+}
+
+fn fenced(commands: &[&str]) -> String {
+    format!("```sh\n{}\n```\n", commands.join("\n"))
+}
+
+/// The skeleton README. LF line endings.
+fn skeleton(facts: &RepoFacts) -> String {
+    let install = match facts.package_manager.as_deref() {
+        Some(manager) => install_command(manager),
+        None if facts.languages.iter().any(|language| language == "rust") => Some("cargo build"),
+        None => None,
+    };
+    let install = install.map_or_else(
+        || "Describe how to install the project here.\n".to_owned(),
+        |command| fenced(&[command]),
+    );
+    let commands: Vec<&str> = [&facts.commands.build, &facts.commands.test]
         .into_iter()
-        .filter(|name| {
-            let lower = name.to_lowercase();
-            matches!(
-                lower.as_str(),
-                "readme.md" | "readme" | "readme.rst" | "readme.txt"
-            )
-        })
+        .filter_map(|command| command.as_deref())
         .collect();
-    readmes.sort();
-    // Prefer Markdown when there are several.
-    let preferred = readmes.iter().find(|n| n.to_lowercase() == "readme.md");
-    Ok(preferred.or_else(|| readmes.first()).cloned())
+    let usage = if commands.is_empty() {
+        "Describe how to run the project here.\n".to_owned()
+    } else {
+        fenced(&commands)
+    };
+    format!(
+        "# {}\n\n<!-- A skeleton created by firescale (core/readme-setup). It is your team's to edit. -->\n\n## Install\n\n{install}\n## Usage\n\n{usage}",
+        project_name(facts)
+    )
 }
 
 fn is_underline(line: &str) -> bool {
@@ -232,8 +366,9 @@ impl BuiltinRule for ReadmeSetup {
             severity: Severity::Low,
             category: Category::Maintainability,
             description: "README has install and run steps.".to_owned(),
-            inputs: vec!["README*".to_owned(), "readme*".to_owned()],
-            has_fix: false,
+            // One glob for every letter case of the name.
+            inputs: vec!["[Rr][Ee][Aa][Dd][Mm][Ee]*".to_owned()],
+            has_fix: true,
             after: Vec::new(),
         }
     }
@@ -244,12 +379,19 @@ impl BuiltinRule for ReadmeSetup {
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
         let Some(file) = find_readme(ctx)? else {
+            let (message, file, fixable) = skeleton_blocker(ctx)?.unwrap_or_else(|| {
+                (
+                    "No README found at the repo root. Add a README.md that explains how to install and run the project; `fscale fix` can create a skeleton.".to_owned(),
+                    SKELETON.to_owned(),
+                    Fixable::Deterministic,
+                )
+            });
             return Ok(vec![Finding {
-                message: "No README found at the repo root. Add a README.md that explains how to install and run the project.".to_owned(),
-                file: "README.md".to_owned(),
+                message,
+                file,
                 range: None,
                 project: None,
-                fixable: Fixable::Agent,
+                fixable,
             }]);
         };
         // Bytes plus a lossy decode: a README in another encoding must not abort the run.
@@ -284,5 +426,21 @@ impl BuiltinRule for ReadmeSetup {
             );
         }
         Ok(findings)
+    }
+
+    fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
+        // Never trust the diagnostics alone: look at the disk again, and only
+        // create a file where nothing README-like exists.
+        if find_readme(ctx)?.is_some() || skeleton_blocker(ctx)?.is_some() {
+            return Ok(FixResult::default());
+        }
+        let facts = detect_facts(ctx.root())?;
+        ctx.create_tracked(SKELETON, &skeleton(&facts))?;
+        Ok(FixResult {
+            changed_files: vec![SKELETON.to_owned()],
+            notes: vec![format!(
+                "{SKELETON} is a skeleton. Describe the project and complete the Install and Usage sections."
+            )],
+        })
     }
 }

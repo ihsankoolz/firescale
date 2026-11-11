@@ -8,6 +8,7 @@ pub mod ci_exists;
 pub mod env_example;
 #[path = "gitignore-basics/mod.rs"]
 pub mod gitignore_basics;
+mod install;
 #[path = "no-committed-env/mod.rs"]
 pub mod no_committed_env;
 #[path = "no-secrets-in-source/mod.rs"]

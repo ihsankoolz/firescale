@@ -166,6 +166,40 @@ impl Git {
         Ok(files)
     }
 
+    /// Adds one file to the index.
+    pub fn track(&self, file: &str) -> Result<()> {
+        let result = run_git(&self.root, &["--literal-pathspecs", "add", "--", file])?;
+        if result.code != 0 {
+            return Err(Error::user(format!(
+                "git add failed for {file}: {}. If a .gitignore rule ignores the file, remove that rule, then run this again.",
+                result.stderr.trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// True when the index has an entry for `file`.
+    pub fn is_tracked(&self, file: &str) -> Result<bool> {
+        let args = ["--literal-pathspecs", "ls-files", "--cached", "--", file];
+        Ok(!run_git(&self.root, &args)?.stdout.trim().is_empty())
+    }
+
+    /// True when a `.gitignore` rule (or another exclude) ignores `file`.
+    pub fn is_ignored(&self, file: &str) -> Result<bool> {
+        // check-ignore takes plain paths and does not accept pathspec magic.
+        // Exit code 0: ignored. 1: not ignored. Anything else: git could not
+        // say, which must not be read as "free to create".
+        let result = run_git(&self.root, &["check-ignore", "--quiet", "--", file])?;
+        match result.code {
+            0 => Ok(true),
+            1 => Ok(false),
+            _ => Err(Error::user(format!(
+                "git check-ignore failed for {file}: {}. Fix the git error above, then run this again.",
+                result.stderr.trim()
+            ))),
+        }
+    }
+
     /// Removes paths from the index and keeps the files on disk.
     pub fn untrack(&self, paths: &[String]) -> Result<()> {
         for batch in paths.chunks(UNTRACK_BATCH) {
