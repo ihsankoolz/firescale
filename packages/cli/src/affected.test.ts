@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -102,6 +103,24 @@ describe('fscale check --affected', () => {
     await commit(repo, 'second');
     expect(await files(repo, ['--affected'])).toEqual([]);
     expect(await files(repo, ['--affected', '--base', 'HEAD~1'])).toEqual(['packages/other/.env']);
+  });
+
+  it('works when the firescale root is a folder inside a larger git repo', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'README.md': '# outer\n',
+        'service/firescale.config.json': ENFORCED_CONFIG,
+        'service/.env': FAKE_ENV,
+      },
+    });
+    await commit(repo, 'initial');
+    const service = path.join(repo.root, 'service');
+    expect((await runCli(['check', '--affected', '--cwd', service])).code).toBe(EXIT_OK);
+    await repo.write('service/sub/.env.local', FAKE_ENV);
+    await repo.track(['service/sub/.env.local']);
+    const result = await runCli(['check', '--json', '--affected', '--cwd', service]);
+    const report = JSON.parse(result.stdout) as CheckReport;
+    expect(report.diagnostics.map((d) => d.file)).toEqual(['sub/.env.local']);
   });
 
   it('keeps the summary and exit code consistent with the narrowed report', async () => {

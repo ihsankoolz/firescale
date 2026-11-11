@@ -36,6 +36,9 @@ fn names(root: &Path, args: &[&str]) -> Result<Option<Vec<String>>> {
     ))
 }
 
+/// Paths are relative to `root`, even when `root` is a folder inside a larger
+/// git repo (`--relative`), so they compare with diagnostic paths.
+///
 /// Lists changed files: uncommitted changes (staged or not) and untracked
 /// files, plus, when `base` is given, everything committed since the merge
 /// base with that ref.
@@ -47,7 +50,8 @@ pub fn changed_files(root: &Path, base: Option<&str>) -> Result<Changed> {
     let mut files = BTreeSet::new();
     if let Some(base) = base {
         let range = format!("{base}...HEAD");
-        let Some(committed) = names(root, &["diff", "--name-only", "-z", &range])? else {
+        let Some(committed) = names(root, &["diff", "--name-only", "--relative", "-z", &range])?
+        else {
             return Err(Error::user(format!(
                 "--base \"{base}\" is not a commit git can compare with HEAD. Pass a branch, tag or commit that exists, for example --base origin/main."
             )));
@@ -55,7 +59,7 @@ pub fn changed_files(root: &Path, base: Option<&str>) -> Result<Changed> {
         files.extend(committed);
     }
     for args in [
-        &["diff", "--name-only", "-z", "HEAD"][..],
+        &["diff", "--name-only", "--relative", "-z", "HEAD"][..],
         &["ls-files", "-z", "--others", "--exclude-standard"][..],
     ] {
         files.extend(names(root, args)?.unwrap_or_default());
