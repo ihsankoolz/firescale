@@ -1,0 +1,60 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale explain > prints what the rule checks, why, and how to fix it by hand 1`] = `
+"Rule:        core/no-committed-env
+Severity:    blocker
+Category:    security
+Status:      enforced
+Fix:         deterministic fix available
+Description: No .env files are tracked by git, except example files such as .env.example.
+
+# core/no-committed-env
+
+## What this rule enforces and why
+
+No \`.env\` file is tracked by git. That means \`.env\` itself and any \`.env.<name>\` file such as \`.env.local\` or \`.env.production\`, at any depth. Example files are allowed: \`.env.example\` by default, or the names listed in the rule's \`allow\` option.
+
+Env files usually hold API keys, database passwords and tokens. Once one is committed, everyone with access to the repo can read those secrets, and they stay in git history even after the file is deleted.
+
+## Manual fix
+
+1. Stop tracking each reported file, keeping your local copy: \`git rm --cached <file>\`.
+2. Add these lines to the root \`.gitignore\`, in this order (the last matching line wins):
+
+   \`\`\`
+   .env
+   .env.*
+   !.env.example
+   \`\`\`
+
+3. If there is no \`.env.example\`, create one that lists the variable names with empty or fake values, and commit it.
+4. Commit the change.
+5. Treat every secret that was in a committed env file as leaked. Rotate it at the provider. Removing the file from the index does not remove it from history.
+
+## Agent fix instructions
+
+Fix only the files named in this rule's diagnostics. Never print, copy or summarise the contents of an env file.
+
+### DETERMINISTIC
+
+Apply these steps exactly:
+
+1. For each reported file, run \`git rm --cached --quiet -- <file>\`. Do not delete the file from disk.
+2. Make sure the root \`.gitignore\` contains the lines \`.env\`, \`.env.*\` and \`!.env.example\`. Add only the lines that are missing. \`!.env.example\` must come after \`.env\` and \`.env.*\`, because the last matching line wins; if it sits before them, add it again at the end. Create the file if it does not exist.
+3. Do not edit, move or rename the env files themselves.
+
+### REPORT
+
+- Every file that was untracked. Tell the user that any secret in it must be rotated, because it remains in git history.
+- That rewriting git history to remove the files is a separate decision for the user. Do not rewrite history.
+- A missing \`.env.example\`, if there is none. Do not create it from real values.
+
+## Verify
+
+Run this command. It must report no violations for this rule.
+
+\`\`\`
+fscale check --rules core/no-committed-env
+\`\`\`
+"
+`;

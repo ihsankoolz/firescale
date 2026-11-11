@@ -29,7 +29,8 @@ Keep this list accurate. Run `pnpm build` before `pnpm typecheck` or `pnpm test`
   - Parts: `pnpm lint:ts`, `pnpm lint:format`, `pnpm lint:rust`
 - Typecheck: `pnpm typecheck`
 - Format: `pnpm format`
-- Run the local CLI: `pnpm fscale --version`
+- Run the local CLI: `pnpm fscale --version`, `pnpm fscale check`, `pnpm fscale explain <rule>`
+- One test file: `pnpm exec vitest run <path>`. Update snapshots: `pnpm exec vitest run -u`
 - Rust only: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - Definition of done (from M4 on): `pnpm fscale verify`
 

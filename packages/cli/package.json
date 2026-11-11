@@ -16,14 +16,27 @@
     "fscale": "./dist/bin.js",
     "firescale": "./dist/bin.js"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schemas/check-output.schema.json": "./schemas/check-output.schema.json"
+  },
   "files": [
-    "dist"
+    "dist",
+    "schemas"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@firescale/native": "workspace:*"
+    "@firescale/native": "workspace:*",
+    "@firescale/rules-core": "workspace:*",
+    "@firescale/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0"
   }
 }

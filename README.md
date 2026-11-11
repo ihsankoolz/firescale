@@ -6,6 +6,17 @@
 
 Status: early development. See [SPEC.md](SPEC.md) for the design and [PLAN.md](PLAN.md) for progress.
 
+## Usage
+
+```
+fscale check                          # run the rules, report violations
+fscale check --json                   # the same, as JSON for CI and agents
+fscale check --rules "core/*"         # only some rules
+fscale explain core/no-committed-env  # what a rule checks and how to fix it
+```
+
+Rules are report-only (`evaluated`) by default. Set a rule to `enforced` in `firescale.config.ts` or `firescale.config.json` to make `fscale check` exit 1 when it fails. See [docs/config.md](docs/config.md), [docs/check-json.md](docs/check-json.md) and [docs/writing-rules.md](docs/writing-rules.md).
+
 ## Dev setup
 
 You need:

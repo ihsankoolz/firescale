@@ -4,19 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { coreVersion } from '@firescale/native';
 import { describe, expect, it } from 'vitest';
-import { EXIT_OK, EXIT_USAGE, run } from './cli.js';
+import { EXIT_OK, EXIT_USAGE } from './cli.js';
+import { runCli } from './test-helpers.js';
 
 const execFileAsync = promisify(execFile);
-
-async function capture(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  let stdout = '';
-  let stderr = '';
-  const code = await run(argv, {
-    stdout: (text) => (stdout += text),
-    stderr: (text) => (stderr += text),
-  });
-  return { code, stdout, stderr };
-}
 
 async function readJson(url: URL): Promise<{ version: string }> {
   return JSON.parse(await readFile(url, 'utf8')) as { version: string };
@@ -24,7 +15,7 @@ async function readJson(url: URL): Promise<{ version: string }> {
 
 describe('fscale --version', () => {
   it('prints the version reported by the Rust core through the binding', async () => {
-    const result = await capture(['--version']);
+    const result = await runCli(['--version']);
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toBe(`${coreVersion()}\n`);
     expect(result.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
@@ -44,24 +35,21 @@ describe('fscale --version', () => {
 
 describe('fscale usage', () => {
   it('prints help with no arguments', async () => {
-    const result = await capture([]);
+    const result = await runCli([]);
     expect(result.code).toBe(EXIT_OK);
-    expect(result.stdout).toMatchInlineSnapshot(`
-      "fscale - knock the scale off a repo, and prove it's clean.
-
-      Usage:
-        fscale [options]
-
-      Options:
-        -v, --version   Print the firescale version
-        -h, --help      Print this help
-      "
-    `);
+    expect(result.stdout).toMatchSnapshot();
   });
 
   it('rejects unknown options with a next step', async () => {
-    const result = await capture(['--nope']);
+    const result = await runCli(['--nope']);
     expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('fscale --help');
+  });
+
+  it('rejects unknown commands with a next step', async () => {
+    const result = await runCli(['frobnicate']);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('unknown command "frobnicate"');
     expect(result.stderr).toContain('fscale --help');
   });
 });
