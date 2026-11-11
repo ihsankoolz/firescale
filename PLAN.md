@@ -71,7 +71,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M3 — Engine: walk, hash, cache ☐
+## M3 — Engine: walk, hash, cache ☑
 
 **Build** (all Rust, in `crates/core`)
 
@@ -84,10 +84,10 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 **Done when**
 
-- ☐ A second `fscale check` with no file changes is served from cache, proven by a test.
-- ☐ Changing a file inside a rule's `inputs` invalidates only that rule's result, proven by a test.
-- ☐ Benchmarks for cold and warm runs on a 50k-file fixture are recorded in `bench/RESULTS.md`.
-- ☐ All Rust code passes clippy with warnings denied.
+- ☑ A second `fscale check` with no file changes is served from cache, proven by a test.
+- ☑ Changing a file inside a rule's `inputs` invalidates only that rule's result, proven by a test.
+- ☑ Benchmarks for cold and warm runs on a 50k-file fixture are recorded in `bench/RESULTS.md`.
+- ☑ All Rust code passes clippy with warnings denied.
 
 ---
 

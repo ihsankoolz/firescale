@@ -2,6 +2,39 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## Check on a 50k-file repo: cold cache, warm cache, no cache (M3)
+
+Measured with `bench/check-bench.mjs` on a fixture from `bench/generate-fixture.mjs --files 50000`: 50,005 tracked files, one enforced rule (`core/no-committed-env`), one violation. 10 runs per row, release build.
+
+- **Cold cache:** `.firescale` is deleted before every run, so the run walks the repo, runs the rule and writes the cache.
+- **Warm cache:** the cache is in place, so the run walks the repo, finds the entry and does not run the rule.
+- **No cache:** `--no-cache`. The rule runs; nothing is walked or written.
+
+### Linux x64, local container (4 vCPUs, Intel Xeon @ 2.10GHz), 2026-11-11
+
+| Command              | min (ms) | p50 (ms) | p95 (ms) | mean (ms) |
+| -------------------- | -------: | -------: | -------: | --------: |
+| `--version`          |      2.7 |      3.1 |      4.8 |       3.4 |
+| `check` (cold cache) |     93.1 |     99.2 |    108.8 |      99.9 |
+| `check` (warm cache) |     59.8 |     63.7 |     68.9 |      64.3 |
+| `check --no-cache`   |     28.2 |     32.7 |     36.0 |      31.5 |
+
+CI_RESULTS_PLACEHOLDER
+
+### Reading these numbers
+
+**With today's single rule, the cache makes `check` slower, not faster.** A warm run still has to walk 50k files and read the git index to prove nothing changed, which costs about 60 ms here. The rule itself only asks git for its file list, which costs about 30 ms. The cache avoids the rule but pays for the walk.
+
+The cache is built for rules that read file contents, such as the secret scanner and env-usage rules planned for M5, where one rule can cost far more than the walk. Until those exist it is overhead. See ADR 0010 and the "Needs your decision" list in DECISIONS.md.
+
+### How to reproduce
+
+```
+cargo build --release -p firescale-cli
+node bench/generate-fixture.mjs <empty dir> --files 50000
+node bench/check-bench.mjs --bin target/release/fscale --fixture <that dir> --runs 10 --label <name>
+```
+
 ## Startup: TypeScript CLI vs Rust binary (M2)
 
 Recorded on 2026-11-11 while moving `fscale` from a Node program to a native Rust binary (ADR 0008).

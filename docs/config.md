@@ -61,6 +61,15 @@ A repo with `firescale.config.json` (or no config) and only built-in packs never
 
 `firescale.config.ts` is loaded by Node's built-in TypeScript support (Node 22.18 or newer), so it may only use erasable TypeScript syntax. The `import { defineConfig } from 'firescale'` line needs firescale installed in the repo; without it, export a plain object.
 
+## The result cache
+
+`fscale check` stores each built-in rule's result in `.firescale/cache/` and reuses it while the rule's input files, their git state, the rule's options and the firescale version are unchanged. firescale writes a `.gitignore` inside `.firescale/`, so the folder is never committed.
+
+- `fscale check --no-cache` runs every rule again and neither reads nor writes the cache.
+- `FSCALE_LOG=cache fscale check` prints `cache: hit`, `miss` or `skip` per rule on stderr.
+- Custom TypeScript rules are not cached.
+- Deleting `.firescale/` is always safe.
+
 ## `--rules` and rules that are off
 
 `fscale check --rules <glob>` skips rules that are `off`. The exception is a rule named by its exact id, for example `fscale check --rules core/no-committed-env`: it runs even when it is `off`, as report-only, and a note on stderr says so. This keeps the Verify command in every SKILL.md usable.

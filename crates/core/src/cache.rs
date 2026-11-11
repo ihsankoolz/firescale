@@ -62,8 +62,19 @@ pub struct RepoSnapshot {
 impl RepoSnapshot {
     /// Walks the repo and reads the git index.
     pub fn capture(root: &Path) -> Result<Self> {
-        let tracked: BTreeSet<String> = Git::new(root).tracked_files()?.into_iter().collect();
-        let mut files: BTreeSet<String> = walk_files(root)?.into_iter().collect();
+        // The walk and the git call are independent, so they run side by side.
+        let (walked, tracked) = std::thread::scope(|scope| {
+            let walk = scope.spawn(|| walk_files(root));
+            let tracked = Git::new(root).tracked_files();
+            let walked = walk.join().unwrap_or_else(|_| {
+                Err(Error::internal(
+                    "The file walk panicked. Please report this.",
+                ))
+            });
+            (walked, tracked)
+        });
+        let tracked: BTreeSet<String> = tracked?.into_iter().collect();
+        let mut files: BTreeSet<String> = walked?.into_iter().collect();
         // A tracked file can be ignored (added with --force), so the walk alone misses it.
         files.extend(tracked.iter().cloned());
         Ok(Self {
