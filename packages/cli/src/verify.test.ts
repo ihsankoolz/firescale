@@ -26,6 +26,7 @@ interface VerifyReport {
   failedStep?: string;
   rerun?: string;
   steps: Step[];
+  warnings?: string[];
 }
 
 async function validate(json: string): Promise<VerifyReport> {
@@ -193,6 +194,30 @@ describe('fscale verify', () => {
     const report = await validate(result.stdout);
     expect(report.runner).toBe('none');
     expect(report.steps.slice(1).every((step) => step.status === 'skipped')).toBe(true);
+    expect(report.warnings).toEqual([
+      'steps were skipped because no command was found: lint, typecheck, test. Set verify.lint in your firescale config to a command, or to false if this repo has none.',
+    ]);
+  });
+
+  it('prints a visible warning for a step with no command, and none for a step turned off', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'package.json': JSON.stringify({ name: 'demo', scripts: { test: 'node test.js' } }),
+        'firescale.config.json': JSON.stringify({ verify: { typecheck: false } }),
+        'test.js': "console.log('ok');\n",
+      },
+    });
+    const result = await runCli(['verify'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toMatchSnapshot();
+    expect(result.stdout).toContain(
+      '\nwarning: 1 step was skipped because no command was found: lint.',
+    );
+    expect(result.stdout).not.toContain('typecheck.');
+
+    const off = await fixtures.create({ files: repoFiles("console.log('2 passed');\n") });
+    const quiet = await runCli(['verify', '--json'], off.root);
+    expect((await validate(quiet.stdout)).warnings).toBeUndefined();
   });
 
   it('rejects bad usage and a bad verify config', async () => {
