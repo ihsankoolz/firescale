@@ -162,26 +162,32 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ## Direction change after M7
 
-On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit for small teams, the rules become the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Everything below was rewritten then. Milestones are sized for one session each. Themes, in order:
+On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit for small teams, the rules become the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Everything below was rewritten then, and reordered once more by the owner (ADR 0017): the Next.js and Python stack packs moved up to directly after M13, and a publishing checkpoint was added after M9. Milestones are sized for one session each. Themes, in order:
 
 | Theme                        | Milestones |
 | ---------------------------- | ---------- |
-| Rules are the scaffold       | M8, M9     |
-| Group-project mode           | M10, M11   |
-| Born agent-ready             | M12, M13   |
-| Referee: blame-aware verify  | M14 to M16 |
-| Referee: tamper guard        | M17 to M20 |
-| Guarded agent runner, ledger | M21, M22   |
-| Stack packs                  | M23 to M26 |
+| Rules are the scaffold           | M8, M9, then the publishing checkpoint |
+| Group-project mode               | M10, M11   |
+| Born agent-ready                 | M12, M13   |
+| Stack packs: Next.js and Python  | M14, M15   |
+| Referee: blame-aware verify      | M16 to M18 |
+| Referee: tamper guard            | M19 to M22 |
+| Guarded agent runner, ledger     | M23, M24   |
+| Stack packs: Supabase and Expo   | M25, M26   |
 
-Two things outside the milestones that they depend on:
+One thing outside the milestones that they depend on:
 
-- **Publishing to npm.** The CI workflow that `init` generates runs `npx firescale verify`, and teammates install firescale from npm. Publishing is a manual step for the owner (DECISIONS.md, "Publishing to npm"). Until it is done, generated CI works only in tests, and M9 to M11 say so in their pull requests.
 - **Cursor's documentation.** It could not be reached from the build environment during M7. M12 needs it.
+
+Owner decisions that apply to everything below (ADR 0017):
+
+- Blame-aware labels are on by default whenever there is a base commit.
+- The stop hook lets an agent go after 3 blocks in a row.
+- A verify step with no command is skipped and prints a visible warning.
 
 ---
 
-## M8 — The fix loop ☐
+## M8 — The fix loop ☑
 
 The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is left to fix.
 
@@ -195,11 +201,11 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 **Done when**
 
-- ☐ Two fixture rules where B must run after A are fixed in one `fscale fix`, in that order, proven by a test. The same works for a custom TypeScript rule with `after`.
-- ☐ A dependency cycle and an unknown `after` id are each rejected with a clear error, proven by tests.
-- ☐ Two fixture rules that undo each other stop the loop with an error naming both, and so does a loop that reaches the pass limit. The exit code is not 0.
-- ☐ `fscale fix --dry-run` with two dependent fixes prints the same diff that `fscale fix` then produces, and changes nothing.
-- ☐ Running `fscale fix` a second time changes nothing, for every built-in rule with a fix.
+- ☑ Two fixture rules where B must run after A are fixed in one `fscale fix`, in that order, proven by a test. The same works for a custom TypeScript rule with `after`.
+- ☑ A dependency cycle and an unknown `after` id are each rejected with a clear error, proven by tests.
+- ☑ Two fixture rules that undo each other stop the loop with an error naming both, and so does a loop that reaches the pass limit. The exit code is not 0.
+- ☑ `fscale fix --dry-run` with two dependent fixes prints the same diff that `fscale fix` then produces, and changes nothing.
+- ☑ Running `fscale fix` a second time changes nothing, for every built-in rule with a fix.
 
 ---
 
@@ -223,7 +229,22 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
+## Checkpoint — Owner publishes 0.1.0 to npm ☐ (manual, after M9)
+
+Not a build milestone. The owner publishes `firescale` 0.1.0 to npm by hand, following "Publishing to npm" in DECISIONS.md.
+
+Why here: the CI workflow that `init` generates (M9) runs `npx firescale verify`, and teammates install firescale from npm. Until 0.1.0 is published, generated CI and group-project mode work only in tests.
+
+**Done when**
+
+- ☐ `npx firescale@0.1.0 --version` works from an empty folder on a machine without this repo.
+- ☐ A repo made by `fscale init` passes its own generated CI on GitHub.
+
+---
+
 ## M10 — The group-project pack ☐
+
+Needs the publishing checkpoint: the CI this pack checks for runs `npx firescale verify`, which only works for a real team once 0.1.0 is on npm. If it is not published yet, say so at the top of the pull request.
 
 **Build**
 
@@ -244,6 +265,8 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 ---
 
 ## M11 — `fscale doctor` ☐
+
+Needs the publishing checkpoint: a teammate runs `doctor` from an npm install, and the generated CI that tells them to needs 0.1.0 on npm. If it is not published yet, say so at the top of the pull request.
 
 **Build**
 
@@ -301,7 +324,28 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M14 — Blame-aware verify: the base run ☐
+## M14 — Stack pack: Next.js ☐
+
+## M15 — Stack pack: Python ☐
+
+One milestone and one pull request per pack. Moved up from the end of the plan by the owner (ADR 0017), so that real stacks can be scaffolded before the referee is built. Every stack pack, here and in M25 and M26, has this shape.
+
+**Build**
+
+- Research the stack's current official setup docs first, and record what the pack assumes in an ADR.
+- Five to eight rules whose fixes create or repair files, each with a SKILL.md and fixture tests.
+- `fscale init --packs core,<stack>` builds a starter through the fix loop.
+
+**Done when**
+
+- ☐ `fscale init --packs core,<stack>` in an empty folder yields a repo where the pack reports no violations.
+- ☐ In that repo, the stack's own install and build or test commands succeed. Run by hand where CI cannot install the stack, with the output in the PR.
+- ☐ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap.
+- ☐ Every fix is idempotent, proven by tests.
+
+---
+
+## M16 — Blame-aware verify: the base run ☐
 
 **Build**
 
@@ -309,7 +353,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 - Definitions: the **head** is the working tree, uncommitted changes included, because that is what an agent's stop hook judges. The **base** is the merge base of the head commit and `--base <ref>`, or of the default branch when `--base` is not given.
 - Run verify on the base commit in a temporary git worktree. Never touch the user's working tree or index. The worktree gets its dependencies by running the repo's install command there (from `fscale facts`, or a new `verify.install` config key).
 - Cache base results under `.firescale/` keyed by base SHA + toolchain versions + lockfile hash.
-- Label at step level and for rule diagnostics: `new`, `pre-existing`, `fixed`. Only `new` makes `fscale verify` exit 1.
+- Label at step level and for rule diagnostics: `new`, `pre-existing`, `fixed`. Only `new` makes `fscale verify` exit 1. The labels are on by default whenever there is a base commit (owner decision, ADR 0017); there is no flag to turn them on.
 - With no base that differs from the head commit and a clean tree, or outside git, verify behaves as it does today: every failure blocks.
 - The summary and `--json` carry the labels (schema version 2). Update `docs/verify.md` and `docs/affected.md`.
 
@@ -324,7 +368,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M15 — Blame-aware verify: per-test labels ☐
+## M17 — Blame-aware verify: per-test labels ☐
 
 **Build**
 
@@ -340,7 +384,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M16 — Blame-aware verify: reruns and the stop hook ☐
+## M18 — Blame-aware verify: reruns and the stop hook ☐
 
 **Build**
 
@@ -358,7 +402,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M17 — Tamper guard: design and the first language ☐
+## M19 — Tamper guard: design and the first language ☐
 
 **Build**
 
@@ -376,7 +420,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M18 — Tamper guard: more languages and policy ☐
+## M20 — Tamper guard: more languages and policy ☐
 
 **Build**
 
@@ -391,7 +435,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M19 — Tamper guard: config and CI ☐
+## M21 — Tamper guard: config and CI ☐
 
 **Build**
 
@@ -408,7 +452,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M20 — Tamper guard: approvals and measured rates ☐
+## M22 — Tamper guard: approvals and measured rates ☐
 
 **Build**
 
@@ -423,7 +467,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M21 — Guarded agent runner ☐
+## M23 — Guarded agent runner ☐
 
 **Build**
 
@@ -439,7 +483,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M22 — Agent adapters and `fscale ledger` ☐ (finish and test locally)
+## M24 — Agent adapters and `fscale ledger` ☐ (finish and test locally)
 
 **Build**
 
@@ -455,29 +499,11 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M23 to M26 — Stack packs ☐
+## M25 — Stack pack: Supabase ☐
 
-| Milestone | Pack       | Status |
-| --------- | ---------- | ------ |
-| M23       | `python`   | ☐      |
-| M24       | `nextjs`   | ☐      |
-| M25       | `supabase` | ☐      |
-| M26       | `expo`     | ☐      |
+## M26 — Stack pack: Expo ☐
 
-One milestone and one pull request per pack, in this order (simplest toolchain first). Each follows the same shape.
-
-**Build**
-
-- Research the stack's current official setup docs first, and record what the pack assumes in an ADR.
-- Five to eight rules whose fixes create or repair files, each with a SKILL.md and fixture tests.
-- `fscale init --packs core,<stack>` builds a starter through the fix loop.
-
-**Done when**
-
-- ☐ `fscale init --packs core,<stack>` in an empty folder yields a repo where the pack reports no violations.
-- ☐ In that repo, the stack's own install and build or test commands succeed. Run by hand where CI cannot install the stack, with the output in the PR.
-- ☐ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap.
-- ☐ Every fix is idempotent, proven by tests.
+One milestone and one pull request per pack, with the same "Build" and "Done when" lists as M14 and M15.
 
 ---
 

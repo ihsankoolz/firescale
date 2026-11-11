@@ -254,6 +254,7 @@ impl BuiltinRule for EnvExample {
             description: "If code reads env vars, .env.example lists them.".to_owned(),
             inputs,
             has_fix: true,
+            after: Vec::new(),
         }
     }
 

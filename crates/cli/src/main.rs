@@ -1,5 +1,6 @@
 //! The `fscale` command.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::io::{IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
@@ -12,14 +13,16 @@ use firescale_core::config::{find_root, load_config, RuleSource};
 use firescale_core::diff::unified_diff;
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
+use firescale_core::fixloop::{plan_order, run_fix_loop, LoopReport, LoopRule, MAX_PASSES};
 use firescale_core::hooks::{
     decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent, AGENTS,
 };
 use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
 use firescale_core::report::{format_human, format_json, CheckReport};
-use firescale_core::rule::{fix_rule_with, Change};
+use firescale_core::rule::{fix_rule_with, Change, FixOutcome};
 use firescale_core::sarif::format_sarif;
+use firescale_core::scratch::Scratch;
 use firescale_core::select::select_rules;
 use firescale_core::verify::{
     format_verify_human, format_verify_json, plan_verify, run_verify, CheckStep, VerifyReport,
@@ -252,7 +255,97 @@ fn plural(count: usize, word: &str) -> String {
     format!("{count} {word}{}", if count == 1 { "" } else { "s" })
 }
 
-/// `fscale fix`: applies the deterministic fix of every selected rule.
+/// One rule's part of a fix run: its change lines, and in a dry run the diffs.
+struct RenderedFixes {
+    text: String,
+    changes: usize,
+    rules: usize,
+}
+
+/// Renders what the loop changed, grouped by rule in the order the rules
+/// first changed something. A file a rule wrote in several passes is listed
+/// once, with the content from before its first write and after its last.
+fn render_fixes(report: &LoopReport, dry_run: bool) -> RenderedFixes {
+    let mut rules: Vec<&str> = Vec::new();
+    for change in &report.changes {
+        if !rules.contains(&change.rule.as_str()) {
+            rules.push(&change.rule);
+        }
+    }
+    let mut text = String::new();
+    let mut total = 0;
+    for rule in &rules {
+        text.push_str(&format!("{rule}\n"));
+        let mut diffs = String::new();
+        let mut seen: Vec<(bool, &str)> = Vec::new();
+        let own = || report.changes.iter().filter(|change| change.rule == *rule);
+        for entry in own() {
+            match &entry.change {
+                Change::Untrack { file } => {
+                    if seen.contains(&(false, file.as_str())) {
+                        continue;
+                    }
+                    seen.push((false, file));
+                    let verb = if dry_run {
+                        "would untrack"
+                    } else {
+                        "untracked"
+                    };
+                    text.push_str(&format!("  {verb} {file} (the file stays on disk)\n"));
+                }
+                Change::Write { file, before, .. } => {
+                    if seen.contains(&(true, file.as_str())) {
+                        continue;
+                    }
+                    seen.push((true, file));
+                    let verb = match (dry_run, before.is_some()) {
+                        (true, true) => "would edit",
+                        (true, false) => "would create",
+                        (false, true) => "edited",
+                        (false, false) => "created",
+                    };
+                    text.push_str(&format!("  {verb} {file}\n"));
+                    if dry_run {
+                        let last = own()
+                            .filter_map(|later| match &later.change {
+                                Change::Write {
+                                    file: other, after, ..
+                                } if other == file => Some(after),
+                                _ => None,
+                            })
+                            .next_back();
+                        if let Some(after) = last {
+                            diffs.push_str(&unified_diff(file, before.as_deref(), after));
+                        }
+                    }
+                }
+            }
+        }
+        total += seen.len();
+        // Notes describe what was done, so they only make sense after a real fix.
+        if !dry_run {
+            let mut shown: Vec<&str> = Vec::new();
+            for (_, note) in report.notes.iter().filter(|(owner, _)| owner == rule) {
+                if !shown.contains(&note.as_str()) {
+                    shown.push(note);
+                    text.push_str(&format!("  note: {note}\n"));
+                }
+            }
+        }
+        if !diffs.is_empty() {
+            text.push_str(&format!("\n{diffs}"));
+        }
+        text.push('\n');
+    }
+    RenderedFixes {
+        text,
+        changes: total,
+        rules: rules.len(),
+    }
+}
+
+/// `fscale fix`: runs the deterministic fixes in dependency order, pass after
+/// pass, until nothing is left to fix (ADR 0018).
 fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     if !extra.is_empty() {
         return Err(Error::usage(format!(
@@ -263,95 +356,105 @@ fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let packs = firescale_rules::builtin_packs();
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
+
+    // Bad `after` declarations are found before anything is written, over
+    // every rule that is on, whatever --rules selects.
+    let loop_rule = |meta: &firescale_core::model::RuleMeta| LoopRule {
+        id: meta.id.clone(),
+        after: meta.after.clone(),
+    };
+    let known: BTreeSet<String> = packs
+        .iter()
+        .flat_map(|pack| pack.rules.iter().map(|rule| rule.meta().id))
+        .chain(config.rules.iter().map(|rule| rule.meta.id.clone()))
+        .collect();
+    let enabled: Vec<LoopRule> = config
+        .rules
+        .iter()
+        .filter(|rule| rule.status != Status::Off)
+        .map(|rule| loop_rule(&rule.meta))
+        .collect();
+    plan_order(&enabled, &known)?;
+
     let selection = select_rules(config.rules, args.rules.as_deref())?;
     let notes = selection.notes;
+    let selected: Vec<LoopRule> = selection
+        .rules
+        .iter()
+        .map(|rule| loop_rule(&rule.meta))
+        .collect();
+    let order = plan_order(&selected, &known)?;
+    // Rules without a fix take no part in the loop.
+    let with_fix: Vec<&LoopRule> = order
+        .iter()
+        .filter(|index| selection.rules[**index].meta.has_fix)
+        .map(|index| &selected[*index])
+        .collect();
 
-    let mut out = String::new();
-    let (mut total, mut rules_changed) = (0, 0);
-    for rule in &selection.rules {
-        let attempt = match &rule.source {
+    // A dry run is the real loop in a scratch copy of the repo, so every fix
+    // sees what the fixes before it wrote, and the repo itself is not touched.
+    let scratch = if args.dry_run && !with_fix.is_empty() {
+        Some(Scratch::copy_of(root)?)
+    } else {
+        None
+    };
+    let work_root = scratch.as_ref().map_or(root, Scratch::root);
+
+    let outcome = run_fix_loop(&with_fix, MAX_PASSES, |entry| {
+        let Some(rule) = selection.rules.iter().find(|rule| rule.meta.id == entry.id) else {
+            return Ok(FixOutcome::default());
+        };
+        match &rule.source {
             RuleSource::Builtin(builtin) => {
-                fix_rule_with(*builtin, root, &rule.options, args.dry_run)
+                fix_rule_with(*builtin, work_root, &rule.options, false)
             }
             // A custom rule's fix runs in the Node host, through the SDK.
-            RuleSource::Custom { pack, .. } if rule.meta.has_fix => {
-                host.fix_rule(pack, &rule.meta.id, &rule.options, args.dry_run)
-            }
-            RuleSource::Custom { .. } => continue,
-        };
-        // A failure must not hide what earlier rules already changed.
-        let outcome = match attempt {
-            Ok(outcome) => outcome,
-            Err(error) if total > 0 && !args.dry_run => {
-                return Err(Error::user(format!(
-                    "{}\n\nThe fix of {} failed after these changes had already been made:\n\n{}\nReview them with `git status` and `git diff`, then run `fscale fix` again.",
-                    error.message(),
-                    rule.meta.id,
-                    out.trim_end()
-                )));
-            }
-            Err(error) => return Err(error),
-        };
-        if outcome.changes.is_empty() {
-            continue;
-        }
-        total += outcome.changes.len();
-        rules_changed += 1;
-        out.push_str(&format!("{}\n", rule.meta.id));
-        let mut diffs = String::new();
-        for change in &outcome.changes {
-            match change {
-                Change::Untrack { file } => {
-                    let verb = if args.dry_run {
-                        "would untrack"
-                    } else {
-                        "untracked"
-                    };
-                    out.push_str(&format!("  {verb} {file} (the file stays on disk)\n"));
-                }
-                Change::Write {
-                    file,
-                    before,
-                    after,
-                } => {
-                    let verb = match (args.dry_run, before.is_some()) {
-                        (true, true) => "would edit",
-                        (true, false) => "would create",
-                        (false, true) => "edited",
-                        (false, false) => "created",
-                    };
-                    out.push_str(&format!("  {verb} {file}\n"));
-                    if args.dry_run {
-                        diffs.push_str(&unified_diff(file, before.as_deref(), after));
-                    }
-                }
+            RuleSource::Custom { pack, .. } => {
+                host.fix_rule(work_root, pack, &rule.meta.id, &rule.options, false)
             }
         }
-        // Notes describe what was done, so they only make sense after a real fix.
-        if !args.dry_run {
-            for note in &outcome.result.notes {
-                out.push_str(&format!("  note: {note}\n"));
-            }
-        }
-        if !diffs.is_empty() {
-            out.push_str(&format!("\n{diffs}"));
-        }
-        out.push('\n');
-    }
+    });
 
-    if total == 0 {
+    let report = match outcome {
+        Ok(report) => report,
+        // A failure must not hide what earlier fixes already changed.
+        Err(failure) if failure.report.changes.is_empty() => return Err(failure.error),
+        Err(failure) => {
+            let done = render_fixes(&failure.report, args.dry_run);
+            let (lead, next) = if args.dry_run {
+                (
+                    "This was a dry run, so nothing was changed. It had got this far:",
+                    "Fix the problem above, then run the dry run again.",
+                )
+            } else {
+                (
+                    "The fix stopped after these changes had already been made:",
+                    "Review them with `git status` and `git diff`, then run `fscale fix` again.",
+                )
+            };
+            return Err(Error::user(format!(
+                "{}\n\n{lead}\n\n{}\n\n{next}",
+                failure.error.message(),
+                done.text.trim_end()
+            )));
+        }
+    };
+
+    let done = render_fixes(&report, args.dry_run);
+    let mut out = done.text;
+    if done.changes == 0 {
         out.push_str("Nothing to fix: no deterministic fix has anything left to do.\n");
     } else if args.dry_run {
         out.push_str(&format!(
             "Dry run: {} in {}. Nothing was changed. Run `fscale fix` to apply.\n",
-            plural(total, "change"),
-            plural(rules_changed, "rule")
+            plural(done.changes, "change"),
+            plural(done.rules, "rule")
         ));
     } else {
         out.push_str(&format!(
             "Fixed: {} in {}. Run `fscale check` to see what is left.\n",
-            plural(total, "change"),
-            plural(rules_changed, "rule")
+            plural(done.changes, "change"),
+            plural(done.rules, "rule")
         ));
     }
     Ok(Output {

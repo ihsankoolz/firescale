@@ -63,6 +63,7 @@ impl BuiltinRule for CommandsDocumented {
             .map(|input| (*input).to_owned())
             .collect(),
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

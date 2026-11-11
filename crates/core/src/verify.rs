@@ -35,8 +35,12 @@ pub enum StepOverride {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Planned {
     Command(String),
-    /// Not run, with the reason.
+    /// Not run because no command was found, with the reason. Verify warns
+    /// about these: the repo may be missing a check it should have.
     Skipped(String),
+    /// Not run on purpose, with the reason: turned off in the config, or
+    /// covered by another step. No warning.
+    NotNeeded(String),
 }
 
 /// The commands `verify` will run, and how they were chosen.
@@ -144,7 +148,7 @@ pub fn plan_verify(
                     "cargo clippy --workspace --all-targets -- -D warnings".to_owned(),
                 ),
                 "test" => Planned::Command("cargo test --workspace".to_owned()),
-                _ => Planned::Skipped("cargo clippy already type-checks".to_owned()),
+                _ => Planned::NotNeeded("cargo clippy already type-checks".to_owned()),
             },
             _ => Planned::Skipped(format!(
                 "no {step} command found; set verify.{step} in your firescale config"
@@ -158,7 +162,7 @@ pub fn plan_verify(
             let planned = match overrides.get(*step) {
                 Some(StepOverride::Command(command)) => Planned::Command(command.clone()),
                 Some(StepOverride::Skip) => {
-                    Planned::Skipped("turned off in your firescale config".to_owned())
+                    Planned::NotNeeded("turned off in your firescale config".to_owned())
                 }
                 None => detect(step),
             };
@@ -233,6 +237,10 @@ pub struct VerifyReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rerun: Option<String>,
     pub steps: Vec<StepReport>,
+    /// Things the user should know that are not failures: steps that were
+    /// skipped because no command was found.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// The result of the `check` step, worked out by the caller.
@@ -373,7 +381,7 @@ pub fn run_verify(
 
     for (name, planned) in &plan.steps {
         let report = match planned {
-            Planned::Skipped(reason) => StepReport {
+            Planned::Skipped(reason) | Planned::NotNeeded(reason) => StepReport {
                 name: name.clone(),
                 status: StepStatus::Skipped,
                 command: None,
@@ -397,6 +405,22 @@ pub fn run_verify(
         steps.push(report);
     }
 
+    let unchecked: Vec<&str> = plan
+        .steps
+        .iter()
+        .filter(|(_, planned)| matches!(planned, Planned::Skipped(_)))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let warnings = if unchecked.is_empty() {
+        Vec::new()
+    } else {
+        let example = unchecked[0];
+        vec![format!(
+            "{} skipped because no command was found: {}. Set verify.{example} in your firescale config to a command, or to false if this repo has none.",
+            if unchecked.len() == 1 { "1 step was" } else { "steps were" },
+            unchecked.join(", ")
+        )]
+    };
     let first_failure = steps.iter().find(|step| step.status == StepStatus::Failed);
     Ok(VerifyReport {
         schema_version: VERIFY_SCHEMA_VERSION,
@@ -406,6 +430,7 @@ pub fn run_verify(
         failed_step: first_failure.map(|step| step.name.clone()),
         rerun: first_failure.and_then(|step| step.command.clone()),
         steps,
+        warnings,
     })
 }
 
@@ -437,6 +462,12 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         }
         if let Some(command) = &report.rerun {
             out.push_str(&format!("\nFix the failure, then run again: {command}\n"));
+        }
+    }
+    if !report.warnings.is_empty() {
+        out.push('\n');
+        for warning in &report.warnings {
+            out.push_str(&format!("warning: {warning}\n"));
         }
     }
     out
@@ -478,7 +509,9 @@ mod tests {
             .iter()
             .map(|(name, planned)| match planned {
                 Planned::Command(command) => format!("{name}: {command}"),
-                Planned::Skipped(reason) => format!("{name}: skipped ({reason})"),
+                Planned::Skipped(reason) | Planned::NotNeeded(reason) => {
+                    format!("{name}: skipped ({reason})")
+                }
             })
             .collect()
     }
@@ -679,5 +712,53 @@ mod tests {
         assert!(report.ok);
         assert!(format_verify_human(&report).starts_with("verify: OK\n"));
         assert!(report.rerun.is_none());
+    }
+
+    #[test]
+    fn a_step_with_no_command_is_skipped_with_a_visible_warning() {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let plan = VerifyPlan {
+            runner: "scripts".to_owned(),
+            steps: vec![
+                (
+                    "lint".to_owned(),
+                    Planned::Skipped("package.json has no lint script".to_owned()),
+                ),
+                (
+                    "typecheck".to_owned(),
+                    Planned::NotNeeded("turned off in your firescale config".to_owned()),
+                ),
+                (
+                    "test".to_owned(),
+                    Planned::Skipped("package.json has no test script".to_owned()),
+                ),
+            ],
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        // Still not a failure.
+        assert!(report.ok);
+        assert_eq!(
+            report.warnings,
+            ["steps were skipped because no command was found: lint, test. Set verify.lint in your firescale config to a command, or to false if this repo has none."]
+        );
+        let text = format_verify_human(&report);
+        assert!(
+            text.ends_with(&format!("\nwarning: {}\n", report.warnings[0])),
+            "{text}"
+        );
+        assert!(format_verify_json(&report).contains("\"warnings\": ["));
+
+        // A step that is off on purpose gives no warning.
+        let quiet = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![(
+                "test".to_owned(),
+                Planned::NotNeeded("turned off in your firescale config".to_owned()),
+            )],
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &quiet).unwrap();
+        assert!(report.warnings.is_empty());
+        assert!(!format_verify_human(&report).contains("warning"));
+        assert!(!format_verify_json(&report).contains("warnings"));
     }
 }

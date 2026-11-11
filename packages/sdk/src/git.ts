@@ -13,6 +13,40 @@ interface GitResult {
 }
 
 /**
+ * Environment variables with which git tells its hooks, or a user tells git,
+ * which repository and index to use instead of the one found from `cwd`.
+ */
+const REPO_ENV = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_COMMON_DIR',
+  'GIT_PREFIX',
+];
+
+let ignoreInherited = false;
+
+/**
+ * From now on, every git command of this process finds its repository from
+ * the folder it runs in and ignores `GIT_DIR`, `GIT_INDEX_FILE` and the like.
+ * The Node host calls this before a fix works on a scratch copy of the repo:
+ * started from a git hook, those variables would lead back to the real repo.
+ */
+export function ignoreInheritedGitRepo(): void {
+  ignoreInherited = true;
+}
+
+function gitEnv(): NodeJS.ProcessEnv {
+  if (!ignoreInherited) return process.env;
+  const names = new Set(REPO_ENV);
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !names.has(name.toUpperCase())),
+  );
+}
+
+/**
  * Runs git in `cwd` without a shell. Resolves with the exit code instead of
  * rejecting, except when git itself cannot be started.
  */
@@ -21,7 +55,13 @@ export function runGit(cwd: string, args: readonly string[]): Promise<GitResult>
     execFile(
       'git',
       [...args],
-      { cwd, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true },
+      {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer: 256 * 1024 * 1024,
+        windowsHide: true,
+        env: gitEnv(),
+      },
       (error, stdout, stderr) => {
         if (error && typeof error.code !== 'number') {
           const reason = error.code === 'ENOENT' ? 'git was not found on PATH' : error.message;

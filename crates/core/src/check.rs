@@ -226,6 +226,7 @@ mod tests {
                 description: "test rule".to_owned(),
                 inputs: vec![format!("**/*.{}", self.extension)],
                 has_fix: false,
+                after: Vec::new(),
             }
         }
 

@@ -56,6 +56,7 @@ impl BuiltinRule for SingleTestCommand {
             .map(|input| (*input).to_owned())
             .collect(),
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

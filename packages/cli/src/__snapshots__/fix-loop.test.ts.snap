@@ -1,0 +1,65 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fix --dry-run across dependent fixes > prints what \`fscale fix\` then does, and changes nothing 1`] = `
+"order/z-base
+  would create base.txt
+
+--- /dev/null
++++ b/base.txt
+@@ -0,0 +1,1 @@
++base
+
+order/a-derived
+  would create derived.txt
+
+--- /dev/null
++++ b/derived.txt
+@@ -0,0 +1,1 @@
++derived from: base
+
+Dry run: 2 changes in 2 rules. Nothing was changed. Run \`fscale fix\` to apply.
+"
+`;
+
+exports[`fix --dry-run across dependent fixes > shows one rule editing the file another rule creates, for built-in rules 1`] = `
+"core/gitignore-basics
+  would create .gitignore
+
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++# Generated files and dependencies
++node_modules/
+
+core/no-committed-env
+  would untrack .env (the file stays on disk)
+  would edit .gitignore
+
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,2 +1,6 @@
+ # Generated files and dependencies
+ node_modules/
++# Env files hold secrets. Commit an example file instead.
++.env
++.env.*
++!.env.example
+
+Dry run: 3 changes in 2 rules. Nothing was changed. Run \`fscale fix\` to apply.
+"
+`;
+
+exports[`fixes that do not settle > stops when two fixes undo each other, and names both 1`] = `
+"fscale: The fixes do not settle: in pass 2, "fight/spaces" wrote the same content to style.txt that it had already written, because another fix changed the file in between. Rules that write style.txt: "fight/spaces", "fight/tabs". Turn one of them off, or change one fix so that both can be satisfied at once.
+
+The fix stopped after these changes had already been made:
+
+fight/spaces
+  created style.txt
+
+fight/tabs
+  edited style.txt
+
+Review them with \`git status\` and \`git diff\`, then run \`fscale fix\` again.
+"
+`;

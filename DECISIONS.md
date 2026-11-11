@@ -13,14 +13,9 @@ Not yet proven on macOS or Windows:
 
 ## Needs your decision (all milestones, most important first)
 
-- **(Direction) Read the new PLAN.md from M8 onward before anything is built.** It is in its own pull request, which is deliberately not merged. The points most worth your eye are listed under "Direction change" below.
-- **(Direction) Publishing to npm now gates real use.** `doctor` and the group-project pack are for teammates, and teammates can only install firescale once it is on npm. Publishing is yours to do (see "Publishing to npm"). The CI workflow that `init` will generate (M9) also runs `npx firescale verify`. Consider publishing before M9.
-- **(Direction) Blame-aware verify becomes the default behaviour of `fscale verify`** whenever there is a base commit to compare with. A failure that already exists on the base will no longer fail verify or hold an agent back. On the default branch itself every failure still blocks. Say if you would rather have it behind a flag.
-
+- **(Plan) Publish 0.1.0 to npm after M9.** It is now a checkpoint in PLAN.md. The steps are under "Publishing to npm" below. M10 and M11 need it for generated CI to work for a real team.
 - **(M7) The Cursor hook format is unconfirmed.** cursor.com was blocked from the build session, twice. `fscale hooks install` writes `.cursor/hooks.json` from a best reading and prints a note. Someone with access to Cursor's docs should check it (ADR 0014), or allow `cursor.com` in the cloud environment's network settings so a session can.
 - **(M7) The `agent-ready` pack is opt-in**, not on by default. Say if you want it on for every repo.
-- **(M7) A verify step with no command is skipped, not failed.** A repo with no tests passes `fscale verify`. The `agent-ready/single-test-command` rule is how you make that an error.
-- **(M7) The hook lets an agent stop after 3 failed attempts in a row.** `FSCALE_HOOK_MAX_BLOCKS` changes it.
 
 - **(M6) The npm name `fscale` is taken by an unrelated package.** `npx firescale` works; `npx fscale` would run that other package. After `npm install firescale` the command `fscale` is ours. If that risk bothers you, the options are to ask npm about the name or to make `firescale` the only command.
 - **(M6) No postinstall step, so one Node start sits in front of every `fscale` run from npm.** ADR 0013 explains why. Agent hooks can call the binary directly. Say if you want the postinstall optimisation anyway.
@@ -36,6 +31,57 @@ Not yet proven on macOS or Windows:
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M8 — The fix loop
+
+**Built**
+
+- Rules can declare `after`: the rules whose fixes must run before their own. Built-in rules (`RuleMeta.after`) and custom TypeScript rules (`defineRule({ after })`).
+- The fix loop in `crates/core/src/fixloop.rs`: fixes run in dependency order, pass after pass, until a pass finds nothing left to fix. `fscale fix` uses it.
+- Errors that stop the loop and name the rules and files: a dependency cycle, an `after` id that no rule has, two fixes that undo each other, a fix that never settles (10 passes), and a fix that does nothing about the violations it claims.
+- `fscale fix --dry-run` now runs the real loop in a scratch copy of the repo, so it shows the combined result of all fixes and passes.
+
+**Decisions made for you** (all ADR 0018)
+
+- **The pass limit is 10 and is not configurable.**
+- **A dry run copies the repo** (tracked and unignored files) to the temp folder and runs the real fixes there. A virtual overlay would have been faster but could not give every rule the same view; rules read through git and straight from disk too.
+- **`fscale fix` now exits 2 when the fixes cannot settle.** Before, a fix that did nothing about its own violations ended in "Nothing to fix" and exit 0.
+- **Nothing is rolled back when the loop stops with an error.** The changes made so far stay and are listed in the error.
+- **An `after` entry that names a rule which exists but is off places no constraint.** Only an id that no rule has is an error. Turning one rule of a cycle off breaks the cycle.
+- **`after` only orders fixes.** It has no effect on `check`.
+- **`core/no-committed-env` now declares `after: core/gitignore-basics`.** It is the first built-in use, and it is true: one creates `.gitignore`, the other adds to it.
+- **A write that does not change a file's content is no longer reported as a change**, for built-in and custom fixes.
+- **A fix counts as stuck only after two passes in a row** with violations and no change, so that a custom fix writing files by itself is not called broken.
+- **One existing test changed its fixture, not its assertion:** "shows a new file as a diff against /dev/null" asserted a preview that the old dry run got wrong when two rules touch `.gitignore`. It now turns on one rule; a new test covers two.
+
+**Known limits**
+
+- A dry run of a very large repo takes seconds, because of the copy.
+- A fix that depends on a file git ignores (and does not track) can preview differently from the real run.
+- If `fscale` is killed during a dry run, a `firescale-dry-run-*` folder stays in the temp folder.
+- A custom fix that writes files without using its context is invisible to the loop.
+- An `after` id that no rule has stops `fscale fix`, also when it belongs to a custom pack the repo has not listed.
+- An independent review before the pull request found three real defects, all fixed with tests: a dry run started from a git hook could untrack files in the real index (git's `GIT_DIR` and `GIT_INDEX_FILE` variables were inherited); the "fixes undo each other" check fired on one rule writing its own file twice; and a custom fix that writes files without its context failed the run.
+
+## Plan update and your answers (before M8)
+
+**Changed** (ADR 0017)
+
+- The `nextjs` and `python` stack packs moved to directly after M13 (now M14 and M15). Later milestones were renumbered: blame-aware verify is M16 to M18, the tamper guard M19 to M22, the runner M23, adapters and `fscale ledger` M24. `supabase` and `expo` are still M25 and M26. ADR 0017 has the full old-to-new table; the "Direction change" section below still uses the old numbers.
+- A publishing checkpoint after M9: you publish 0.1.0 to npm by hand. M10 and M11 note that generated CI needs it.
+- CI trimmed (ADR 0016, see "CI compute" below). This replaces pull request #11, which was closed unmerged.
+
+**Your answers, now recorded as decisions**
+
+- Blame-aware labels are on by default when there is a base commit. No flag.
+- The stop hook releases an agent after 3 blocks in a row.
+- A verify step with no command is skipped and prints a visible warning.
+
+**Decisions made for you**
+
+- **The warning was built now**, in the same pull request as M8, because it is a small change to what M7 built and would otherwise sit recorded but untrue until the next verify milestone. `fscale verify` prints a `warning:` line under the summary, and `--json` has a `warnings` list. A step you turn off with `false` gives no warning. The verify snapshots changed on purpose.
+- **Next.js is M14 and Python M15**, in the order you named them.
+- **The checkpoint is not numbered**, so no milestone number shifts because of it.
 
 ## Direction change (after M7, docs only)
 
@@ -102,6 +148,29 @@ Not yet proven on macOS or Windows:
 - An independent review before the pull request found eight issues; all were fixed with tests (listed in ADR 0014, "Consequences"). The most important: the loop guard did not cap an agent that omits `stop_hook_active`, and quoted commands were mangled on Windows.
 - A subagent started the `agent-ready` pack and stopped at a usage limit after the first rule; the other three were written in the main session.
 
+## CI compute (after M7, at your request)
+
+**Changed** (ADR 0016)
+
+- A push to any branch runs Linux only, on Node 22 and 24.
+- macOS and Windows run only on pull requests into `main` and when you start the workflow by hand, on Node 24.
+- The benchmark job runs only when you start the workflow by hand.
+- A new push cancels the run still in progress for the same branch or pull request.
+- pnpm and cargo caching are unchanged.
+
+**Known limits**
+
+- A new pull request builds cold on macOS and Windows, because those jobs never run on `main` and so save no cache there. Start the workflow by hand on `main` now and then to seed their caches.
+- Pointing a stacked pull request at `main` does not start macOS and Windows; its next push does.
+
+**Decisions made for you**
+
+- **The npm install job (`package`) is also manual-only now.** It runs on three OSes and ends with the launcher benchmark, so I counted it as a benchmark job. The `ci:bench` and `ci:package` labels no longer do anything. Say if you want the label back for `package`.
+- **No job runs twice for one commit.** On a pull request, Linux comes from the push and macOS and Windows from the pull request, so you still see the same four checks.
+- **`main` itself is tested on Linux only** after a merge. macOS and Windows ran on the pull request before it merged.
+- **Cancelling also applies to `main`.** Two merges close together leave one finished run, for the later commit.
+- A pull request into a branch other than `main` gets Linux only.
+
 ## M6 — npm packaging
 
 **Built**
@@ -118,7 +187,7 @@ Not yet proven on macOS or Windows:
 - The launcher passes its own Node and host script to the binary, so TypeScript rules use the same Node.
 - `@firescale/sdk` is now publishable (it was private).
 
-**CI was trimmed at your request** (ADR 0009 amendment): each push now runs 4 check jobs instead of 12 jobs. The benchmark and npm install jobs run only when you start the CI workflow by hand from the Actions tab, or on a pull request labelled `ci:bench` or `ci:package`. Run them before a release.
+**CI was trimmed at your request** (ADR 0009 amendment): each push ran 4 check jobs instead of 12 jobs. This was trimmed again later; see "CI compute" above and ADR 0016 for what runs now.
 
 **Known limits**
 
@@ -241,7 +310,7 @@ Not yet proven on macOS or Windows:
 - Decide the items under "Needs your decision" at the top of this file.
 - Commits made by the build sessions use your name and email but are not signed, so GitHub shows them as "Unverified". If you want verified history, sign going forward; re-signing old commits means rewriting history.
 - The branches `m0-skeleton`, `m1-rule-sdk`, `m2-rust-front-door`, `m3-engine-cache` and `m4-fix-sarif-facts` are merged and can be deleted.
-- The manual test with a real agent (now M22) is not reachable yet.
+- The manual test with a real agent (now M24) is not reachable yet.
 
 ## Publishing to npm
 

@@ -3,6 +3,7 @@
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::error::{Error, Result};
 
@@ -18,10 +19,46 @@ pub struct GitOutput {
     pub stderr: String,
 }
 
+/// Environment variables with which git tells its hooks, or a user tells
+/// git, which repository and index to use instead of the one found from the
+/// current folder.
+const REPO_ENV: [&str; 7] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+];
+
+static IGNORE_INHERITED_REPO: AtomicBool = AtomicBool::new(false);
+
+/// From now on, every git command of this process finds its repository from
+/// the folder it runs in, and ignores `GIT_DIR`, `GIT_INDEX_FILE` and the
+/// like from the environment.
+///
+/// A dry run calls this before it works in its scratch copy. Without it, a
+/// dry run started from a git hook, where git sets those variables, would
+/// run its git commands against the real repository and its real index.
+pub fn ignore_inherited_repo() {
+    IGNORE_INHERITED_REPO.store(true, Ordering::SeqCst);
+}
+
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    if IGNORE_INHERITED_REPO.load(Ordering::SeqCst) {
+        for name in REPO_ENV {
+            command.env_remove(name);
+        }
+    }
+    command
+}
+
 /// Runs git in `cwd`. A non-zero exit is returned, not treated as an error;
 /// only failing to start git is an error.
 pub fn run_git(cwd: &Path, args: &[&str]) -> Result<GitOutput> {
-    let output = Command::new("git")
+    let output = git_command()
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -36,6 +73,48 @@ pub fn run_git(cwd: &Path, args: &[&str]) -> Result<GitOutput> {
                 "Could not run git ({reason}). Install git and make sure it is on your PATH, then try again."
             ))
         })?;
+    Ok(GitOutput {
+        code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// Like `run_git`, with `input` written to git's stdin.
+pub fn run_git_with_input(cwd: &Path, args: &[&str], input: &[u8]) -> Result<GitOutput> {
+    use std::io::Write;
+
+    let failed = |error: std::io::Error| {
+        let reason = if error.kind() == ErrorKind::NotFound {
+            "git was not found on PATH".to_owned()
+        } else {
+            error.to_string()
+        };
+        Error::user(format!(
+            "Could not run git ({reason}). Install git and make sure it is on your PATH, then try again."
+        ))
+    };
+    let mut child = git_command()
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(failed)?;
+    // Write from another thread: git may fill its output pipe before it has
+    // read all of its input, and would then wait on us while we wait on it.
+    let stdin = child.stdin.take();
+    let output = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            if let Some(mut stdin) = stdin {
+                // A git that exits early closes the pipe; its exit code says why.
+                let _ = stdin.write_all(input);
+            }
+        });
+        child.wait_with_output()
+    })
+    .map_err(failed)?;
     Ok(GitOutput {
         code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

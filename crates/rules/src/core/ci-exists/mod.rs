@@ -164,6 +164,7 @@ impl BuiltinRule for CiExists {
                 .map(|s| (*s).to_owned())
                 .collect(),
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

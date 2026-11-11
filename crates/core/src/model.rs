@@ -136,4 +136,8 @@ pub struct RuleMeta {
     /// Whether the rule has a deterministic fix.
     #[serde(default)]
     pub has_fix: bool,
+    /// Ids of rules whose fixes must run before this rule's fix. Only orders
+    /// fixes: it does not change when the rule is checked.
+    #[serde(default)]
+    pub after: Vec<String>,
 }

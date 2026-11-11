@@ -31,6 +31,11 @@
       "description": "The command to run again after fixing the failure. Absent when ok is true.",
       "type": "string"
     },
+    "warnings": {
+      "description": "Things to know that are not failures: steps skipped because no command was found. Absent when there are none.",
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "steps": {
       "type": "array",
       "items": {

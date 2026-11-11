@@ -1,6 +1,6 @@
 # 0015 — Direction: a toolkit for small teams, where the rules are the scaffold and a referee keeps agents honest
 
-Status: accepted (2026-11-11, after M7). Changes SPEC §1, §3, §4, §5, §6, §7, §8, §9, §11 and §12, adds §15 to §17, and replaces PLAN.md from M8 onward. Supersedes the "Later" list of the old plan.
+Status: accepted (2026-11-11, after M7). Changes SPEC §1, §3, §4, §5, §6, §7, §8, §9, §11 and §12, adds §15 to §17, and replaces PLAN.md from M8 onward. Supersedes the "Later" list of the old plan. The milestone numbers after M13 in this ADR were changed by ADR 0017, which has the translation table.
 
 ## Context
 

@@ -24,6 +24,17 @@ Fix the failure, then run again: node test.js
 "
 `;
 
+exports[`fscale verify > prints a visible warning for a step with no command, and none for a step turned off 1`] = `
+"verify: OK
+  check      passed   8 rules, no enforced violations
+  lint       skipped  package.json has no lint script
+  typecheck  skipped  turned off in your firescale config
+  test       passed   npm run test
+
+warning: 1 step was skipped because no command was found: lint. Set verify.lint in your firescale config to a command, or to false if this repo has none.
+"
+`;
+
 exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
 {
   "failedStep": "test",

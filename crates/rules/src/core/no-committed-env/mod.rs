@@ -145,6 +145,8 @@ impl BuiltinRule for NoCommittedEnv {
                 GITIGNORE.to_owned(),
             ],
             has_fix: true,
+            // Its fix adds lines to the .gitignore that core/gitignore-basics creates.
+            after: vec![super::gitignore_basics::ID.to_owned()],
         }
     }
 

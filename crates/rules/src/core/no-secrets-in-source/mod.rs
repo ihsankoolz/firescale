@@ -311,6 +311,7 @@ impl BuiltinRule for NoSecretsInSource {
             description: "No obvious keys or tokens are in tracked files.".to_owned(),
             inputs: vec!["**/*".to_owned()],
             has_fix: false,
+            after: Vec::new(),
         }
     }
 

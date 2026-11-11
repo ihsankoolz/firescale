@@ -62,6 +62,8 @@ export async function fixRule(rule: Rule, init: ContextInit): Promise<FixResult>
 export interface FixOutcome {
   result: FixResult;
   changes: Change[];
+  /** How many deterministic violations the fix was asked to repair. */
+  attempted: number;
 }
 
 /**
@@ -73,9 +75,11 @@ export async function fixRuleWithChanges(
   init: ContextInit,
   options: { dryRun?: boolean } = {},
 ): Promise<FixOutcome> {
-  if (!rule.fix) return { result: { changedFiles: [] }, changes: [] };
+  if (!rule.fix) return { result: { changedFiles: [] }, changes: [], attempted: 0 };
   const diagnostics = (await checkRule(rule, init)).filter((d) => d.fixable === 'deterministic');
-  if (diagnostics.length === 0) return { result: { changedFiles: [] }, changes: [] };
+  if (diagnostics.length === 0) {
+    return { result: { changedFiles: [] }, changes: [], attempted: 0 };
+  }
   const changes: Change[] = [];
   const context = createContext(init, {
     dryRun: options.dryRun ?? false,
@@ -86,5 +90,6 @@ export async function fixRuleWithChanges(
   return {
     result: result.notes ? { changedFiles, notes: result.notes } : { changedFiles },
     changes,
+    attempted: diagnostics.length,
   };
 }

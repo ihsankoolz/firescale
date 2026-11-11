@@ -97,6 +97,7 @@ impl BuiltinRule for GitignoreBasics {
             .map(|name| (*name).to_owned())
             .collect(),
             has_fix: true,
+            after: Vec::new(),
         }
     }
 

@@ -21,7 +21,7 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 | 4     | A root `package.json`                              | The script of that name: `<pm> run <step>`.                                           |
 | 5     | A Rust-only repo (`Cargo.toml`, no `package.json`) | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`. |
 
-`<exec>` is `pnpm exec`, `yarn`, `bunx` or `npx`, by package manager. A step with no command is **skipped**, with the reason in the summary. A skipped step is not a failure: a repo with nothing to run passes. `fscale facts` shows the package manager and scripts that were detected.
+`<exec>` is `pnpm exec`, `yarn`, `bunx` or `npx`, by package manager. A step with no command is **skipped**, with the reason in the summary, and verify prints a `warning:` line under the summary that names the skipped steps. A skipped step is not a failure: a repo with nothing to run passes. To silence the warning, give the step a command, or set it to `false` to say that this repo has none. `fscale facts` shows the package manager and scripts that were detected.
 
 ```json
 {
@@ -69,6 +69,7 @@ At most the last 30 non-empty lines of the failed command are kept, with colour 
 | `failedStep`    | The first failed step. Absent when `ok` is true.                                                                                                                |
 | `rerun`         | The command to run again. Absent when `ok` is true.                                                                                                             |
 | `steps`         | Four entries: `name`, `status` (`passed`, `failed`, `skipped`, `not-run`), `durationMs`, `detail`, and where they apply `command`, `exitCode` and `outputTail`. |
+| `warnings`      | Strings. Steps skipped because no command was found. Absent when there are none.                                                                                |
 
 ## Limits
 

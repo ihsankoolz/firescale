@@ -57,6 +57,7 @@ export default defineRule({
   category: 'security', // security | reliability | consistency | maintainability
   description: 'No .env files are tracked by git.',
   inputs: ['**/.env', '**/.env.*', '.gitignore'], // globs the check depends on
+  after: ['core/gitignore-basics'], // optional: rules whose fixes must run before this one's
   async check(ctx) {
     return []; // Finding[]: { message, file, range?, project?, fixable }
   },
@@ -99,3 +100,19 @@ it('failing repo', async () => {
 ```
 
 `fixtures.create({ files, track })` makes a temp git repo. `track` is `'all'` (default), `'none'`, `'no-git'` or a list of paths. The repo object has `check`, `fix`, `trackedFiles`, `read`, `write`, `track` and `root`. Never put anything that looks like a real secret in a fixture.
+
+## Fixes that depend on other fixes
+
+`fscale fix` runs fixes in passes until nothing is left to fix (see [fix.md](fix.md)). If your fix edits a file that another rule's fix creates, say so with `after`:
+
+```ts
+after: ['core/gitignore-basics'],
+```
+
+In a built-in rule it is the `after` field of `RuleMeta`. It only orders fixes; it does not change when the rule is checked.
+
+Three things the loop holds every fix to:
+
+- **Run twice, change nothing the second time.** A fix that appends on every run reaches the pass limit and fails the whole `fscale fix`.
+- **Fix what you flag.** If `check` marks a finding `deterministic`, `fix` must repair it. A finding the fix cannot repair is `agent` or `manual`.
+- **Do not fight another rule.** Two fixes that want different content in the same file stop the loop, and the error names both.
