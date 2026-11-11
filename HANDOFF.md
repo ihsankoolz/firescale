@@ -6,16 +6,16 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack.
 - **Merged without full CI:** M6 npm packaging. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
-- **M7 `verify` and hooks:** built and reviewed on branch `m7-verify-hooks`, pull request #9. **Not merged if you are reading this on that branch:** its CI jobs never started (Actions limit). See "CI owed" in DECISIONS.md. Re-run the failed jobs when Actions works, fix anything Windows or macOS shows, then merge.
-- **Direction changed on 2026-11-11 (ADR 0015).** SPEC.md and PLAN.md from M8 onward were rewritten in a docs-only pull request, stacked on the M7 branch. The owner wants to read the new plan before anything is built: **do not start M8 until that pull request is merged.**
+- **M7 `verify` and hooks:** done, pull request #9, CI green on Linux, macOS and Windows.
+- **Direction changed on 2026-11-11 (ADR 0015).** SPEC.md and PLAN.md from M8 onward were rewritten in a docs-only pull request (#10). The owner wants to read the new plan before anything is built: **do not start M8 until that pull request is merged.**
 - **Not started, in order:** M8 the fix loop, M9 `init`/`adopt`/`sync`, M10 group-project pack, M11 `doctor`, M12 agent files from `init`, M13 generators, M14 to M16 blame-aware verify, M17 to M20 tamper guard, M21 guarded agent runner, M22 adapters and `fscale ledger`, M23 to M26 stack packs.
 
 ## How to resume
 
 1. Read `SPEC.md`, `PLAN.md`, `AGENTS.md`, `docs/decisions/` and `DECISIONS.md`.
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
-3. Check whether GitHub Actions runs again (it stopped on 2026-11-11 at the account's monthly limit). If it does not, add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
-4. Check that the M7 pull request (#9) and the direction pull request are both merged. If not, stop and ask the owner.
+3. GitHub Actions ran again from 2026-11-11 (it had stopped at the account's monthly limit). If jobs end within seconds with no logs, the limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
+4. Check that the direction pull request (#10) is merged. If not, stop and ask the owner.
 5. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. M8 starts in `crates/core/src/rule.rs` (`fix_rule_with`) and the `fix` command in `crates/cli/src/main.rs`.
 
 Notes from M7 that the next milestones build on:

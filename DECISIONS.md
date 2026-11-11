@@ -4,11 +4,11 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## CI owed
 
-GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), and you asked for work to continue without it. From that point everything is verified on Linux only, on the build machine. M6 pushes carried `[skip ci]`; the M7 pull request did not, to find out whether Actions was back. It was not. When Actions is available again, start the CI workflow by hand on `main` (Actions tab, "CI", "Run workflow"); that runs the checks, the benchmarks and the npm install tests on all three OSes.
+GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), and you asked for work to continue without it. From that point everything is verified on Linux only, on the build machine. M6 pushes carried `[skip ci]`; the M7 pull request did not. Actions started running jobs again on 2026-11-11 during M7, so pushes no longer need `[skip ci]`. The M6 item below is still owed. To clear it, start the CI workflow by hand on `main` (Actions tab, "CI", "Run workflow"); that runs the checks, the benchmarks and the npm install tests on all three OSes.
 
 Not yet proven on macOS or Windows:
 
-- **M7 (not merged):** the pull request's CI run on 2026-11-11 did not execute. All four jobs ended as failed within four seconds, with no runner assigned and no logs, which is what the Actions limit looks like. M7 is verified on Linux only (`pnpm fscale verify` passes). It was left unmerged because the instruction was to merge on green CI on all three OSes. The review judged the Windows and macOS risk low after the fixes, but two things have never run on Windows: the raw `cmd` command line in `crates/core/src/verify.rs`, and the Vitest stdin handling for the stop hook. To finish: re-run the failed jobs on the pull request once Actions works, then merge.
+- **M7:** nothing owed. Its first two CI runs on 2026-11-11 did not execute (all jobs ended within seconds with no logs, the Actions limit). The jobs were re-run later that day and passed on Linux (Node 22 and 24), macOS and Windows, including the Windows command-line handling in `crates/core/src/verify.rs` and the stop-hook tests. Still not measured: verify latency on macOS and Windows (the `bench` job only runs by hand).
 - **M6:** the reworked npm install test (`scripts/smoke-npm.mjs`) on Windows. The earlier version passed on Linux and macOS; on Windows the install, `--version` and `check` passed and the script then failed on its own quoting bug, which is fixed but unconfirmed. The launcher changes from the review are also Linux-only so far.
 
 ## Needs your decision (all milestones, most important first)
@@ -60,7 +60,7 @@ Not yet proven on macOS or Windows:
 - **Gemini CLI support is under "Later".** SPEC names Gemini, but nothing in your brief asks for it.
 - **A docs review before the pull request** found milestones that were too large (the tamper guard and blame-aware verify were split further), contradictions with M7's behaviour, and missing test boxes. All were addressed.
 - **Reading alint output is under "Later"**, not a numbered milestone, since you called it optional.
-- **This pull request is stacked on the M7 branch**, because M7 could not be merged (its CI did not start; see "CI owed"). Its base is `m7-verify-hooks`, so it shows only the docs. Merge M7 first; GitHub then points this one at `main`.
+- **This pull request was opened on top of the M7 branch**, because M7's CI had not yet run at that point. M7 has since passed CI and merged, and this pull request targets `main`.
 
 **Left open on purpose, each for its milestone's ADR**
 
