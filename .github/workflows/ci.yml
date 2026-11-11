@@ -56,3 +56,32 @@ jobs:
 
       - name: Smoke test
         run: pnpm fscale --version
+
+  bench:
+    name: bench / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The bench scripts have no dependencies, so there is no pnpm install here.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build release binary
+        run: cargo build --release -p firescale-cli
+
+      - name: Generate fixture
+        run: node bench/generate-fixture.mjs "${{ runner.temp }}/fixture-50k" --files 50000
+
+      - name: Run benchmark
+        run: node bench/check-bench.mjs --bin target/release/fscale --fixture "${{ runner.temp }}/fixture-50k" --runs 10 --label "${{ matrix.os }}" --files 50000

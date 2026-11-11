@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule core/no-committed-env by rem
 
 ## What this rule enforces and why
 
-No `.env` file is tracked by git. That means `.env` itself and any `.env.<name>` file such as `.env.local` or `.env.production`, at any depth. Example files are allowed: `.env.example` by default, or the names listed in the rule's `allow` option.
+No `.env` file is tracked by git. That means `.env` itself and any `.env.<name>` file such as `.env.local` or `.env.production`, at any depth. Names match in any letter case, so `.ENV` and `.Env.Local` count too: Windows and macOS ignore filename case, so such a file is the same secret file there. Example files are allowed: `.env.example` by default, or the names listed in the rule's `allow` option.
 
 Env files usually hold API keys, database passwords and tokens. Once one is committed, everyone with access to the repo can read those secrets, and they stay in git history even after the file is deleted.
 
@@ -21,6 +21,8 @@ Env files usually hold API keys, database passwords and tokens. Once one is comm
    .env.*
    !.env.example
    ```
+
+   `.gitignore` is case-sensitive on Linux, so for a file whose name is not in lower case (for example `.ENV`), also add an exact ignore line with that name.
 
 3. If there is no `.env.example`, create one that lists the variable names with empty or fake values, and commit it.
 4. Commit the change.
@@ -36,7 +38,8 @@ Apply these steps exactly:
 
 1. For each reported file, run `git rm --cached --quiet -- <file>`. Do not delete the file from disk.
 2. Make sure the root `.gitignore` contains the lines `.env`, `.env.*` and `!.env.example`. Add only the lines that are missing. `!.env.example` must come after `.env` and `.env.*`, because the last matching line wins; if it sits before them, add it again at the end. Create the file if it does not exist.
-3. Do not edit, move or rename the env files themselves.
+3. For a reported file whose name is not in lower case (for example `.ENV` or `.Env.Local`), also add an exact ignore line with its path, because `.gitignore` is case-sensitive on Linux. Add it only if that line is missing.
+4. Do not edit, move or rename the env files themselves.
 
 ### REPORT
 

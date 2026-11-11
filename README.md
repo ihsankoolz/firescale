@@ -12,6 +12,7 @@ Status: early development. See [SPEC.md](SPEC.md) for the design and [PLAN.md](P
 fscale check                          # run the rules, report violations
 fscale check --json                   # the same, as JSON for CI and agents
 fscale check --rules "core/*"         # only some rules
+fscale check --no-cache               # ignore the result cache in .firescale/
 fscale explain core/no-committed-env  # what a rule checks and how to fix it
 ```
 
@@ -51,9 +52,10 @@ pnpm fscale --version
 ## Layout
 
 ```
-crates/core      Rust: the engine (model, config, git, rule trait, reports, Node bridge)
+crates/core      Rust: the engine (model, config, git, walker, cache, rule trait, reports, Node bridge)
 crates/rules     Rust: built-in rule packs
 crates/cli       Rust: the fscale binary
+crates/testkit   Rust: test-only helpers (a stand-in for node)
 packages/cli     The firescale npm package: Node host for TS rules, config helpers
 packages/sdk     Rule authoring API for custom TypeScript rules
 packages/agents  Agent adapters (later)

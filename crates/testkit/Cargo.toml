@@ -1,0 +1,18 @@
+[package]
+name = "firescale-testkit"
+description = "Test-only helpers for firescale. Not shipped."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# A stand-in for `node` that records that it was started. Used to prove that
+# fscale does not start Node for repos with only built-in rules.
+[[bin]]
+name = "fscale-node-stub"
+path = "src/node_stub.rs"
+
+[lints]
+workspace = true

@@ -71,7 +71,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M3 — Engine: walk, hash, cache ☐
+## M3 — Engine: walk, hash, cache ☑
 
 **Build** (all Rust, in `crates/core`)
 
@@ -80,13 +80,14 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 - Rule-result cache keyed by rule version + input-file hashes + config hash. Stored under `.firescale/cache/`.
 - Parallel scheduling of rule checks. Custom TypeScript rules are batched through the one Node child.
 - `bench/`: a generator for large fixture repos and a benchmark script.
+- Loose ends from M2: an airtight "no Node process" test, tests for the automatic lookup of the Node host, the `core/no-committed-env` SKILL.md mentions case variants, and benchmarks recorded from Windows and macOS CI runners.
 
 **Done when**
 
-- ☐ A second `fscale check` with no file changes is served from cache, proven by a test.
-- ☐ Changing a file inside a rule's `inputs` invalidates only that rule's result, proven by a test.
-- ☐ Benchmarks for cold and warm runs on a 50k-file fixture are recorded in `bench/RESULTS.md`.
-- ☐ All Rust code passes clippy with warnings denied.
+- ☑ A second `fscale check` with no file changes is served from cache, proven by a test.
+- ☑ Changing a file inside a rule's `inputs` invalidates only that rule's result, proven by a test.
+- ☑ Benchmarks for cold and warm runs on a 50k-file fixture are recorded in `bench/RESULTS.md`.
+- ☑ All Rust code passes clippy with warnings denied.
 
 ---
 
@@ -123,7 +124,23 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M6 — `verify` and agent hooks ☐
+## M6 — npm packaging ☐
+
+**Build**
+
+- Per-platform binary packages and the `firescale` launcher package, as designed in ADR 0008 §6.
+- A release workflow that builds the binary for each platform and assembles the packages. Publishing itself stays a manual, approved step.
+- Install smoke tests: `npm`, `pnpm` and `yarn`, on all three OSes, from locally packed tarballs.
+
+**Done when**
+
+- ☐ `npx firescale --version` works from packed tarballs on all three OSes with no Rust toolchain.
+- ☐ A custom TypeScript rule works from an npm install, proven by a smoke test.
+- ☐ The launcher's overhead is measured and recorded in `bench/RESULTS.md`.
+
+---
+
+## M7 — `verify` and agent hooks ☐
 
 **Build**
 
@@ -143,7 +160,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M7 — Guarded agent runner ☐ (finish and test locally)
+## M8 — Guarded agent runner ☐ (finish and test locally)
 
 **Build**
 
@@ -157,22 +174,6 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 - ☐ With the fake agent: a good fix is committed, a bad fix is rolled back, a fix touching a protected path is rejected.
 - ☐ The runner refuses to start on a dirty tree or when secrets are tracked.
 - ☐ Manual local test: a real agent fixes one real violation end to end. Result noted in the PR.
-
----
-
-## M8 — npm packaging ☐
-
-**Build**
-
-- Per-platform binary packages and the `firescale` launcher package, as designed in ADR 0008 §6.
-- A release workflow that builds the binary for each platform and assembles the packages. Publishing itself stays a manual, approved step.
-- Install smoke tests: `npm`, `pnpm` and `yarn`, on all three OSes, from locally packed tarballs.
-
-**Done when**
-
-- ☐ `npx firescale --version` works from packed tarballs on all three OSes with no Rust toolchain.
-- ☐ A custom TypeScript rule works from an npm install, proven by a smoke test.
-- ☐ The launcher's overhead is measured and recorded in `bench/RESULTS.md`.
 
 ---
 

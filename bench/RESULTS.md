@@ -2,6 +2,70 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## Check on a 50k-file repo: cold cache, warm cache, no cache (M3)
+
+Measured with `bench/check-bench.mjs` on a fixture from `bench/generate-fixture.mjs --files 50000`: 50,005 tracked files, one enforced rule (`core/no-committed-env`), one violation. 10 runs per row, release build.
+
+- **Cold cache:** `.firescale` is deleted before every run, so the run walks the repo, runs the rule and writes the cache.
+- **Warm cache:** the cache is in place, so the run walks the repo, finds the entry and does not run the rule.
+- **No cache:** `--no-cache`. The rule runs; nothing is walked or written.
+
+### Linux x64, local container (4 vCPUs, Intel Xeon @ 2.10GHz), 2026-11-11
+
+| Command              | min (ms) | p50 (ms) | p95 (ms) | mean (ms) |
+| -------------------- | -------: | -------: | -------: | --------: |
+| `--version`          |      2.7 |      3.1 |      4.8 |       3.4 |
+| `check` (cold cache) |     93.1 |     99.2 |    108.8 |      99.9 |
+| `check` (warm cache) |     59.8 |     63.7 |     68.9 |      64.3 |
+| `check --no-cache`   |     28.2 |     32.7 |     36.0 |      31.5 |
+
+### GitHub Actions runners, by OS
+
+From the `bench` jobs of [CI run 42947874962](https://github.com/ihsankoolz/firescale/actions/runs/42947874962) on 2026-11-11. Same fixture and script, 10 runs per row. Shared runners are noisy, so read these as rough sizes, not precise figures.
+
+**Linux** (`ubuntu-latest`, x64, AMD EPYC 9V74, 2 vCPUs)
+
+| Command              | min (ms) | p50 (ms) | p95 (ms) | mean (ms) |
+| -------------------- | -------: | -------: | -------: | --------: |
+| `--version`          |      2.0 |      2.1 |      3.7 |       2.3 |
+| `check` (cold cache) |    132.8 |    137.7 |    171.1 |     141.8 |
+| `check` (warm cache) |    108.3 |    108.9 |    111.3 |     109.2 |
+| `check --no-cache`   |     26.3 |     26.6 |     27.0 |      26.5 |
+
+**macOS** (`macos-latest`, arm64, Apple M1 virtual, 3 vCPUs)
+
+| Command              | min (ms) | p50 (ms) | p95 (ms) | mean (ms) |
+| -------------------- | -------: | -------: | -------: | --------: |
+| `--version`          |      2.9 |      3.6 |     11.0 |       4.8 |
+| `check` (cold cache) |    105.2 |    134.4 |    207.0 |     138.0 |
+| `check` (warm cache) |     81.8 |    102.0 |    176.3 |     106.3 |
+| `check --no-cache`   |     28.5 |     48.9 |     59.3 |      45.7 |
+
+**Windows** (`windows-latest`, x64, AMD EPYC 7763, 2 vCPUs)
+
+| Command              | min (ms) | p50 (ms) | p95 (ms) | mean (ms) |
+| -------------------- | -------: | -------: | -------: | --------: |
+| `--version`          |     19.4 |     21.0 |     26.3 |      21.6 |
+| `check` (cold cache) |    475.0 |    493.7 |    509.0 |     492.1 |
+| `check` (warm cache) |    344.2 |    369.9 |    384.6 |     366.8 |
+| `check --no-cache`   |    141.4 |    143.5 |    160.3 |     146.2 |
+
+Windows is several times slower across the board: starting a process costs about 20 ms there against 2 to 4 ms elsewhere, and each `git` call and the 50k-file walk are slower too. The pattern is the same on all three: warm is faster than cold, and `--no-cache` is fastest.
+
+### Reading these numbers
+
+**With today's single rule, the cache makes `check` slower, not faster.** A warm run still has to walk 50k files and read the git index to prove nothing changed, which costs about 60 ms on the local machine and more on the CI runners. The rule itself only asks git for its file list, which costs about 30 ms. The cache avoids the rule but pays for the walk.
+
+The cache is built for rules that read file contents, such as the secret scanner and env-usage rules planned for M5, where one rule can cost far more than the walk. Until those exist it is overhead. See ADR 0010 and the "Needs your decision" list in DECISIONS.md.
+
+### How to reproduce
+
+```
+cargo build --release -p firescale-cli
+node bench/generate-fixture.mjs <empty dir> --files 50000
+node bench/check-bench.mjs --bin target/release/fscale --fixture <that dir> --runs 10 --label <name>
+```
+
 ## Startup: TypeScript CLI vs Rust binary (M2)
 
 Recorded on 2026-11-11 while moving `fscale` from a Node program to a native Rust binary (ADR 0008).
