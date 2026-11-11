@@ -4,11 +4,11 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## CI owed
 
-GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), and you asked for work to continue without it. From that point everything is verified on Linux only, on the build machine, and pushes carry `[skip ci]` so they start no runs. When Actions is available again, start the CI workflow by hand on `main` (Actions tab, "CI", "Run workflow"); that runs the checks, the benchmarks and the npm install tests on all three OSes.
+GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), and you asked for work to continue without it. From that point everything is verified on Linux only, on the build machine. M6 pushes carried `[skip ci]`; the M7 pull request did not, to find out whether Actions was back. It was not. When Actions is available again, start the CI workflow by hand on `main` (Actions tab, "CI", "Run workflow"); that runs the checks, the benchmarks and the npm install tests on all three OSes.
 
 Not yet proven on macOS or Windows:
 
-- **M7:** see the M7 section below for what its CI run covered.
+- **M7 (not merged):** the pull request's CI run on 2026-11-11 did not execute. All four jobs ended as failed within four seconds, with no runner assigned and no logs, which is what the Actions limit looks like. M7 is verified on Linux only (`pnpm fscale verify` passes). It was left unmerged because the instruction was to merge on green CI on all three OSes. The review judged the Windows and macOS risk low after the fixes, but two things have never run on Windows: the raw `cmd` command line in `crates/core/src/verify.rs`, and the Vitest stdin handling for the stop hook. To finish: re-run the failed jobs on the pull request once Actions works, then merge.
 - **M6:** the reworked npm install test (`scripts/smoke-npm.mjs`) on Windows. The earlier version passed on Linux and macOS; on Windows the install, `--version` and `check` passed and the script then failed on its own quoting bug, which is fixed but unconfirmed. The launcher changes from the review are also Linux-only so far.
 
 ## Needs your decision (all milestones, most important first)

@@ -6,7 +6,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack.
 - **Merged without full CI:** M6 npm packaging. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
-- **M7 `verify` and hooks:** built on branch `m7-verify-hooks`. See the M7 section of DECISIONS.md for its CI and merge state.
+- **M7 `verify` and hooks:** built and reviewed on branch `m7-verify-hooks`, pull request #9. **Not merged if you are reading this on that branch:** its CI jobs never started (Actions limit). See "CI owed" in DECISIONS.md. Re-run the failed jobs when Actions works, fix anything Windows or macOS shows, then merge.
 - **Next:** the direction changed on 2026-11-11. A docs-only pull request rewrites PLAN.md from M8 onward. Read the merged PLAN.md, not this line, for what comes next.
 
 ## How to resume
