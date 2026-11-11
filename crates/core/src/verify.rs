@@ -20,7 +20,7 @@ pub const VERIFY_SCHEMA_VERSION: u32 = 1;
 pub const STEPS: [&str; 3] = ["lint", "typecheck", "test"];
 
 /// How many lines of a failed command's output the summary keeps.
-const TAIL_LINES: usize = 30;
+pub const TAIL_LINES: usize = 30;
 
 /// A step's setting in the `verify` section of the config.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,14 +78,27 @@ fn turbo_has_task(root: &Path, task: &str) -> bool {
 }
 
 /// Chooses a command for each step. Order of preference: the config, Nx,
-/// Turborepo, package scripts, then Cargo for a Rust-only repo.
+/// Turborepo, package scripts, then Cargo for a Rust-only repo. `base` is the
+/// `--base` ref of an affected run; it is passed on to `nx affected`.
 #[must_use]
 pub fn plan_verify(
     root: &Path,
     facts: &RepoFacts,
     overrides: &BTreeMap<String, StepOverride>,
     affected: bool,
+    base: Option<&str>,
 ) -> VerifyPlan {
+    // Passed to Nx only when it is a plain ref name, so it needs no quoting.
+    let nx_base = base
+        .filter(|base| {
+            !base.is_empty()
+                && !base.starts_with('-')
+                && base
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._/-~^@".contains(c))
+        })
+        .map(|base| format!(" --base={base}"))
+        .unwrap_or_default();
     let has_tool = |name: &str| facts.tools.iter().any(|tool| tool == name);
     let has_package_json = root.join("package.json").is_file();
     let rust_only = !has_package_json && facts.languages.iter().any(|language| language == "rust");
@@ -106,7 +119,7 @@ pub fn plan_verify(
     let detect = |step: &str| -> Planned {
         match detected_runner {
             "nx" => Planned::Command(if affected {
-                format!("{prefix} nx affected -t {step}")
+                format!("{prefix} nx affected -t {step}{nx_base}")
             } else {
                 format!("{prefix} nx run-many -t {step}")
             }),
@@ -270,19 +283,32 @@ fn tail(stdout: &[u8], stderr: &[u8]) -> Vec<String> {
     lines[lines.len().saturating_sub(TAIL_LINES)..].to_vec()
 }
 
+/// The platform shell, set up to run one command line.
+#[cfg(windows)]
+fn shell(command: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut shell = Command::new("cmd");
+    // The command line must reach cmd exactly as written. Rust's normal
+    // argument quoting would turn `"` into `\"`, which cmd does not
+    // understand. With /S, cmd strips the outer pair of quotes and runs the rest.
+    shell
+        .args(["/D", "/S", "/C"])
+        .raw_arg(format!("\"{command}\""));
+    shell
+}
+
+/// The platform shell, set up to run one command line.
+#[cfg(not(windows))]
+fn shell(command: &str) -> Command {
+    let mut shell = Command::new("sh");
+    shell.args(["-c", command]);
+    shell
+}
+
 /// Runs one command through the platform shell and reports how it went.
 fn run_step(root: &Path, name: &str, command: &str) -> Result<StepReport> {
     let started = Instant::now();
-    let mut shell = if cfg!(windows) {
-        let mut shell = Command::new("cmd");
-        shell.args(["/D", "/S", "/C", command]);
-        shell
-    } else {
-        let mut shell = Command::new("sh");
-        shell.args(["-c", command]);
-        shell
-    };
-    let output = shell
+    let output = shell(command)
         .current_dir(root)
         .stdin(Stdio::null())
         .env("NO_COLOR", "1")
@@ -470,6 +496,7 @@ mod tests {
             &facts(&[], Some("pnpm"), commands, &["javascript"]),
             &BTreeMap::new(),
             false,
+            None,
         );
         assert_eq!(plan.runner, "scripts");
         assert_eq!(
@@ -497,15 +524,29 @@ mod tests {
             &facts(&["nx", "turbo"], Some("pnpm"), Commands::default(), &[]),
             &BTreeMap::new(),
             true,
+            Some("origin/main"),
         );
         assert_eq!(nx.runner, "nx");
-        assert_eq!(commands_of(&nx)[0], "lint: pnpm exec nx affected -t lint");
+        assert_eq!(
+            commands_of(&nx)[0],
+            "lint: pnpm exec nx affected -t lint --base=origin/main"
+        );
+        // A base that is not a plain ref name is left out instead of being quoted.
+        let odd = plan_verify(
+            fixture.root(),
+            &facts(&["nx"], Some("pnpm"), Commands::default(), &[]),
+            &BTreeMap::new(),
+            true,
+            Some("main; echo hi"),
+        );
+        assert_eq!(commands_of(&odd)[0], "lint: pnpm exec nx affected -t lint");
 
         let turbo = plan_verify(
             fixture.root(),
             &facts(&["turbo"], None, Commands::default(), &[]),
             &BTreeMap::new(),
             false,
+            None,
         );
         assert_eq!(turbo.runner, "turbo");
         assert_eq!(
@@ -523,7 +564,7 @@ mod tests {
         let fixture =
             Fixture::new(&[("Cargo.toml", "[package]\nname = \"x\"\n")], Track::NoGit).unwrap();
         let rust = facts(&[], None, Commands::default(), &["rust"]);
-        let plan = plan_verify(fixture.root(), &rust, &BTreeMap::new(), false);
+        let plan = plan_verify(fixture.root(), &rust, &BTreeMap::new(), false, None);
         assert_eq!(plan.runner, "cargo");
         assert_eq!(commands_of(&plan)[2], "test: cargo test --workspace");
 
@@ -534,7 +575,7 @@ mod tests {
                 StepOverride::Command("make test".to_owned()),
             ),
         ]);
-        let plan = plan_verify(fixture.root(), &rust, &overrides, false);
+        let plan = plan_verify(fixture.root(), &rust, &overrides, false, None);
         assert_eq!(
             commands_of(&plan)[0],
             "lint: skipped (turned off in your firescale config)"

@@ -77,6 +77,22 @@ describe('fscale hooks install', () => {
     await expect(read(repo.root, HOOK_FILES.codex)).rejects.toThrow();
   });
 
+  it('adds the stop hook when the same command only appears somewhere else', async () => {
+    const repo = await fixtures.create({
+      files: {
+        '.claude/settings.json': JSON.stringify({
+          permissions: { allow: ['Bash(fscale hooks run --agent claude)'] },
+        }),
+      },
+    });
+    const result = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root);
+    expect(result.stdout).toContain('installed         .claude/settings.json');
+    const settings = JSON.parse(await read(repo.root, HOOK_FILES.claude)) as {
+      hooks: { Stop: { hooks: { command: string }[] }[] };
+    };
+    expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe('fscale hooks run --agent claude');
+  });
+
   it('explains bad usage', async () => {
     const repo = await fixtures.create();
     const none = await runCli(['hooks', 'install'], repo.root);
@@ -164,11 +180,44 @@ describe('fscale hooks run (the stop hook)', () => {
     expect(result.stderr).toContain('the stop hook could not run verify');
   });
 
-  it('survives input that is not JSON, and needs --agent', async () => {
+  it('survives input that is not JSON', async () => {
     const repo = await fixtures.create({ files: PASSING });
     const odd = await runCli(['hooks', 'run', '--agent', 'claude'], repo.root, {}, { input: '??' });
     expect(odd.code).toBe(EXIT_OK);
+  });
+
+  it.each([
+    ['a payload without stop_hook_active', 'claude', '{"session_id":"quiet"}'],
+    ['input that is not JSON', 'codex', '??'],
+    ['no input at all', 'claude', ''],
+  ])('loop guard: still caps with %s', async (_name, agent, input) => {
+    const repo = await fixtures.create({ files: FAILING });
+    const codes: number[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const result = await runCli(['hooks', 'run', '--agent', agent], repo.root, {}, { input });
+      codes.push(result.code);
+    }
+    expect(codes).toEqual([EXIT_BLOCK, EXIT_BLOCK, EXIT_BLOCK, EXIT_OK]);
+  });
+
+  it('loop guard: caps Cursor on its own count when Cursor sends no loop_count', async () => {
+    const repo = await fixtures.create({ files: FAILING });
+    const replies: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      replies.push((await stop(repo.root, 'cursor', { conversation_id: 'c2' })).stdout);
+    }
+    expect(replies.slice(0, 3).every((reply) => reply.includes('followup_message'))).toBe(true);
+    expect(replies[3]).toBe('{}\n');
+  });
+
+  it('never answers its own errors with exit code 2, which would block the agent', async () => {
+    const repo = await fixtures.create({ files: FAILING });
+    const typo = await runCli(['hooks', 'run', '--agent', 'claud'], repo.root);
+    expect(typo.code).toBe(1);
+    expect(typo.stderr).toContain('unknown agent "claud"');
     const missing = await runCli(['hooks', 'run'], repo.root);
-    expect(missing.code).toBe(EXIT_USAGE);
+    expect(missing.code).toBe(1);
+    const flag = await runCli(['hooks', 'run', '--agent', 'claude', '--nope'], repo.root);
+    expect(flag.code).toBe(1);
   });
 });

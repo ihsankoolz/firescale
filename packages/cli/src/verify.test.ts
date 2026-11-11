@@ -122,6 +122,46 @@ describe('fscale verify', () => {
     expect(report.steps[0]?.outputTail?.join('\n')).toContain('core/no-committed-env');
   });
 
+  it('runs a command with quoted arguments as written, on every platform', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: false, typecheck: false, test: 'node -e "process.exit(3)"' },
+        }),
+      },
+    });
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = await validate(result.stdout);
+    expect(report.steps[3]?.exitCode).toBe(3);
+    expect(report.rerun).toBe('node -e "process.exit(3)"');
+  });
+
+  it('shows only enforced violations for a failed check, and caps the list', async () => {
+    const envFiles = Object.fromEntries(
+      Array.from({ length: 40 }, (_, i) => [
+        `env/.env.${String(i).padStart(2, '0')}`,
+        'EXAMPLE=1\n',
+      ]),
+    );
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          rules: { 'core/no-committed-env': 'enforced' },
+        }),
+        ...envFiles,
+      },
+    });
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const tail = (await validate(result.stdout)).steps[0]?.outputTail ?? [];
+    expect(tail).toHaveLength(30);
+    expect(tail[0]).toMatch(/^core\/no-committed-env {2}env\/\.env\.00 {2}/);
+    // Report-only rules (the other seven core rules) are not part of a failure.
+    expect(tail.slice(0, 29).every((line) => line.startsWith('core/no-committed-env'))).toBe(true);
+    expect(tail[29]).toBe('... and 11 more. Run `fscale check` to see them all.');
+  });
+
   it('finds the test command from package.json scripts', async () => {
     const repo = await fixtures.create({
       files: {

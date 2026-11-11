@@ -61,6 +61,7 @@ Not yet proven on macOS or Windows:
 - No time limit on verify steps; output is captured, not streamed.
 - No `hooks uninstall`. Gemini CLI has no hook support here.
 - `agent-ready/verify-hook` can serve a stale cached result when the hook file is untracked and git-ignored.
+- An independent review before the pull request found eight issues; all were fixed with tests (listed in ADR 0014, "Consequences"). The most important: the loop guard did not cap an agent that omits `stop_hook_active`, and quoted commands were mangled on Windows.
 - A subagent started the `agent-ready` pack and stopped at a usage limit after the first rule; the other three were written in the main session.
 
 ## M6 — npm packaging

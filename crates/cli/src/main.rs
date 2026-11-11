@@ -15,13 +15,15 @@ use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json}
 use firescale_core::hooks::{
     decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent, AGENTS,
 };
+use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
-use firescale_core::report::{format_human, format_json};
+use firescale_core::report::{format_human, format_json, CheckReport};
 use firescale_core::rule::{fix_rule_with, Change};
 use firescale_core::sarif::format_sarif;
 use firescale_core::select::select_rules;
 use firescale_core::verify::{
     format_verify_human, format_verify_json, plan_verify, run_verify, CheckStep, VerifyReport,
+    TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -401,6 +403,36 @@ fn facts(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }))
 }
 
+/// What the summary shows when the check step fails: the violations of
+/// enforced rules only, capped like any other step's output.
+fn enforced_violation_lines(report: &CheckReport) -> Vec<String> {
+    let mut lines = Vec::new();
+    for rule in report
+        .rules
+        .iter()
+        .filter(|rule| rule.status == Status::Enforced && rule.violations > 0)
+    {
+        for diagnostic in report.diagnostics.iter().filter(|d| d.rule_id == rule.id) {
+            let line = diagnostic
+                .range
+                .map_or_else(String::new, |range| format!(":{}", range.start_line));
+            lines.push(format!(
+                "{}  {}{line}  {}",
+                rule.id, diagnostic.file, diagnostic.message
+            ));
+        }
+    }
+    let total = lines.len();
+    if total > TAIL_LINES {
+        lines.truncate(TAIL_LINES - 1);
+        lines.push(format!(
+            "... and {} more. Run `fscale check` to see them all.",
+            total - (TAIL_LINES - 1)
+        ));
+    }
+    lines
+}
+
 /// Runs check and then the planned lint, typecheck and test commands.
 fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)> {
     let packs = firescale_rules::builtin_packs();
@@ -430,7 +462,7 @@ fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)
                 plural(report.summary.enforced_violations, "enforced violation")
             }
         ),
-        output: format_human(&report).lines().map(str::to_owned).collect(),
+        output: enforced_violation_lines(&report),
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         command: if args.affected {
             "fscale check --affected"
@@ -439,7 +471,13 @@ fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)
         }
         .to_owned(),
     };
-    let plan = plan_verify(root, &facts, &overrides, args.affected);
+    let plan = plan_verify(
+        root,
+        &facts,
+        &overrides,
+        args.affected,
+        args.base.as_deref(),
+    );
     let verify = run_verify(root, version(), check, &plan)?;
     Ok((verify, outcome.warnings))
 }
@@ -593,7 +631,20 @@ fn run() -> Result<Output> {
     }
 }
 
+/// True for `fscale hooks run ...`. Claude Code and Codex read exit code 2
+/// from a stop hook as "do not stop", so this command must never use it for
+/// its own errors: a broken hook must not trap an agent.
+fn is_stop_hook() -> bool {
+    let words: Vec<String> = env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .take(2)
+        .collect();
+    words == ["hooks", "run"]
+}
+
 fn main() -> ExitCode {
+    let error_code = if is_stop_hook() { 1 } else { EXIT_USAGE };
     let (stdout, stderr, code) = match run() {
         Ok(output) => {
             let notes: String = output.notes.iter().map(|note| format!("{note}\n")).collect();
@@ -602,15 +653,15 @@ fn main() -> ExitCode {
         Err(Error::Usage(message)) => (
             String::new(),
             format!("fscale: {message}\nRun `fscale --help` to see the available commands and options.\n"),
-            EXIT_USAGE,
+            error_code,
         ),
-        Err(Error::User(message)) => (String::new(), format!("fscale: {message}\n"), EXIT_USAGE),
+        Err(Error::User(message)) => (String::new(), format!("fscale: {message}\n"), error_code),
         Err(Error::Internal(message)) => (
             String::new(),
             format!(
                 "fscale: unexpected error. Please report it at https://github.com/ihsankoolz/firescale/issues\n{message}\n"
             ),
-            EXIT_USAGE,
+            error_code,
         ),
     };
     // A closed pipe (for example `fscale check | head`) is not an error worth reporting.

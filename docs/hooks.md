@@ -16,7 +16,7 @@ fscale hooks install --all --bin "npx firescale"
 
 The Claude Code format was checked against its documentation and the Codex format against its source on 2026-11-11. Cursor's documentation could not be reached from the build environment, so its format is a best reading and `hooks install` prints a note saying so. Check `.cursor/hooks.json` against your Cursor version before relying on it.
 
-Installing keeps everything else that is in the file, and running it again changes nothing. A file that is not valid JSON is left alone and reported. Commit the files so every teammate's agent gets the hook.
+Installing keeps everything else that is in the file, and running it again changes nothing. A hook counts as installed only when the command is under the agent's stop event. A file that is not valid JSON is left alone and reported. Commit the files so every teammate's agent gets the hook.
 
 ## `--bin`: how the hook starts fscale
 
@@ -39,9 +39,13 @@ An agent that cannot fix a failure must not be held forever. The hook counts how
 
 - A failure adds one to the count and blocks the stop: "attempt 1 of 3".
 - After 3 blocks in a row the agent is allowed to stop, with a note that verify still fails. The count starts again.
-- A pass resets the count. So does a new stop attempt that is not a continuation (Claude Code and Codex send `stop_hook_active: false`).
+- A pass resets the count. So does a stop attempt the agent marks as fresh (`stop_hook_active: false` from Claude Code and Codex, `loop_count: 0` from Cursor). An agent that says nothing either way is counted, so the cap always holds.
 - Cursor's own `loop_count` is used when it is higher than firescale's.
+- A count older than one hour is ignored.
+- If the count cannot be stored (a read-only folder, or `.firescale/hooks` is a symlink), the agent is allowed to stop.
 - `FSCALE_HOOK_MAX_BLOCKS=<n>` changes the cap. `0` never blocks.
+
+`fscale hooks run` never exits with code 2 for its own errors, such as a mistyped agent name or a broken config. It exits 1 with the reason, which agents show but do not treat as "keep working".
 
 ## Limits
 

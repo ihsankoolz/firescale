@@ -35,7 +35,9 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 
 Commands run from the repo root through the platform shell (`sh -c` on macOS and Linux, `cmd /C` on Windows) with `NO_COLOR=1`, and with no input.
 
-`--affected` narrows the `check` step to changed files (see [affected.md](affected.md)) and is passed on to Nx and Turborepo. Plain package scripts and Cargo always run in full.
+`--affected` narrows the `check` step to changed files (see [affected.md](affected.md)) and is passed on to Nx and Turborepo. `--base <ref>` is also passed to `nx affected`; for Turborepo, set `TURBO_SCM_BASE` yourself. Plain package scripts and Cargo always run in full.
+
+On Windows the command line is handed to `cmd` exactly as written, so `cmd` quoting works (`node -e "..."`, `"C:\Program Files\tool\tool.exe" arg`).
 
 ## Output
 
@@ -54,7 +56,7 @@ Last lines of test:
 Fix the failure, then run again: pnpm run test
 ```
 
-At most the last 30 non-empty lines of the failed command are kept, with colour codes removed. Steps after the failure are listed as `not run`.
+At most the last 30 non-empty lines of the failed command are kept, with colour codes removed. Steps after the failure are listed as `not run`. When `check` is the step that failed, the lines are the violations of enforced rules, one per line, with the same cap; report-only rules are left out.
 
 `--json` prints the format described by `packages/cli/schemas/verify-output.schema.json` (JSON Schema draft-07, published as `firescale/schemas/verify-output.schema.json`).
 

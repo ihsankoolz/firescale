@@ -13,6 +13,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 
@@ -90,16 +91,48 @@ fn array_mut<'a>(value: &'a mut Value, file: &str, what: &str) -> Result<&'a mut
     })
 }
 
-/// True when some string anywhere under `value` is one of our hook commands
-/// for this agent, whatever binary prefix it was installed with.
+/// The commands of the agent's stop hooks in a parsed config file. Only the
+/// stop event counts: the same text under another event, or in a permission
+/// list, is not a stop hook.
+fn stop_commands(value: &Value, agent: Agent) -> Vec<&str> {
+    let entries = |key: &str| {
+        value
+            .get("hooks")
+            .and_then(|hooks| hooks.get(key))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    };
+    fn command(entry: &Value) -> Option<&str> {
+        entry.get("command").and_then(Value::as_str)
+    }
+    match agent {
+        Agent::Claude | Agent::Codex => entries("Stop")
+            .iter()
+            .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+            .flatten()
+            .filter_map(command)
+            .collect(),
+        Agent::Cursor => entries("stop").iter().filter_map(command).collect(),
+    }
+}
+
+/// True when one of the agent's stop hooks is our hook command, whatever
+/// binary prefix it was installed with.
 fn mentions_hook(value: &Value, agent: Agent) -> bool {
     let needle = format!("hooks run --agent {}", agent.name());
-    match value {
-        Value::String(text) => text.contains(&needle),
-        Value::Array(items) => items.iter().any(|item| mentions_hook(item, agent)),
-        Value::Object(map) => map.values().any(|item| mentions_hook(item, agent)),
-        _ => false,
+    stop_commands(value, agent)
+        .iter()
+        .any(|command| command.contains(&needle))
+}
+
+/// Returns the object at `key`, creating it when it is missing or null.
+fn child<'a>(map: &'a mut Map<String, Value>, key: &str, empty: Value) -> &'a mut Value {
+    let slot = map.entry(key).or_insert(Value::Null);
+    if slot.is_null() {
+        *slot = empty;
     }
+    slot
 }
 
 /// Adds the stop hook to an agent's config, keeping everything else in it.
@@ -122,17 +155,15 @@ pub fn merge_hook(existing: Option<&str>, agent: Agent, bin: &str) -> Result<Opt
     let top = object_mut(&mut root, file, "the top level")?;
     match agent {
         Agent::Claude | Agent::Codex => {
-            let hooks = top.entry("hooks").or_insert_with(|| json!({}));
-            let hooks = object_mut(hooks, file, "\"hooks\"")?;
-            let stop = hooks.entry("Stop").or_insert_with(|| json!([]));
+            let hooks = object_mut(child(top, "hooks", json!({})), file, "\"hooks\"")?;
+            let stop = child(hooks, "Stop", json!([]));
             array_mut(stop, file, "\"hooks.Stop\"")?
                 .push(json!({ "hooks": [{ "type": "command", "command": command }] }));
         }
         Agent::Cursor => {
             top.entry("version").or_insert_with(|| json!(1));
-            let hooks = top.entry("hooks").or_insert_with(|| json!({}));
-            let hooks = object_mut(hooks, file, "\"hooks\"")?;
-            let stop = hooks.entry("stop").or_insert_with(|| json!([]));
+            let hooks = object_mut(child(top, "hooks", json!({})), file, "\"hooks\"")?;
+            let stop = child(hooks, "stop", json!([]));
             array_mut(stop, file, "\"hooks.stop\"")?.push(json!({ "command": command }));
         }
     }
@@ -188,8 +219,9 @@ pub fn hook_installed(root: &Path, agent: Agent) -> bool {
 pub struct HookInput {
     /// Identifies the agent session, so sessions do not share a counter.
     pub session: String,
-    /// True when the agent says it is already continuing because of a stop hook.
-    pub continuing: bool,
+    /// Whether the agent says it is already continuing because of a stop hook.
+    /// `None` when the agent did not say.
+    pub continuing: Option<bool>,
     /// Cursor's own count of how many times the stop hook has sent it back.
     pub loop_count: Option<u32>,
 }
@@ -204,10 +236,7 @@ pub fn parse_hook_input(stdin: &str) -> HookInput {
         session: text("session_id")
             .or_else(|| text("conversation_id"))
             .unwrap_or_else(|| "default".to_owned()),
-        continuing: value
-            .get("stop_hook_active")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
+        continuing: value.get("stop_hook_active").and_then(Value::as_bool),
         loop_count: value
             .get("loop_count")
             .and_then(Value::as_u64)
@@ -243,7 +272,20 @@ fn state_file(root: &Path, agent: Agent, session: &str) -> PathBuf {
         .join(format!("{}-{safe}.json", agent.name()))
 }
 
+/// A count older than this is from an earlier piece of work and is ignored.
+const STALE_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// The stored count. Zero when there is none, when it cannot be read, or
+/// when it is stale.
 fn read_blocks(path: &Path) -> u32 {
+    let stale = fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > STALE_AFTER);
+    if stale {
+        return 0;
+    }
     fs::read_to_string(path)
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
@@ -252,12 +294,47 @@ fn read_blocks(path: &Path) -> u32 {
         .unwrap_or(0)
 }
 
+/// True when the path exists and is a symlink. The counter is never written
+/// through one, so a repo cannot point it at a file outside `.firescale`.
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// Stores the count. False when it could not be stored safely.
+fn write_blocks(path: &Path, blocks: u32) -> bool {
+    let Some(hooks_dir) = path.parent() else {
+        return false;
+    };
+    let Some(dot_firescale) = hooks_dir.parent() else {
+        return false;
+    };
+    if is_symlink(dot_firescale) || is_symlink(hooks_dir) || is_symlink(path) {
+        return false;
+    }
+    if fs::create_dir_all(hooks_dir).is_err() {
+        return false;
+    }
+    // The same self-ignoring folder the cache uses.
+    let ignore = dot_firescale.join(".gitignore");
+    if !is_symlink(&ignore) && !ignore.exists() {
+        let _ = fs::write(
+            ignore,
+            "# Created by firescale. Nothing in this folder should be committed.\n*\n",
+        );
+    }
+    fs::write(path, format!("{}\n", json!({ "blocks": blocks }))).is_ok()
+}
+
 /// The loop guard. Decides what to tell the agent and updates the counter.
 ///
 /// - Verify passed: reset the counter, allow.
-/// - A stop attempt that is not a continuation starts a new count.
-/// - Otherwise each failure adds one; at `max_blocks` the agent is let go
-///   and the counter is reset, so the next turn starts fresh.
+/// - The agent says this is a fresh stop attempt (`stop_hook_active: false`,
+///   or a `loop_count` of 0): start a new count.
+/// - Otherwise, including when the agent says nothing either way, each
+///   failure adds one to the stored count. At `max_blocks` the agent is let
+///   go and the counter is reset, so the next turn starts fresh.
+/// - If the count cannot be stored, the agent is let go: a guard that cannot
+///   count must not block forever.
 pub fn decide(
     root: &Path,
     agent: Agent,
@@ -270,32 +347,18 @@ pub fn decide(
         let _ = fs::remove_file(&path);
         return Decision::Allow;
     }
-    let previous = if input.continuing || input.loop_count.is_some_and(|count| count > 0) {
-        read_blocks(&path)
-    } else {
-        0
-    };
+    let fresh = input.continuing == Some(false) || input.loop_count == Some(0);
+    let stored = if fresh { 0 } else { read_blocks(&path) };
     // Trust whichever count is higher: ours, or the agent's own.
-    let previous = previous.max(input.loop_count.unwrap_or(0));
+    let previous = stored.max(input.loop_count.unwrap_or(0));
     if previous >= max_blocks {
         let _ = fs::remove_file(&path);
         return Decision::GiveUp { blocks: previous };
     }
     let blocks = previous + 1;
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-        // The same self-ignoring folder the cache uses.
-        if let Some(dot_firescale) = parent.parent() {
-            let ignore = dot_firescale.join(".gitignore");
-            if !ignore.exists() {
-                let _ = fs::write(
-                    ignore,
-                    "# Created by firescale. Nothing in this folder should be committed.\n*\n",
-                );
-            }
-        }
+    if !write_blocks(&path, blocks) {
+        return Decision::GiveUp { blocks: previous };
     }
-    let _ = fs::write(&path, format!("{}\n", json!({ "blocks": blocks })));
     Decision::Block { blocks }
 }
 
@@ -359,7 +422,7 @@ mod tests {
     fn input(session: &str, continuing: bool) -> HookInput {
         HookInput {
             session: session.to_owned(),
-            continuing,
+            continuing: Some(continuing),
             loop_count: None,
         }
     }
@@ -450,7 +513,7 @@ mod tests {
             parsed,
             HookInput {
                 session: "abc".to_owned(),
-                continuing: true,
+                continuing: Some(true),
                 loop_count: None
             }
         );
@@ -542,7 +605,7 @@ mod tests {
         let fixture = Fixture::new(&[], Track::NoGit).unwrap();
         let from_cursor = HookInput {
             session: "c".to_owned(),
-            continuing: false,
+            continuing: None,
             loop_count: Some(3),
         };
         assert_eq!(
@@ -569,6 +632,93 @@ mod tests {
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["claude-______etc_passwd____.json"]);
+    }
+
+    #[test]
+    fn the_cap_holds_when_the_agent_does_not_say_whether_it_is_continuing() {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let silent = HookInput {
+            session: "quiet".to_owned(),
+            continuing: None,
+            loop_count: None,
+        };
+        let decisions: Vec<Decision> = (0..5)
+            .map(|_| decide(fixture.root(), Agent::Cursor, &silent, false, 3))
+            .collect();
+        assert_eq!(
+            decisions,
+            [
+                Decision::Block { blocks: 1 },
+                Decision::Block { blocks: 2 },
+                Decision::Block { blocks: 3 },
+                Decision::GiveUp { blocks: 3 },
+                Decision::Block { blocks: 1 },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_count_that_cannot_be_stored_lets_the_agent_go() {
+        // `.firescale` is a file, so the counter folder cannot be created.
+        let fixture = Fixture::new(&[(".firescale", "in the way\n")], Track::NoGit).unwrap();
+        assert_eq!(
+            decide(fixture.root(), Agent::Claude, &input("s", true), false, 3),
+            Decision::GiveUp { blocks: 0 }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_counter_is_never_written_through_a_symlink() {
+        let fixture = Fixture::new(&[("outside/keep.txt", "x\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        std::fs::create_dir_all(root.join(".firescale")).unwrap();
+        std::os::unix::fs::symlink(root.join("outside"), root.join(".firescale").join("hooks"))
+            .unwrap();
+        assert_eq!(
+            decide(root, Agent::Claude, &input("s", true), false, 3),
+            Decision::GiveUp { blocks: 0 }
+        );
+        let names: Vec<String> = std::fs::read_dir(root.join("outside"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["keep.txt"]);
+    }
+
+    #[test]
+    fn only_a_stop_hook_counts_as_installed() {
+        let elsewhere = r#"{"permissions":{"allow":["Bash(fscale hooks run --agent claude)"]},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"fscale hooks run --agent claude"}]}]}}"#;
+        let merged = merge_hook(Some(elsewhere), Agent::Claude, "fscale")
+            .unwrap()
+            .expect("the stop hook is still missing, so it is added");
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(
+            value["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "fscale hooks run --agent claude"
+        );
+        assert!(value["hooks"]["PreToolUse"].is_array());
+        // Cursor's event is lower-case `stop`; Claude's `Stop` shape is not Cursor's.
+        assert!(merge_hook(Some(&merged), Agent::Cursor, "fscale")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn a_null_hooks_key_is_treated_as_missing() {
+        let merged = merge_hook(
+            Some(r#"{"hooks":null,"model":"x"}"#),
+            Agent::Codex,
+            "fscale",
+        )
+        .unwrap()
+        .unwrap();
+        let value: Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["model"], "x");
+        assert_eq!(
+            value["hooks"]["Stop"][0]["hooks"][0]["command"],
+            "fscale hooks run --agent codex"
+        );
     }
 
     #[test]
