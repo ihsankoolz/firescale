@@ -209,7 +209,7 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## M9 — `init`, `adopt` and `sync` ☐
+## M9 — `init`, `adopt` and `sync` ☑
 
 **Build**
 
@@ -221,11 +221,11 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 **Done when**
 
-- ☐ `fscale init --packs core` in an empty folder yields a repo where `fscale check` reports no deterministic violations, and prints the violations that are left for a person.
-- ☐ `fscale adopt --dry-run` on a fixture repo prints a diff and changes nothing; `fscale adopt` then leaves no deterministic violations.
-- ☐ In a fixture repo with its own README, CI workflow and `.gitignore`, `fscale adopt` leaves every existing line in place, proven by a test.
-- ☐ `fscale sync --check` exits 1 after a generated file is deleted, and 0 after `fscale sync`.
-- ☐ `init`, `adopt` and `sync` start no Node process in a repo with only built-in packs, proven by a test.
+- ☑ `fscale init --packs core` in an empty folder yields a repo where `fscale check` reports no deterministic violations, and prints the violations that are left for a person.
+- ☑ `fscale adopt --dry-run` on a fixture repo prints a diff and changes nothing; `fscale adopt` then leaves no deterministic violations.
+- ☑ In a fixture repo with its own README, CI workflow and `.gitignore`, `fscale adopt` leaves every existing line in place, proven by a test.
+- ☑ `fscale sync --check` exits 1 after a generated file is deleted, and 0 after `fscale sync`.
+- ☑ `init`, `adopt` and `sync` start no Node process in a repo with only built-in packs, proven by a test.
 
 ---
 

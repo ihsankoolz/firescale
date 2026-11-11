@@ -39,3 +39,7 @@ Further choices:
 - The heuristics will miss things: a secret in an unknown format, a README that explains setup in prose only, a CI system firescale has not heard of. That is the accepted price of few false positives.
 - `env-example` and `readme-setup` are string scans, not parsers. Unusual syntax is not seen.
 - Running `fscale check` on this repo reports nothing with all eight rules, which is M5's dogfooding criterion. A test keeps it that way.
+
+## Amendment (M9, ADR 0019)
+
+`core/ci-exists` and `core/readme-setup` now have a deterministic fix that creates the file when it is absent: a starter workflow and a README skeleton. Both checks also require a tracked file to be on disk, and report a file that exists but is untracked as a manual fix. An existing README or workflow is still never edited; those findings stay for an agent.

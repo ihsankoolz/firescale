@@ -4,7 +4,7 @@
 
 `firescale` is a free toolkit for small teams where the rules are the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Every rule ships a **check**, an optional **deterministic fix**, and a portable **SKILL.md**, so a human, a CI job or any coding agent (Claude Code, Codex, Cursor) can find what is wrong with a repo and fix it the same way. One `fscale verify` command is the "definition of done" that all of them call. It works on any repo, with or without Nx or Turborepo, on Windows, macOS and Linux.
 
-Built today: `check`, `fix`, `verify`, agent hooks and two rule packs. Planned, in [PLAN.md](PLAN.md): `init`, `adopt` and `sync` driven by the rules' own fixes, a group-project pack and `doctor`, a referee inside `verify` (blame-aware failures and a tamper guard), a guarded agent runner with a ledger, and stack packs.
+Built today: `check`, `fix`, `verify`, agent hooks, two rule packs, and `init`, `adopt` and `sync` driven by the rules' own fixes ([docs/init.md](docs/init.md)). Planned, in [PLAN.md](PLAN.md): a group-project pack and `doctor`, a referee inside `verify` (blame-aware failures and a tamper guard), a guarded agent runner with a ledger, and stack packs.
 
 Install guide: [docs/install.md](docs/install.md) (not published to npm yet).
 
@@ -20,6 +20,9 @@ fscale check --rules "core/*"         # only some rules
 fscale check --no-cache               # ignore the result cache in .firescale/
 fscale fix --dry-run                  # show what the deterministic fixes would change
 fscale fix                            # apply them, in dependency order, until nothing is left to fix
+fscale init                           # in an empty folder: config, then every fix; no templates
+fscale adopt --dry-run                # existing repo: preview what is missing; `fscale adopt` adds it
+fscale sync --check                   # CI: exit 1 when `fscale sync` would repair something
 fscale check --affected               # only report what your changes touch
 fscale facts                          # detected package manager, tools and projects
 fscale explain core/no-committed-env  # what a rule checks and how to fix it

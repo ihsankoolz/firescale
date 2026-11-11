@@ -14,7 +14,7 @@ fscale fix --rules "core/*"
 
 ## The fix loop
 
-`fscale fix` does not run each fix once. It runs them in passes, until a pass finds nothing left to fix (ADR 0018). This is the engine that `init`, `adopt` and `sync` will use.
+`fscale fix` does not run each fix once. It runs them in passes, until a pass finds nothing left to fix (ADR 0018). `init`, `adopt` and `sync` run the same loop over every rule that is on ([init.md](init.md)).
 
 - **Order.** A rule can say that its fix must run after another rule's, with `after` (see [writing-rules.md](writing-rules.md)). Otherwise fixes run in order of rule id. `--rules` does not change the order of the rules it selects, and a dependency it leaves out simply does not run.
 - **Passes.** A fix that needs something another fix creates, without saying so, gets it one pass later.
