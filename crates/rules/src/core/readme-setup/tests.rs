@@ -105,3 +105,12 @@ mod metadata {
         assert_eq!(meta.inputs, vec!["README*", "readme*"]);
     }
 }
+
+#[test]
+fn a_readme_that_is_not_utf8_does_not_abort_the_run() {
+    let f = Fixture::new(&[("README.md", "x")], Track::All).unwrap();
+    let mut bytes = GOOD.as_bytes().to_vec();
+    bytes.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+    std::fs::write(f.root().join("README.md"), bytes).unwrap();
+    assert!(f.check(&ReadmeSetup, &Options::new()).unwrap().is_empty());
+}

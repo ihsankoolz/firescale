@@ -129,3 +129,10 @@ mod fixed_repo {
         assert_eq!(f.read("package.json").unwrap(), "{}");
     }
 }
+
+#[test]
+fn package_json_with_a_byte_order_mark_is_parsed() {
+    let bom = format!("\u{feff}{FULL}");
+    let f = Fixture::new(&[("package.json", bom.as_str())], Track::All).unwrap();
+    assert!(missing(&f, &Options::new()).is_empty());
+}

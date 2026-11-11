@@ -25,7 +25,7 @@ pub struct SingleLockfile;
 
 /// The manager name from `packageManager` (`pnpm@9.1.0` -> `pnpm`).
 fn declared_manager(package_json: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(package_json).ok()?;
+    let value: Value = serde_json::from_str(package_json.trim_start_matches('\u{feff}')).ok()?;
     let declared = value.get("packageManager")?.as_str()?;
     let name = declared.split('@').next().unwrap_or(declared).trim();
     (!name.is_empty()).then(|| name.to_owned())

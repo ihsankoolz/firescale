@@ -150,3 +150,14 @@ mod fixed_repo {
             .is_empty());
     }
 }
+
+#[test]
+fn byte_order_mark_does_not_hide_the_declared_manager() {
+    let pkg = "\u{feff}{\"name\":\"demo\",\"packageManager\":\"yarn@4.1.0\"}\n";
+    let f = Fixture::new(
+        &[("package.json", pkg), ("package-lock.json", LOCK)],
+        Track::All,
+    )
+    .unwrap();
+    assert_eq!(files(&f), ["package-lock.json"]);
+}

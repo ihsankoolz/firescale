@@ -120,6 +120,21 @@ mod metadata {
         assert_eq!(meta.severity, Severity::Medium);
         assert_eq!(meta.category, Category::Reliability);
         assert!(!meta.has_fix);
-        assert_eq!(meta.inputs.len(), 7);
+        assert_eq!(meta.inputs.len(), 16);
     }
+}
+
+#[test]
+fn other_ci_systems_silence_the_rule() {
+    for file in [".travis.yml", ".buildkite/pipeline.yaml"] {
+        let f = Fixture::new(&[(file, "script: make\n")], Track::All).unwrap();
+        assert!(check(&f).is_empty(), "{file}");
+    }
+}
+
+#[test]
+fn meta_inputs_list_other_ci_configs() {
+    let inputs = CiExists.meta().inputs;
+    assert!(inputs.contains(&".drone.yml".to_owned()));
+    assert!(inputs.contains(&".appveyor.yml".to_owned()));
 }

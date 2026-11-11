@@ -15,11 +15,12 @@ The `core` pack is on by default. Every rule is report-only (`evaluated`) until 
 
 ## Options
 
-| Rule                        | Option       | Meaning                                                           |
-| --------------------------- | ------------ | ----------------------------------------------------------------- |
-| `core/no-committed-env`     | `allow`      | Env file names that may be committed. Default `[".env.example"]`. |
-| `core/no-secrets-in-source` | `allowFiles` | Repo-relative files to skip.                                      |
-| `core/env-example`          | `ignore`     | Extra variable names that need not be listed.                     |
-| `core/scripts-present`      | `required`   | Script names to require instead of `lint`, `test`, `build`.       |
+| Rule                        | Option         | Meaning                                                                 |
+| --------------------------- | -------------- | ----------------------------------------------------------------------- |
+| `core/no-committed-env`     | `allow`        | Env file names that may be committed. Default `[".env.example"]`.       |
+| `core/no-secrets-in-source` | `allowFiles`   | Repo-relative files to skip.                                            |
+| `core/env-example`          | `ignore`       | Extra variable names that need not be listed.                           |
+| `core/env-example`          | `excludePaths` | Repo-relative path prefixes that are not scanned, for example fixtures. |
+| `core/scripts-present`      | `required`     | Script names to require instead of `lint`, `test`, `build`.             |
 
 To silence one line for the secrets rule, put `firescale:allow-secret` in a comment on that line.

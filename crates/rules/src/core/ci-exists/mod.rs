@@ -15,12 +15,21 @@ const WORKFLOWS: &str = ".github/workflows";
 
 /// Configs of other CI systems. The rule only understands GitHub Actions
 /// triggers, so any of these at the root means there is nothing to report.
-const OTHER_CI: [&str; 5] = [
+const OTHER_CI: [&str; 14] = [
     ".gitlab-ci.yml",
     ".circleci/config.yml",
     "azure-pipelines.yml",
     "bitbucket-pipelines.yml",
     "Jenkinsfile",
+    ".travis.yml",
+    ".gitlab-ci.yaml",
+    ".circleci/config.yaml",
+    ".drone.yml",
+    ".woodpecker.yml",
+    ".buildkite/pipeline.yml",
+    ".buildkite/pipeline.yaml",
+    "appveyor.yml",
+    ".appveyor.yml",
 ];
 
 pub struct CiExists;
@@ -71,18 +80,11 @@ impl BuiltinRule for CiExists {
             severity: Severity::Medium,
             category: Category::Reliability,
             description: "A CI workflow exists and runs on pull requests.".to_owned(),
-            inputs: [
-                ".github/workflows/*.yml",
-                ".github/workflows/*.yaml",
-                ".gitlab-ci.yml",
-                ".circleci/config.yml",
-                "azure-pipelines.yml",
-                "bitbucket-pipelines.yml",
-                "Jenkinsfile",
-            ]
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect(),
+            inputs: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+                .iter()
+                .chain(OTHER_CI.iter())
+                .map(|s| (*s).to_owned())
+                .collect(),
             has_fix: false,
         }
     }

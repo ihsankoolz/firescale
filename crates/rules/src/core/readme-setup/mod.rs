@@ -222,7 +222,13 @@ impl BuiltinRule for ReadmeSetup {
                 fixable: Fixable::Agent,
             }]);
         };
-        let text = ctx.read(&file)?.unwrap_or_default();
+        // Bytes plus a lossy decode: a README in another encoding must not abort the run.
+        let path = file
+            .split('/')
+            .fold(ctx.root().to_path_buf(), |p, part| p.join(part));
+        let text = fs::read(&path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
         let mut findings = Vec::new();
         let mut missing = |part: &str, hint: &str| {
             findings.push(Finding {

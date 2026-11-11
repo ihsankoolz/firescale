@@ -26,7 +26,9 @@ const BUILT_IN_IGNORE: [&str; 14] = [
     "NODE_ENV", "CI", "PATH", "HOME", "PWD", "USER", "SHELL", "TERM", "TMPDIR", "TEMP", "TMP",
     "LANG", "TZ", "DEBUG",
 ];
-const IGNORE_PREFIXES: [&str; 4] = ["npm_", "GITHUB_", "RUNNER_", "FSCALE_"];
+const IGNORE_PREFIXES: [&str; 7] = [
+    "npm_", "GITHUB_", "RUNNER_", "FSCALE_", "CARGO_", "RUSTC_", "RUSTUP_",
+];
 
 /// Patterns where the name follows directly and ends at a non-identifier character.
 const BARE_PATTERNS: [&str; 2] = ["process.env.", "import.meta.env."];
@@ -77,13 +79,31 @@ fn parse_name(rest: &str, quoted: bool) -> Option<&str> {
     ok.then(|| &rest[..len])
 }
 
+/// True when the pattern is not the tail of a longer identifier or member path.
+fn boundary_ok(before: &str, pattern: &str) -> bool {
+    let Some(prev) = before.chars().next_back() else {
+        return true;
+    };
+    if prev.is_ascii_alphanumeric() || prev == '_' || prev == '$' {
+        return false;
+    }
+    let starts_with_ident = pattern.starts_with(|c: char| c.is_ascii_alphabetic());
+    // `std::env::var` is reached through a path, so `::` is fine; a `.` is not.
+    !(starts_with_ident && prev == '.')
+}
+
 fn names_in_line(line: &str) -> Vec<&str> {
     let mut found = Vec::new();
     for (patterns, quoted) in [(&BARE_PATTERNS[..], false), (&QUOTED_PATTERNS[..], true)] {
         for pattern in patterns {
             let mut from = 0;
             while let Some(at) = line[from..].find(pattern) {
-                let start = from + at + pattern.len();
+                let begin = from + at;
+                let start = begin + pattern.len();
+                if !boundary_ok(&line[..begin], pattern) {
+                    from = start;
+                    continue;
+                }
                 if let Some(name) = parse_name(&line[start..], quoted) {
                     found.push(name);
                 }
@@ -128,11 +148,41 @@ fn is_source(file: &str) -> bool {
 }
 
 /// Every env var read in tracked source files: name -> (file, line) of the first read.
+/// Reads the `excludePaths` option: repo-relative path prefixes whose files
+/// are not scanned, for example fixtures that contain env reads on purpose.
+fn excluded_paths(ctx: &RuleContext) -> Result<Vec<String>> {
+    let Some(option) = ctx.options().get("excludePaths") else {
+        return Ok(Vec::new());
+    };
+    let paths: Option<Vec<String>> = option.as_array().and_then(|items| {
+        items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .filter(|path| {
+                        !path.is_empty() && !path.starts_with('/') && !path.contains('\\')
+                    })
+                    .map(str::to_owned)
+            })
+            .collect()
+    });
+    paths.ok_or_else(|| {
+        Error::user(
+            "core/env-example: option \"excludePaths\" must be a list of repo-relative path prefixes with forward slashes, for example [\"tests/fixtures/\"]. Fix it in your firescale config.",
+        )
+    })
+}
+
 fn scan(ctx: &RuleContext) -> Result<BTreeMap<String, (String, u32)>> {
     let ignore = ignore_list(ctx)?;
+    let excluded = excluded_paths(ctx)?;
     let mut found: BTreeMap<String, (String, u32)> = BTreeMap::new();
     for file in ctx.git().tracked_files()? {
-        if !is_source(&file) {
+        if !is_source(&file)
+            || excluded
+                .iter()
+                .any(|prefix| file.starts_with(prefix.as_str()))
+        {
             continue;
         }
         let path = file
@@ -175,6 +225,11 @@ fn listed_names(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// True when `.env.example` exists but is a directory or other non-file.
+fn example_is_not_a_file(ctx: &RuleContext) -> bool {
+    fs::metadata(ctx.root().join(EXAMPLE)).is_ok_and(|m| !m.is_file())
+}
+
 impl BuiltinRule for EnvExample {
     fn meta(&self) -> RuleMeta {
         let mut inputs: Vec<String> = EXTENSIONS.iter().map(|e| format!("**/*.{e}")).collect();
@@ -197,6 +252,16 @@ impl BuiltinRule for EnvExample {
         let used = scan(ctx)?;
         if used.is_empty() {
             return Ok(Vec::new());
+        }
+        if example_is_not_a_file(ctx) {
+            return Ok(vec![Finding {
+                message: ".env.example must be a file, but it is not. Replace it with a file that lists one NAME= line per variable."
+                    .to_owned(),
+                file: EXAMPLE.to_owned(),
+                range: None,
+                project: None,
+                fixable: Fixable::Manual,
+            }]);
         }
         let Some(example) = ctx.read(EXAMPLE)? else {
             let mut names: Vec<&str> = used.keys().map(String::as_str).take(10).collect();
@@ -237,6 +302,9 @@ impl BuiltinRule for EnvExample {
 
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         // Work from the current state, so a stale diagnostic list cannot cause a second change.
+        if example_is_not_a_file(ctx) {
+            return Ok(FixResult::default());
+        }
         let used = scan(ctx)?;
         let current = ctx.read(EXAMPLE)?;
         let listed = current.as_deref().map(listed_names).unwrap_or_default();

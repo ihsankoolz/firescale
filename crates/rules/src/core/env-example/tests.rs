@@ -231,3 +231,109 @@ mod metadata {
         assert!(meta.inputs.contains(&".env.example".to_owned()));
     }
 }
+
+mod regressions {
+    use super::*;
+
+    fn messages(src: &str) -> Vec<String> {
+        let f = repo(&[("src/app.rb", src)]);
+        check(&f).into_iter().map(|d| d.message).collect()
+    }
+
+    #[test]
+    fn cargo_variables_are_ignored() {
+        let f = repo(&[(
+            "src/main.rs",
+            "let d = std::env::var(\"CARGO_MANIFEST_DIR\");\nlet r = std::env::var(\"RUSTUP_HOME\");\nlet c = std::env::var(\"RUSTC_WRAPPER\");\n",
+        )]);
+        assert!(check(&f).is_empty());
+    }
+
+    #[test]
+    fn a_directory_named_env_example_is_one_manual_finding_and_no_fix() {
+        let f = repo(&[("src/app.js", APP), (".env.example/placeholder.txt", "x\n")]);
+        let found = check(&f);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].file, ".env.example");
+        assert_eq!(found[0].fixable, Fixable::Manual);
+        let outcome = f.fix(&EnvExample, &Options::new()).unwrap();
+        assert!(outcome.changed_files.is_empty());
+    }
+
+    #[test]
+    fn longer_identifiers_and_member_paths_are_not_reads() {
+        assert!(
+            messages("x = MY_ENV[\"FOO\"]\ny = config.ENV[\"FOO\"]\nz = myprocess.env.FOO\n")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn real_reads_still_match() {
+        let f = repo(&[
+            ("src/a.rb", "x = ENV[\"RB_NAME\"]\n"),
+            ("src/b.rs", "let x = std::env::var(\"RS_NAME\");\n"),
+            ("src/c.js", "const x = process.env.JS_NAME;\n"),
+            (".env.example", "OTHER=\n"),
+        ]);
+        assert_eq!(check(&f).len(), 3);
+    }
+}
+
+mod exclude_paths {
+    use firescale_core::rule::Options;
+    use firescale_core::testing::{Fixture, Track};
+    use serde_json::json;
+
+    use super::super::EnvExample;
+
+    fn options(value: serde_json::Value) -> Options {
+        value.as_object().cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn files_under_an_excluded_prefix_are_not_scanned() {
+        let fixture = Fixture::new(
+            &[
+                ("src/app.js", "const url = process.env.EXAMPLE_APP_URL;\n"),
+                (
+                    "fixtures/sample.js",
+                    "const x = process.env.EXAMPLE_FIXTURE_ONLY;\n",
+                ),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        let all = fixture.check(&EnvExample, &Options::new()).unwrap();
+        assert!(
+            all[0].message.contains("EXAMPLE_FIXTURE_ONLY"),
+            "{}",
+            all[0].message
+        );
+
+        let narrowed = fixture
+            .check(
+                &EnvExample,
+                &options(json!({ "excludePaths": ["fixtures/"] })),
+            )
+            .unwrap();
+        assert_eq!(narrowed.len(), 1);
+        assert!(narrowed[0].message.contains("EXAMPLE_APP_URL"));
+        assert!(!narrowed[0].message.contains("EXAMPLE_FIXTURE_ONLY"));
+    }
+
+    #[test]
+    fn an_invalid_exclude_paths_option_is_rejected_with_a_next_step() {
+        let fixture = Fixture::new(&[("src/app.js", "x\n")], Track::All).unwrap();
+        for bad in [json!("fixtures/"), json!(["/abs"]), json!([""]), json!([1])] {
+            let error = fixture
+                .check(&EnvExample, &options(json!({ "excludePaths": bad })))
+                .unwrap_err();
+            assert!(
+                error.message().contains("excludePaths"),
+                "{}",
+                error.message()
+            );
+        }
+    }
+}

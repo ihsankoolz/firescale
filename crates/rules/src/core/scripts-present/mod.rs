@@ -67,7 +67,7 @@ impl BuiltinRule for ScriptsPresent {
         let Some(text) = ctx.read(PACKAGE_JSON)? else {
             return Ok(Vec::new());
         };
-        let Ok(package) = serde_json::from_str::<Value>(&text) else {
+        let Ok(package) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else {
             return Ok(vec![Finding {
                 message: "package.json is not valid JSON. Fix the syntax error, then run the check again."
                     .to_owned(),
