@@ -50,7 +50,7 @@ Every command is served by the native `fscale` binary. Commands marked **Node** 
 | `fscale fix [--dry-run] [--rules <glob>]` | Apply deterministic fixes, in dependency order, until nothing is left to fix (§15). |
 | `fscale fix --agent <claude\|codex\|gemini> [--rule <id>]` | Hand one rule's remaining violations to an agent, with guardrails. **Node** (agent adapter). |
 | `fscale explain <rule>` | Print what a rule checks, why, and how to fix it by hand. |
-| `fscale verify [--affected] [--base <ref>] [--json]` | Conformance, then lint, typecheck and tests, judged by the referee (§8). One compact failure summary. |
+| `fscale verify [--affected] [--base <ref>] [--json]` | Conformance, then lint, typecheck and tests, judged by the referee (§8) against the base commit. One compact failure summary. |
 | `fscale hooks install [--agent <name>\|--all]` | Write agent hook config that calls `fscale verify` before the agent may stop. |
 | `fscale facts [--json]` | Print detected repo facts: projects, package manager, commands, project graph. |
 
@@ -58,8 +58,8 @@ Every command is served by the native `fscale` binary. Commands marked **Node** 
 
 | Command | Purpose |
 |---|---|
-| `fscale init [--packs <list>]` | Build a new repo: write the config, then run every enabled rule's fix until `check` passes. No templates. |
-| `fscale adopt [--dry-run]` | The same loop on an existing repo. Shows the plan first and never overwrites a file it did not create. |
+| `fscale init [--packs <list>]` | Build a new repo: write the config, then run every enabled rule's fix until `check` passes. No templates. Default packs: `core` and `agent-ready`. |
+| `fscale adopt [--dry-run]` | The same loop on an existing repo. Never replaces content a person wrote. |
 | `fscale sync [--check]` | The same loop again, to repair drift. `--check` changes nothing and fails when something would change, for CI. |
 | `fscale add <generator> --json <input> [--dry-run]` | Scaffold an app, package or service from JSON input. **Node** (generators). |
 | `fscale schema <generator>` | Print a generator's input JSON schema, so agents can call it correctly. **Node** (generators). |
@@ -151,7 +151,7 @@ A custom pack is listed in the config by path (`packs: ['core', './tools/rules/p
 
 **No more hand-written generic hygiene rules will be added beyond these eight.** alint already covers that ground. If alint is installed, firescale may ingest its output and report it as diagnostics; this is optional and never a dependency.
 
-**agent-ready** (built, opt-in): `agents-md` (AGENTS.md exists), `commands-documented`, `single-test-command`, `verify-hook`. Its fixes, which write the agent files, come with §16.
+**agent-ready** (built; opt-in for `check` in an existing repo, on by default in `fscale init`): `agents-md` (AGENTS.md exists), `commands-documented`, `single-test-command`, `verify-hook`. Its fixes, which write the agent files, come with §16.
 
 **group-project** (planned, opt-in): a pull request template, a branch naming rule, a contributing guide, and a CI workflow that runs `fscale verify`.
 
@@ -197,9 +197,11 @@ Each failure gets a label, and only `new` blocks:
 | `fixed`        | Failed on the base, passes on the head.         |
 | `flaky`        | Failed on the head, passed when run again.      |
 
+- The **head** is the working tree, uncommitted changes included. The **base** is the merge base with `--base <ref>`, or with the default branch.
 - The base commit is run in a git worktree. The user's working tree and index are never touched.
+- With a base, every step runs, so an old failure in one step cannot hide a new failure in a later one.
 - Base results are cached by base SHA + toolchain versions + lockfile hash.
-- With no base that differs from the head (on the default branch itself, or outside git), every failure blocks, as before.
+- With no base that differs from the head (a clean tree on the default branch, or outside git), every failure blocks, as before.
 - A `new` failure is run again before it blocks. **No flaky-test history is kept**: the rerun is all there is.
 - The stop hook uses the same labels, so an agent is only sent back for what it broke.
 
@@ -311,14 +313,14 @@ MIT.
 
 1. Run `check`.
 2. Run the deterministic fix of every enabled rule that has violations, in the order given by the rules' `after` declarations.
-3. Repeat until no deterministic violation is left.
+3. Repeat until no deterministic violation is left. A pass that changes nothing while such violations remain is an error (see "Convergent").
 
 Requirements:
 
 - **Idempotent.** Every fix, run twice, changes nothing the second time.
 - **Ordered.** Fixes run after the fixes they declare a dependency on. A cycle or an unknown rule id is an error before anything is written.
 - **Convergent.** The loop has a pass limit. If it is reached, or two fixes keep undoing each other, the command stops with a clear error that names the rules and files, and exits non-zero. It never reports success on a repo that does not pass.
-- **Careful with existing work.** `adopt` and `sync` never overwrite a file firescale did not create, except inside a managed block.
+- **Careful with existing work.** A fix never replaces content a person wrote. It creates a missing file, merges into a structured file, appends, or rewrites inside a managed block.
 
 What differs between the commands:
 
@@ -333,7 +335,7 @@ Violations that only an agent or a person can fix do not block the loop. They ar
 
 ## 16. Born agent-ready
 
-- `fscale init` with the `agent-ready` pack writes, for Claude Code, Codex and Cursor: an AGENTS.md with a **managed block**, the skills of the enabled rules, the verify hooks, and safe permission settings (no reading of env files or secrets; the repo's own check commands allowed).
+- `fscale init` turns on the `agent-ready` pack by default, so a new repo gets, for Claude Code, Codex and Cursor: an AGENTS.md with a **managed block**, the skills of the enabled rules, the verify hooks, and safe permission settings (no reading of env files or secrets; the repo's own check commands allowed).
 - These are fixes of `agent-ready` rules, so they follow §15. `fscale sync` repairs them.
 - Text outside the managed block of AGENTS.md belongs to the team and is never rewritten.
 - Generators (`fscale add`) take JSON input and support `--dry-run`. `fscale schema <generator>` prints the input schema. A skill tells agents to call `fscale add` instead of hand-writing boilerplate.

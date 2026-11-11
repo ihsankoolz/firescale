@@ -2,7 +2,9 @@
 
 > Fire scale is the rough crust that forms on hot metal in a forge. A smith knocks it off to show clean work.
 
-`firescale` is a free, stack-agnostic conformance and verify engine. Every rule ships a **check**, an optional **deterministic fix**, and a portable **SKILL.md**, so a human, a CI job or any coding agent (Claude Code, Codex, Gemini CLI, Cursor) can find what is wrong with a repo and fix it the same way. One `fscale verify` command is the "definition of done" that all of them call. It works on any repo, with or without Nx or Turborepo, on Windows, macOS and Linux.
+`firescale` is a free toolkit for small teams where the rules are the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Every rule ships a **check**, an optional **deterministic fix**, and a portable **SKILL.md**, so a human, a CI job or any coding agent (Claude Code, Codex, Cursor) can find what is wrong with a repo and fix it the same way. One `fscale verify` command is the "definition of done" that all of them call. It works on any repo, with or without Nx or Turborepo, on Windows, macOS and Linux.
+
+Built today: `check`, `fix`, `verify`, agent hooks and two rule packs. Planned, in [PLAN.md](PLAN.md): `init`, `adopt` and `sync` driven by the rules' own fixes, a group-project pack and `doctor`, a referee inside `verify` (blame-aware failures and a tamper guard), a guarded agent runner with a ledger, and stack packs.
 
 Install guide: [docs/install.md](docs/install.md) (not published to npm yet).
 

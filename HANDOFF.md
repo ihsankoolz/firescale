@@ -8,7 +8,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Merged without full CI:** M6 npm packaging. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
 - **M7 `verify` and hooks:** built and reviewed on branch `m7-verify-hooks`, pull request #9. **Not merged if you are reading this on that branch:** its CI jobs never started (Actions limit). See "CI owed" in DECISIONS.md. Re-run the failed jobs when Actions works, fix anything Windows or macOS shows, then merge.
 - **Direction changed on 2026-11-11 (ADR 0015).** SPEC.md and PLAN.md from M8 onward were rewritten in a docs-only pull request, stacked on the M7 branch. The owner wants to read the new plan before anything is built: **do not start M8 until that pull request is merged.**
-- **Not started, in order:** M8 the fix loop, M9 `init`/`adopt`/`sync`, M10 group-project pack, M11 `doctor`, M12 agent files from `init`, M13 generators, M14 and M15 blame-aware verify, M16 and M17 tamper guard, M18 guarded agent runner, M19 adapters and ledger, M20 to M23 stack packs.
+- **Not started, in order:** M8 the fix loop, M9 `init`/`adopt`/`sync`, M10 group-project pack, M11 `doctor`, M12 agent files from `init`, M13 generators, M14 to M16 blame-aware verify, M17 to M20 tamper guard, M21 guarded agent runner, M22 adapters and `fscale ledger`, M23 to M26 stack packs.
 
 ## How to resume
 
@@ -40,4 +40,4 @@ Notes from M7 that the next milestones build on:
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
 - Nothing can be published to npm yet (M6).
-- The manual test with a real agent (now M19) is not reachable yet.
+- The manual test with a real agent (now M22) is not reachable yet.

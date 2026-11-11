@@ -14,7 +14,7 @@ Not yet proven on macOS or Windows:
 ## Needs your decision (all milestones, most important first)
 
 - **(Direction) Read the new PLAN.md from M8 onward before anything is built.** It is in its own pull request, which is deliberately not merged. The points most worth your eye are listed under "Direction change" below.
-- **(Direction) Publishing to npm now gates real use.** `doctor` and the group-project pack are for teammates, and teammates can only install firescale once it is on npm. Publishing is yours to do (see "Publishing to npm"). Consider doing it before M10.
+- **(Direction) Publishing to npm now gates real use.** `doctor` and the group-project pack are for teammates, and teammates can only install firescale once it is on npm. Publishing is yours to do (see "Publishing to npm"). The CI workflow that `init` will generate (M9) also runs `npx firescale verify`. Consider publishing before M9.
 - **(Direction) Blame-aware verify becomes the default behaviour of `fscale verify`** whenever there is a base commit to compare with. A failure that already exists on the base will no longer fail verify or hold an agent back. On the default branch itself every failure still blocks. Say if you would rather have it behind a flag.
 
 - **(M7) The Cursor hook format is unconfirmed.** cursor.com was blocked from the build session, twice. `fscale hooks install` writes `.cursor/hooks.json` from a best reading and prints a note. Someone with access to Cursor's docs should check it (ADR 0014), or allow `cursor.com` in the cloud environment's network settings so a session can.
@@ -43,16 +43,22 @@ Not yet proven on macOS or Windows:
 
 - ADR 0015: firescale stays a toolkit for small teams and gains five changes: rules are the scaffold, born agent-ready, a built-in referee (blame-aware verify and a tamper guard), group-project mode, and a ledger.
 - SPEC.md updated to match. Sections 1 to 14 keep their numbers, because ADRs and code comments cite them; the new sections are 15 (rules as the scaffold), 16 (born agent-ready) and 17 (group-project mode). The referee is in section 8, with verify.
-- PLAN.md rewritten from M8 onward: sixteen milestones, M8 to M23, each sized for one session.
+- PLAN.md rewritten from M8 onward: nineteen milestones, M8 to M26, each sized for one session.
+- README.md's first paragraph now gives the new pitch.
 
 **Decisions made for you** (all ADR 0015)
 
 - **The docs describe the product in its own words.** Your brief described it by comparison with another product, by name. AGENTS.md's originality rule says that name must never be used in this repo, so the ADR, SPEC and PLAN say "a toolkit for small teams" instead. The meaning is unchanged.
-- **Milestone order: yours, with two adjustments.** (1) The fix loop (ordering by declared dependencies, the convergence error) is its own milestone, M8, before `init`, because `init`, `adopt` and `sync` all stand on it. (2) The study of trustbut, goodhart and skylos opens the first referee milestone (M14) instead of being a milestone of its own.
-- **Each theme is split in two** so a milestone fits a session: scaffold (M8 loop, M9 commands), group project (M10 pack, M11 doctor), agent-ready (M12 agent files, M13 generators), blame-aware verify (M14 base run, M15 per-test labels and reruns), tamper guard (M16 tests and assertions, M17 config, CI and approvals), runner (M18 guardrails, M19 adapters and ledger).
+- **Milestone order: yours, with adjustments.** (1) The fix loop (ordering by declared dependencies, the convergence error) is its own milestone, M8, before `init`, because `init`, `adopt` and `sync` all stand on it. (2) The study of trustbut, goodhart and skylos opens the tamper guard (M17) instead of being a milestone of its own. (3) The ledger file is written by the runner (M21), since that is one of its guardrails; `fscale ledger` and cost come with the adapters (M22).
+- **Themes are split so a milestone fits a session:** scaffold (M8 loop, M9 commands), group project (M10 pack, M11 doctor), agent-ready (M12 agent files, M13 generators), blame-aware verify (M14 base run, M15 per-test labels, M16 reruns and the stop hook), tamper guard (M17 design and JavaScript, M18 Rust, Python and policy, M19 config and CI detectors, M20 approvals and measured rates), runner (M21 guardrails and ledger file, M22 adapters and `fscale ledger`).
+- **`fscale init` turns on `agent-ready` by default**, because you asked that `init` also writes the agent files. For `fscale check` in an existing repo the pack stays opt-in (ADR 0014).
+- **Verify with a base runs every step** instead of stopping at the first failure, and `--base` works without `--affected`. Both change what M7 built, and are needed so that an old failure cannot hide a new one.
+- **"Head" means the working tree**, uncommitted changes included, because that is what a stop hook judges.
 - **Stack packs: one milestone each, Python first, then Next.js, Supabase, Expo** (simplest toolchain first).
 - **`init` no longer needs Node.** It is the fix loop, in Rust. Only `add` and `schema` use the TypeScript generators.
-- **`adopt` and `sync` never overwrite a file firescale did not create**, except inside a managed block.
+- **A fix never replaces content a person wrote.** It creates, merges, appends, or rewrites a managed block.
+- **Gemini CLI support is under "Later".** SPEC names Gemini, but nothing in your brief asks for it.
+- **A docs review before the pull request** found milestones that were too large (the tamper guard and blame-aware verify were split further), contradictions with M7's behaviour, and missing test boxes. All were addressed.
 - **Reading alint output is under "Later"**, not a numbered milestone, since you called it optional.
 - **This pull request is stacked on the M7 branch**, because M7 could not be merged (its CI did not start; see "CI owed"). Its base is `m7-verify-hooks`, so it shows only the docs. Merge M7 first; GitHub then points this one at `main`.
 
@@ -60,8 +66,10 @@ Not yet proven on macOS or Windows:
 
 - The exact `after` syntax and the loop's pass limit (M8).
 - Which agent permission settings count as "safe" (M12).
-- Where human approvals for changed snapshots are stored, so that an agent cannot write its own (M17).
-- Which tree-sitter grammars ship, and what they cost in binary size (M16).
+- How verify gets per-test results from a runner without changing the user's command (M15).
+- Which tree-sitter grammars ship, and what they cost in binary size (M17).
+- Where human approvals for changed snapshots are stored, so that an agent cannot write its own (M20).
+- How the base worktree gets its dependencies installed, and what that costs (M14).
 
 ## M7 — `verify` and agent hooks
 
@@ -233,7 +241,7 @@ Not yet proven on macOS or Windows:
 - Decide the items under "Needs your decision" at the top of this file.
 - Commits made by the build sessions use your name and email but are not signed, so GitHub shows them as "Unverified". If you want verified history, sign going forward; re-signing old commits means rewriting history.
 - The branches `m0-skeleton`, `m1-rule-sdk`, `m2-rust-front-door`, `m3-engine-cache` and `m4-fix-sarif-facts` are merged and can be deleted.
-- The manual test with a real agent (now M19) is not reachable yet.
+- The manual test with a real agent (now M22) is not reachable yet.
 
 ## Publishing to npm
 

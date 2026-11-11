@@ -32,7 +32,7 @@ Pitch: _a toolkit for small teams where the rules are the scaffold, every repo i
 
 ### 2. Born agent-ready
 
-- `init` also writes what a coding agent needs: an AGENTS.md with a managed block, the rule skills, the verify hooks, and safe permission settings, for Claude Code, Codex and Cursor. These are fixes of the `agent-ready` rules, so they follow change 1.
+- `init` turns on the `agent-ready` pack by default, so it also writes what a coding agent needs: an AGENTS.md with a managed block, the rule skills, the verify hooks, and safe permission settings, for Claude Code, Codex and Cursor. These are fixes of the `agent-ready` rules, so they follow change 1.
 - Text outside the managed block in AGENTS.md belongs to the team and is never rewritten.
 - Generators stay: `fscale add <generator>` takes its input as JSON and supports `--dry-run`, and `fscale schema <generator>` prints the input schema, so an agent can call a generator correctly without reading its source.
 
@@ -47,7 +47,9 @@ Pitch: _a toolkit for small teams where the rules are the scaffold, every repo i
 | `fixed`        | Failed on the base, passes on the head.         | no     |
 | `flaky`        | Failed on the head, then passed when run again. | no     |
 
+- The head is the working tree, uncommitted changes included. The base is the merge base with a given ref, or with the default branch.
 - The base commit is run in a git worktree, never in the user's working tree.
+- With a base, verify runs every step instead of stopping at the first failure, so an old failure cannot hide a new one. This supersedes that point of ADR 0014 once it is built.
 - Base results are cached by base SHA + toolchain versions + lockfile hash, so the base is run once per base commit.
 - A `new` failure is run a second time before it blocks. If it passes then, it is `flaky`. That is the whole of flaky handling: **no flaky-test history is kept.**
 
@@ -81,12 +83,17 @@ Prior art to study before designing it: trustbut, goodhart, skylos. What firesca
 
 ### Order of work
 
-The suggested order was: rules-as-scaffold, group-project pack and doctor, born agent-ready, blame-aware verify, tamper guard, guarded agent runner and ledger, stack packs. PLAN.md keeps that order. Each theme is split so that one milestone fits one session. Two adjustments, both because of dependencies:
+The suggested order was: rules-as-scaffold, group-project pack and doctor, born agent-ready, blame-aware verify, tamper guard, guarded agent runner and ledger, stack packs. PLAN.md keeps that order of themes. Each theme is split so that one milestone fits one session, which gives nineteen milestones, M8 to M26. Adjustments, each because of a dependency:
 
-1. **The fix loop is its own milestone, before `init`.** Ordering by declared dependencies and the convergence error are engine work that `init`, `adopt` and `sync` all stand on, and they can be proven with the fixes that exist today.
-2. **Prior-art study opens each referee theme** instead of being a milestone of its own, so the design ADR and the first working slice land together.
+1. **The fix loop is its own milestone (M8), before `init`.** Ordering by declared dependencies and the convergence error are engine work that `init`, `adopt` and `sync` all stand on, and they can be proven with the fixes that exist today.
+2. **The study of trustbut, goodhart and skylos opens the tamper guard (M17)**, where it informs the design, and is not a milestone of its own.
+3. **The ledger file is written by the runner milestone (M21)**, because appending to it is one of the runner's guardrails. The `fscale ledger` command and cost reporting come with the adapters (M22).
+4. **The tamper guard is four milestones** (first language, more languages and policy, config and CI detectors, approvals and measured rates), and blame-aware verify three (base run, per-test labels, reruns and the stop hook). Each was too large for one session as a single milestone.
 
-One thing the order cannot fix: group-project mode is for teammates, and teammates need to install firescale. Publishing to npm is a manual step that only the owner can take (DECISIONS.md, "Publishing to npm"). It is not a milestone, but `doctor` and the group-project pack are only useful to a real team once it is done.
+Two things the order cannot fix, both outside the milestones:
+
+- The CI workflow that `init` generates runs `npx firescale verify`, and teammates install firescale from npm. Publishing to npm is a manual step that only the owner can take (DECISIONS.md, "Publishing to npm"). Until then, generated CI and group-project mode work only in tests.
+- Cursor's documentation could not be reached from the build environment. M12 needs it to confirm Cursor's formats.
 
 ## Consequences
 
@@ -94,6 +101,8 @@ One thing the order cannot fix: group-project mode is for teammates, and teammat
 - The rule contract grows: a rule can declare which rules come before it, and fixes that create files become normal. Custom TypeScript rules get the same field.
 - The `agent-ready` rules gain fixes. ADR 0014 left them without fixes because generating those files "belongs to `init`"; with this ADR, `init` is those fixes.
 - tree-sitter and its grammars become dependencies of the binary when the tamper guard is built. That needs its own ADR, with the size and build-time cost measured.
+- `fscale verify --base <ref>` becomes valid without `--affected`, and verify with a base runs every step. Both change behaviour that M7 built (ADR 0014); the blame-aware ADR (M14) records it.
+- A fix never replaces content a person wrote: it creates, merges, appends, or rewrites a managed block. The existing fixes (`gitignore-basics`, `env-example`) already work this way.
 - The old M8 (guarded agent runner) moves after the referee. The referee is what makes an unattended agent run trustworthy, so the runner is built on top of it.
-- The old "Later" items (publish to npm and a docs site, an MCP server, Nx plugins) stay later and unordered.
+- The old "Later" items (publish to npm and a docs site, an MCP server, Nx plugins) stay later and unordered. Gemini CLI support joins them: SPEC names Gemini, but no milestone builds it yet.
 - The project name's origin (SPEC, first lines) is unchanged. AGENTS.md's originality rule still applies: nothing is copied from any private codebase, and the product is described in its own words.
