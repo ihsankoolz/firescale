@@ -124,7 +124,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ---
 
-## M6 — npm packaging ☐
+## M6 — npm packaging ☑
 
 **Build**
 
@@ -134,9 +134,9 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 **Done when**
 
-- ☐ `npx firescale --version` works from packed tarballs on all three OSes with no Rust toolchain.
-- ☐ A custom TypeScript rule works from an npm install, proven by a smoke test.
-- ☐ The launcher's overhead is measured and recorded in `bench/RESULTS.md`.
+- ☑ `npx firescale --version` works from packed tarballs on all three OSes with no Rust toolchain.
+- ☑ A custom TypeScript rule works from an npm install, proven by a smoke test.
+- ☑ The launcher's overhead is measured and recorded in `bench/RESULTS.md`.
 
 ---
 

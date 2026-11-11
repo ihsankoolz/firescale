@@ -4,21 +4,18 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## Where things stand
 
-- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`.
-- **In review:** M5 core rule pack, on branch `m5-core-rules`. If its pull request is merged, M5 is done. If it is still open, read its body: it says what its CI and review showed.
-- **Not started, in order:** M6 npm packaging, M7 `verify` and hooks, M8 guarded agent runner, M9 `init`/`add`/`sync`.
-
-The last session was asked to finish M3 through M9 in one sitting, with a hard stop at 11:45 Singapore time on 11 Nov. It had about 75 minutes, which covered M3, M4 and M5. The M5 rules were written and reviewed in the last half hour, so give them a second look (see DECISIONS.md, decision 0).
+- **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack.
+- **Merged without full CI:** M6 npm packaging. GitHub Actions stopped starting jobs (monthly limit), and the owner asked to continue without it. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
+- **Not started, in order:** M7 `verify` and hooks, M8 guarded agent runner, M9 `init`/`add`/`sync`.
 
 ## How to resume
 
 1. Read `SPEC.md`, `PLAN.md`, `AGENTS.md`, `docs/decisions/` and `DECISIONS.md`.
-2. If the M5 pull request is still open, check its CI and its "Not done" section, finish what is listed there, and merge it.
-3. Branch `m6-npm-packaging` from `main` and build M6 from PLAN.md. ADR 0008 §6 has the design: one binary package per platform in `optionalDependencies`, a small JavaScript launcher as `bin`, an optional hard-link step. Starting points:
-   - `packages/cli` is the `firescale` npm package. It has no `bin` yet and is not publishable as is: `@firescale/sdk` is `private` and is a `workspace:*` dependency, so decide whether to publish the SDK or bundle it.
-   - The binary finds the Node host through `FSCALE_NODE_HOST`, then next to itself, then through `import 'firescale/host'` (`crates/core/src/node.rs`). The launcher should set `FSCALE_NODE_HOST`.
-   - A release workflow needs cross-platform builds. The CI `bench` job already builds a release binary on all three OSes.
-   - Do not publish. Write the exact publish steps into DECISIONS.md.
+2. Do not rely on CI: Actions is unavailable. Verify locally (`pnpm build && pnpm lint && pnpm typecheck && pnpm test`), push with `[skip ci]` in the commit message, and add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
+3. Branch `m7-verify-hooks` from `main` and build M7 from PLAN.md. Starting points:
+   - `fscale facts` already detects the package manager, the `build`/`test`/`lint`/`typecheck` commands and the tools (`nx`, `turbo`): `crates/core/src/facts.rs`. `verify` should pick its commands from there.
+   - Hook formats were researched on 2026-11-11 from primary sources. Claude Code: a `Stop` hook in `.claude/settings.json`, shape `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"..."}]}]}}`; the hook gets JSON on stdin with `stop_hook_active`; it blocks with exit code 2 and its stderr, or with `{"decision":"block","reason":"..."}` on stdout; Claude Code itself ends the turn after 8 blocks in a row. Codex CLI (0.167.1): the same shape and the same blocking contract, in `<repo>/.codex/hooks.json` (confirmed in its source, `codex-rs/hooks/src/engine/discovery.rs`). **Cursor could not be checked**: cursor.com was blocked from the build session. Confirm its `.cursor/hooks.json` format from Cursor's docs before relying on it.
+   - The agent-ready rule pack goes in `crates/rules/src/` next to `core/`.
 
 ## Things to know before changing code
 
@@ -26,7 +23,7 @@ The last session was asked to finish M3 through M9 in one sitting, with a hard s
 - The `explain` snapshot embeds the rule's SKILL.md, which is compiled into the binary. After editing a SKILL.md: `pnpm build`, then update that snapshot on purpose.
 - Commits must use the owner's git identity with no co-author or tool attribution. Check `git config user.name` and `user.email` in a fresh clone.
 - The result cache is on by default. Use `--no-cache` when debugging a rule, and see decision 1 in `DECISIONS.md`.
-- CI has two jobs per OS: `check` (Node 22 and 24) and `bench` (the 50k-file benchmark, numbers in the job summary).
+- CI runs four `check` jobs per push. The `bench` and `package` jobs (benchmarks, npm install smoke tests) only run when the workflow is started by hand, or on a pull request labelled `ci:bench` / `ci:package` (label it before pushing). The owner is short on Actions minutes and tokens: push once per milestone, keep subagent use modest.
 - After changing the help text or a SKILL.md, update the affected snapshot on purpose (`pnpm build`, then `pnpm exec vitest run -u <that test file>`), and check that no other snapshot changed.
 
 ## Left for the owner to do by hand

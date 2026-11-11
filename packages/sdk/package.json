@@ -1,9 +1,13 @@
 {
   "name": "@firescale/sdk",
   "version": "0.1.0",
-  "private": true,
   "description": "Rule authoring API for firescale: defineRule, types and test helpers.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ihsankoolz/firescale.git",
+    "directory": "packages/sdk"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.18.0"
@@ -25,5 +29,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

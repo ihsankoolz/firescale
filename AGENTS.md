@@ -36,6 +36,8 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - Startup benchmark: `node bench/startup.mjs --runs 50 -- target/release/fscale --version`
 - 50k-file benchmark: `node bench/generate-fixture.mjs <dir> --files 50000`, then `node bench/check-bench.mjs --bin target/release/fscale --fixture <dir>`
 - See cache hits and misses: `FSCALE_LOG=cache pnpm fscale check`
+- Build npm tarballs for this platform: `cargo build --release -p firescale-cli`, `pnpm -r run build`, `node scripts/pack-npm.mjs`
+- Smoke-test an install from those tarballs: `node scripts/smoke-npm.mjs --pm npm` (also `pnpm`, `yarn`)
 - Definition of done (from M7 on): `pnpm fscale verify`
 
 ## Hard rules
