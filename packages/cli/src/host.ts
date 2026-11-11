@@ -13,7 +13,13 @@
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { checkRule, FirescaleError, type Diagnostic, type Rule, type RulePack } from '@firescale/sdk';
+import {
+  checkRule,
+  FirescaleError,
+  type Diagnostic,
+  type Rule,
+  type RulePack,
+} from '@firescale/sdk';
 
 /** Must match `PROTOCOL_VERSION` in crates/core/src/node.rs. */
 export const PROTOCOL_VERSION = 1;
@@ -220,3 +226,5 @@ export async function serve(): Promise<void> {
 }
 
 await serve();
+// Stdin closed: the run is over. Exit even if a rule left a timer or handle open.
+process.exit(0);

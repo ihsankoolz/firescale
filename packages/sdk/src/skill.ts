@@ -54,14 +54,48 @@ export function parseSkill(text: string): ParsedSkill | null {
   return { frontmatter, body: match[2] ?? '' };
 }
 
+/**
+ * Marks the lines that belong to a fenced code block (``` or ~~~), fences
+ * included, so headings inside code are never mistaken for headings.
+ */
+function fencedLines(lines: readonly string[]): boolean[] {
+  const mask: boolean[] = [];
+  let open: { char: string; length: number } | null = null;
+  for (const line of lines) {
+    if (open === null) {
+      const start = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      const fence = start?.[1];
+      if (fence !== undefined && !(fence.startsWith('`') && (start?.[2] ?? '').includes('`'))) {
+        open = { char: fence.charAt(0), length: fence.length };
+        mask.push(true);
+      } else {
+        mask.push(false);
+      }
+    } else {
+      mask.push(true);
+      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line)?.[1];
+      if (close !== undefined && close.charAt(0) === open.char && close.length >= open.length) {
+        open = null;
+      }
+    }
+  }
+  return mask;
+}
+
+/** Index of the first line outside a code fence that is exactly `marker`, or -1. */
+function findHeading(lines: readonly string[], marker: string): number {
+  const fenced = fencedLines(lines);
+  return lines.findIndex((line, i) => !fenced[i] && line.trim() === marker);
+}
+
 function sectionBody(body: string, heading: string, level: number): string | null {
   const lines = body.split('\n');
-  const marker = `${'#'.repeat(level)} ${heading}`;
-  const start = lines.findIndex((line) => line.trim() === marker);
+  const start = findHeading(lines, `${'#'.repeat(level)} ${heading}`);
   if (start === -1) return null;
+  const fenced = fencedLines(lines);
   const stop = new RegExp(`^#{1,${level}} `);
   const rest = lines.slice(start + 1);
-  const end = rest.findIndex((line) => stop.test(line));
+  const end = rest.findIndex((line, i) => !fenced[start + 1 + i] && stop.test(line));
   return (end === -1 ? rest : rest.slice(0, end)).join('\n');
 }
 
@@ -108,7 +142,7 @@ export function validateSkill(text: string, expected: SkillExpectation = {}): st
 
   let cursor = -1;
   for (const section of SKILL_SECTIONS) {
-    const index = body.split('\n').findIndex((line) => line.trim() === `## ${section}`);
+    const index = findHeading(body.split('\n'), `## ${section}`);
     if (index === -1) {
       problems.push(`Missing section "## ${section}".`);
     } else if (index < cursor) {
@@ -127,7 +161,7 @@ export function validateSkill(text: string, expected: SkillExpectation = {}): st
   if (agent !== null) {
     let blockCursor = -1;
     for (const block of SKILL_AGENT_BLOCKS) {
-      const index = agent.split('\n').findIndex((line) => line.trim() === `### ${block}`);
+      const index = findHeading(agent.split('\n'), `### ${block}`);
       if (index === -1) {
         problems.push(`"Agent fix instructions" is missing the "### ${block}" block.`);
       } else if (index < blockCursor) {

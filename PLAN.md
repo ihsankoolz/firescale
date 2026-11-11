@@ -45,7 +45,7 @@ Status key: ☐ not started · ◐ in progress · ☑ done
 
 ---
 
-## M2 — Rust front door ◐
+## M2 — Rust front door ☑
 
 Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are built in, and Node is started only for TypeScript rules, `.ts` config, generators and agent adapters.
 

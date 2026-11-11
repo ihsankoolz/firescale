@@ -1,6 +1,6 @@
 # 0006 — Fixture repos are built at test time
 
-Status: accepted (M1)
+Status: accepted (M1). Since ADR 0008 the same approach is used for Rust rule tests (`firescale_core::testing::Fixture`).
 
 ## Context
 

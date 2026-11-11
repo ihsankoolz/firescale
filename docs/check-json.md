@@ -3,7 +3,7 @@
 `fscale check --json` prints one JSON document to stdout. It is the stable interface for CI and coding agents. The human output of `fscale check` may change at any time; this format only changes with a new `schemaVersion`.
 
 - JSON Schema: [`packages/cli/schemas/check-output.schema.json`](../packages/cli/schemas/check-output.schema.json). It ships in the npm package as `firescale/schemas/check-output.schema.json`.
-- TypeScript type: `CheckReport`, exported from `firescale`.
+- TypeScript type: `CheckReport`, exported from `firescale`. The document itself is produced by the Rust binary (`crates/core/src/report.rs`).
 - A test validates real output against the schema, and a snapshot test pins the exact output (`packages/cli/src/check.test.ts`).
 
 ## Example
@@ -77,3 +77,5 @@ No field holds an absolute path, a timestamp or a duration, so the output for an
 | 2    | Bad usage, bad config, or an internal error. Nothing is printed to stdout. |
 
 With exit code 2 the error is on stderr as plain text, and stdout is empty, so a JSON parser never sees a partial document.
+
+Notes for the user (for example that `--rules` ran a rule that is `off`) and anything a custom rule logs also go to stderr. Stdout only ever holds the JSON document.

@@ -1,15 +1,50 @@
 # Writing a rule
 
-A rule is a folder inside a rule pack:
+There are two kinds of rule (ADR 0008):
+
+- **Built-in rules** are Rust, compiled into the `fscale` binary. They live in this repo.
+- **Custom rules** are TypeScript, written with the SDK. They live in your repo and run through a Node process that `fscale` starts when needed.
+
+Both need a `SKILL.md` with the same sections and tests with fixtures.
+
+## Built-in rules (Rust)
 
 ```
-packages/rules-<pack>/src/rules/<rule-id>/
-  rule.ts          metadata, check(), optional fix()
-  SKILL.md         instructions for humans and agents
-  rule.test.ts     fixtures: passing repo, failing repo, fixed repo, fix run twice
+crates/rules/src/<pack>/<rule-id>/
+  mod.rs           metadata, check(), optional fix()
+  SKILL.md         instructions for humans and agents, embedded with include_str!
+  tests.rs         fixtures: passing repo, failing repo, fixed repo, fix run twice
 ```
 
-Register it in the pack's `src/index.ts`. A test fails if a rule folder is not registered or has no `SKILL.md`.
+Implement `firescale_core::rule::BuiltinRule` and add the rule to its pack in `crates/rules/src/<pack>/mod.rs`. `core/no-committed-env` is the reference. Tests build fixture repos with `firescale_core::testing::Fixture`. A Vitest test (`packages/cli/src/skills.test.ts`) validates every built-in SKILL.md and checks the rule is registered.
+
+## Custom rules (TypeScript)
+
+```
+<your pack>/
+  pack.ts                    export const pack = definePack({ name, rules })
+  rules/<rule-id>/
+    rule.ts                  metadata, check(), optional fix()
+    SKILL.md                 instructions for humans and agents
+    rule.test.ts             fixtures: passing repo, failing repo, fixed repo, fix run twice
+```
+
+List the pack in your config by path: `"packs": ["core", "./tools/rules/pack.ts"]`. A complete small example is in [`packages/cli/test-fixtures/custom-pack`](../packages/cli/test-fixtures/custom-pack).
+
+```ts
+// pack.ts
+import { definePack } from '@firescale/sdk';
+import noTodoFile from './rules/no-todo-file/rule.ts';
+
+export const pack = definePack({
+  name: 'team',
+  rules: [
+    { rule: noTodoFile, skillFile: new URL('./rules/no-todo-file/SKILL.md', import.meta.url) },
+  ],
+});
+```
+
+Rule ids must start with the pack's name. Anything a rule logs with `console.log` goes to stderr, so it never corrupts `--json` output. In M2 the bridge runs a custom rule's `check`; running a custom rule's `fix` arrives with `fscale fix`.
 
 ## rule.ts
 

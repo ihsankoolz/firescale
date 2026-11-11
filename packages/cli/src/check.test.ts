@@ -1,20 +1,21 @@
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { CheckReport } from './check.js';
-import { EXIT_OK, EXIT_USAGE, EXIT_VIOLATIONS } from './cli.js';
-import { ENFORCED_CONFIG, FAKE_ENV, runCli } from './test-helpers.js';
+import type { CheckReport } from './report.js';
+import {
+  ENFORCED_CONFIG,
+  EXIT_OK,
+  EXIT_USAGE,
+  EXIT_VIOLATIONS,
+  FAKE_ENV,
+  runCli,
+} from './test-helpers.js';
 
-const execFileAsync = promisify(execFile);
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
 
-const BIN = fileURLToPath(new URL('../dist/bin.js', import.meta.url));
 const SCHEMA = new URL('../schemas/check-output.schema.json', import.meta.url);
 
 /** A repo with two tracked env files, one nested, plus an allowed example. */
@@ -46,16 +47,10 @@ describe('fscale check', () => {
 
   it('exits 1 from the built binary too', async () => {
     const repo = await failingRepo(ENFORCED_CONFIG);
-    const outcome = await execFileAsync(process.execPath, [BIN, 'check'], { cwd: repo.root }).then(
-      () => ({ code: 0, stdout: '' }),
-      (error: { code?: number; stdout?: string }) => ({
-        code: error.code,
-        stdout: error.stdout ?? '',
-      }),
-    );
-    expect(outcome.code).toBe(EXIT_VIOLATIONS);
-    expect(outcome.stdout).toContain('.env');
-    expect(outcome.stdout).toContain('FAILED');
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout).toContain('.env');
+    expect(result.stdout).toContain('FAILED');
   });
 
   it('reports but exits 0 by default, because the default status is evaluated', async () => {
@@ -115,17 +110,9 @@ describe('fscale check', () => {
         ].join('\n'),
       },
     });
-    const outcome = await execFileAsync(process.execPath, [BIN, 'check', '--json'], {
-      cwd: repo.root,
-    }).then(
-      () => ({ code: 0, stdout: '' }),
-      (error: { code?: number; stdout?: string }) => ({
-        code: error.code,
-        stdout: error.stdout ?? '',
-      }),
-    );
-    expect(outcome.code).toBe(EXIT_VIOLATIONS);
-    const report = JSON.parse(outcome.stdout) as CheckReport;
+    const result = await runCli(['check', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as CheckReport;
     expect(report.rules[0]?.status).toBe('enforced');
   });
 });
@@ -158,6 +145,71 @@ describe('fscale check --rules', () => {
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toContain('matches no rule');
     expect(result.stderr).toContain('core/no-committed-env');
+  });
+});
+
+describe('fscale check --rules on an off rule', () => {
+  const OFF = JSON.stringify({ rules: { 'core/no-committed-env': 'off' } });
+
+  it('skips the rule without --rules', async () => {
+    const repo = await failingRepo(OFF);
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toBe('OK: 0 rules checked, no violations.\n');
+  });
+
+  it('evaluates it as report-only when named exactly', async () => {
+    const repo = await failingRepo(OFF);
+    const result = await runCli(['check', '--rules', 'core/no-committed-env'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toContain('.env');
+    expect(result.stdout).toContain('evaluated');
+    expect(result.stderr).toContain('note: core/no-committed-env is off');
+  });
+
+  it('reports it as evaluated in JSON, with the note on stderr', async () => {
+    const schema = JSON.parse(await readFile(SCHEMA, 'utf8')) as object;
+    const validate = new Ajv({ allErrors: true }).compile(schema);
+    const repo = await failingRepo(OFF);
+    const result = await runCli(['check', '--json', '--rules', 'core/no-committed-env'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    const report = JSON.parse(result.stdout) as CheckReport;
+    expect(validate(report), JSON.stringify(validate.errors)).toBe(true);
+    expect(report.rules.map((r) => [r.id, r.status])).toEqual([
+      ['core/no-committed-env', 'evaluated'],
+    ]);
+    expect(result.stderr).toContain('note: core/no-committed-env is off');
+  });
+
+  it('does not let a glob switch an off rule on', async () => {
+    const repo = await failingRepo(OFF);
+    const result = await runCli(['check', '--rules', 'core/*'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('only matches rules that are off');
+  });
+});
+
+describe('core/no-committed-env name variants', () => {
+  it('matches the name case-insensitively and ignores look-alikes', async () => {
+    // Never two names that differ only by case in one folder: macOS and Windows would merge them.
+    const repo = await fixtures.create({
+      files: {
+        '.ENV': FAKE_ENV,
+        'a/.Env.Local': FAKE_ENV,
+        'sub/.ENV.PRODUCTION': FAKE_ENV,
+        'b/.ENV.EXAMPLE': FAKE_ENV,
+        'c/.envrc': FAKE_ENV,
+        'firescale.config.json': ENFORCED_CONFIG,
+      },
+    });
+    const result = await runCli(['check', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as CheckReport;
+    expect(report.diagnostics.map((d) => d.file).sort()).toEqual([
+      '.ENV',
+      'a/.Env.Local',
+      'sub/.ENV.PRODUCTION',
+    ]);
   });
 });
 

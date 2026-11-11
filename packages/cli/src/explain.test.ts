@@ -1,7 +1,6 @@
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EXIT_OK, EXIT_USAGE } from './cli.js';
-import { ENFORCED_CONFIG, runCli } from './test-helpers.js';
+import { ENFORCED_CONFIG, EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);

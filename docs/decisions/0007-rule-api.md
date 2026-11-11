@@ -1,6 +1,6 @@
 # 0007 — Final rule API and where rules live
 
-Status: accepted (M1)
+Status: accepted (M1). Amended by ADR 0008: this API now describes custom TypeScript rules; built-in rules are Rust. Points 7 and 8 (where built-in rules live) and the limits in point 11 are superseded.
 
 ## Context
 

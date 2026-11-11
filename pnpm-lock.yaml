@@ -205,8 +205,6 @@ importers:
 
   packages/generators: {}
 
-  packages/rules-agent-ready: {}
-
   packages/sdk: {}
 
 packages:

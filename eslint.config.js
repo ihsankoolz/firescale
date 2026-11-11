@@ -5,11 +5,7 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
-    ignores: [
-      '**/dist/**',
-      '**/node_modules/**',
-      'target/**',
-    ],
+    ignores: ['**/dist/**', '**/node_modules/**', 'target/**'],
   },
   js.configs.recommended,
   tseslint.configs.strict,
@@ -31,8 +27,8 @@ export default defineConfig(
     rules: { 'no-restricted-syntax': 'off' },
   },
   {
-    // Plain Node build scripts.
-    files: ['scripts/**/*.mjs'],
+    // Plain Node benchmark scripts.
+    files: ['bench/**/*.mjs'],
     languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
   },
   prettier,

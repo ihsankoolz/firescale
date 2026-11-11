@@ -33,7 +33,8 @@ const run = () => {
 // Warm the file cache so the first sample is not an outlier.
 for (let i = 0; i < 3; i += 1) run();
 const samples = Array.from({ length: runs }, run).sort((a, b) => a - b);
-const at = (fraction) => samples[Math.min(samples.length - 1, Math.floor(samples.length * fraction))];
+const at = (fraction) =>
+  samples[Math.min(samples.length - 1, Math.floor(samples.length * fraction))];
 const round = (value) => Math.round(value * 10) / 10;
 console.log(
   JSON.stringify({
