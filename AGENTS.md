@@ -34,7 +34,7 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - One Rust test: `cargo test -p firescale-rules <name>`
 - Rust only: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - Startup benchmark: `node bench/startup.mjs --runs 50 -- target/release/fscale --version`
-- Definition of done (from M6 on): `pnpm fscale verify`
+- Definition of done (from M7 on): `pnpm fscale verify`
 
 ## Hard rules
 
