@@ -187,7 +187,7 @@ Owner decisions that apply to everything below (ADR 0017):
 
 ---
 
-## M8 — The fix loop ☐
+## M8 — The fix loop ☑
 
 The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is left to fix.
 
@@ -201,11 +201,11 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 **Done when**
 
-- ☐ Two fixture rules where B must run after A are fixed in one `fscale fix`, in that order, proven by a test. The same works for a custom TypeScript rule with `after`.
-- ☐ A dependency cycle and an unknown `after` id are each rejected with a clear error, proven by tests.
-- ☐ Two fixture rules that undo each other stop the loop with an error naming both, and so does a loop that reaches the pass limit. The exit code is not 0.
-- ☐ `fscale fix --dry-run` with two dependent fixes prints the same diff that `fscale fix` then produces, and changes nothing.
-- ☐ Running `fscale fix` a second time changes nothing, for every built-in rule with a fix.
+- ☑ Two fixture rules where B must run after A are fixed in one `fscale fix`, in that order, proven by a test. The same works for a custom TypeScript rule with `after`.
+- ☑ A dependency cycle and an unknown `after` id are each rejected with a clear error, proven by tests.
+- ☑ Two fixture rules that undo each other stop the loop with an error naming both, and so does a loop that reaches the pass limit. The exit code is not 0.
+- ☑ `fscale fix --dry-run` with two dependent fixes prints the same diff that `fscale fix` then produces, and changes nothing.
+- ☑ Running `fscale fix` a second time changes nothing, for every built-in rule with a fix.
 
 ---
 

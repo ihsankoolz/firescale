@@ -111,7 +111,7 @@ export default defineRule({
   category: 'maintainability',    // security | reliability | consistency | maintainability
   description: 'No TODO comments in src/main.',
   inputs: ['src/main/**'],        // globs used for cache hashing
-  after: ['core/gitignore-basics'], // optional: rules whose fixes must run first (from M8)
+  after: ['core/gitignore-basics'], // optional: rules whose fixes must run first
   check: async (ctx) => Finding[],
   fix:   async (ctx, diagnostics) => FixResult,   // optional, deterministic, idempotent
 });
@@ -320,7 +320,7 @@ Requirements:
 
 - **Idempotent.** Every fix, run twice, changes nothing the second time.
 - **Ordered.** Fixes run after the fixes they declare a dependency on. A cycle or an unknown rule id is an error before anything is written.
-- **Convergent.** The loop has a pass limit. If it is reached, or two fixes keep undoing each other, the command stops with a clear error that names the rules and files, and exits non-zero. It never reports success on a repo that does not pass.
+- **Convergent.** The loop has a pass limit (10, ADR 0018). If it is reached, or two fixes keep undoing each other, the command stops with a clear error that names the rules and files, and exits non-zero. It never reports success on a repo that does not pass.
 - **Careful with existing work.** A fix never replaces content a person wrote. It creates a missing file, merges into a structured file, appends, or rewrites inside a managed block.
 
 What differs between the commands:

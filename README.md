@@ -19,7 +19,7 @@ fscale check --sarif                  # the same, as SARIF 2.1.0 (docs/sarif.md)
 fscale check --rules "core/*"         # only some rules
 fscale check --no-cache               # ignore the result cache in .firescale/
 fscale fix --dry-run                  # show what the deterministic fixes would change
-fscale fix                            # apply them
+fscale fix                            # apply them, in dependency order, until nothing is left to fix
 fscale check --affected               # only report what your changes touch
 fscale facts                          # detected package manager, tools and projects
 fscale explain core/no-committed-env  # what a rule checks and how to fix it

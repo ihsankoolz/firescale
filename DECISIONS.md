@@ -32,6 +32,33 @@ Not yet proven on macOS or Windows:
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
 
+## M8 — The fix loop
+
+**Built**
+
+- Rules can declare `after`: the rules whose fixes must run before their own. Built-in rules (`RuleMeta.after`) and custom TypeScript rules (`defineRule({ after })`).
+- The fix loop in `crates/core/src/fixloop.rs`: fixes run in dependency order, pass after pass, until a pass finds nothing left to fix. `fscale fix` uses it.
+- Errors that stop the loop and name the rules and files: a dependency cycle, an `after` id that no rule has, two fixes that undo each other, a fix that never settles (10 passes), and a fix that does nothing about the violations it claims.
+- `fscale fix --dry-run` now runs the real loop in a scratch copy of the repo, so it shows the combined result of all fixes and passes.
+
+**Decisions made for you** (all ADR 0018)
+
+- **The pass limit is 10 and is not configurable.**
+- **A dry run copies the repo** (tracked and unignored files) to the temp folder and runs the real fixes there. A virtual overlay would have been faster but could not give every rule the same view; rules read through git and straight from disk too.
+- **`fscale fix` now exits 2 when the fixes cannot settle.** Before, a fix that did nothing about its own violations ended in "Nothing to fix" and exit 0.
+- **Nothing is rolled back when the loop stops with an error.** The changes made so far stay and are listed in the error.
+- **An `after` entry that names a rule which exists but is off places no constraint.** Only an id that no rule has is an error. Turning one rule of a cycle off breaks the cycle.
+- **`after` only orders fixes.** It has no effect on `check`.
+- **One existing test changed its fixture, not its assertion:** "shows a new file as a diff against /dev/null" asserted a preview that the old dry run got wrong when two rules touch `.gitignore`. It now turns on one rule; a new test covers two.
+
+**Known limits**
+
+- A dry run of a very large repo takes seconds, because of the copy.
+- A fix that depends on a file git ignores (and does not track) can preview differently from the real run.
+- If `fscale` is killed during a dry run, a `firescale-dry-run-*` folder stays in the temp folder.
+- A custom fix that writes files without using its context is invisible to the loop.
+- No built-in rule declares `after` yet. `core/no-committed-env` and `core/gitignore-basics` both write `.gitignore` and work in id order today.
+
 ## Plan update and your answers (before M8)
 
 **Changed** (ADR 0017)
