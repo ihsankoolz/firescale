@@ -6,14 +6,14 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack.
 - **Merged without full CI:** M6 npm packaging. See "CI owed" at the top of DECISIONS.md: one Windows check for M6 is unproven.
-- **M7 `verify` and hooks:** built and reviewed on branch `m7-verify-hooks`, pull request #9. **Not merged if you are reading this on that branch:** its CI jobs never started (Actions limit). See "CI owed" in DECISIONS.md. Re-run the failed jobs when Actions works, fix anything Windows or macOS shows, then merge.
+- **M7 `verify` and hooks:** done, pull request #9, CI green on Linux, macOS and Windows.
 - **Next:** the direction changed on 2026-11-11. A docs-only pull request rewrites PLAN.md from M8 onward. Read the merged PLAN.md, not this line, for what comes next.
 
 ## How to resume
 
 1. Read `SPEC.md`, `PLAN.md`, `AGENTS.md`, `docs/decisions/` and `DECISIONS.md`.
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
-3. Check whether GitHub Actions runs again (it stopped on 2026-11-11 at the account's monthly limit). If it does not, add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
+3. GitHub Actions ran again from 2026-11-11 (it had stopped at the account's monthly limit). If jobs end within seconds with no logs, the limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`.
 
 Notes from M7 that the next milestones build on:
