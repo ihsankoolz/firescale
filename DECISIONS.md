@@ -67,7 +67,7 @@ Built from what you found when running 0.1.0 on your course project. All decisio
 **Decisions made for you** (all ADR 0020; the ones you may disagree with are also under "Needs your decision")
 
 - **Depth limit: four folder levels below the root.** Not configurable.
-- **Skipped while searching:** everything `.gitignore` ignores, every folder starting with a dot (`.venv`, `.pytest_cache`, `.ruff_cache`), and `node_modules`, `bower_components`, `vendor`, `site-packages`, `venv`, `env`, `__pycache__`, `dist`, `build`, `out`, `target`, `coverage`, `htmlcov`, `test-results`, `playwright-report`, `tmp`, `temp`, `logs`.
+- **Skipped while searching:** everything `.gitignore` ignores, every folder starting with a dot (`.venv`, `.pytest_cache`, `.ruff_cache`), folders of examples and fixtures (`fixtures`, `__fixtures__`, `test-fixtures`, `testdata`, `examples`, `example`, `samples`, `templates`), and `node_modules`, `bower_components`, `vendor`, `site-packages`, `venv`, `env`, `__pycache__`, `dist`, `build`, `out`, `target`, `coverage`, `htmlcov`, `test-results`, `playwright-report`, `tmp`, `temp`, `logs`.
 - **Nested projects: a project's folder is not searched further.** A `package.json` inside a project (an example, a fixture) belongs to that project. Only the root is always searched.
 - **A workspace file at the root decides its ecosystem.** With a pnpm or npm workspace, Node projects are its members only; a folder the workspace excludes stays excluded. The same for a Cargo workspace. Other ecosystems are still searched. This keeps every repo that has a workspace file as it was.
 - **The repo-level `packageManager`, `lockfiles` and `commands` still describe the root only.** Five rules read them. New: `packageManagers` lists them all, and `languages` includes every project's.
@@ -78,6 +78,10 @@ Built from what you found when running 0.1.0 on your course project. All decisio
 - **A folder under `verify.projects` that does not exist is an error** (exit 2).
 - **Projects run in full with `--affected`.**
 - **A root Python or Go project now gets commands.** Before, such a repo skipped every step.
+- **A second kind of project at the root runs too.** A repo with, say, `Cargo.toml` and a Python package at the root used to run only one of them. The other is now listed as `in the repo root (python)`. Turn it off with `"verify": { "projects": { ".": false } }`.
+- **A `pyproject.toml` with only `[tool.*]` tables is config, not a project.** So a shared ruff config above your services does not hide them.
+- **A linter is run only when its config file is there**, and the repo root gets no guessed `tsc`.
+- **A `package.json` that cannot be parsed still counts as a project**, with every step skipped and a warning in `fscale facts`.
 - **`core/gitignore-basics` now asks for the entries of every project's language**, so a repo with a Python service in a subfolder needs `__pycache__` and `.venv` ignored. This is the one rule whose findings can change in an existing repo.
 - **`agent-ready/single-test-command` still looks at the root only.**
 - **Test-only variables are low severity, not hidden.** A teammate running the tests still needs them.
@@ -98,7 +102,11 @@ Built from what you found when running 0.1.0 on your course project. All decisio
 - A discovered project that is itself a workspace is listed as one project.
 - Two projects can share a name; `root` tells them apart.
 - Projects run one after another. On your repo that is six test runs in sequence.
-- Test code is recognised by its path only, and case-sensitively.
+- Test code is recognised by its path only, and case-sensitively. Folders named `spec`, `testing` or `playwright` are not test folders.
+- With bun, uv, poetry or pipenv, verify's commands go through `bunx`, `uv run`, `poetry run` or `pipenv run`, which can install what is missing. Only `npx --no` is certain not to. I could not reach those tools' docs from the build session to pick safer flags.
+- On macOS and Windows, a `verify.projects` key written in the wrong letter case adds a second run in that folder instead of replacing the project's own.
+- The stop hook's note on a partial run goes to stderr. A person or a log sees it; the agent may not.
+- An independent review found fourteen issues before the pull request, two of them ways to still get `verify: OK` with steps not run. ADR 0020 lists what was fixed and what was left.
 - The always-ignored variable list cannot be shortened by config.
 - Custom TypeScript rules cannot give a finding its own severity.
 - Other limits are in `docs/facts.md` and `docs/verify.md`.

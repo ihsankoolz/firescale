@@ -38,12 +38,14 @@ Each project:
 Many repos keep their code below the root with no workspace file: a `backend/` with a few services, a `frontend/` with an app. `fscale facts` finds these.
 
 - **What is searched.** Every folder down to **four levels** below the repo root. `backend/auth_service` is level 2.
-- **What is skipped.** Everything `.gitignore` ignores (only `.gitignore` files inside the repo count, so the answer is the same on every machine), every folder whose name starts with a dot (`.venv`, `.pytest_cache`, `.ruff_cache`, `.git`), and these folders: `node_modules`, `bower_components`, `vendor`, `site-packages`, `venv`, `env`, `__pycache__`, `dist`, `build`, `out`, `target`, `coverage`, `htmlcov`, `test-results`, `playwright-report`, `tmp`, `temp`, `logs`. Symbolic links are not followed.
+- **What is skipped.** Everything `.gitignore` ignores (only `.gitignore` files inside the repo count, so the answer is the same on every machine), every folder whose name starts with a dot (`.venv`, `.pytest_cache`, `.ruff_cache`, `.git`), and these folders: `node_modules`, `bower_components`, `vendor`, `site-packages`, `venv`, `env`, `__pycache__`, `dist`, `build`, `out`, `target`, `coverage`, `htmlcov`, `test-results`, `playwright-report`, `tmp`, `temp`, `logs`, and the folders of samples and test input `fixtures`, `__fixtures__`, `test-fixtures`, `testdata`, `examples`, `example`, `samples`, `templates`. Symbolic links are not followed.
 - **What makes a folder a project.**
   - `package.json`: a `node` project.
   - `Cargo.toml`: a `rust` project.
   - `go.mod`: a `go` project.
-  - `pyproject.toml`, `setup.py` or `Pipfile`: a `python` project. So is a `requirements.txt` together with a `.py` file or one of `pytest.ini`, `tox.ini`, `setup.cfg`, `conftest.py`, `ruff.toml`, `.ruff.toml`, `mypy.ini`, `manage.py`, `alembic.ini`. A `requirements.txt` with nothing beside it is not a project: it is often only the input of a docs build or a container image.
+  - `setup.py`, `Pipfile`, or a `pyproject.toml` that describes a package (it has a `[project]`, `[tool.poetry]` or `[build-system]` table): a `python` project. So is a `requirements.txt` together with a `.py` file or one of `pyproject.toml`, `pytest.ini`, `tox.ini`, `setup.cfg`, `conftest.py`, `ruff.toml`, `.ruff.toml`, `mypy.ini`, `manage.py`, `alembic.ini`.
+  - A `requirements.txt` with nothing beside it is not a project: it is often only the input of a docs build or a container image. A `pyproject.toml` with only `[tool.*]` tables is not one either: it is shared tool config, often placed above the real projects, and the search goes on below it.
+  - A `package.json` that is not valid JSON still makes a project. It has no commands, and the problem is listed under `warnings`.
   - A folder with marker files of two kinds is two projects with the same `root`.
 - **Nested projects.** A project's folder is not searched any further. A marker file inside a project (an example, a fixture, a `fuzz/` crate) belongs to that project. The repo root is the one exception: it is always searched.
 - **Workspace files decide.** When the root declares a Node workspace (`pnpm-workspace.yaml`, or `workspaces` in `package.json`), the Node projects are its members and no others are looked for; a folder the workspace leaves out stays out. The same goes for a Cargo workspace and Rust projects. Projects of the other kinds are still searched for.
@@ -65,9 +67,9 @@ For each project, from the files in its own folder:
   - Languages: javascript, plus typescript with a `tsconfig.json` or a `typescript` dependency.
   - Tools, each from a config file or a dependency: `biome` (`biome.json`), `cypress` (`cypress.config.*`), `eslint` (`eslint.config.*`, `.eslintrc*`), `jest` (`jest.config.*`), `knip` (`knip.json`, `knip.jsonc`, `knip.config.*`), `next` (`next.config.*`), `oxlint` (`.oxlintrc.json`, `oxlint.config.*`), `playwright` (`playwright.config.*`), `prettier` (`.prettierrc*`, `prettier.config.*`), `vite` (`vite.config.*`), `vitest` (`vitest.config.*`, `vitest.workspace.*`), and `docker` (`Dockerfile`).
   - Commands: a script named `build`, `test`, `lint` or `typecheck` gives `"<pm> run <script>"`. Without a script, the tools give the command:
-    - lint: `oxlint`, else `eslint .`, else `biome check .`
+    - lint: `oxlint`, else `eslint .`, else `biome check .`, and only when that linter's config file is in the folder. A linter that is only a dependency gives no command.
     - test: `vitest run`, else `jest`. Playwright and Cypress are not used as the test command: end-to-end tests need browsers and running services.
-    - typecheck: `tsc --noEmit` when there is a `tsconfig.json` without `references`. A tsconfig of project references gets no command: `tsc --noEmit` would check nothing there, and `tsc -b` could write files.
+    - typecheck: `tsc --noEmit` when there is a `tsconfig.json` without `references`. Not at the repo root, where a tsconfig is often only a base for the packages below it. A tsconfig of project references gets no command: `tsc --noEmit` would check nothing there, and `tsc -b` could write files.
     - Tools run through `pnpm exec`, `yarn`, `bunx`, or `npx --no` for npm. `npx --no` never downloads a tool that is not installed.
 - **Python**
   - Package manager: `uv` (`uv.lock` or `[tool.uv` in `pyproject.toml`), `poetry` (`poetry.lock` or `[tool.poetry`), `pipenv` (`Pipfile`), else `pip`.
@@ -94,4 +96,5 @@ The graph:
 - Two projects can have the same name, for example two folders both called `api`. `root` tells them apart.
 - Python commands assume `python` is on the PATH and has the tools installed, as in an activated virtual environment. On a machine with only `python3`, set the command under `verify.projects`.
 - uv workspaces are not part of the graph yet.
+- With bun, uv, poetry and pipenv the commands go through `bunx`, `uv run`, `poetry run` and `pipenv run`. Those can install what is missing or create a virtual environment. Only `npx --no` is guaranteed not to. `tsc --noEmit` writes a `.tsbuildinfo` file when the tsconfig turns on `incremental` or `composite`.
 - The search has no config: it follows `.gitignore` and the list above. A folder that should not count as a project can be turned off for `fscale verify` with `verify.projects`.

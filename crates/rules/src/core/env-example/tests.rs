@@ -511,11 +511,8 @@ mod test_only_variables {
             "svc/integration_test/a.py",
             "svc/integration_tests/a.py",
             "frontend/e2e/login.ts",
-            "spec/models/a.rb",
-            "specs/a.rb",
-            "pkg/testing/a.go",
+            "spec/models/user_spec.rb",
             "cypress/support/a.js",
-            "playwright/a.ts",
             "conftest.py",
             "svc/conftest.py",
             "svc/test_api.py",
@@ -539,6 +536,12 @@ mod test_only_variables {
             "pkg/test_api.go",
             "src/Tests/api.ts",
             "protest/a.py",
+            // Folders that often hold product code (review of M10): a spec
+            // loader, test helpers that ship, a Playwright service wrapper.
+            "src/spec/loader.ts",
+            "specs/a.rb",
+            "pkg/testing/a.go",
+            "playwright/a.ts",
         ] {
             assert!(!is_test_path(file), "{file}");
         }
@@ -998,5 +1001,91 @@ mod course_project {
         assert!(second.changed_files.is_empty());
         assert_eq!(f.read(".env.example"), Some(root));
         assert_eq!(f.read("backend/auth_service/.env.example"), Some(auth));
+    }
+}
+
+mod review_findings {
+    use super::*;
+
+    #[test]
+    fn product_code_in_a_folder_named_spec_or_testing_is_not_test_code() {
+        let f = repo(&[
+            (".env.example", ""),
+            (
+                "src/spec/loader.ts",
+                "const a = process.env.EXAMPLE_SPEC_URL;\n",
+            ),
+            (
+                "src/testing/helpers.ts",
+                "const b = process.env.EXAMPLE_HELPER_URL;\n",
+            ),
+            ("src/e2e/run.ts", "const c = process.env.EXAMPLE_E2E_URL;\n"),
+        ]);
+        let found = check(&f);
+        let severity = |name: &str| {
+            found
+                .iter()
+                .find(|d| d.message.starts_with(name))
+                .unwrap_or_else(|| panic!("{name} not reported: {found:?}"))
+                .severity
+        };
+        assert_eq!(severity("EXAMPLE_SPEC_URL"), None);
+        assert_eq!(severity("EXAMPLE_HELPER_URL"), None);
+        assert_eq!(severity("EXAMPLE_E2E_URL"), Some(Severity::Low));
+    }
+
+    #[test]
+    fn names_a_project_could_define_are_not_on_the_ignore_list() {
+        let f = repo(&[
+            (".env.example", ""),
+            (
+                "app.py",
+                "import os\nos.getenv(\"USERNAME\")\nos.getenv(\"HOSTNAME\")\nos.getenv(\"COMPOSE_PROJECT_NAME\")\nos.getenv(\"PLAYWRIGHT_SERVICE_TOKEN\")\nos.getenv(\"DOCKER_HOST\")\n",
+            ),
+        ]);
+        let mut names: Vec<String> = check(&f)
+            .iter()
+            .map(|d| d.message.split(' ').next().unwrap_or_default().to_owned())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [
+                "COMPOSE_PROJECT_NAME",
+                "HOSTNAME",
+                "PLAYWRIGHT_SERVICE_TOKEN",
+                "USERNAME"
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_example_file_is_a_manual_fix_and_is_never_written() {
+        let outside =
+            Fixture::new(&[("shared.env.example", "EXAMPLE_KEPT=\n")], Track::NoGit).unwrap();
+        let real = outside.root().join("shared.env.example");
+        let f = repo(&[
+            (".env.example", ""),
+            ("svc/main.py", "import os\nos.getenv(\"EXAMPLE_SVC_URL\")\n"),
+            ("app.py", "import os\nos.getenv(\"EXAMPLE_ROOT_URL\")\n"),
+        ]);
+        std::os::unix::fs::symlink(&real, f.root().join("svc").join(".env.example")).unwrap();
+        let found = check(&f);
+        let svc = found
+            .iter()
+            .find(|d| d.message.starts_with("EXAMPLE_SVC_URL"))
+            .unwrap();
+        assert_eq!(svc.fixable, Fixable::Manual);
+        assert!(svc.message.contains("symbolic link"));
+        // The fix still does the rest, and leaves the link's target alone.
+        let result = f.fix(&EnvExample, &Options::new()).unwrap();
+        assert_eq!(result.changed_files, [".env.example"]);
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "EXAMPLE_KEPT=\n");
+        assert!(f
+            .fix(&EnvExample, &Options::new())
+            .unwrap()
+            .changed_files
+            .is_empty());
     }
 }

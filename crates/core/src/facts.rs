@@ -24,10 +24,20 @@ pub const FACTS_SCHEMA_VERSION: u32 = 2;
 /// `backend/auth_service` is level 2.
 pub const DISCOVERY_DEPTH: usize = 4;
 
-/// Folders never searched for projects: dependencies, caches and build output.
+/// Folders never searched for projects: dependencies, caches, build output,
+/// and folders of examples and test fixtures.
 /// Folders whose name starts with a dot are skipped too, and so is everything
 /// `.gitignore` ignores.
-pub const DISCOVERY_SKIPPED_DIRS: [&str; 18] = [
+pub const DISCOVERY_SKIPPED_DIRS: [&str; 26] = [
+    // Sample and test input: a manifest in there is not a project to verify.
+    "fixtures",
+    "__fixtures__",
+    "test-fixtures",
+    "testdata",
+    "examples",
+    "example",
+    "samples",
+    "templates",
     "node_modules",
     "bower_components",
     "vendor",
@@ -534,13 +544,22 @@ fn script_commands(json: Option<&Value>, package_manager: &str) -> Commands {
 /// Commands worked out from tool config files, for a project with no script
 /// for the step. Only tools that check without changing files, and no
 /// end-to-end runners: those need browsers and running services.
-fn node_tool_commands(root: &Path, dir: &str, tools: &[String], exec: &str) -> Commands {
+fn node_tool_commands(
+    root: &Path,
+    dir: &str,
+    tools: &[String],
+    configured: &[String],
+    exec: &str,
+) -> Commands {
     let has = |tool: &str| tools.iter().any(|name| name == tool);
-    let lint = if has("oxlint") {
+    // A linter is only run when its config file is there: `eslint .` fails
+    // without one, and a dependency alone does not say the project uses it.
+    let has_config = |tool: &str| configured.iter().any(|name| name == tool);
+    let lint = if has_config("oxlint") {
         Some(format!("{exec} oxlint"))
-    } else if has("eslint") {
+    } else if has_config("eslint") {
         Some(format!("{exec} eslint ."))
-    } else if has("biome") {
+    } else if has_config("biome") {
         Some(format!("{exec} biome check ."))
     } else {
         None
@@ -593,12 +612,19 @@ fn node_detail(
     if names.iter().any(|name| name == "tsconfig.json") || has_node_dependency(json, "typescript") {
         languages.push("typescript".to_owned());
     }
-    let mut tools: Vec<String> = NODE_TOOLS
+    let configured: Vec<String> = NODE_TOOLS
         .iter()
         .filter(|tool| {
             names
                 .iter()
                 .any(|name| tool.prefixes.iter().any(|prefix| name.starts_with(prefix)))
+        })
+        .map(|tool| tool.name.to_owned())
+        .collect();
+    let mut tools: Vec<String> = NODE_TOOLS
+        .iter()
+        .filter(|tool| {
+            configured.iter().any(|name| name == tool.name)
                 || tool
                     .packages
                     .iter()
@@ -611,7 +637,13 @@ fn node_detail(
     }
     tools.sort();
     let scripts = script_commands(json, package_manager.as_deref().unwrap_or("npm"));
-    let from_tools = node_tool_commands(root, dir, &tools, node_exec(package_manager.as_deref()));
+    let from_tools = node_tool_commands(
+        root,
+        dir,
+        &tools,
+        &configured,
+        node_exec(package_manager.as_deref()),
+    );
     let detail = Detail {
         languages,
         package_manager,
@@ -743,7 +775,8 @@ fn python_config_above(root: &Path, dir: &str, files: &[&str], table: &str) -> b
 }
 
 /// Files that, next to a `requirements.txt`, make a folder a Python project.
-const PYTHON_SIGNS: [&str; 9] = [
+const PYTHON_SIGNS: [&str; 10] = [
+    "pyproject.toml",
     "pytest.ini",
     "tox.ini",
     "setup.cfg",
@@ -755,13 +788,26 @@ const PYTHON_SIGNS: [&str; 9] = [
     "alembic.ini",
 ];
 
-/// True when the folder is a Python project: it has a `pyproject.toml`,
-/// `setup.py` or `Pipfile`, or a `requirements.txt` together with a Python
-/// config file or a `.py` file. A lone `requirements.txt` is often only the
-/// input of a docs build or a container image.
-fn is_python_project(names: &[String]) -> bool {
+/// True when the folder is a Python project: it has a `setup.py`, a
+/// `Pipfile` or a `pyproject.toml` that describes a package, or a
+/// `requirements.txt` together with a Python config file or a `.py` file.
+///
+/// A lone `requirements.txt` is often only the input of a docs build or a
+/// container image. A `pyproject.toml` with only `[tool.*]` sections is
+/// shared tool config, often placed above the real projects, and must not
+/// stop the search there.
+fn is_python_project(root: &Path, dir: &str, names: &[String]) -> bool {
     let has = |file: &str| names.iter().any(|name| name == file);
-    has("pyproject.toml")
+    let package_pyproject = has("pyproject.toml")
+        && read_text(root, &in_dir(dir, "pyproject.toml")).is_some_and(|text| {
+            parse_toml(&text).iter().any(|entry| {
+                matches!(
+                    entry.section.as_str(),
+                    "project" | "tool.poetry" | "build-system"
+                )
+            })
+        });
+    package_pyproject
         || has("setup.py")
         || has("Pipfile")
         || (has("requirements.txt")
@@ -1115,21 +1161,24 @@ fn discovered_projects(
         };
         let mut found = Vec::new();
         if has("package.json") && !node_workspace && !is_known("node") {
-            if let Some(json) = read_json(root, &in_dir(&dir, "package.json"), warnings) {
-                let (detail, _) = node_detail(root, &dir, Some(&json), None);
-                found.push(Raw {
-                    name: json
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .filter(|name| !name.is_empty())
-                        .map_or_else(|| folder_name(&dir), str::to_owned),
-                    root: dir.clone(),
-                    kind: "node",
-                    source: source::DISCOVERED,
-                    deps: node_deps(&json),
-                    detail,
-                });
-            }
+            // A manifest that cannot be read still marks a project. It gets
+            // no commands, so verify lists its steps as skipped instead of
+            // leaving the project out.
+            let json = read_json(root, &in_dir(&dir, "package.json"), warnings);
+            let (detail, _) = node_detail(root, &dir, json.as_ref(), None);
+            found.push(Raw {
+                name: json
+                    .as_ref()
+                    .and_then(|json| json.get("name"))
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .map_or_else(|| folder_name(&dir), str::to_owned),
+                root: dir.clone(),
+                kind: "node",
+                source: source::DISCOVERED,
+                deps: json.as_ref().map(node_deps).unwrap_or_default(),
+                detail,
+            });
         }
         if has("Cargo.toml") && !cargo_workspace && !is_known("rust") {
             let entries = read_text(root, &in_dir(&dir, "Cargo.toml"))
@@ -1144,7 +1193,7 @@ fn discovered_projects(
                 detail: rust_detail(root, &dir, &entries),
             });
         }
-        if is_python_project(&names) {
+        if is_python_project(root, &dir, &names) {
             found.push(Raw {
                 name: python_name(root, &dir),
                 root: dir.clone(),
@@ -1230,6 +1279,12 @@ pub fn detect_facts(root: &Path) -> Result<RepoFacts> {
         (Detail::default(), Commands::default())
     };
     let package_manager = root_node.package_manager.clone();
+    // No guessed typecheck at the root: a root tsconfig is often only a base
+    // for the packages below it, and `tsc --noEmit` fails on one.
+    let root_tool_commands = Commands {
+        typecheck: None,
+        ..root_tool_commands
+    };
 
     let cargo_text = read_text(root, "Cargo.toml");
     let cargo = cargo_text.as_deref().map(parse_toml).unwrap_or_default();
@@ -1288,7 +1343,7 @@ pub fn detect_facts(root: &Path) -> Result<RepoFacts> {
     if cargo_text.is_some() {
         raw.extend(rust_projects(root, &cargo, &mut warnings));
     }
-    if is_python_project(&root_names) {
+    if is_python_project(root, ".", &root_names) {
         raw.push(Raw {
             name: python_name(root, "."),
             root: ".".to_owned(),
@@ -1389,7 +1444,13 @@ pub fn format_facts_human(facts: &RepoFacts) -> String {
             project.name, project.kind, project.root
         ));
         let mut stack = project.languages.clone();
-        stack.extend(project.package_manager.iter().cloned());
+        stack.extend(
+            project
+                .package_manager
+                .iter()
+                .filter(|manager| !project.languages.contains(manager))
+                .cloned(),
+        );
         stack.extend(project.tools.iter().cloned());
         if !stack.is_empty() {
             out.push_str(&format!("    stack: {}\n", stack.join(", ")));
@@ -1561,21 +1622,7 @@ mod tests {
         );
         assert_eq!(facts.tools, ["github-actions", "nx", "turbo"]);
         assert_eq!(facts.commands.lint.as_deref(), Some("yarn run lint"));
-        // The root is a project of each kind it has a manifest for. The
-        // Python one has no name of its own.
-        let kinds: Vec<_> = facts
-            .projects
-            .iter()
-            .map(|p| (p.name.as_str(), p.kind.as_str(), p.root.as_str()))
-            .collect();
-        assert_eq!(
-            kinds,
-            [
-                (".", "python", "."),
-                ("app", "node", "."),
-                ("app", "rust", ".")
-            ]
-        );
+        assert_eq!(facts.projects.len(), 2);
         // Same name, different kinds: no dependency between them.
         assert!(facts.projects.iter().all(|p| p.depends_on.is_empty()));
     }
@@ -1890,13 +1937,82 @@ mod tests {
     #[test]
     fn ruff_configured_in_a_folder_above_counts() {
         let facts = facts(&[
+            // Tool config only: not a project, and the search goes on below it.
             ("pyproject.toml", "[tool.ruff]\nline-length = 100\n"),
-            ("services/a/requirements.txt", "pytest\nmypy\n"),
+            ("services/pyproject.toml", "[tool.mypy]\nstrict = true\n"),
+            ("services/a/requirements.txt", "pytest\n"),
             ("services/a/main.py", ""),
         ]);
+        let roots: Vec<_> = facts.projects.iter().map(|p| p.root.as_str()).collect();
+        assert_eq!(roots, ["services/a"]);
         let a = by_root(&facts, "services/a");
         assert_eq!(a.tools, ["mypy", "pytest", "ruff"]);
         assert_eq!(a.commands.lint.as_deref(), Some("python -m ruff check ."));
         assert_eq!(a.commands.typecheck.as_deref(), Some("python -m mypy ."));
+    }
+
+    #[test]
+    fn folders_of_examples_and_fixtures_are_not_searched() {
+        let facts = facts(&[
+            ("package.json", r#"{"name":"lib","scripts":{"test":"x"}}"#),
+            ("examples/basic/package.json", r#"{"name":"basic"}"#),
+            ("test/fixtures/broken/package.json", "{ nope"),
+            (
+                "src/__fixtures__/x/pyproject.toml",
+                "[project]\nname = \"x\"\n",
+            ),
+            ("templates/app/go.mod", "module example.com/app\n"),
+            ("site/package.json", r#"{"name":"site"}"#),
+        ]);
+        let found: Vec<_> = facts.projects.iter().map(|p| p.root.as_str()).collect();
+        assert_eq!(found, [".", "site"]);
+        assert!(facts.warnings.is_empty(), "{:?}", facts.warnings);
+    }
+
+    #[test]
+    fn a_project_whose_manifest_cannot_be_read_is_still_listed() {
+        let facts = facts(&[
+            ("a/package.json", r#"{"name":"a","scripts":{"test":"x"}}"#),
+            (
+                "b/package.json",
+                r#"{"name":"b","scripts":{"test":"exit 1"},}"#,
+            ),
+        ]);
+        let found: Vec<_> = facts
+            .projects
+            .iter()
+            .map(|p| (p.name.as_str(), p.root.as_str()))
+            .collect();
+        assert_eq!(found, [("a", "a"), ("b", "b")]);
+        // No commands can be read from it, so verify will skip and name its steps.
+        assert_eq!(by_root(&facts, "b").commands, Commands::default());
+        assert_eq!(facts.warnings.len(), 1);
+        assert!(facts.warnings[0].starts_with("b/package.json is not valid JSON"));
+    }
+
+    #[test]
+    fn a_linter_named_only_as_a_dependency_gives_no_command() {
+        let facts = facts(&[
+            (
+                "web/package.json",
+                r#"{"devDependencies":{"eslint":"9","vitest":"3"}}"#,
+            ),
+            ("web/tsconfig.json", "{}"),
+            ("package.json", r#"{"name":"root"}"#),
+            ("tsconfig.json", "{}"),
+            ("eslint.config.js", ""),
+        ]);
+        let web = by_root(&facts, "web");
+        assert_eq!(web.tools, ["eslint", "vitest"]);
+        assert_eq!(web.commands.lint, None);
+        // A test runner works without a config file.
+        assert_eq!(web.commands.test.as_deref(), Some("npx --no vitest run"));
+        // At the root, a linter's config file gives a command, but a
+        // tsconfig does not: it is often only a base for the packages below.
+        assert_eq!(
+            facts.root_tool_commands.lint.as_deref(),
+            Some("npx --no eslint .")
+        );
+        assert_eq!(facts.root_tool_commands.typecheck, None);
     }
 }

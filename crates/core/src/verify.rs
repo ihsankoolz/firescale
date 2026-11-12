@@ -72,8 +72,12 @@ pub enum Planned {
 /// The steps of one project, run in its folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectPlan {
-    /// The project's folder: repo-relative, forward slashes.
+    /// The project's folder: repo-relative, forward slashes. `.` for a
+    /// project at the repo root that the root's own commands do not cover.
     pub root: String,
+    /// `node`, `rust`, `python` or `go`. `None` for a folder that is only
+    /// named in the config.
+    pub kind: Option<String>,
     pub steps: Vec<(String, Planned)>,
 }
 
@@ -169,14 +173,23 @@ fn from_override(setting: &StepOverride) -> Planned {
     }
 }
 
-/// The steps of the projects below the root: the ones `fscale facts`
-/// discovered, and any other folder named under `verify.projects`.
-fn plan_projects(facts: &RepoFacts, config: &VerifyConfig) -> Vec<ProjectPlan> {
+/// True for a project that gets steps of its own: one `fscale facts`
+/// discovered below the root, or one at the root of a kind that the root's
+/// commands (`covered`) do not run. Workspace members are covered by the root.
+fn runs_by_itself(project: &Project, covered: &str) -> bool {
+    project.source == source::DISCOVERED
+        || (project.source == source::ROOT && project.kind != covered)
+}
+
+/// The steps of the projects that run by themselves, and of any other folder
+/// named under `verify.projects`. `covered` is the kind of project the
+/// root's own commands run.
+fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec<ProjectPlan> {
     let mut plans: Vec<ProjectPlan> = Vec::new();
     let mut discovered: Vec<&Project> = facts
         .projects
         .iter()
-        .filter(|project| project.source == source::DISCOVERED)
+        .filter(|project| runs_by_itself(project, covered))
         .collect();
     discovered.sort_by(|a, b| (&a.root, &a.kind).cmp(&(&b.root, &b.kind)));
     for project in discovered {
@@ -214,6 +227,7 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig) -> Vec<ProjectPlan> {
         if !steps.is_empty() {
             plans.push(ProjectPlan {
                 root: project.root.clone(),
+                kind: Some(project.kind.clone()),
                 steps,
             });
         }
@@ -224,7 +238,7 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig) -> Vec<ProjectPlan> {
             || facts
                 .projects
                 .iter()
-                .any(|project| project.source == source::DISCOVERED && project.root == *folder)
+                .any(|project| runs_by_itself(project, covered) && project.root == *folder)
         {
             continue;
         }
@@ -239,12 +253,13 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig) -> Vec<ProjectPlan> {
             if !steps.is_empty() {
                 plans.push(ProjectPlan {
                     root: folder.clone(),
+                    kind: None,
                     steps,
                 });
             }
         }
     }
-    plans.sort_by(|a, b| a.root.cmp(&b.root));
+    plans.sort_by(|a, b| (&a.root, &a.kind).cmp(&(&b.root, &b.kind)));
     plans
 }
 
@@ -356,10 +371,24 @@ pub fn plan_verify(
         }
     };
 
-    let projects = plan_projects(facts, config);
+    // The kind of project the root's commands run. A project of another kind
+    // at the root gets its own steps, so that it is run or named, not dropped.
+    let covered = match detected_runner {
+        "nx" | "turbo" | "scripts" => "node",
+        "cargo" => "rust",
+        other => other,
+    };
+    let projects = plan_projects(facts, config, covered);
     // With no commands of its own, the root only lists what the config sets
-    // for it, as long as projects below it have steps to run.
-    let root_runs = detected_runner != "none" || projects.is_empty();
+    // for it, as long as a project has a step that runs or is named as
+    // skipped. Projects that are all turned off do not make the root silent.
+    let projects_have_steps = projects.iter().any(|project| {
+        project
+            .steps
+            .iter()
+            .any(|(_, planned)| !matches!(planned, Planned::NotNeeded(_)))
+    });
+    let root_runs = detected_runner != "none" || !projects_have_steps;
     let steps: Vec<(String, Planned)> = STEPS
         .iter()
         .filter_map(|step| {
@@ -421,6 +450,10 @@ pub struct StepReport {
     /// the repo root.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// The kind of that project: `node`, `rust`, `python` or `go`. Absent
+    /// for a root step and for a folder that is only named in the config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     pub status: StepStatus,
     /// The command that ran, or would have. Absent for a step with no command.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -570,7 +603,14 @@ fn project_dir(root: &Path, folder: &str) -> PathBuf {
 }
 
 /// Runs one command through the platform shell, in `dir`, and reports how it went.
-fn run_step(dir: &Path, name: &str, project: Option<&str>, command: &str) -> Result<StepReport> {
+fn run_step(
+    dir: &Path,
+    name: &str,
+    project: Option<&ProjectPlan>,
+    command: &str,
+) -> Result<StepReport> {
+    let kind = project.and_then(|project| project.kind.clone());
+    let project = project.map(|project| project.root.as_str());
     let started = Instant::now();
     let output = shell(command)
         .current_dir(dir)
@@ -593,6 +633,7 @@ fn run_step(dir: &Path, name: &str, project: Option<&str>, command: &str) -> Res
     Ok(StepReport {
         name: name.to_owned(),
         project: project.map(str::to_owned),
+        kind,
         status: if passed {
             StepStatus::Passed
         } else {
@@ -617,6 +658,15 @@ fn run_step(dir: &Path, name: &str, project: Option<&str>, command: &str) -> Res
     })
 }
 
+/// How a project's folder is written in a sentence.
+fn place_name(folder: &str) -> &str {
+    if folder == "." {
+        "the repo root"
+    } else {
+        folder
+    }
+}
+
 fn plural_steps(count: usize) -> String {
     format!("{count} step{}", if count == 1 { "" } else { "s" })
 }
@@ -633,6 +683,7 @@ pub fn run_verify(
     let mut steps = vec![StepReport {
         name: "check".to_owned(),
         project: None,
+        kind: None,
         status: if check.ok {
             StepStatus::Passed
         } else {
@@ -647,16 +698,15 @@ pub fn run_verify(
     let mut failed = !check.ok;
 
     let root_steps = plan.steps.iter().map(|step| (None, step));
-    let project_steps = plan.projects.iter().flat_map(|project| {
-        project
-            .steps
-            .iter()
-            .map(|step| (Some(project.root.as_str()), step))
-    });
+    let project_steps = plan
+        .projects
+        .iter()
+        .flat_map(|project| project.steps.iter().map(move |step| (Some(project), step)));
     for (project, (name, planned)) in root_steps.chain(project_steps) {
         let idle = |status: StepStatus, command: Option<&String>, detail: &str| StepReport {
             name: name.clone(),
-            project: project.map(str::to_owned),
+            project: project.map(|project| project.root.clone()),
+            kind: project.and_then(|project| project.kind.clone()),
             status,
             command: command.cloned(),
             exit_code: None,
@@ -671,7 +721,8 @@ pub fn run_verify(
                 idle(StepStatus::NotRun, Some(command), "an earlier step failed")
             }
             Planned::Command(command) => {
-                let dir = project.map_or_else(|| root.to_path_buf(), |p| project_dir(root, p));
+                let dir =
+                    project.map_or_else(|| root.to_path_buf(), |p| project_dir(root, &p.root));
                 run_step(&dir, name, project, command)?
             }
         };
@@ -694,7 +745,7 @@ pub fn run_verify(
             let names: Vec<String> = skipped
                 .iter()
                 .map(|skip| match &skip.project {
-                    Some(project) => format!("{} in {project}", skip.step),
+                    Some(project) => format!("{} in {}", skip.step, place_name(project)),
                     None => skip.step.clone(),
                 })
                 .collect();
@@ -751,7 +802,7 @@ pub fn run_verify(
 fn headline(report: &VerifyReport) -> String {
     if let Some(step) = &report.failed_step {
         return match &report.failed_project {
-            Some(project) => format!("verify: FAILED at {step} in {project}"),
+            Some(project) => format!("verify: FAILED at {step} in {}", place_name(project)),
             None => format!("verify: FAILED at {step}"),
         };
     }
@@ -775,12 +826,26 @@ fn headline(report: &VerifyReport) -> String {
 #[must_use]
 pub fn format_verify_human(report: &VerifyReport) -> String {
     let mut out = format!("{}\n", headline(report));
-    let mut current: Option<&str> = None;
+    let mut current: Option<(&str, Option<&str>)> = None;
     for step in &report.steps {
-        let project = step.project.as_deref();
+        let project = step
+            .project
+            .as_deref()
+            .map(|project| (project, step.kind.as_deref()));
         if project != current {
-            if let Some(project) = project {
-                out.push_str(&format!("  in {project}:\n"));
+            if let Some((folder, kind)) = project {
+                // The kind is named when the folder alone does not say which
+                // project this is: two kinds in one folder, or the repo root.
+                let shared = report.steps.iter().any(|other| {
+                    other.project.as_deref() == Some(folder) && other.kind.as_deref() != kind
+                });
+                let place = place_name(folder);
+                match kind {
+                    Some(kind) if shared || folder == "." => {
+                        out.push_str(&format!("  in {place} ({kind}):\n"));
+                    }
+                    _ => out.push_str(&format!("  in {place}:\n")),
+                }
             }
             current = project;
         }
@@ -800,7 +865,9 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         let place = failure
             .project
             .as_ref()
-            .map_or_else(String::new, |project| format!(" in {project}"));
+            .map_or_else(String::new, |project| {
+                format!(" in {}", place_name(project))
+            });
         if !failure.output_tail.is_empty() {
             out.push_str(&format!("\nLast lines of {}{place}:\n", failure.name));
             for line in &failure.output_tail {
@@ -1139,6 +1206,7 @@ mod tests {
                                 ],
                                 projects: vec![ProjectPlan {
                                     root: "svc".to_owned(),
+                                    kind: Some("python".to_owned()),
                                     steps: vec![("test".to_owned(), project_test.clone())],
                                 }],
                                 fail_on_skipped,
@@ -1370,7 +1438,10 @@ mod tests {
                     "packages/a/package.json",
                     r#"{"name":"a","scripts":{"test":"z"}}"#,
                 ),
-                ("services/api/pyproject.toml", "[tool.pytest.ini_options]\n"),
+                (
+                    "services/api/pyproject.toml",
+                    "[project]\nname = \"api\"\n[tool.pytest.ini_options]\n",
+                ),
             ],
             Track::NoGit,
         )
@@ -1478,6 +1549,7 @@ mod tests {
             projects: vec![
                 ProjectPlan {
                     root: "one".to_owned(),
+                    kind: None,
                     steps: vec![
                         ("lint".to_owned(), Planned::Command(show.to_owned())),
                         (
@@ -1488,6 +1560,7 @@ mod tests {
                 },
                 ProjectPlan {
                     root: "two/deep".to_owned(),
+                    kind: None,
                     steps: vec![
                         ("lint".to_owned(), Planned::Command(fail.to_owned())),
                         ("test".to_owned(), Planned::Command(show.to_owned())),
@@ -1586,5 +1659,201 @@ mod tests {
         assert!(report.warnings.is_empty());
         assert!(!format_verify_human(&report).contains("warning"));
         assert!(!format_verify_json(&report).contains("warnings"));
+    }
+
+    // ---------------------------------------------- found by the review
+
+    fn plan_of(files: &[(&str, &str)], config: &VerifyConfig) -> (Fixture, VerifyPlan) {
+        let fixture = Fixture::new(files, Track::NoGit).unwrap();
+        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let plan = plan_verify(fixture.root(), &facts, config, false, None);
+        (fixture, plan)
+    }
+
+    const PY_PACKAGE: &str = "[project]\nname = \"x\"\n[tool.pytest.ini_options]\n";
+
+    #[test]
+    fn a_second_kind_of_project_at_the_root_is_not_dropped() {
+        // Cargo supplies the root's steps. The Python project beside it used
+        // to vanish from the plan, and the run said OK.
+        let (_rust, plan) = plan_of(
+            &[
+                ("Cargo.toml", "[package]\nname = \"x\"\n"),
+                ("pyproject.toml", PY_PACKAGE),
+            ],
+            &VerifyConfig::default(),
+        );
+        assert_eq!(plan.runner, "cargo");
+        assert_eq!(
+            project_commands(&plan),
+            [
+                ". lint: skipped (no linter was found (looked for ruff))",
+                ". typecheck: skipped (no type checker was found (looked for mypy))",
+                ". test: python -m pytest",
+            ]
+        );
+        assert_eq!(plan.projects[0].kind.as_deref(), Some("python"));
+
+        // The same beside package scripts, and Go beside Python.
+        let (_node, plan) = plan_of(
+            &[
+                (
+                    "package.json",
+                    r#"{"scripts":{"lint":"a","typecheck":"b","test":"c"}}"#,
+                ),
+                ("pyproject.toml", PY_PACKAGE),
+            ],
+            &VerifyConfig::default(),
+        );
+        assert_eq!(plan.runner, "scripts");
+        assert_eq!(project_commands(&plan).len(), 3);
+        let (_go, plan) = plan_of(
+            &[
+                ("pyproject.toml", PY_PACKAGE),
+                ("go.mod", "module example.com/x\n"),
+            ],
+            &VerifyConfig::default(),
+        );
+        assert_eq!(plan.runner, "python");
+        assert_eq!(
+            project_commands(&plan),
+            [
+                ". lint: go vet ./...",
+                ". typecheck: off (go vet already type-checks)",
+                ". test: go test ./...",
+            ]
+        );
+
+        // "." under verify.projects is the handle for them.
+        let off = VerifyConfig {
+            projects: BTreeMap::from([(".".to_owned(), ProjectOverride::Off)]),
+            ..VerifyConfig::default()
+        };
+        let (_off, plan) = plan_of(
+            &[
+                ("Cargo.toml", "[package]\nname = \"x\"\n"),
+                ("pyproject.toml", PY_PACKAGE),
+            ],
+            &off,
+        );
+        assert!(project_commands(&plan)
+            .iter()
+            .all(|line| line.contains("off (this project is turned off")));
+        // The root's own steps are untouched.
+        assert_eq!(commands_of(&plan)[2], "test: cargo test --workspace");
+    }
+
+    #[test]
+    fn turning_projects_off_does_not_hide_that_nothing_runs() {
+        // One project, turned off: the root must still say that it has no
+        // commands, or the run would read as OK with only `check`.
+        let off = VerifyConfig {
+            projects: BTreeMap::from([("svc".to_owned(), ProjectOverride::Off)]),
+            ..VerifyConfig::default()
+        };
+        let (fixture, plan) = plan_of(&[("svc/go.mod", "module example.com/svc\n")], &off);
+        assert_eq!(plan.runner, "none");
+        assert_eq!(plan.steps.len(), 3);
+        assert!(plan
+            .steps
+            .iter()
+            .all(|(_, planned)| matches!(planned, Planned::Skipped(_))));
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.result, VerifyResult::Partial);
+        assert!(format_verify_human(&report)
+            .starts_with("verify: PARTIAL - 1 of 4 steps ran, 3 skipped\n"));
+
+        // The same for a folder that only the config names.
+        let only_false = VerifyConfig {
+            projects: BTreeMap::from([(
+                "misc".to_owned(),
+                ProjectOverride::Steps(BTreeMap::from([("lint".to_owned(), StepOverride::Skip)])),
+            )]),
+            ..VerifyConfig::default()
+        };
+        let (fixture, plan) = plan_of(&[("misc/keep.txt", "")], &only_false);
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.result, VerifyResult::Partial);
+    }
+
+    #[test]
+    fn a_project_with_an_unreadable_manifest_has_its_steps_skipped_not_dropped() {
+        let (fixture, plan) = plan_of(
+            &[
+                (
+                    "a/package.json",
+                    r#"{"scripts":{"lint":"echo ok","typecheck":"echo ok","test":"echo ok"}}"#,
+                ),
+                ("b/package.json", r#"{"scripts":{"test":"exit 1"},}"#),
+            ],
+            &VerifyConfig::default(),
+        );
+        let roots: Vec<_> = plan.projects.iter().map(|p| p.root.as_str()).collect();
+        assert_eq!(roots, ["a", "b"]);
+        assert!(plan.projects[1]
+            .steps
+            .iter()
+            .all(|(_, planned)| matches!(planned, Planned::Skipped(_))));
+        drop(fixture);
+    }
+
+    #[test]
+    fn two_kinds_in_one_folder_are_told_apart() {
+        let (fixture, plan) = plan_of(
+            &[
+                ("app/go.mod", "module example.com/app\n"),
+                ("app/package.json", r#"{"scripts":{"test":"echo node"}}"#),
+            ],
+            &VerifyConfig {
+                steps: BTreeMap::from([
+                    ("lint".to_owned(), StepOverride::Skip),
+                    ("typecheck".to_owned(), StepOverride::Skip),
+                ]),
+                projects: BTreeMap::from([(
+                    "app".to_owned(),
+                    ProjectOverride::Steps(BTreeMap::from([(
+                        "test".to_owned(),
+                        StepOverride::Command("echo custom".to_owned()),
+                    )])),
+                )]),
+                ..VerifyConfig::default()
+            },
+        );
+        // A command set for the folder runs once, in place of both kinds' own.
+        assert_eq!(project_commands(&plan), ["app test: echo custom"]);
+
+        let (fixture2, plan) = plan_of(
+            &[
+                ("app/go.mod", "module example.com/app\n"),
+                ("app/package.json", r#"{"scripts":{"test":"echo node"}}"#),
+            ],
+            &VerifyConfig {
+                steps: BTreeMap::from([
+                    ("lint".to_owned(), StepOverride::Skip),
+                    ("typecheck".to_owned(), StepOverride::Skip),
+                    ("test".to_owned(), StepOverride::Skip),
+                ]),
+                ..VerifyConfig::default()
+            },
+        );
+        assert!(plan.projects.is_empty());
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: ["go", "node"]
+                .iter()
+                .map(|kind| ProjectPlan {
+                    root: "app".to_owned(),
+                    kind: Some((*kind).to_owned()),
+                    steps: vec![("test".to_owned(), Planned::Command("echo fine".to_owned()))],
+                })
+                .collect(),
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture2.root(), "0.0.0", passing_check(), &plan).unwrap();
+        let text = format_verify_human(&report);
+        assert!(text.contains("  in app (go):\n"), "{text}");
+        assert!(text.contains("  in app (node):\n"), "{text}");
+        assert!(format_verify_json(&report).contains("\"kind\": \"go\""));
+        drop(fixture);
     }
 }

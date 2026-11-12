@@ -27,10 +27,11 @@ A name that only test code reads is reported at low severity, and the message sa
 
 Test code is:
 
-- any file below a folder named `test`, `tests`, `__tests__`, `unit_test`, `unit_tests`, `integration_test`, `integration_tests`, `e2e`, `spec`, `specs`, `testing`, `cypress` or `playwright`;
+- any file below a folder named `test`, `tests`, `__tests__`, `unit_test`, `unit_tests`, `integration_test`, `integration_tests`, `e2e` or `cypress`;
 - a file named `conftest.py`;
 - Python files named `test_*.py` or `*_test.py`;
 - Go files named `*_test.go`;
+- Ruby files named `*_spec.rb` or `*_test.rb`;
 - files named `*.test.*` or `*.spec.*`, for example `api.test.ts`.
 
 When the root `.env.example` does not exist, the one shared finding has low severity only if every name in it is test-only.
@@ -39,9 +40,9 @@ When the root `.env.example` does not exist, the one shared finding has low seve
 
 The operating system, the shell, CI services and development tools set these. A project does not define them, so the rule never asks for them.
 
-Exact names: `PATH`, `HOME`, `PWD`, `OLDPWD`, `USER`, `USERNAME`, `LOGNAME`, `HOSTNAME`, `SHELL`, `SHLVL`, `TERM`, `TERM_PROGRAM`, `COLORTERM`, `COLUMNS`, `LINES`, `DISPLAY`, `EDITOR`, `VISUAL`, `PAGER`, `LANG`, `LANGUAGE`, `TZ`, `TMPDIR`, `TEMP`, `TMP`, `SSH_AUTH_SOCK`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `PROGRAMFILES`, `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `HOMEDRIVE`, `HOMEPATH`, `COMPUTERNAME`, `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_BUILDKIT`, `DOCKER_CONFIG`, `DOCKER_CONTEXT`, `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `CI`, `CONTINUOUS_INTEGRATION`, `GITLAB_CI`, `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, `DEBUG`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_ENV`, `NODE_OPTIONS`, `NODE_PATH`, `NODE_DEBUG`, `NODE_NO_WARNINGS`, `NODE_EXTRA_CA_CERTS`, `JEST_WORKER_ID`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUNBUFFERED`, `PYTHONDONTWRITEBYTECODE`, `PYTHONIOENCODING`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `RUST_BACKTRACE`, `GOPATH`, `GOROOT`, `JAVA_HOME`.
+Exact names: `PATH`, `HOME`, `PWD`, `OLDPWD`, `USER`, `LOGNAME`, `SHELL`, `SHLVL`, `TERM`, `TERM_PROGRAM`, `COLORTERM`, `COLUMNS`, `LINES`, `DISPLAY`, `EDITOR`, `VISUAL`, `PAGER`, `LANG`, `LANGUAGE`, `TZ`, `TMPDIR`, `TEMP`, `TMP`, `SSH_AUTH_SOCK`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `PROGRAMFILES`, `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `HOMEDRIVE`, `HOMEPATH`, `COMPUTERNAME`, `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_BUILDKIT`, `DOCKER_CONFIG`, `DOCKER_CONTEXT`, `CI`, `CONTINUOUS_INTEGRATION`, `GITLAB_CI`, `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, `DEBUG`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_ENV`, `NODE_OPTIONS`, `NODE_PATH`, `NODE_DEBUG`, `NODE_NO_WARNINGS`, `NODE_EXTRA_CA_CERTS`, `JEST_WORKER_ID`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUNBUFFERED`, `PYTHONDONTWRITEBYTECODE`, `PYTHONIOENCODING`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `RUST_BACKTRACE`, `GOPATH`, `GOROOT`, `JAVA_HOME`.
 
-Names that start with: `LC_*`, `XDG_*`, `npm_*`, `GITHUB_*`, `RUNNER_*`, `FSCALE_*`, `CARGO_*`, `RUSTC_*`, `RUSTUP_*`, `PYTEST_*`, `PLAYWRIGHT_*`, `VITEST*`.
+Names that start with: `LC_*`, `XDG_*`, `npm_*`, `GITHUB_*`, `RUNNER_*`, `FSCALE_*`, `CARGO_*`, `RUSTC_*`, `RUSTUP_*`, `PYTEST_*`, `VITEST*`.
 
 ### Options
 

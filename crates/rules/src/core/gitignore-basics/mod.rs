@@ -101,6 +101,22 @@ impl BuiltinRule for GitignoreBasics {
                 "**/tsconfig.json",
                 "**/setup.py",
                 "**/Pipfile",
+                "**/go.mod",
+                "go.mod",
+                "setup.py",
+                "Pipfile",
+                // What decides whether a folder is searched, and whether a
+                // requirements.txt in it makes a Python project.
+                "**/.gitignore",
+                "pnpm-workspace.yaml",
+                "**/*.py",
+                "**/pytest.ini",
+                "**/tox.ini",
+                "**/setup.cfg",
+                "**/ruff.toml",
+                "**/.ruff.toml",
+                "**/mypy.ini",
+                "**/alembic.ini",
             ]
             .iter()
             .map(|name| (*name).to_owned())

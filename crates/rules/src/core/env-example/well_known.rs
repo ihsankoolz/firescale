@@ -16,9 +16,7 @@ pub const NAMES: &[&str] = &[
     "PWD",
     "OLDPWD",
     "USER",
-    "USERNAME",
     "LOGNAME",
-    "HOSTNAME",
     "SHELL",
     "SHLVL",
     "TERM",
@@ -57,8 +55,6 @@ pub const NAMES: &[&str] = &[
     "DOCKER_BUILDKIT",
     "DOCKER_CONFIG",
     "DOCKER_CONTEXT",
-    "COMPOSE_PROJECT_NAME",
-    "COMPOSE_FILE",
     // CI.
     "CI",
     "CONTINUOUS_INTEGRATION",
@@ -101,18 +97,8 @@ pub const NAMES: &[&str] = &[
 
 /// Name prefixes. A name that starts with one of these is ignored.
 pub const PREFIXES: &[&str] = &[
-    "LC_",
-    "XDG_",
-    "npm_",
-    "GITHUB_",
-    "RUNNER_",
-    "FSCALE_",
-    "CARGO_",
-    "RUSTC_",
-    "RUSTUP_",
-    "PYTEST_",
-    "PLAYWRIGHT_",
-    "VITEST",
+    "LC_", "XDG_", "npm_", "GITHUB_", "RUNNER_", "FSCALE_", "CARGO_", "RUSTC_", "RUSTUP_",
+    "PYTEST_", "VITEST",
 ];
 
 /// True when the rule never asks for `name`.

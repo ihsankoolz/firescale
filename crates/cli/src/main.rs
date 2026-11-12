@@ -767,6 +767,9 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                         .skipped
                         .iter()
                         .map(|skip| match &skip.project {
+                            Some(project) if project == "." => {
+                                format!("{} in the repo root", skip.step)
+                            }
                             Some(project) => format!("{} in {project}", skip.step),
                             None => skip.step.clone(),
                         })

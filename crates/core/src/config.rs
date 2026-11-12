@@ -348,16 +348,19 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                 };
                 for (folder, setting) in projects {
                     let clean = folder.trim_end_matches('/');
-                    let plain = !clean.is_empty()
-                        && !clean.starts_with('/')
-                        && !clean.contains('\\')
-                        && !clean.contains(':')
-                        && clean
-                            .split('/')
-                            .all(|part| !part.is_empty() && part != "." && part != "..");
+                    // "." names the projects at the repo root that the root's
+                    // own commands do not run.
+                    let plain = clean == "."
+                        || !clean.is_empty()
+                            && !clean.starts_with('/')
+                            && !clean.contains('\\')
+                            && !clean.contains(':')
+                            && clean
+                                .split('/')
+                                .all(|part| !part.is_empty() && part != "." && part != "..");
                     if !plain {
                         return Err(Error::user(format!(
-                            "{name}: verify.projects key \"{folder}\" must be a folder below the repo root, written with forward slashes, for example \"backend/api\". For the repo root itself, set verify.lint, verify.typecheck and verify.test."
+                            "{name}: verify.projects key \"{folder}\" must be a folder inside the repo, relative to its root and written with forward slashes, for example \"backend/api\"."
                         )));
                     }
                     let parsed = match setting {
@@ -376,13 +379,36 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                             )));
                         }
                     };
-                    verify.projects.insert(clean.to_owned(), parsed);
+                    if verify.projects.insert(clean.to_owned(), parsed).is_some() {
+                        return Err(Error::user(format!(
+                            "{name}: verify.projects lists the folder \"{clean}\" twice, once with a trailing slash. Keep one entry."
+                        )));
+                    }
                 }
             }
-            step => {
+            step if crate::verify::STEPS.contains(&step) => {
                 verify
                     .steps
                     .insert(step.to_owned(), parse_step(name, "verify", step, value)?);
+            }
+            other => {
+                // A misspelt option must not read as a misspelt step.
+                let lower = other.to_lowercase();
+                let meant = if lower.starts_with("fail") || lower.contains("skip") {
+                    Some("failOnSkipped")
+                } else if lower.starts_with("proj") {
+                    Some("projects")
+                } else {
+                    None
+                };
+                return Err(Error::user(match meant {
+                    Some(meant) => format!(
+                        "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
+                    ),
+                    None => format!(
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test."
+                    ),
+                }));
             }
         }
     }

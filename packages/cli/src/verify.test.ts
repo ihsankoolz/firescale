@@ -430,8 +430,9 @@ describe('fscale verify in a repo with projects in subfolders', () => {
     expect(await missing.calls()).toEqual([]);
 
     for (const [projects, message] of [
-      [{ '.': false }, 'must be a folder below the repo root'],
-      [{ '../other': false }, 'must be a folder below the repo root'],
+      [{ '../other': false }, 'must be a folder inside the repo'],
+      [{ '/abs': false }, 'must be a folder inside the repo'],
+      [{ frontend: false, 'frontend/': false }, 'lists the folder "frontend" twice'],
       [{ frontend: true }, 'must be false, to leave the project out, or an object'],
       [{ frontend: { tests: 'x' } }, 'unknown verify step "tests"'],
       [{ frontend: { test: 5 } }, 'verify.projects["frontend"].test must be a command'],
@@ -441,6 +442,52 @@ describe('fscale verify in a repo with projects in subfolders', () => {
       expect(wrong.code).toBe(EXIT_USAGE);
       expect(wrong.stderr).toContain(message);
     }
+  });
+
+  it('does not say OK when a project is missing from the plan', async () => {
+    // Found by review: a second kind of project at the root was dropped, and
+    // a project whose package.json cannot be parsed vanished.
+    const twoKinds = await fixtures.create({
+      files: {
+        'package.json': JSON.stringify({
+          scripts: { lint: 'node -e ""', typecheck: 'node -e ""', test: 'node -e ""' },
+        }),
+        'pyproject.toml': '[project]\nname = "x"\n',
+      },
+    });
+    const first = await runCli(['verify'], twoKinds.root);
+    expect(first.code).toBe(EXIT_OK);
+    expect(first.stdout).toMatchSnapshot();
+    expect(first.stdout.startsWith('verify: PARTIAL - 4 of 7 steps ran, 3 skipped\n')).toBe(true);
+    expect(first.stdout).toContain('in the repo root (python):');
+
+    const broken = await fixtures.create({
+      files: {
+        'a/package.json': JSON.stringify({
+          scripts: { lint: 'node -e ""', typecheck: 'node -e ""', test: 'node -e ""' },
+        }),
+        'b/package.json': '{"name":"b","scripts":{"test":"exit 1"},}',
+      },
+    });
+    const second = await runCli(['verify', '--json'], broken.root);
+    const report = await validate(second.stdout);
+    expect(report.result).toBe('partial');
+    expect(report.skipped.map((skip) => `${skip.step} in ${skip.project ?? ''}`)).toEqual([
+      'lint in b',
+      'typecheck in b',
+      'test in b',
+    ]);
+  });
+
+  it('names a misspelt verify option instead of calling it a step', async () => {
+    const repo = await fixtures.create({
+      files: { 'firescale.config.json': JSON.stringify({ verify: { failOnSkiped: true } }) },
+    });
+    const result = await runCli(['verify'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toBe(
+      'fscale: firescale.config.json: unknown key "failOnSkiped" in "verify". Did you mean "failOnSkipped"?\n',
+    );
   });
 
   it('starts no Node process', async () => {

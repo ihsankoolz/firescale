@@ -109,6 +109,21 @@ exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
 }
 `;
 
+exports[`fscale verify in a repo with projects in subfolders > does not say OK when a project is missing from the plan 1`] = `
+"verify: PARTIAL - 4 of 7 steps ran, 3 skipped
+  check      passed   8 rules, no enforced violations
+  lint       passed   npm run lint
+  typecheck  passed   npm run typecheck
+  test       passed   npm run test
+  in the repo root (python):
+    lint       skipped  no linter was found (looked for ruff)
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       skipped  no test runner was found (looked for pytest)
+
+warning: steps were skipped because no command was found: lint in the repo root, typecheck in the repo root, test in the repo root. Set verify.projects["."].lint in your firescale config to a command, or to false if that project has none.
+"
+`;
+
 exports[`fscale verify in a repo with projects in subfolders > runs the backend's and the frontend's steps, each in its own folder, and names every skipped step 1`] = `
 "verify: PARTIAL - 9 of 19 steps ran, 10 skipped
   check      passed   8 rules, no enforced violations
@@ -212,6 +227,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no linter was found (looked for ruff)",
       "durationMs": 0,
+      "kind": "python",
       "name": "lint",
       "project": "backend/audit_service",
       "status": "skipped",
@@ -219,6 +235,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no type checker was found (looked for mypy)",
       "durationMs": 0,
+      "kind": "python",
       "name": "typecheck",
       "project": "backend/audit_service",
       "status": "skipped",
@@ -228,6 +245,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "python -m pytest",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "python",
       "name": "test",
       "project": "backend/audit_service",
       "status": "passed",
@@ -237,6 +255,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "python -m ruff check .",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "python",
       "name": "lint",
       "project": "backend/auth_service",
       "status": "passed",
@@ -244,6 +263,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no type checker was found (looked for mypy)",
       "durationMs": 0,
+      "kind": "python",
       "name": "typecheck",
       "project": "backend/auth_service",
       "status": "skipped",
@@ -253,6 +273,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "python -m pytest",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "python",
       "name": "test",
       "project": "backend/auth_service",
       "status": "passed",
@@ -260,6 +281,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no linter was found (looked for ruff)",
       "durationMs": 0,
+      "kind": "python",
       "name": "lint",
       "project": "backend/ledger_service",
       "status": "skipped",
@@ -267,6 +289,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no type checker was found (looked for mypy)",
       "durationMs": 0,
+      "kind": "python",
       "name": "typecheck",
       "project": "backend/ledger_service",
       "status": "skipped",
@@ -276,6 +299,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "python -m pytest",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "python",
       "name": "test",
       "project": "backend/ledger_service",
       "status": "passed",
@@ -283,6 +307,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no linter was found (looked for ruff)",
       "durationMs": 0,
+      "kind": "python",
       "name": "lint",
       "project": "backend/market_service",
       "status": "skipped",
@@ -290,6 +315,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no type checker was found (looked for mypy)",
       "durationMs": 0,
+      "kind": "python",
       "name": "typecheck",
       "project": "backend/market_service",
       "status": "skipped",
@@ -299,6 +325,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "python -m pytest",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "python",
       "name": "test",
       "project": "backend/market_service",
       "status": "passed",
@@ -306,6 +333,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no linter was found (looked for ruff)",
       "durationMs": 0,
+      "kind": "python",
       "name": "lint",
       "project": "backend/realtime_service",
       "status": "skipped",
@@ -313,6 +341,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "no type checker was found (looked for mypy)",
       "durationMs": 0,
+      "kind": "python",
       "name": "typecheck",
       "project": "backend/realtime_service",
       "status": "skipped",
@@ -322,6 +351,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "python -m pytest",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "python",
       "name": "test",
       "project": "backend/realtime_service",
       "status": "passed",
@@ -331,6 +361,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "npx --no oxlint",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "node",
       "name": "lint",
       "project": "frontend",
       "status": "passed",
@@ -340,6 +371,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "detail": "npx --no tsc --noEmit",
       "durationMs": 0,
       "exitCode": 0,
+      "kind": "node",
       "name": "typecheck",
       "project": "frontend",
       "status": "passed",
@@ -347,6 +379,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     {
       "detail": "package.json has no test script, and no vitest or jest config was found",
       "durationMs": 0,
+      "kind": "node",
       "name": "test",
       "project": "frontend",
       "status": "skipped",

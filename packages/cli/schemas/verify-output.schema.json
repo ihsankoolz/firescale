@@ -82,8 +82,12 @@
             "enum": ["check", "lint", "typecheck", "test"]
           },
           "project": {
-            "description": "Folder of the project the step belongs to, where its command runs. Absent for a step of the repo root.",
+            "description": "Folder of the project the step belongs to, where its command runs. \".\" for a project at the repo root that the root's own commands do not cover. Absent for a step of the repo root.",
             "type": "string"
+          },
+          "kind": {
+            "description": "The kind of that project. Absent for a root step and for a folder that is only named in the config.",
+            "enum": ["go", "node", "python", "rust"]
           },
           "status": {
             "description": "skipped: no command was found, so nothing was verified. not-run: an earlier step failed, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",

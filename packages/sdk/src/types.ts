@@ -164,4 +164,24 @@ export interface FirescaleConfig {
   rules?: Record<string, RuleStatus | RuleConfig>;
   /** Globs an agent fix run may never change. Used by the diff guard from M5. */
   protectedPaths?: string[];
+  /** Settings for `fscale verify`. See docs/verify.md. */
+  verify?: VerifyConfig;
+}
+
+/** A verify step's setting: the command to run, or `false` to turn the step off. */
+export type VerifyStepSetting = string | false;
+
+/** The steps `fscale verify` runs after `check`. */
+export interface VerifySteps {
+  lint?: VerifyStepSetting;
+  typecheck?: VerifyStepSetting;
+  test?: VerifyStepSetting;
+}
+
+/** The `verify` section of the config. The top-level steps apply to the whole repo. */
+export interface VerifyConfig extends VerifySteps {
+  /** `true` makes a step that was skipped for lack of a command fail the run. Default `false`. */
+  failOnSkipped?: boolean;
+  /** Per project, keyed by its folder: `false` turns it off, an object sets single steps. */
+  projects?: Record<string, false | VerifySteps>;
 }

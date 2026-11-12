@@ -24,7 +24,7 @@ const SKIP_DIRS: [&str; 6] = ["node_modules", "dist", "build", "target", "vendor
 const MAX_BYTES: u64 = 1_000_000;
 
 /// Folder names that hold test code, wherever they sit in the path.
-const TEST_DIRS: [&str; 13] = [
+const TEST_DIRS: [&str; 9] = [
     "test",
     "tests",
     "__tests__",
@@ -33,11 +33,7 @@ const TEST_DIRS: [&str; 13] = [
     "integration_test",
     "integration_tests",
     "e2e",
-    "spec",
-    "specs",
-    "testing",
     "cypress",
-    "playwright",
 ];
 
 const CODE_COMMENT: &str = "# Variables read by the code. Add example values or leave empty.";
@@ -217,8 +213,8 @@ fn listed_names(text: &str) -> BTreeSet<String> {
 /// definition of "test code"; SKILL.md describes it in words.
 ///
 /// Test code is a file below a folder named in `TEST_DIRS`, a file named
-/// `conftest.py`, a Python `test_*.py` or `*_test.py`, a Go `*_test.go`, and
-/// any `*.test.*` or `*.spec.*` file.
+/// `conftest.py`, a Python `test_*.py` or `*_test.py`, a Go `*_test.go`, a
+/// Ruby `*_spec.rb` or `*_test.rb`, and any `*.test.*` or `*.spec.*` file.
 fn is_test_path(file: &str) -> bool {
     let mut folders: Vec<&str> = file.split('/').collect();
     let name = folders.pop().unwrap_or("");
@@ -229,6 +225,7 @@ fn is_test_path(file: &str) -> bool {
     let by_language = match extension {
         "py" => stem.starts_with("test_") || stem.ends_with("_test"),
         "go" => stem.ends_with("_test"),
+        "rb" => stem.ends_with("_spec") || stem.ends_with("_test"),
         _ => false,
     };
     // `api.test.ts`, `login.spec.js`: `test` or `spec` between two dots.
@@ -427,6 +424,15 @@ fn example_is_not_a_file(ctx: &RuleContext) -> bool {
     fs::metadata(ctx.root().join(EXAMPLE)).is_ok_and(|m| !m.is_file())
 }
 
+/// True when the example file is a symbolic link. A fix never writes through
+/// a link, so a name that belongs in such a file is for a person to add.
+fn is_link(ctx: &RuleContext, target: &str) -> bool {
+    let path = target
+        .split('/')
+        .fold(ctx.root().to_path_buf(), |path, part| path.join(part));
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
 /// The one finding for a repo whose root `.env.example` does not exist yet.
 fn summary_finding(missing: &[&Missing]) -> Finding {
     let mut list = missing
@@ -569,7 +575,19 @@ impl BuiltinRule for EnvExample {
         let (for_new_root, rest): (Vec<&Missing>, Vec<&Missing>) = missing
             .iter()
             .partition(|item| !root_exists && item.target == EXAMPLE);
-        let mut findings: Vec<Finding> = rest.into_iter().map(name_finding).collect();
+        let mut findings: Vec<Finding> = rest
+            .into_iter()
+            .map(|item| {
+                let mut finding = name_finding(item);
+                if is_link(ctx, &item.target) {
+                    finding.fixable = Fixable::Manual;
+                    finding.message.push_str(
+                        " That file is a symbolic link, which fscale fix does not write to: add the line by hand.",
+                    );
+                }
+                finding
+            })
+            .collect();
         if !for_new_root.is_empty() {
             findings.push(summary_finding(&for_new_root));
         }
@@ -583,7 +601,7 @@ impl BuiltinRule for EnvExample {
         }
         let Unlisted { missing, .. } = unlisted(ctx, scan(ctx)?)?;
         let mut by_target: BTreeMap<&str, (Vec<&str>, Vec<&str>)> = BTreeMap::new();
-        for item in &missing {
+        for item in missing.iter().filter(|item| !is_link(ctx, &item.target)) {
             let (code, tests) = by_target.entry(item.target.as_str()).or_default();
             if item.test_only {
                 tests.push(item.name.as_str());

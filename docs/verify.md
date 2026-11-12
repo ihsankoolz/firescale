@@ -52,6 +52,8 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 `fscale facts` finds projects in subfolders (see [facts.md](facts.md)). Each one whose `source` is `discovered` runs its own `lint`, `typecheck` and `test`, with the commands `fscale facts` lists for it, **in its own folder**. A project with no command for a step has that step skipped, with the reason.
 
 - Workspace members are not run one by one: the root's commands cover them.
+- The root's commands come from one source, the first match in the table above. A project of another kind at the root, for example a Python package beside a `Cargo.toml`, is not dropped: it runs its own steps, listed as `in the repo root (python)`. Its key under `verify.projects` is `"."`.
+- A folder with projects of two kinds lists them apart, as `in app (go)` and `in app (node)`. A command set for that folder under `verify.projects` runs once, in place of both kinds' own command for that step.
 - When the root has no commands of its own (no `package.json`, `Cargo.toml`, Nx, Turborepo, Python or Go project there), it lists no steps, and `runner` is `projects`.
 - Projects run in the order of their folders. They always run in full, also with `--affected`.
 
@@ -80,7 +82,7 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 | `projects.<folder>`                      | Settings for one project, by its folder. `false` turns all its steps off. An object sets single steps to a command or to `false`, and wins over the repo-wide setting for that step. |
 | `projects.<folder>` for any other folder | A folder `fscale facts` did not list as discovered runs exactly the commands given for it, in that folder. Use it for a project below the search depth.                              |
 
-A folder named under `projects` must exist, or verify stops with exit code 2. The repo root is not a project here: use the top-level keys for it.
+A folder named under `projects` must exist, or verify stops with exit code 2. Write the folder as `fscale facts` prints it, in the same letter case. The top-level keys are for the root's own commands; `"."` under `projects` is only for other kinds of project at the root.
 
 Commands run through the platform shell (`sh -c` on macOS and Linux, `cmd /C` on Windows) with `NO_COLOR=1`, and with no input. Root steps run from the repo root, project steps from the project's folder.
 
@@ -128,26 +130,26 @@ At most the last 30 non-empty lines of the failed command are kept, with colour 
 
 `--json` prints the format described by `packages/cli/schemas/verify-output.schema.json` (JSON Schema draft-07, published as `firescale/schemas/verify-output.schema.json`).
 
-| Field           | Meaning                                                                                                                                                                                                                                 |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | Always `2`. Changes only on a breaking change. Version 2 added `result`, the counts, `skipped`, `failOnSkipped`, `failedProject`, the `project` of a step, and the step status `off`.                                                   |
-| `version`       | The firescale version.                                                                                                                                                                                                                  |
-| `ok`            | `true` when the exit code is 0: `result` is `ok` or `partial`.                                                                                                                                                                          |
-| `result`        | `ok` (every step ran and passed), `partial` (nothing failed, at least one step skipped) or `failed` (a step failed, or steps were skipped with `failOnSkipped` on). **Read this, not `ok` alone.**                                      |
-| `runner`        | How the root's commands were chosen: `config` (all three steps set in the config), `nx`, `turbo`, `scripts`, `cargo`, `python`, `go`, `projects` (only the projects below the root) or `none`.                                          |
-| `stepsTotal`    | Steps that should run: every step except those that are `off`.                                                                                                                                                                          |
-| `stepsRun`      | Steps that did run, passing or failing.                                                                                                                                                                                                 |
-| `failOnSkipped` | The config setting.                                                                                                                                                                                                                     |
-| `failedStep`    | The first failed step. Absent when no step failed.                                                                                                                                                                                      |
-| `failedProject` | The folder of the project whose step failed. Absent for a root step.                                                                                                                                                                    |
-| `rerun`         | The command to run again, from the folder in `failedProject` when that is present. Absent when no step failed.                                                                                                                          |
-| `steps`         | `check` first, then the root's steps, then each project's. Each has `name`, `status` (`passed`, `failed`, `skipped`, `not-run`, `off`), `durationMs`, `detail`, and where they apply `project`, `command`, `exitCode` and `outputTail`. |
-| `skipped`       | Every skipped step: `step`, `reason`, and `project` for a project's step. Empty when nothing was skipped.                                                                                                                               |
-| `warnings`      | One sentence naming the skipped steps. Absent when there are none.                                                                                                                                                                      |
+| Field           | Meaning                                                                                                                                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | Always `2`. Changes only on a breaking change. Version 2 added `result`, the counts, `skipped`, `failOnSkipped`, `failedProject`, the `project` of a step, and the step status `off`.                                                           |
+| `version`       | The firescale version.                                                                                                                                                                                                                          |
+| `ok`            | `true` when the exit code is 0: `result` is `ok` or `partial`.                                                                                                                                                                                  |
+| `result`        | `ok` (every step ran and passed), `partial` (nothing failed, at least one step skipped) or `failed` (a step failed, or steps were skipped with `failOnSkipped` on). **Read this, not `ok` alone.**                                              |
+| `runner`        | How the root's commands were chosen: `config` (all three steps set in the config), `nx`, `turbo`, `scripts`, `cargo`, `python`, `go`, `projects` (only the projects below the root) or `none`.                                                  |
+| `stepsTotal`    | Steps that should run: every step except those that are `off`.                                                                                                                                                                                  |
+| `stepsRun`      | Steps that did run, passing or failing.                                                                                                                                                                                                         |
+| `failOnSkipped` | The config setting.                                                                                                                                                                                                                             |
+| `failedStep`    | The first failed step. Absent when no step failed.                                                                                                                                                                                              |
+| `failedProject` | The folder of the project whose step failed. Absent for a root step.                                                                                                                                                                            |
+| `rerun`         | The command to run again, from the folder in `failedProject` when that is present. Absent when no step failed.                                                                                                                                  |
+| `steps`         | `check` first, then the root's steps, then each project's. Each has `name`, `status` (`passed`, `failed`, `skipped`, `not-run`, `off`), `durationMs`, `detail`, and where they apply `project`, `kind`, `command`, `exitCode` and `outputTail`. |
+| `skipped`       | Every skipped step: `step`, `reason`, and `project` for a project's step. Empty when nothing was skipped.                                                                                                                                       |
+| `warnings`      | One sentence naming the skipped steps. Absent when there are none.                                                                                                                                                                              |
 
 ## The stop hook
 
-`fscale hooks run` blocks an agent only when verify fails. On a partial run the agent may stop, and the hook prints a line on stderr that says the run was not a clean pass and names the skipped steps. With `verify.failOnSkipped` on, a partial run is a failure and the hook blocks. ADR 0020 explains the default.
+`fscale hooks run` blocks an agent only when verify fails. On a partial run the agent may stop, and the hook prints a line on stderr that says the run was not a clean pass and names the skipped steps. That line is for the person reading the hook's output or its log: an agent may not be shown the stderr of a hook that lets it stop. With `verify.failOnSkipped` on, a partial run is a failure and the hook blocks. ADR 0020 explains the default.
 
 ## Limits
 
