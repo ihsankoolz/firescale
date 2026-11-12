@@ -47,6 +47,10 @@ const GRACE: Duration = Duration::from_secs(2);
 /// process that left the group (a daemon) may hold them open for ever.
 const DRAIN: Duration = Duration::from_secs(2);
 
+/// The exit code of a Windows process ended by Ctrl+C or Ctrl+Break
+/// (`STATUS_CONTROL_C_EXIT`, 0xC000013A).
+const STATUS_CONTROL_C_EXIT: i32 = 0xC000_013A_u32 as i32;
+
 /// At most this much output is kept per stream; older output is dropped.
 const MAX_OUTPUT: usize = 16 * 1024 * 1024;
 
@@ -174,12 +178,27 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
     let (ending, duration) = loop {
         let elapsed = started.elapsed();
         match tree.child.try_wait() {
-            Ok(Some(status)) => break (Ending::Exited(status.code()), elapsed),
+            Ok(Some(status)) => {
+                // A command that ended because the same Ctrl+Break or closed
+                // console reached it too was stopped, not failed. Its end can
+                // come a moment before fscale's own handler sets the flag.
+                if status.code() == Some(STATUS_CONTROL_C_EXIT) {
+                    let deadline = Instant::now() + Duration::from_millis(500);
+                    while !watch.stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        std::thread::sleep(POLL);
+                    }
+                }
+                if watch.stop.load(Ordering::SeqCst) {
+                    break (Ending::Stopped, elapsed);
+                }
+                break (Ending::Exited(status.code()), elapsed);
+            }
             Ok(None) => {}
-            // The child cannot be waited on: stop it, and call it stopped.
+            // The child cannot be waited on: stop it, and report it as a
+            // command that ended with no exit code.
             Err(_) => {
                 tree.stop();
-                break (Ending::Stopped, elapsed);
+                break (Ending::Exited(None), elapsed);
             }
         }
         if watch.stop.load(Ordering::SeqCst) {
@@ -224,7 +243,31 @@ mod platform {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
 
+    use std::sync::atomic::AtomicI32;
+
     use super::{GRACE, POLL, STOP};
+
+    /// The process groups of the commands running now, so that a second
+    /// Ctrl+C can kill them from the signal handler, where only atomics and
+    /// `kill(2)` may be used. Free slots hold 0.
+    static GROUPS: [AtomicI32; 64] = [const { AtomicI32::new(0) }; 64];
+
+    fn register(group: libc::pid_t) {
+        for slot in &GROUPS {
+            if slot
+                .compare_exchange(0, group, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+
+    fn unregister(group: libc::pid_t) {
+        for slot in &GROUPS {
+            let _ = slot.compare_exchange(group, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
 
     /// A command running as the leader of its own process group.
     pub(super) struct Tree {
@@ -240,6 +283,7 @@ mod platform {
             let child = command.spawn()?;
             let group = libc::pid_t::try_from(child.id())
                 .map_err(|_| std::io::Error::other("the process id does not fit in pid_t"))?;
+            register(group);
             Ok(Self {
                 child,
                 group,
@@ -294,6 +338,12 @@ mod platform {
         }
     }
 
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            unregister(self.group);
+        }
+    }
+
     /// True when the process (`target` > 0) or process group (`target` < 0)
     /// exists.
     fn exists(target: libc::pid_t) -> bool {
@@ -314,9 +364,28 @@ mod platform {
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
 
-    extern "C" fn on_signal(_signal: libc::c_int) {
-        // Only an atomic store: safe inside a signal handler.
-        STOP.store(true, Ordering::SeqCst);
+    extern "C" fn on_signal(signal: libc::c_int) {
+        // Only atomics, kill(2), signal(2) and raise(3) here: all are safe
+        // inside a signal handler.
+        if !STOP.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // A second signal: kill every running command at once, then end
+        // fscale the way the signal would have without a handler.
+        for slot in &GROUPS {
+            let group = slot.load(Ordering::SeqCst);
+            if group > 0 {
+                // SAFETY: kill(2) is async-signal-safe.
+                unsafe {
+                    libc::kill(-group, libc::SIGKILL);
+                }
+            }
+        }
+        // SAFETY: signal(2) and raise(3) are async-signal-safe.
+        unsafe {
+            libc::signal(signal, libc::SIG_DFL);
+            libc::raise(signal);
+        }
     }
 
     /// Makes Ctrl+C (`SIGINT`), `SIGTERM` and `SIGHUP` set [`STOP`] instead
@@ -464,8 +533,10 @@ mod platform {
     impl Tree {
         pub(super) fn spawn(mut command: Command) -> std::io::Result<Self> {
             // Suspended, so nothing it starts runs before it is in the job.
-            // Its own process group, so Ctrl+C reaches fscale only, which
-            // then stops the whole job.
+            // Its own process group, with Ctrl+C turned off in it: a Ctrl+C
+            // at the console reaches fscale, which stops the whole job.
+            // (Ctrl+Break and closing the console still reach every process
+            // on the console; the watch loop reports such an end as stopped.)
             command.creation_flags(CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP);
             let job = Job::new();
             let mut child = command.spawn()?;
@@ -496,7 +567,8 @@ mod platform {
             let _ = self.child.wait();
         }
 
-        /// After the shell ended: stops what it left in the job.
+        /// After the shell ended: stops what it left in the job. Without a
+        /// job, what the shell left cannot be found any more (documented).
         pub(super) fn stop_rest(&mut self) {
             if let Some(job) = &self.job {
                 job.terminate();
@@ -520,19 +592,26 @@ mod platform {
         }
     }
 
-    /// Windows has no process groups that outlive their leader here: the
-    /// job dies with fscale. The id is the shell's process id.
-    pub(crate) fn group_exists(pid: u32) -> bool {
-        process_exists(pid)
+    /// On Windows a command's job dies with fscale, so nothing an earlier
+    /// run started can be left. A process with the same id is another
+    /// process that reuses the id, and must never be named for stopping.
+    pub(crate) fn group_exists(_pid: u32) -> bool {
+        false
     }
 
     static INSTALLED: AtomicBool = AtomicBool::new(false);
 
     unsafe extern "system" fn on_control(event: u32) -> windows_sys::core::BOOL {
         match event {
-            CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT
-            | CTRL_SHUTDOWN_EVENT => {
+            // A second Ctrl+C or Ctrl+Break ends fscale at once (the default
+            // handler). Its jobs close with it, which stops their commands.
+            CTRL_C_EVENT | CTRL_BREAK_EVENT => i32::from(!STOP.swap(true, Ordering::SeqCst)),
+            // Windows ends the process as soon as this handler returns, and
+            // gives it about 5 seconds. Waiting here lets verify stop its
+            // commands and print the summary; the process ends when it is done.
+            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
                 STOP.store(true, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(4500));
                 1
             }
             _ => 0,

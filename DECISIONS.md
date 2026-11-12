@@ -89,6 +89,19 @@ Found by running 0.1.2 on your course project on Windows: verify silent for over
 - **Run records live in the temp folder**, not in the repo.
 - **`libc` and `windows-sys` became direct dependencies**, at the versions already in `Cargo.lock`.
 
+**Independent review before the pull request** found eleven issues. Fixed:
+
+- On Windows the "left behind" note could name a reused process id with a `taskkill` command; it no longer comes up on Windows, and records older than a day are dropped.
+- A Ctrl+Break that also killed a step's shell was reported as FAILED; it is now STOPPED, tested with the event sent to the whole console.
+- Closing the console ended fscale before the summary; it now waits for it.
+- Ctrl+C during `check` gave an error; it is now a stop (exit 130).
+- A second Ctrl+C now kills at once.
+- A `try_wait` error was reported as a user stop.
+- A record being written could be deleted by another run, and notes came in random order.
+- Three tests were weak: one could kill a reused process id, the 3-second limit was tight for Windows runners, and the 2-second pipe wait had no test.
+
+Left: the facts schema stays at version 2 although its new `notes` field fails an old validator with `additionalProperties: false`. That is the policy 0.1.2 followed for `install` and `interpreter` (ADR 0022). Also left: on Windows, if no job can be made, what a step leaves running after it ends is not stopped (documented).
+
 **Tests changed on purpose, none weakened**
 
 - Verify snapshots and two assertions: schema version 4. The help snapshot: the new options and exit code 130. The "unknown verify step" message now also lists the other keys.

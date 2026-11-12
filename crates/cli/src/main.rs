@@ -735,7 +735,26 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let progress = args
         .progress
         .unwrap_or_else(|| std::io::stderr().is_terminal());
-    let (report, notes) = verify_report(root, args, progress)?;
+    let (report, notes) = match verify_report(root, args, progress) {
+        Ok(done) => done,
+        // Ctrl+C during the check also reaches the Node host and git, which
+        // then fail: that is a stop, not an error.
+        Err(error) if STOP.load(std::sync::atomic::Ordering::SeqCst) => {
+            return Ok(Output {
+                stdout: if args.json {
+                    String::new()
+                } else {
+                    "verify: STOPPED - interrupted before the check finished\n".to_owned()
+                },
+                notes: vec![format!(
+                    "fscale: verify was stopped before the check finished ({}). Run fscale verify again to check the repo.",
+                    error.message()
+                )],
+                code: EXIT_STOPPED,
+            });
+        }
+        Err(error) => return Err(error),
+    };
     Ok(Output {
         stdout: if args.json {
             format_verify_json(&report)

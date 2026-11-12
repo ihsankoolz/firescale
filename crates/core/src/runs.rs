@@ -50,6 +50,9 @@ pub struct RunRecord {
     state: Mutex<State>,
 }
 
+/// Records older than this are removed without a note.
+const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// The folder that holds the records: `firescale-runs` in the temp folder.
 #[must_use]
 pub fn default_dir() -> PathBuf {
@@ -137,13 +140,22 @@ impl RunRecord {
                 if rest == pid.to_string() {
                     continue;
                 }
-                let Some(other) = fs::read_to_string(entry.path())
-                    .ok()
-                    .and_then(|text| serde_json::from_str::<State>(&text).ok())
-                else {
+                // A file that cannot be read now may be in the middle of a
+                // write by its run: leave it. One that reads but does not
+                // parse is broken: remove it.
+                let Ok(text) = fs::read_to_string(entry.path()) else {
+                    continue;
+                };
+                let Ok(other) = serde_json::from_str::<State>(&text) else {
                     let _ = fs::remove_file(entry.path());
                     continue;
                 };
+                // A record older than a day is from a run long gone, whose
+                // process ids may since belong to other processes.
+                if now.saturating_sub(other.started) > MAX_AGE.as_secs() {
+                    let _ = fs::remove_file(entry.path());
+                    continue;
+                }
                 match describe(&other, now) {
                     Some(note) => notes.push(note),
                     // Nothing of that run is left: forget it.
@@ -153,6 +165,7 @@ impl RunRecord {
                 }
             }
         }
+        notes.sort();
         if fs::create_dir_all(dir).is_err() {
             return (None, notes);
         }
@@ -301,6 +314,7 @@ mod tests {
         assert!(note.contains("does not wait"), "{note}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn commands_left_by_a_killed_run_are_named_with_how_to_stop_them() {
         let temp = tempfile::tempdir().unwrap();
@@ -336,6 +350,57 @@ mod tests {
             "{note}"
         );
         assert!(note.contains(&stop_command(leftover.id())), "{note}");
+    }
+
+    /// On Windows a killed run's job takes its commands with it, so a live
+    /// process with a recorded id is another process: never named.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_a_reused_process_id_is_never_named_for_stopping() {
+        let temp = tempfile::tempdir().unwrap();
+        let (dir, root) = (temp.path().join("runs"), temp.path().join("repo"));
+        fs::create_dir_all(&root).unwrap();
+        let mut other = long_running();
+        write_other(
+            &dir,
+            &root,
+            &State {
+                pid: ended_pid(),
+                started: now(),
+                root: String::new(),
+                running: vec![RunningStep {
+                    place: "lint".to_owned(),
+                    command: "eslint .".to_owned(),
+                    pid: other.id(),
+                }],
+            },
+        );
+        let (_record, notes) = RunRecord::start_in(&dir, &root, std::process::id());
+        let _ = other.kill();
+        let _ = other.wait();
+        assert!(notes.is_empty(), "{notes:?}");
+    }
+
+    #[test]
+    fn a_record_older_than_a_day_is_removed_quietly() {
+        let temp = tempfile::tempdir().unwrap();
+        let (dir, root) = (temp.path().join("runs"), temp.path().join("repo"));
+        fs::create_dir_all(&root).unwrap();
+        // Alive, but its record is two days old: the id was reused.
+        write_other(
+            &dir,
+            &root,
+            &State {
+                pid: std::process::id(),
+                started: now() - 2 * 24 * 60 * 60,
+                root: String::new(),
+                running: Vec::new(),
+            },
+        );
+        let (_record, notes) = RunRecord::start_in(&dir, &root, ended_pid());
+        assert!(notes.is_empty(), "{notes:?}");
+        let old = dir.join(format!("{}-{}.json", repo_key(&root), std::process::id()));
+        assert!(!old.exists());
     }
 
     #[test]

@@ -81,6 +81,8 @@ On Ctrl+C, on `SIGTERM` or `SIGHUP` (macOS and Linux), and on Ctrl+Break or clos
 - On macOS and Linux each command runs in its own process group. Stopping sends `SIGTERM` to the group, then `SIGKILL` to whatever is left after 2 seconds.
 - On Windows each command runs in its own job object, which it enters before it can start anything. Stopping terminates the job. If fscale itself is killed outright, Windows closes the job and its processes end with it.
 
+A **second** Ctrl+C (or signal) does not wait: it kills every running command at once and ends fscale, with no summary. Closing the console window on Windows still prints the summary: fscale has about 5 seconds before Windows ends it, and its job ends the commands either way. Ctrl+C during the `check` step stops verify with `verify: STOPPED - interrupted before the check finished` and exit code 130.
+
 When a step's command ends by itself, whatever it left running in its group is stopped too, and verify waits at most 2 seconds for its output to close. A background process that a test left behind can no longer keep verify waiting.
 
 ### Time limits
@@ -129,7 +131,9 @@ Run projects in parallel only when they do not share anything that cannot be sha
 Verify takes no lock, so a second `fscale verify` never waits for another one. Instead, each run keeps a small record in the temp folder (`firescale-runs`) with its process id and the commands it is running, and removes it when it ends. A new run reads the records of the same repo and says on stderr:
 
 - when another verify is running there: which process, since when, and what it is running. The two may compete for the same files, ports or test database.
-- when an earlier verify ended without stopping its commands (it was killed outright on macOS or Linux) and they are still running: which ones, and the command that stops them (`kill -TERM -<group>`; on Windows `taskkill /T /F /PID <pid>`).
+- when an earlier verify ended without stopping its commands (it was killed outright on macOS or Linux) and they are still running: which ones, and the command that stops them (`kill -TERM -<group>`). On Windows a killed run's job ends its commands, so this never comes up there.
+
+Records older than a day are removed without a word, since their process ids may belong to other processes by then.
 
 ## Python projects use their own virtual environment
 
@@ -283,7 +287,7 @@ At most the last 30 non-empty lines of the failed command are kept, with colour 
 ## Limits
 
 - A step's own output is captured, not streamed. Progress lines say what runs, and the heartbeat shows the last line of output.
-- On macOS and Linux, a process that leaves its process group (a daemon that calls `setsid`) is not stopped with its command, and if fscale is killed with `SIGKILL` its commands keep running; the next run names them. On Windows, a daemon started by a step (such as a build server) is stopped at the end of the step, because it is in the step's job.
+- On macOS and Linux, a process that leaves its process group (a daemon that calls `setsid`) is not stopped with its command, and if fscale is killed with `SIGKILL` its commands keep running; the next run names them. On Windows, a daemon started by a step (such as a build server) is stopped at the end of the step, because it is in the step's job. If Windows refuses to make a job (rare: a parent job that forbids it), `taskkill /T` stops a step on a timeout or Ctrl+C, but what a step leaves running after it ends is not stopped.
 - With Nx, the task names must be `lint`, `typecheck` and `test`. Use the `verify` config key for other names.
 - A Node, Rust or Go project's commands run with the tools found on the PATH. A Python project's run with its interpreter (see above).
 - Setup detection only knows the messages in the table. A setup problem with another message is a normal failure.

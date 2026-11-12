@@ -27,6 +27,8 @@ Not proven on the owner's machine: which of the two each later run hit. Both are
 - **Windows:** the shell is started suspended and in a new process group, assigned to a new job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and only then resumed (every thread of the process, found with a Toolhelp snapshot), so nothing it starts escapes the job. Stopping terminates the job. When fscale dies for any reason, Windows closes the job handle and its processes end. If no job can be made, `taskkill /T /F` stops the tree.
 - When the command ends by itself, what it left in its group or job is stopped too, and verify waits at most 2 seconds for the output pipes to close.
 - Ctrl+C, `SIGTERM` and `SIGHUP` (Unix) and Ctrl+C, Ctrl+Break, closing the console, log-off and shutdown (Windows) only set a flag; the loop that watches each command sees it within 20 ms, stops the tree, and verify prints the summary of what finished and exits with **130**. The handler is installed only by `verify` and `hooks run`.
+- A second Ctrl+C or signal does not wait for the grace period: on Unix the handler sends `SIGKILL` to every registered command group (a fixed table of atomics, so it is safe in a signal handler) and re-raises the signal with the default action; on Windows the handler returns false, the default handler ends fscale, and the jobs close. For closing the console, log-off and shutdown, the Windows handler waits up to 4.5 seconds so verify can stop its commands and print the summary before Windows ends the process.
+- Ctrl+Break and closing the console reach every process on the console, including a step's shell. A command that ends with `STATUS_CONTROL_C_EXIT` while (or within half a second before) the stop flag is set is reported as stopped, not failed. Ctrl+C during the check step, which also reaches the Node host and git, ends verify as stopped (exit 130) instead of with their error.
 - New step status `stopped` (`STOPPED`); steps that had not started are `not-run` ("verify was stopped"). New result `stopped`. The headline reads `verify: STOPPED - interrupted after 3 of 9 steps ran`, then any failures.
 
 ### Time limits
@@ -63,7 +65,7 @@ Not proven on the owner's machine: which of the two each later run hit. Both are
 
 ### Runs never wait on each other
 
-- No lock. Each run writes a record to `<temp>/firescale-runs/<repo hash>-<pid>.json`: its pid, start time and the commands it is running with their process ids, and removes it at the end. A new run reads the records of the same repo and, on stderr, names another run that is alive and what it runs, or commands that an earlier, killed run left behind, with `kill -TERM -<group>` or `taskkill /T /F /PID <pid>`. Stale records with nothing left are removed.
+- No lock. Each run writes a record to `<temp>/firescale-runs/<repo hash>-<pid>.json`: its pid, start time and the commands it is running with their process ids, and removes it at the end. A new run reads the records of the same repo and, on stderr, names another run that is alive and what it runs, or commands that an earlier, killed run left behind, with `kill -TERM -<group>`. On Windows the second case cannot happen (the job ends with fscale), so a live process with a recorded id is another process that reuses the id and is never named. Stale records with nothing left, broken records and records older than a day are removed. A record that cannot be read at the moment is left alone. Process ids can be reused, so a note about a running verify can, rarely, be wrong; the day limit bounds that.
 
 ### Dependencies
 

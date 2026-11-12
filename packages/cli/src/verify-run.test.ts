@@ -97,9 +97,10 @@ async function expectTreeGone(folder: string, count: number): Promise<void> {
   await until(async () => (await Promise.all(pids.map(alive))).every((up) => !up), 10_000).catch(
     () => undefined,
   );
+  // Survivors are only named, never killed here: on Windows an id can be
+  // reused quickly by an unrelated process.
   const survivors: number[] = [];
   for (const pid of pids) if (await alive(pid)) survivors.push(pid);
-  for (const pid of survivors) process.kill(pid, 'SIGKILL');
   expect(survivors).toEqual([]);
 }
 
@@ -155,9 +156,39 @@ describe('stopping verify stops every process it started', () => {
     },
   );
 
-  it.runIf(WINDOWS)(
-    'on Ctrl+Break, stops the whole job and prints the summary of what finished',
+  it.skipIf(WINDOWS)(
+    'on a second Ctrl+C, kills the commands at once and ends without waiting',
     async () => {
+      const scratch = await fixtures.create({ files: {}, track: 'no-git' });
+      const pidFile = path.join(scratch.root, 'sleep.pid');
+      // The command ignores SIGTERM, so the first Ctrl+C has to wait for
+      // the grace period before SIGKILL; the second one does not wait.
+      const repo = await repoWith({
+        lint: false,
+        typecheck: false,
+        test: `trap '' TERM; sleep 120 & echo $! > "${pidFile}"; wait`,
+      });
+      const run = startVerify(repo.root);
+      await until(() => existsSync(pidFile));
+      const pid = Number.parseInt(await readFile(pidFile, 'utf8'), 10);
+      run.child.kill('SIGINT');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const begun = Date.now();
+      run.child.kill('SIGINT');
+      await run.exited;
+      expect(run.child.signalCode).toBe('SIGINT');
+      expect(Date.now() - begun).toBeLessThan(1500);
+      await until(async () => !(await alive(pid)), 5_000).catch(() => undefined);
+      expect(await alive(pid)).toBe(false);
+    },
+  );
+
+  it.runIf(WINDOWS).each([
+    ['group', "fscale's process group only"],
+    ['console', 'every process on the console, as a key press does'],
+  ] as const)(
+    'on Ctrl+Break sent to %s (%s), stops the whole job and prints the summary of what finished',
+    async (mode) => {
       const scratch = await fixtures.create({ files: {}, track: 'no-git' });
       const pids = path.join(scratch.root, 'pids');
       const output = path.join(scratch.root, 'verify.out');
@@ -168,7 +199,7 @@ describe('stopping verify stops every process it started', () => {
       });
       const helper = spawn(
         CTRL_BREAK,
-        [path.join(pids, 'ready'), output, BIN, 'verify', '--progress'],
+        [mode, path.join(pids, 'ready'), output, BIN, 'verify', '--progress'],
         { cwd: repo.root, env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
       );
       started.push(helper);
@@ -179,6 +210,9 @@ describe('stopping verify stops every process it started', () => {
       const stdout = await readFile(output, 'utf8');
       expect(code).toBe(EXIT_STOPPED);
       expect(stdout).toMatch(/^verify: STOPPED - interrupted after 2 of 3 steps ran\r?\n/);
+      // The step whose commands got the event too is stopped, not failed.
+      expect(stdout).toMatch(/ {2}test {7}STOPPED /);
+      expect(stdout).not.toContain('FAILED');
       expect(stdout).toContain('Stopped: verify was interrupted');
       expect(await readFile(`${output}.err`, 'utf8')).toContain('[verify] test: STOPPED after');
       await expectTreeGone(pids, 3);
@@ -220,6 +254,32 @@ describe('a process a step leaves behind', () => {
   });
 });
 
+describe("a daemon that leaves the step's process group", () => {
+  // setsid(1) is part of util-linux, so this runs on Linux only.
+  it.runIf(process.platform === 'linux')(
+    'holds the output pipe, but verify waits at most 2 seconds for it',
+    async () => {
+      const scratch = await fixtures.create({ files: {}, track: 'no-git' });
+      const pids = path.join(scratch.root, 'pids');
+      const repo = await repoWith({
+        lint: false,
+        typecheck: false,
+        test: `setsid ${treeCommand(pids, 0)} & echo daemon-started`,
+      });
+      const begun = Date.now();
+      const result = await runCli(['verify'], repo.root);
+      const took = Date.now() - begun;
+      await until(() => existsSync(path.join(pids, 'ready')), 10_000);
+      const [daemon] = await treePids(pids);
+      // It left the group, so verify cannot stop it (documented): this test does.
+      if (daemon !== undefined && (await alive(daemon))) process.kill(daemon, 'SIGKILL');
+      expect(result.code).toBe(EXIT_OK);
+      expect(took).toBeLessThan(15_000);
+      expect(daemon).toBeDefined();
+    },
+  );
+});
+
 describe('time limits', () => {
   it('stops a step that runs too long with its whole tree, says so, and runs the other projects', async () => {
     const scratch = await fixtures.create({ files: {}, track: 'no-git' });
@@ -230,7 +290,7 @@ describe('time limits', () => {
         typecheck: false,
         test: false,
         projects: {
-          'backend/slow': { test: { command: treeCommand(pids), timeout: '3s' } },
+          'backend/slow': { test: { command: treeCommand(pids), timeout: '8s' } },
           frontend: { test: 'echo frontend-ran' },
         },
       },
@@ -240,11 +300,11 @@ describe('time limits', () => {
     expect(result.code).toBe(EXIT_VIOLATIONS);
     expect(result.stdout).toMatch(/^verify: TIMED OUT at test in backend\/slow\r?\n/);
     expect(result.stdout).toContain('    test       TIMED OUT ');
-    expect(result.stdout).toContain('(no result within 3s)');
+    expect(result.stdout).toContain('(no result within 8s)');
     // The last lines of its output, as for a failure.
     expect(result.stdout).toContain('Last lines of test in backend/slow:\n  tree-stub level');
     expect(result.stdout).toContain(
-      'Timed out: test in backend/slow gave no result within 3s, so it was stopped with every process it started.',
+      'Timed out: test in backend/slow gave no result within 8s, so it was stopped with every process it started.',
     );
     expect(result.stdout).toContain(
       'If it is only slow, raise verify.projects["backend/slow"].test.timeout in your firescale config.',
@@ -259,7 +319,7 @@ describe('time limits', () => {
     expect(report.result).toBe('failed');
     const step = report.steps.find((s) => s.project === 'backend/slow');
     expect(step?.status).toBe('timed-out');
-    expect(step?.timeoutMs).toBe(3000);
+    expect(step?.timeoutMs).toBe(8000);
     expect(step?.timeoutKey).toBe('verify.projects["backend/slow"].test.timeout');
   });
 
