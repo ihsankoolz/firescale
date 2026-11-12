@@ -91,7 +91,16 @@
           },
           "status": {
             "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",
-            "enum": ["passed", "failed", "setup-needed", "timed-out", "stopped", "skipped", "not-run", "off"]
+            "enum": [
+              "passed",
+              "failed",
+              "setup-needed",
+              "timed-out",
+              "stopped",
+              "skipped",
+              "not-run",
+              "off"
+            ]
           },
           "command": {
             "description": "The command that ran, or would have. Absent for a skipped step and for one that is off.",

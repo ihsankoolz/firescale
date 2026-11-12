@@ -1,6 +1,6 @@
 {
   "name": "@firescale/sdk",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Rule authoring API for firescale: defineRule, types and test helpers.",
   "license": "MIT",
   "repository": {
