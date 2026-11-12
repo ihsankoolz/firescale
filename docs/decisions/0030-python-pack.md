@@ -15,7 +15,7 @@ The docs sites were blocked from the build session; the facts come from the sour
 
 ## Decision
 
-- **Per project.** Every rule works on each Python project `fscale facts` finds. A repo of services with `requirements.txt`, `requirements-dev.txt`, `pytest.ini` and their own `.venv`, and no `pyproject.toml`, passes as it is, and a gap in one service is fixed in that service's folder. **Nothing in the pack creates or asks for a `pyproject.toml`.** Only a repo with no Python project at all (or a root project with no Python code yet) gets a starter at its root.
+- **Per project.** Every rule works on each Python project `fscale facts` finds, and on every folder with a requirements file or a `pyproject.toml` that facts does not list (a service with no `pytest.ini` yet). A repo of services with `requirements.txt`, `requirements-dev.txt`, `pytest.ini` and their own `.venv`, and no `pyproject.toml`, passes as it is, and a gap in one service is fixed in that service's folder. **Nothing in the pack creates or asks for a `pyproject.toml`.** Only a repo with no Python code at all gets a starter at its root.
 - **The starter** (`fscale init --packs core,python`): `requirements.txt` (empty, with a comment), `requirements-dev.txt`, `pytest.ini`, `ruff.toml`, `app/__init__.py`, `app/main.py`, `tests/test_main.py`, and `.gitignore` lines. Plain pip and a venv; no uv or Poetry needed.
 - **Rules.**
 

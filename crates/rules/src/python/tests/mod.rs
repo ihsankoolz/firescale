@@ -62,7 +62,7 @@ impl BuiltinRule for TestsPresent {
             if has_tests(ctx, &target) {
                 continue;
             }
-            findings.push(if target.is_new() {
+            findings.push(if target.is_new() && !target.exists(ctx, "app") {
                 finding(&target, "tests/test_main.py", "No Python code or tests yet. `fscale sync` creates app/main.py and tests/test_main.py, which `python -m pytest` runs.".to_owned(), Fixable::Deterministic)
             } else {
                 finding(&target, "tests/", format!("The Python project in {} has no tests (no tests/ folder and no test_*.py). Add tests for its code.", target.folder), Fixable::Agent)
@@ -74,11 +74,11 @@ impl BuiltinRule for TestsPresent {
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
         for target in targets(ctx)? {
-            if target.is_new() && !has_tests(ctx, &target) {
-                if !target.exists(ctx, "app") {
-                    create(ctx, &target.path("app/__init__.py"), APP_INIT, &mut result)?;
-                    create(ctx, &target.path("app/main.py"), APP_MAIN, &mut result)?;
-                }
+            // An `app` that is not the starter's (a file, another stack's
+            // folder) would make the starter's test fail: left for an agent.
+            if target.is_new() && !has_tests(ctx, &target) && !target.exists(ctx, "app") {
+                create(ctx, &target.path("app/__init__.py"), APP_INIT, &mut result)?;
+                create(ctx, &target.path("app/main.py"), APP_MAIN, &mut result)?;
                 create(
                     ctx,
                     &target.path("tests/test_main.py"),

@@ -43,9 +43,16 @@ pub const PYTEST: &str = "pytest==9.2.0";
 pub const RUFF: &str = "ruff==0.17.5";
 
 /// What every Python rule's result depends on.
-pub(crate) const INPUTS: [&str; 12] = [
-    "**/requirements*.txt",
+pub(crate) const INPUTS: [&str; 19] = [
+    "**/*requirements*.txt",
     "**/requirements/*.txt",
+    "**/pytest.toml",
+    "**/.pytest.toml",
+    "**/mypy.ini",
+    "**/alembic.ini",
+    "**/tests/**",
+    "**/test/**",
+    ".gitignore",
     "**/pyproject.toml",
     "**/setup.py",
     "**/setup.cfg",
@@ -81,8 +88,19 @@ impl Target {
         }
     }
 
+    /// True when anything is at the path, a dangling link included, so a
+    /// check never promises a fix that `create` will not make.
     pub(crate) fn exists(&self, ctx: &RuleContext, file: &str) -> bool {
-        on_disk(ctx.root(), &self.path(file)).exists()
+        on_disk(ctx.root(), &self.path(file))
+            .symlink_metadata()
+            .is_ok()
+    }
+
+    /// True when something is at the path that is not a regular file.
+    pub(crate) fn blocked(&self, ctx: &RuleContext, file: &str) -> bool {
+        on_disk(ctx.root(), &self.path(file))
+            .symlink_metadata()
+            .is_ok_and(|meta| !meta.is_file())
     }
 
     /// True for the starter of a repo that has no Python project yet.
@@ -97,48 +115,124 @@ fn on_disk(root: &Path, file: &str) -> std::path::PathBuf {
         .fold(root.to_path_buf(), |path, part| path.join(part))
 }
 
-/// Every Python project, or the repo root as a new starter when there is none.
+/// Folders the Python pack never looks into.
+const SKIPPED: [&str; 6] = [
+    "node_modules",
+    "venv",
+    "env",
+    "__pycache__",
+    "target",
+    "dist",
+];
+
+/// How deep the pack looks for Python folders, as facts does (ADR 0020).
+const DEPTH: usize = 4;
+
+/// What a walk of the repo found: folders with a requirements file or a
+/// pyproject.toml, and whether there is any `.py` file at all.
+struct Walk {
+    declaring: Vec<String>,
+    any_code: bool,
+}
+
+fn walk(root: &Path) -> Walk {
+    let mut out = Walk {
+        declaring: Vec::new(),
+        any_code: false,
+    };
+    let mut stack = vec![(root.to_path_buf(), String::from("."), 0usize)];
+    while let Some((dir, rel, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut declares = false;
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                if depth < DEPTH && !name.starts_with('.') && !SKIPPED.contains(&name.as_str()) {
+                    let child = if rel == "." {
+                        name.clone()
+                    } else {
+                        format!("{rel}/{name}")
+                    };
+                    stack.push((entry.path(), child, depth + 1));
+                }
+                continue;
+            }
+            let lower = name.to_lowercase();
+            if lower.ends_with(".py") {
+                out.any_code = true;
+            }
+            if (lower.starts_with("requirements") && lower.ends_with(".txt"))
+                || lower == "pyproject.toml"
+            {
+                declares = true;
+            }
+        }
+        if declares {
+            out.declaring.push(rel);
+        }
+    }
+    out
+}
+
+/// Every Python project: those `fscale facts` finds, and folders with a
+/// requirements file or a pyproject.toml that it does not (a service with
+/// no pytest.ini yet). Only a repo with no Python code at all is a new
+/// starter at its root (review of M16).
 pub(crate) fn targets(ctx: &RuleContext) -> Result<Vec<Target>> {
     let facts = detect_facts_with(ctx.root(), None)?;
-    let projects: Vec<Target> = facts
+    let found = walk(ctx.root());
+    let mut targets: Vec<Target> = facts
         .projects
         .into_iter()
         .filter(|project| project.kind == "python")
         .map(|project| Target {
-            new: project.root == "." && !has_python_code(ctx.root()),
             folder: project.root.clone(),
             project: Some(project),
+            new: false,
         })
         .collect();
-    if projects.is_empty() {
+    for folder in &found.declaring {
+        // A folder inside a project facts found belongs to that project.
+        let inside = targets.iter().any(|target| {
+            target.folder == *folder
+                || (target.folder != "." && folder.starts_with(&format!("{}/", target.folder)))
+        });
+        if !inside {
+            targets.push(Target {
+                folder: folder.clone(),
+                project: None,
+                new: false,
+            });
+        }
+    }
+    // No Python code anywhere, and nothing but the root: a starter still
+    // being built, whatever requirements files it has so far.
+    if !found.any_code && targets.iter().all(|target| target.folder == ".") {
         return Ok(vec![Target {
             folder: ".".to_owned(),
             project: None,
             new: true,
         }]);
     }
-    Ok(projects)
+    if targets.is_empty() {
+        targets.push(Target {
+            folder: ".".to_owned(),
+            project: None,
+            new: false,
+        });
+    }
+    targets.sort_by(|a, b| a.folder.cmp(&b.folder));
+    Ok(targets)
 }
 
-/// True when the folder, or a folder right below it, has a `.py` file
-/// (virtual environments and hidden folders aside).
-fn has_python_code(dir: &Path) -> bool {
-    let is_py = |entry: &std::fs::DirEntry| entry.file_name().to_string_lossy().ends_with(".py");
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    entries.filter_map(std::result::Result::ok).any(|entry| {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if entry.path().is_dir() {
-            !name.starts_with('.')
-                && name != "venv"
-                && name != "node_modules"
-                && std::fs::read_dir(entry.path())
-                    .is_ok_and(|inner| inner.filter_map(std::result::Result::ok).any(|e| is_py(&e)))
-        } else {
-            is_py(&entry)
-        }
-    })
+/// The folders of all targets, to tell where one project ends.
+pub(crate) fn target_folders(ctx: &RuleContext) -> Result<Vec<String>> {
+    Ok(targets(ctx)?
+        .into_iter()
+        .map(|target| target.folder)
+        .collect())
 }
 
 pub(crate) fn finding(target: &Target, file: &str, message: String, fixable: Fixable) -> Finding {

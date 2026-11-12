@@ -68,6 +68,15 @@ impl BuiltinRule for RuffConfig {
             if !uses_ruff(ctx, &target) || configured(ctx, &target) {
                 continue;
             }
+            if target.blocked(ctx, "ruff.toml") {
+                findings.push(finding(
+                    &target,
+                    "ruff.toml",
+                    "ruff.toml is there but is not a file (a folder or a link). Remove it or replace it with a file, then run `fscale sync`.".to_owned(),
+                    Fixable::Manual,
+                ));
+                continue;
+            }
             findings.push(finding(
                 &target,
                 "ruff.toml",
@@ -81,7 +90,10 @@ impl BuiltinRule for RuffConfig {
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
         for target in targets(ctx)? {
-            if uses_ruff(ctx, &target) && !configured(ctx, &target) {
+            if uses_ruff(ctx, &target)
+                && !configured(ctx, &target)
+                && !target.blocked(ctx, "ruff.toml")
+            {
                 create(ctx, &target.path("ruff.toml"), RUFF_TOML, &mut result)?;
             }
         }

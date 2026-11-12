@@ -97,6 +97,16 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 - _Fixed:_ a pytest config in a folder above a project now counts, as pytest itself looks upward (`a_pytest_config_in_a_folder_above_counts`).
 - _Left (correct):_ `fastapi/full-stack-fastapi-template`'s backend has tests and no pytest config anywhere, so the pack proposes `backend/pytest.ini`. It is a uv workspace member; the new file does not change its `pyproject.toml`.
 
+**Independent review before the pull request** found five real bugs, all fixed with regression tests (`python::pack_tests::review`):
+
+- **Your requirement, broken in one case:** services with requirements files, `app/` and `tests/` but no `pytest.ini` and no `.py` file directly in their folder are not projects to `fscale facts`, so the pack saw no Python project and proposed a starter at the root. The pack now also treats every folder with a requirements file or `pyproject.toml` as a project, and builds a root starter only when the repo has no Python code at all (`services_that_facts_cannot_see_are_checked_and_get_no_root_starter`).
+- A `src/` layout project (`uv init --package`) counted as a new starter and would have been given `app/` and `tests/`. Only a repo with no Python code is a starter now; a `src/` project's `pytest.ini` says `pythonpath = src`.
+- Cache inputs missed `dev-requirements.txt`, `pytest.toml`, `.gitignore` and test folders, so a cached `check` could stay stale.
+- A pytest config above a project that belongs to another project (with its own `pythonpath`) counted for it, and its tests then imported the wrong package. The search upward now stops at another project's folder.
+- A folder (or a dangling link) where `pytest.ini`, `ruff.toml` or `requirements-dev.txt` should go made `sync` stop; it is a manual finding now.
+- Also fixed: an `app` that is not the starter's (a file, or another stack's folder) no longer gets the starter's test.
+- Left: only the root `.gitignore` is read; services with their own `.gitignore` still get the lines added at the root (as `core/gitignore-basics` does).
+
 **Known limits:** no type checker in the starter; uv and Poetry lockfiles are not created; the versions are a snapshot of 2026-11-12.
 
 ## M15 — Stack pack: Next.js

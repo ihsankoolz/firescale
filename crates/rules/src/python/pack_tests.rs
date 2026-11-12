@@ -118,3 +118,91 @@ fn a_pytest_config_in_a_folder_above_counts() {
     std::fs::write(f.root().join("backend/pytest.ini"), "[pytest]\n").unwrap();
     assert_eq!(findings(&f), []);
 }
+
+/// Regressions from the review of M16.
+mod review {
+    use super::*;
+    use firescale_core::model::Fixable;
+
+    #[test]
+    fn services_that_facts_cannot_see_are_checked_and_get_no_root_starter() {
+        // No pytest.ini and no .py file directly in the service folders.
+        let f = two_services(&[
+            "backend/orders/pytest.ini",
+            "backend/payments/pytest.ini",
+            "backend/orders/ruff.toml",
+        ]);
+        let found = findings(&f);
+        let files: Vec<&str> = found.iter().map(|d| d.file.as_str()).collect();
+        assert!(files.contains(&"backend/orders/pytest.ini"), "{found:?}");
+        assert!(files.contains(&"backend/payments/pytest.ini"), "{found:?}");
+        assert!(
+            !files.iter().any(|file| !file.starts_with("backend/")),
+            "{found:?}"
+        );
+        let changed = fix_all(&f);
+        assert!(
+            changed.iter().all(|file| file.starts_with("backend/")),
+            "{changed:?}"
+        );
+        assert!(f.read("requirements.txt").is_none() && f.read("app/main.py").is_none());
+    }
+
+    #[test]
+    fn a_src_layout_project_is_not_a_starter() {
+        let f = Fixture::new(
+            &[
+                ("pyproject.toml", "[project]\nname = \"pkg\"\ndependencies = []\n\n[build-system]\nrequires = [\"hatchling\"]\n"),
+                ("src/pkg/__init__.py", ""),
+            ],
+            Track::None,
+        )
+        .unwrap();
+        let found = findings(&f);
+        assert!(
+            found
+                .iter()
+                .all(|d| d.fixable != Fixable::Deterministic || d.file == ".gitignore"),
+            "{found:?}"
+        );
+        let changed = fix_all(&f);
+        assert!(
+            !changed
+                .iter()
+                .any(|file| file.starts_with("app/") || file.starts_with("tests/")),
+            "{changed:?}"
+        );
+    }
+
+    #[test]
+    fn a_service_below_another_project_needs_its_own_pytest_config() {
+        let f = root_app();
+        for (path, content) in [
+            ("svc/requirements.txt", "pytest==9.2.0\n"),
+            ("svc/app/__init__.py", ""),
+            ("svc/app/main.py", "def g() -> int:\n    return 1\n"),
+            ("svc/tests/test_g.py", "from app.main import g\n"),
+        ] {
+            std::fs::create_dir_all(f.root().join(path).parent().unwrap()).unwrap();
+            std::fs::write(f.root().join(path), content).unwrap();
+        }
+        let found: Vec<Diagnostic> = findings(&f)
+            .into_iter()
+            .filter(|d| d.rule_id == "python/pytest-config")
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].file, "svc/pytest.ini");
+    }
+
+    #[test]
+    fn a_folder_where_pytest_ini_should_be_is_left_for_a_person() {
+        let f = two_services(&["backend/orders/pytest.ini"]);
+        std::fs::create_dir_all(f.root().join("backend/orders/pytest.ini")).unwrap();
+        let found: Vec<Diagnostic> = findings(&f)
+            .into_iter()
+            .filter(|d| d.rule_id == "python/pytest-config")
+            .collect();
+        assert_eq!(found[0].fixable, Fixable::Manual);
+        assert!(fix_all(&f).is_empty());
+    }
+}
