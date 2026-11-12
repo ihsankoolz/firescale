@@ -24,14 +24,17 @@ use firescale_core::hooks::{
 };
 use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
+use firescale_core::process::{install_stop_handler, EXIT_STOPPED, STOP};
+use firescale_core::progress::{format_duration, heartbeat_from_env, Progress};
 use firescale_core::report::{format_human, format_json, CheckReport};
 use firescale_core::rule::{fix_rule_with, BuiltinPack, Change, FixOutcome};
+use firescale_core::runs::RunRecord;
 use firescale_core::sarif::format_sarif;
 use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
 use firescale_core::verify::{
-    check_project_folders, format_verify_human, format_verify_json, plan_verify, run_verify,
-    CheckStep, VerifyReport, VerifyResult, TAIL_LINES,
+    check_project_folders, format_verify_human, format_verify_json, plan_verify, run_verify_with,
+    CheckStep, RunOptions, VerifyReport, VerifyResult, TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -71,12 +74,16 @@ Options:
   --agent <name>   hooks: claude, codex or cursor
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
+  --jobs <n>       verify: run up to <n> projects at once (default: 1)
+  --progress       verify: print progress on stderr even when it is not a terminal
+  --no-progress    verify: print no progress, even in a terminal
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:
-  0  no enforced rule failed
-  1  an enforced rule has violations, verify failed, or sync --check found drift
-  2  bad usage, bad config, or an internal error
+  0    no enforced rule failed
+  1    an enforced rule has violations, verify failed, or sync --check found drift
+  2    bad usage, bad config, or an internal error
+  130  verify was stopped by Ctrl+C or a termination signal
 ";
 
 #[derive(Debug, Default)]
@@ -97,6 +104,9 @@ struct Args {
     agent: Option<String>,
     bin: Option<String>,
     cwd: Option<String>,
+    /// `--progress` (true) or `--no-progress` (false).
+    progress: Option<bool>,
+    jobs: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -132,7 +142,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
         };
         match name.as_str() {
             "--version" | "--help" | "--json" | "--sarif" | "--no-cache" | "--dry-run"
-            | "--affected" | "--all" | "--force" | "--check" => {
+            | "--affected" | "--all" | "--force" | "--check" | "--progress" | "--no-progress" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -148,10 +158,12 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--all" => args.all = true,
                     "--force" => args.force = true,
                     "--check" => args.check = true,
+                    "--progress" => args.progress = Some(true),
+                    "--no-progress" => args.progress = Some(false),
                     _ => args.json = true,
                 }
             }
-            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" => {
+            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -167,6 +179,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--agent" => args.agent = Some(value),
                     "--bin" => args.bin = Some(value),
                     "--packs" => args.packs = Some(value),
+                    "--jobs" => args.jobs = Some(value),
                     _ => args.cwd = Some(value),
                 }
             }
@@ -609,14 +622,48 @@ fn enforced_violation_lines(report: &CheckReport) -> Vec<String> {
     lines
 }
 
+/// The value of `--jobs`: a whole number of at least 1.
+fn jobs(args: &Args) -> Result<usize> {
+    match &args.jobs {
+        None => Ok(1),
+        Some(value) => match value.trim().parse::<usize>() {
+            Ok(jobs) if jobs >= 1 => Ok(jobs),
+            _ => Err(Error::usage(format!(
+                "--jobs needs a whole number of 1 or more, got \"{value}\"."
+            ))),
+        },
+    }
+}
+
 /// Runs check and then the planned lint, typecheck and test commands.
-fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)> {
+/// `progress` turns on the live lines on stderr.
+fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyReport, Vec<String>)> {
+    let jobs = jobs(args)?;
+    // Ctrl+C and termination signals stop the commands, not fscale at once.
+    install_stop_handler();
+    let progress = progress.then(Progress::stderr);
+    let say = |text: &str| {
+        if let Some(progress) = &progress {
+            progress.line(text);
+        }
+    };
+    // No lock: a second run never waits. It says what else is running.
+    let (record, others) = RunRecord::start(root);
+    for note in others {
+        let _ = writeln!(std::io::stderr(), "fscale: {note}");
+    }
     let packs = firescale_rules::builtin_packs();
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
     let verify_config = config.verify.clone();
     check_project_folders(root, &verify_config)?;
     let selection = select_rules(config.rules, None)?;
+    let check_command = if args.affected {
+        "fscale check --affected"
+    } else {
+        "fscale check"
+    };
+    say(&format!("check: started: {check_command}"));
     let started = Instant::now();
     let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
     let mut report = outcome.report;
@@ -628,6 +675,11 @@ fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)
             &changed_files(root, args.base.as_deref())?,
         );
     }
+    say(&format!(
+        "check: {} after {}",
+        if report.ok { "passed" } else { "FAILED" },
+        format_duration(started.elapsed())
+    ));
     let check = CheckStep {
         ok: report.ok,
         detail: format!(
@@ -641,12 +693,7 @@ fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)
         ),
         output: enforced_violation_lines(&report),
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        command: if args.affected {
-            "fscale check --affected"
-        } else {
-            "fscale check"
-        }
-        .to_owned(),
+        command: check_command.to_owned(),
     };
     let plan = plan_verify(
         root,
@@ -655,7 +702,18 @@ fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)
         args.affected,
         args.base.as_deref(),
     );
-    let verify = run_verify(root, version(), check, &plan)?;
+    let options = RunOptions {
+        stop: &STOP,
+        progress: progress.as_ref(),
+        jobs,
+        config: &verify_config,
+        heartbeat: heartbeat_from_env(),
+        record: record.as_ref(),
+    };
+    let verify = run_verify_with(root, version(), check, &plan, &options)?;
+    if verify.result == VerifyResult::Stopped {
+        say("stopped: every command verify started has been stopped");
+    }
     Ok((verify, outcome.warnings))
 }
 
@@ -672,7 +730,12 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             "--base only works together with --affected. Add --affected.",
         ));
     }
-    let (report, notes) = verify_report(root, args)?;
+    // Progress is for a person watching: on in a terminal, off when stderr
+    // goes to a file or a pipe, unless --progress or --no-progress says.
+    let progress = args
+        .progress
+        .unwrap_or_else(|| std::io::stderr().is_terminal());
+    let (report, notes) = verify_report(root, args, progress)?;
     Ok(Output {
         stdout: if args.json {
             format_verify_json(&report)
@@ -680,7 +743,13 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             format_verify_human(&report)
         },
         notes,
-        code: if report.ok { EXIT_OK } else { EXIT_VIOLATIONS },
+        code: if report.result == VerifyResult::Stopped {
+            EXIT_STOPPED
+        } else if report.ok {
+            EXIT_OK
+        } else {
+            EXIT_VIOLATIONS
+        },
     })
 }
 
@@ -736,7 +805,17 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             };
             let input = parse_hook_input(&stdin);
             // A hook that cannot run verify must not trap the agent: report and let it stop.
-            let report = match verify_report(root, args) {
+            // An agent reads the hook's stderr: no progress unless asked for.
+            let report = match verify_report(root, args, args.progress.unwrap_or(false)) {
+                Ok((report, _)) if report.result == VerifyResult::Stopped => {
+                    return Ok(Output {
+                        stdout: String::new(),
+                        notes: vec![
+                            "fscale: verify was stopped before it finished, so the agent is not held back.".to_owned(),
+                        ],
+                        code: 1,
+                    });
+                }
                 Ok((report, _)) => report,
                 Err(error) => {
                     return Ok(Output {

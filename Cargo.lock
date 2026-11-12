@@ -145,9 +145,11 @@ dependencies = [
  "blake3",
  "globset",
  "ignore",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",
+ "windows-sys",
 ]
 
 [[package]]
@@ -162,6 +164,9 @@ dependencies = [
 [[package]]
 name = "firescale-testkit"
 version = "0.1.2"
+dependencies = [
+ "windows-sys",
+]
 
 [[package]]
 name = "foldhash"
