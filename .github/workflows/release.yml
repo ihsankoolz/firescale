@@ -1,10 +1,13 @@
-# Builds the npm tarballs for all six platforms and uploads them as artifacts.
+# Builds the npm tarballs for all six platforms. For a version tag it then
+# publishes the eight packages to npm and checks the result from clean runners.
 #
-# This workflow does NOT publish anything. Publishing to npm is a manual step,
-# documented in DECISIONS.md.
+#   started by hand (workflow_dispatch)   builds the tarballs, publishes nothing
+#   push of a tag v<version>              builds, publishes, verifies
 #
-# Not yet exercised: the linux-arm64 runner and the two cross-compiled targets
-# (darwin-x64 and win32-arm64). Treat their first run as a test of this file.
+# Publishing uses npm trusted publishing (OIDC): there is no npm token and no
+# secret in this file. Each package names this workflow file, release.yml, as
+# its trusted publisher on npmjs.com. Renaming the file breaks publishing.
+# RELEASING.md has the owner's steps; ADR 0021 has the reasons.
 name: Release
 
 on:
@@ -12,11 +15,49 @@ on:
   push:
     tags: ['v*']
 
+# Two runs for one tag never publish at the same time. A run in progress is
+# never cancelled: a publish that is cut off is finished by running it again.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# The default for every job. Only the publish job asks for more.
 permissions:
   contents: read
 
 jobs:
+  version:
+    # Fails early, before any build minutes are spent, when the version is not
+    # the same in Cargo.toml, Cargo.lock and every package.json, or when the
+    # tag is not v<that version>.
+    name: check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to (ADR 0009).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Version is the same everywhere
+        if: github.ref_type != 'tag'
+        run: node scripts/bump-version.mjs --check
+
+      - name: Version is the same everywhere and matches the tag
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: node scripts/bump-version.mjs --check --tag "$TAG"
+
+      - name: Read the version
+        id: read
+        run: echo "version=$(node scripts/bump-version.mjs --check)" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     name: build / ${{ matrix.key }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -97,3 +138,64 @@ jobs:
             dist-npm/*.tgz
             dist-npm/manifest.json
           if-no-files-found: error
+
+  publish:
+    # Only for a pushed version tag. A run started by hand stops after the build.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [version, build]
+    name: publish to npm
+    # Trusted publishing works on GitHub-hosted runners only.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets npm exchange a short-lived GitHub OIDC token for the right to
+      # publish. This is the whole credential: there is no npm token.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Trusted publishing needs npm 11.5.1 or later and Node 22.14.0 or later.
+      # Node 24 ships a new enough npm; the publish script checks both.
+      # No cache: a release never restores files from an earlier run.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          pattern: npm-*
+
+      # Platform packages, then @firescale/sdk, then firescale. A version that
+      # is already on the registry is skipped, so this job can be run again.
+      - name: Publish
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/publish-npm.mjs --dir artifacts --version "$VERSION"
+
+  verify:
+    needs: [version, publish]
+    name: verify / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # Only the script is used from the checkout. It runs npx in an empty
+      # temp folder with an empty npm cache.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      # A new version can take a few minutes to become installable: up to
+      # 20 attempts, 15 seconds apart.
+      - name: npx firescale@<version> --version
+        # bash on every OS, so the variable is read the same way.
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/verify-published.mjs "$VERSION"
