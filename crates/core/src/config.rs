@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::model::{RuleMeta, Status};
 use crate::node::NodeHost;
 use crate::rule::{BuiltinPack, BuiltinRule, Options};
-use crate::verify::{ProjectOverride, StepOverride, VerifyConfig};
+use crate::verify::{Limit, ProjectOverride, ProjectTimeouts, StepOverride, VerifyConfig};
 
 pub const TS_CONFIG: &str = "firescale.config.ts";
 pub const JSON_CONFIG: &str = "firescale.config.json";
@@ -301,21 +301,108 @@ pub fn resolve_config<'a>(
     })
 }
 
-/// Reads one step setting: a command, or `false` for "do not run this step".
-fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepOverride> {
+/// Reads a time limit: a number of seconds, a text such as `"90s"`,
+/// `"10m"`, `"1h"` or `"1h 30m"`, or `false` for no limit.
+fn parse_limit(name: &str, key: &str, value: &Value) -> Result<Limit> {
+    let bad = || {
+        Error::user(format!(
+            "{name}: {key} must be a time such as \"10m\", \"90s\" or \"1h 30m\", a number of seconds, or false for no limit."
+        ))
+    };
+    let seconds = match value {
+        Value::Bool(false) => return Ok(Limit::Off),
+        Value::Number(number) => number.as_u64().ok_or_else(bad)?,
+        Value::String(text) => {
+            let mut total: u64 = 0;
+            let mut digits = String::new();
+            let mut any = false;
+            for c in text.trim().chars() {
+                match c {
+                    '0'..='9' => digits.push(c),
+                    ' ' if digits.is_empty() => {}
+                    'h' | 'm' | 's' if !digits.is_empty() => {
+                        let amount: u64 = digits.parse().map_err(|_| bad())?;
+                        let unit = match c {
+                            'h' => 3600,
+                            'm' => 60,
+                            _ => 1,
+                        };
+                        total = amount
+                            .checked_mul(unit)
+                            .and_then(|part| total.checked_add(part))
+                            .ok_or_else(bad)?;
+                        digits.clear();
+                        any = true;
+                    }
+                    _ => return Err(bad()),
+                }
+            }
+            if !digits.is_empty() || !any {
+                return Err(bad());
+            }
+            total
+        }
+        _ => return Err(bad()),
+    };
+    if seconds == 0 {
+        return Err(Error::user(format!(
+            "{name}: {key} must be longer than zero. Use false for no limit."
+        )));
+    }
+    Ok(Limit::After(std::time::Duration::from_secs(seconds)))
+}
+
+/// Reads one step setting: a command, `false` for "do not run this step",
+/// or an object with a `command` and a `timeout`.
+fn parse_step(
+    name: &str,
+    key: &str,
+    step: &str,
+    value: &Value,
+) -> Result<(Option<StepOverride>, Option<Limit>)> {
     if !crate::verify::STEPS.contains(&step) {
         return Err(Error::user(format!(
             "{name}: unknown verify step \"{step}\". Allowed steps: lint, typecheck, test."
         )));
     }
+    let bad = || {
+        Error::user(format!(
+            "{name}: {key}.{step} must be a command (a string), false to skip the step, or an object with \"command\" and \"timeout\", for example {{ \"timeout\": \"20m\" }}."
+        ))
+    };
     match value {
         Value::String(command) if !command.trim().is_empty() => {
-            Ok(StepOverride::Command(command.clone()))
+            Ok((Some(StepOverride::Command(command.clone())), None))
         }
-        Value::Bool(false) => Ok(StepOverride::Skip),
-        _ => Err(Error::user(format!(
-            "{name}: {key}.{step} must be a command (a string) or false to skip the step."
-        ))),
+        Value::Bool(false) => Ok((Some(StepOverride::Skip), None)),
+        Value::Object(fields) if !fields.is_empty() => {
+            let mut command = None;
+            let mut limit = None;
+            for (field, value) in fields {
+                match field.as_str() {
+                    "command" => match value {
+                        Value::String(text) if !text.trim().is_empty() => {
+                            command = Some(StepOverride::Command(text.clone()));
+                        }
+                        _ => {
+                            return Err(Error::user(format!(
+                                "{name}: {key}.{step}.command must be a command (a string)."
+                            )));
+                        }
+                    },
+                    "timeout" => {
+                        limit = Some(parse_limit(name, &format!("{key}.{step}.timeout"), value)?);
+                    }
+                    other => {
+                        return Err(Error::user(format!(
+                            "{name}: unknown key \"{other}\" in {key}.{step}. Allowed keys: command, timeout."
+                        )));
+                    }
+                }
+            }
+            Ok((command, limit))
+        }
+        _ => Err(bad()),
     }
 }
 
@@ -340,6 +427,13 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     ))
                 })?;
             }
+            "ci" => {
+                let ci = value.as_bool().ok_or_else(|| {
+                    Error::user(format!("{name}: verify.ci must be true or false."))
+                })?;
+                verify.no_ci_variable = !ci;
+            }
+            "timeout" => verify.timeout = Some(parse_limit(name, "verify.timeout", value)?),
             "projects" => {
                 let Value::Object(projects) = value else {
                     return Err(Error::user(format!(
@@ -363,19 +457,31 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                             "{name}: verify.projects key \"{folder}\" must be a folder inside the repo, relative to its root and written with forward slashes, for example \"backend/api\"."
                         )));
                     }
+                    let mut timeouts = ProjectTimeouts::default();
                     let parsed = match setting {
                         Value::Bool(false) => ProjectOverride::Off,
                         Value::Object(steps) => {
                             let mut map = BTreeMap::new();
+                            let key = format!("verify.projects[\"{folder}\"]");
                             for (step, value) in steps {
-                                let key = format!("verify.projects[\"{folder}\"]");
-                                map.insert(step.clone(), parse_step(name, &key, step, value)?);
+                                if step == "timeout" {
+                                    timeouts.all =
+                                        Some(parse_limit(name, &format!("{key}.timeout"), value)?);
+                                    continue;
+                                }
+                                let (command, limit) = parse_step(name, &key, step, value)?;
+                                if let Some(command) = command {
+                                    map.insert(step.clone(), command);
+                                }
+                                if let Some(limit) = limit {
+                                    timeouts.steps.insert(step.clone(), limit);
+                                }
                             }
                             ProjectOverride::Steps(map)
                         }
                         _ => {
                             return Err(Error::user(format!(
-                                "{name}: verify.projects[\"{folder}\"] must be false, to leave the project out, or an object with lint, typecheck and test."
+                                "{name}: verify.projects[\"{folder}\"] must be false, to leave the project out, or an object with lint, typecheck, test and timeout."
                             )));
                         }
                     };
@@ -384,12 +490,19 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                             "{name}: verify.projects lists the folder \"{clean}\" twice, once with a trailing slash. Keep one entry."
                         )));
                     }
+                    if timeouts != ProjectTimeouts::default() {
+                        verify.project_timeouts.insert(clean.to_owned(), timeouts);
+                    }
                 }
             }
             step if crate::verify::STEPS.contains(&step) => {
-                verify
-                    .steps
-                    .insert(step.to_owned(), parse_step(name, "verify", step, value)?);
+                let (command, limit) = parse_step(name, "verify", step, value)?;
+                if let Some(command) = command {
+                    verify.steps.insert(step.to_owned(), command);
+                }
+                if let Some(limit) = limit {
+                    verify.step_timeouts.insert(step.to_owned(), limit);
+                }
             }
             other => {
                 // A misspelt option must not read as a misspelt step.
@@ -398,6 +511,8 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     Some("failOnSkipped")
                 } else if lower.starts_with("proj") {
                     Some("projects")
+                } else if lower.starts_with("time") {
+                    Some("timeout")
                 } else {
                     None
                 };
@@ -406,7 +521,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                         "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
                     ),
                     None => format!(
-                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test."
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, projects."
                     ),
                 }));
             }
@@ -880,5 +995,111 @@ mod tests {
             "{}",
             error.message()
         );
+    }
+
+    #[test]
+    fn verify_time_limits_are_read_at_every_level() {
+        use crate::verify::{Limit, DEFAULT_TIMEOUT};
+        use std::time::Duration;
+        let packs = builtin();
+        let raw = json!({
+            "verify": {
+                "timeout": "15m",
+                "ci": false,
+                "lint": { "timeout": 90 },
+                "test": { "command": "pnpm test", "timeout": "1h 30m" },
+                "projects": {
+                    "backend/api": { "timeout": "20m", "test": { "timeout": false }, "lint": "ruff check ." },
+                    "web": { "typecheck": { "timeout": "45s" } }
+                }
+            }
+        });
+        let verify = resolve(&raw, &packs).expect("valid").verify;
+        assert!(verify.no_ci_variable);
+        assert_eq!(verify.timeout, Some(Limit::After(Duration::from_secs(900))));
+        assert_eq!(
+            verify.steps.get("test"),
+            Some(&StepOverride::Command("pnpm test".to_owned()))
+        );
+        // A step object with only a time limit keeps the detected command.
+        assert!(!verify.steps.contains_key("lint"));
+        let minutes = |m: u64| Some(Duration::from_secs(m * 60));
+        assert_eq!(verify.timeout_for(None, "test").0, minutes(90));
+        assert_eq!(
+            verify.timeout_for(None, "lint").0,
+            Some(Duration::from_secs(90))
+        );
+        assert_eq!(verify.timeout_for(None, "typecheck").0, minutes(15));
+        // The project's own step, then the project, then the repo's step.
+        assert_eq!(verify.timeout_for(Some("backend/api"), "test").0, None);
+        assert_eq!(
+            verify.timeout_for(Some("backend/api"), "typecheck").0,
+            minutes(20)
+        );
+        assert_eq!(
+            verify.timeout_for(Some("web"), "typecheck").0,
+            Some(Duration::from_secs(45))
+        );
+        assert_eq!(verify.timeout_for(Some("web"), "test").0, minutes(90));
+        assert_eq!(
+            verify.timeout_for(Some("web"), "test").1,
+            "verify.projects[\"web\"].test.timeout"
+        );
+        // Nothing set: the default, and CI=1 stays on.
+        let plain = resolve(&json!({}), &packs).expect("valid").verify;
+        assert!(!plain.no_ci_variable);
+        assert_eq!(plain.timeout_for(None, "test").0, Some(DEFAULT_TIMEOUT));
+        assert_eq!(plain.timeout_for(None, "test").1, "verify.test.timeout");
+    }
+
+    #[test]
+    fn bad_verify_time_limits_are_rejected_with_the_key() {
+        for (verify, expected) in [
+            (
+                json!({ "timeout": "soon" }),
+                "verify.timeout must be a time such as",
+            ),
+            (
+                json!({ "timeout": "10" }),
+                "verify.timeout must be a time such as",
+            ),
+            (
+                json!({ "timeout": "5x" }),
+                "verify.timeout must be a time such as",
+            ),
+            (
+                json!({ "timeout": 0 }),
+                "verify.timeout must be longer than zero. Use false for no limit.",
+            ),
+            (
+                json!({ "timeout": true }),
+                "verify.timeout must be a time such as",
+            ),
+            (
+                json!({ "test": { "timeout": -5 } }),
+                "verify.test.timeout must be a time such as",
+            ),
+            (
+                json!({ "test": {} }),
+                "verify.test must be a command (a string), false to skip the step, or an object",
+            ),
+            (
+                json!({ "test": { "cmd": "x" } }),
+                "unknown key \"cmd\" in verify.test. Allowed keys: command, timeout.",
+            ),
+            (
+                json!({ "test": { "command": false } }),
+                "verify.test.command must be a command (a string).",
+            ),
+            (json!({ "ci": "yes" }), "verify.ci must be true or false."),
+            (json!({ "timeut": "1m" }), "Did you mean \"timeout\"?"),
+            (
+                json!({ "projects": { "api": { "timeout": "fast" } } }),
+                "verify.projects[\"api\"].timeout must be a time such as",
+            ),
+        ] {
+            let error = rejection(&json!({ "verify": verify }));
+            assert!(error.message().contains(expected), "{}", error.message());
+        }
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "firescale",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Knock the scale off a repo, and prove it's clean. The npm package for the fscale CLI: config helpers and the Node host for TypeScript rules.",
   "license": "MIT",
   "repository": {

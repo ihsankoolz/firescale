@@ -14,9 +14,10 @@
 | `lockfiles`       | Sorted lockfiles at the repo root: `Cargo.lock`, `Pipfile.lock`, `bun.lock`, `bun.lockb`, `go.sum`, `package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `yarn.lock`. |
 | `languages`       | Sorted subset of `go`, `javascript`, `python`, `rust`, `typescript`: the root's languages and every project's.                                                                    |
 | `tools`           | Tools of the repo root: a sorted subset of `cargo-workspace`, `docker-compose`, `github-actions`, `nx`, `pnpm-workspace`, `turbo`.                                                |
-| `commands`        | Commands to run from the repo root: optional keys `build`, `test`, `lint`, `typecheck`, one for each script of that name in the root `package.json`.                              |
+| `commands`        | Commands to run from the repo root: optional keys `build`, `test`, `lint`, `typecheck`, one for each script of that name in the root `package.json` (see "Watch-mode scripts").   |
 | `projects`        | Sorted by name. See below.                                                                                                                                                        |
-| `warnings`        | Strings. Things that were skipped.                                                                                                                                                |
+| `warnings`        | Strings. Things that were skipped, and things that may go wrong, such as a watch-mode script with no run-once sibling (see "Watch-mode scripts").                                 |
+| `notes`           | Sorted strings. Things worth knowing that need no action, such as a watch-mode script replaced by its run-once sibling. Always printed, `[]` when there are none.                 |
 
 Each project:
 
@@ -59,7 +60,7 @@ At the repo root:
 - **packageManager**: the name before `@` in the `packageManager` field of the root `package.json`, if it is one of the four. Otherwise by lockfile, first match of `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `bun.lock`, `bun.lockb`.
 - **languages**: `package.json` gives javascript. A root `tsconfig.json`, or `typescript` in `dependencies` or `devDependencies`, gives typescript. `Cargo.toml` gives rust. `pyproject.toml` or `requirements.txt` gives python. `go.mod` gives go. The languages of every project are added.
 - **tools**: `nx.json` gives `nx` (the Nx graph itself is not read), `turbo.json` gives `turbo`, `pnpm-workspace.yaml` gives `pnpm-workspace`, a `[workspace]` table in `Cargo.toml` gives `cargo-workspace`, a `.yml` or `.yaml` file in `.github/workflows` gives `github-actions`, and `docker-compose.yml`, `docker-compose.yaml`, `compose.yml` or `compose.yaml` gives `docker-compose`.
-- **commands**: for each of build, test, lint and typecheck that is a script of the root `package.json`: `"<pm> run <script>"`. The package manager defaults to `npm`. Keys without a script are left out. These are scripts only, because rules such as `agent-ready/commands-documented` compare them with what the repo documents.
+- **commands**: for each of build, test, lint and typecheck that is a script of the root `package.json`: `"<pm> run <script>"`. The package manager defaults to `npm`. Keys without a script are left out. These are scripts only, because rules such as `agent-ready/commands-documented` compare them with what the repo documents. A test, lint or typecheck script that watches for changes gives way to its run-once sibling, as in a project (see "Watch-mode scripts").
 
 For each project, from the files in its own folder:
 
@@ -68,7 +69,7 @@ For each project, from the files in its own folder:
   - Languages: javascript, plus typescript with a `tsconfig.json` or a `typescript` dependency.
   - Tools, each from a config file or a dependency: `biome` (`biome.json`), `cypress` (`cypress.config.*`), `eslint` (`eslint.config.*`, `.eslintrc*`), `jest` (`jest.config.*`), `knip` (`knip.json`, `knip.jsonc`, `knip.config.*`), `next` (`next.config.*`), `oxlint` (`.oxlintrc.json`, `oxlint.config.*`), `playwright` (`playwright.config.*`), `prettier` (`.prettierrc*`, `prettier.config.*`), `vite` (`vite.config.*`), `vitest` (`vitest.config.*`, `vitest.workspace.*`), and `docker` (`Dockerfile`).
   - install: `<pm> install` (`npm install` when the package manager is not known). Not for a workspace member, which the root installs, nor for a `package.json` that cannot be read.
-  - Commands: a script named `build`, `test`, `lint` or `typecheck` gives `"<pm> run <script>"`. Without a script, the tools give the command:
+  - Commands: a script named `build`, `test`, `lint` or `typecheck` gives `"<pm> run <script>"`, or `"<pm> run <step>:run"` when the script watches for changes (see "Watch-mode scripts"). Without a script, the tools give the command:
     - lint: `oxlint`, else `eslint .`, else `biome check .`, and only when that linter's config file is in the folder. A linter that is only a dependency gives no command.
     - test: `vitest run`, else `jest`. Playwright and Cypress are not used as the test command: end-to-end tests need browsers and running services.
     - typecheck: `tsc --noEmit` when there is a `tsconfig.json` without `references`. Not at the repo root, where a tsconfig is often only a base for the packages below it. A tsconfig of project references gets no command: `tsc --noEmit` would check nothing there, and `tsc -b` could write files.
@@ -86,6 +87,37 @@ For each project, from the files in its own folder:
   - Name: `name` under `[project]` or `[tool.poetry]` in `pyproject.toml`, else the folder's name.
 - **Rust** (`Cargo.toml`): package manager `cargo`; commands `cargo build`, `cargo test` and `cargo clippy --all-targets -- -D warnings`, each with `--workspace` when the file has a `[workspace]` table.
 - **Go** (`go.mod`): package manager `go`; commands `go build ./...`, `go test ./...` and `go vet ./...`. The name is the last part of the module path.
+
+### Watch-mode scripts
+
+A script such as `"test": "vitest"` starts the tool in watch mode: in a terminal it never exits. `fscale verify` runs the commands `fscale facts` lists, so for the `test`, `lint` and `typecheck` steps of a Node project, and of the repo root, facts looks for a script that runs once instead.
+
+- **Watch commands.** Each command of the script is read, split at `&&`, `||`, `;` and `|`: its words after any `NAME=value`, and after `npx` (with its options), `pnpm exec`, `yarn`, `yarn exec` or `bunx`. A script with a command that starts with one of these watches:
+  - `vitest`, `vitest watch` or `vitest dev`, also with filters and options, unless it has `run`, `--run`, `--watch=false` or `--no-watch`. Other subcommands (`related`, `bench`, `list`, `init`, `typecheck`) do not count.
+  - `jest --watch` or `jest --watchAll`.
+  - `react-scripts test`, unless it has `--watchAll=false`.
+  - `ng test` or `ng t` (Karma watches by default), unless it has `--watch=false` or `--no-watch`.
+  - `mocha --watch` or `mocha -w`, `ava --watch` or `ava -w`.
+  - `node --test --watch`.
+  - `tsc --watch` or `tsc -w`.
+  - `vue-cli-service test:unit --watch`.
+- **Run-once siblings.** When the step's script watches, the first of `<step>:run`, `<step>:ci` and `<step>:once` that exists and does not watch itself is used instead: `npm run test:run` in place of `npm run test`, with the same package manager. A note says so:
+
+  ```text
+  frontend: the test script runs `vitest`, which watches for changes; verify uses test:run (`vitest run`) instead.
+  ```
+
+- **No sibling.** The step keeps its own script, and a warning says so. `fscale verify` sets `CI=1` for every step, which turns watch mode off for vitest and react-scripts:
+
+  ```text
+  frontend: the test script runs `vitest`, which watches for changes and may never exit. verify runs it with CI=1, which turns watch mode off for most tools (vitest, react-scripts); add a test:run script that runs once to be sure.
+  ```
+
+  For the other tools the warning says that `CI=1` does not help, and asks for a `<step>:run` script.
+
+- Messages start with the project's folder, or `repo root`. Human output lists them under `Notes:` and `Warnings:`; JSON under `notes` and `warnings`.
+- The repo root's `commands` follow the same rule, so the root's test command can be `npm run test:run`. That is what `agent-ready/commands-documented` then asks `AGENTS.md` to name, because it is the command an agent should run.
+- Scripts are not followed: a `"test": "npm run test:unit"` is not looked into, and a `build` script is never replaced.
 
 ### The Python interpreter
 

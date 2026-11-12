@@ -6,9 +6,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M6 npm packaging, M7 `verify` and hooks, M8 the fix loop (pull request #12, with the plan update of ADR 0017 and the CI trim of ADR 0016), M9 `init`, `adopt` and `sync`.
 - **CI owed:** nothing. M6's Windows npm install test passed in a manual run on `main` on 2026-11-11.
-- **Published:** the owner published 0.1.0 to npm by hand on 2026-11-12. **0.1.1 was released on 2026-11-12 through the Release workflow with trusted publishing; every stage passed.** The second box of the publishing checkpoint (a generated repo passing its own CI on GitHub) is still open.
-- **Done in the latest session:** the 0.1.2 fixes from running 0.1.1 on the course project (ADR 0022): each Python project runs with its own `.venv` interpreter (or uv, poetry, pipenv, an active `VIRTUAL_ENV`, then `python`), projects are independent in verify, `setup-needed` is reported apart from failures, ruff and mypy come from dependency lists, and test-runner config files are test code for `core/env-example`. The version is 0.1.2 and **no tag has been pushed**. Earlier: automated releases (ADR 0021, `RELEASING.md`) and M10 (ADR 0020).
-- **Done in the latest session, after 0.1.2:** M11 the group-project pack (ADR 0023).
+- **Published:** the owner published 0.1.0 to npm by hand on 2026-11-12. **0.1.1 and 0.1.2 were released on 2026-11-12 through the Release workflow with trusted publishing; every stage passed.** The second box of the publishing checkpoint (a generated repo passing its own CI on GitHub) is still open.
+- **Done in the latest session:** the 0.1.2 fixes from running 0.1.1 on the course project (ADR 0022): each Python project runs with its own `.venv` interpreter (or uv, poetry, pipenv, an active `VIRTUAL_ENV`, then `python`), projects are independent in verify, `setup-needed` is reported apart from failures, ruff and mypy come from dependency lists, and test-runner config files are test code for `core/env-example`. 0.1.2 was released through the Release workflow on 2026-11-12. Earlier: automated releases (ADR 0021, `RELEASING.md`) and M10 (ADR 0020).
+- **Done in an earlier session, after 0.1.2:** M11 the group-project pack (ADR 0023).
+- **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. The version is 0.1.3 and **no tag has been pushed**.
 - **Not started, in order:** M12 `doctor`, M13 agent files from `init`, M14 generators, M15 Next.js pack, M16 Python pack, M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
 
 ## How to resume
@@ -23,7 +24,7 @@ Notes on M10, for whoever touches facts or verify next:
 - Discovery is `discovered_projects` in `crates/core/src/facts.rs`. The depth (`DISCOVERY_DEPTH`) and the skipped folders (`DISCOVERY_SKIPPED_DIRS`) are constants there. Per-project detection is `node_detail`, `python_detail`, `rust_detail` and `go_detail`.
 - The repo-level `commands`, `packageManager` and `lockfiles` still describe the root only, because rules read them. Do not fold the projects' commands into them without checking `agent-ready/commands-documented` and `core/readme-setup`.
 - Verify plans the root's steps and then one `ProjectPlan` per discovered project (`plan_verify` and `plan_projects` in `crates/core/src/verify.rs`). A step is `Skipped` (no command, makes the run partial) or `NotNeeded` (shown as `off`). Keep that difference: a test tries every mix and fails if a headline says `OK` with a skipped step.
-- Blame-aware verify (M17) must bump the verify schema to 4; M10 took 2 and 0.1.2 took 3. It also has to decide how labels work per project, now that projects run independently.
+- Blame-aware verify (M17) must bump the verify schema to 5; M10 took 2, 0.1.2 took 3 and 0.1.3 took 4. It also has to decide how labels work per project, now that projects run independently, and needs a time budget for the base run (PLAN.md).
 - The course-project fixture exists twice with the same files: `course_project_files` in `crates/core/src/testing.rs` and `courseProjectFiles` in `packages/cli/src/course-fixture.ts`. The CLI tests put stand-ins for `python` and `npx` on the PATH (`writeToolShims`), so they need neither tool.
 - `detect_facts` is called by four rules in one `check`, and each call walks the tree. Caching it per run would win back the 7 to 15% recorded in `bench/RESULTS.md`; mind the fix loop, where files change between calls.
 
@@ -34,6 +35,14 @@ Notes on 0.1.2, for whoever touches verify or Python detection next:
 - Setup detection is `crates/core/src/setup.rs`: one function, a fixed list of messages. Add a caught case and a not-a-finding case for every new message.
 - In `run_verify` the root and each project are units; `blocks()` is what stops a unit. A failed `check` stops all of them.
 - `crates/testkit/src/python_stub.rs` builds `fscale-python-stub`, which the CLI tests copy into a `.venv` as its interpreter (`PYTHON_STUB` in `test-helpers.ts`).
+
+Notes on 0.1.3, for whoever touches how verify runs commands:
+
+- A command runs through `run_tree` in `crates/core/src/process.rs`: process group (Unix) or job object (Windows), the stop flag `STOP`, the time limit and the heartbeat. Change it only with the tests in `packages/cli/src/verify-run.test.ts`, which check with real process trees (`fscale-tree-stub` in the testkit) that nothing survives, on every OS. On Windows, `fscale-ctrl-break` sends a real Ctrl+Break.
+- `run_verify` keeps its old signature (one job, no progress, default limits); `run_verify_with` takes `RunOptions`. Units run in parallel with `--jobs`, but reports are put back in plan order.
+- Time limits are resolved by `VerifyConfig::timeout_for`. Progress lines are `crates/core/src/progress.rs`; run records `crates/core/src/runs.rs` (in `<temp>/firescale-runs`).
+- Watch-mode detection is `watch_tool` and `script_commands` in `crates/core/src/facts.rs`; local-service detection is `service_problem` in `crates/core/src/setup.rs`.
+- The M19 stop hook must stay fast: only the projects a change touches, and a time budget for the base run (PLAN.md).
 
 Notes on M11, for whoever touches the group-project pack or M12 (`doctor`, the other half of SPEC §17):
 
@@ -70,7 +79,9 @@ Notes for M13 (agent files), which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Release 0.1.2 when ready: tag `v0.1.2` on `main` and push the tag (`RELEASING.md`). Consider turning off token publishing for the eight packages now that a workflow release has worked.
+- Release 0.1.3 when ready: tag `v0.1.3` on `main` and push the tag (`RELEASING.md`).
+- Run 0.1.3 on the course project on Windows: check the progress lines, Ctrl+C (Task Manager should show no `node` or `python` left), and the 10-minute limit on the service whose database is not running.
+- Consider turning off token publishing for the eight packages now that two workflow releases have worked (`RELEASING.md`).
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
 - Tick the second box of the publishing checkpoint: see a repo made by `npx firescale@0.1.0 init` pass its generated CI on GitHub (step 7 under "Publishing to npm" in `DECISIONS.md`).

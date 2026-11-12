@@ -66,7 +66,7 @@ async function makeVenv(envFolder: string): Promise<void> {
 }
 
 /**
- * The course project, with stand-ins for `python` and `npx` on the PATH and a
+ * The course project, with stand-ins for `python`, `npx` and `npm` on the PATH and a
  * `.venv` in the folders of `withVenv`.
  */
 async function courseProject(withVenv: string[] = []) {
@@ -161,7 +161,7 @@ describe('projects run independently', () => {
     const result = await runCli(['verify', '--json'], repo.root, env({}, 'python'));
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const report = await validate<VerifyReport>('verify-output.schema.json', result.stdout);
-    expect(report.schemaVersion).toBe(3);
+    expect(report.schemaVersion).toBe(4);
     expect(report.result).toBe('failed');
     expect([report.failedStep, report.failedProject]).toEqual(['test', 'backend/audit_service']);
     // The frontend still ran, after five failing services.
@@ -169,7 +169,7 @@ describe('projects run independently', () => {
     expect(frontend.map((step) => `${step.name} ${step.status}`)).toEqual([
       'lint passed',
       'typecheck passed',
-      'test skipped',
+      'test passed',
     ]);
     // Only auth_service, whose lint failed first, has a step that did not run.
     expect(

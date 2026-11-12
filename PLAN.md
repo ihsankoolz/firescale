@@ -267,13 +267,28 @@ Added by the owner after running 0.1.0 on a real course project (ADR 0020). Its 
 
 ## Fixes in 0.1.2 ☑ (after running 0.1.1 on the same course project)
 
-Not a milestone. 0.1.1 was released through the Release workflow on 2026-11-12 with npm trusted publishing, and every stage passed. Running it on the course project found five problems, fixed in one pull request (ADR 0022):
+Not a milestone; 0.1.2 was released through the Release workflow on 2026-11-12. 0.1.1 was released through the Release workflow on 2026-11-12 with npm trusted publishing, and every stage passed. Running it on the course project found five problems, fixed in one pull request (ADR 0022):
 
 - ☑ Python steps run with the project's own `.venv` or `venv` (`Scripts/python.exe` on Windows, `bin/python` elsewhere), else uv, poetry or pipenv, else an active `VIRTUAL_ENV`, else `python` from the PATH, which is said. `fscale facts` shows the interpreter of each project.
 - ☑ One project's failure no longer stops the others; the headline names every failure.
 - ☑ A step that fails because the environment is not ready is reported as setup needed, with the command that fixes it, and the stop hook tells an agent not to edit code for it.
 - ☑ Ruff and mypy are detected from requirements files and dev-dependency lists.
 - ☑ `core/env-example` treats test-runner config files as test code.
+
+---
+
+## Fixes in 0.1.3 ☑ (after running 0.1.2 on the same course project)
+
+Not a milestone. Running 0.1.2 on the course project on Windows: verify printed nothing for over ten minutes (one service's pytest took 13 minutes, waiting on a test database that was not running), Ctrl+C left node and python processes running, later runs seemed to hang, and the frontend's `test` script was `vitest` (watch mode). Fixed in one pull request (ADR 0024):
+
+- ☑ Live progress on stderr: a line when each step starts and ends, and a heartbeat for a long step. On in a terminal, `--progress` and `--no-progress` override; `--json` stays clean.
+- ☑ Ctrl+C and termination stop every command with its whole process tree (process groups on macOS and Linux, job objects on Windows), then print the summary of what finished, exit 130. Tested on all three OSes.
+- ☑ A time limit per step (default 10 minutes; `verify.timeout`, `<step>.timeout`, per project and per project step). A timed-out step is stopped with its tree and reported as `TIMED OUT` with its last lines; other projects run.
+- ☑ Commands get no input and run with `CI=1` unless `verify.ci` is `false`.
+- ☑ A watching test script is replaced by a run-once sibling (`test:run`, `test:ci`, `test:once`) in `fscale facts`, or warned about.
+- ☑ A refused connection to a local service is setup needed, with `docker compose up -d` when a compose file exists.
+- ☑ `--jobs <n>` runs independent projects in parallel; the summary keeps the plan's order.
+- ☑ A second verify never waits silently: verify takes no lock, says which other verify is running, and names commands an earlier killed run left behind.
 
 ---
 
@@ -390,7 +405,8 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 - Cache base results under `.firescale/` keyed by base SHA + toolchain versions + lockfile hash.
 - Label at step level and for rule diagnostics: `new`, `pre-existing`, `fixed`. Only `new` makes `fscale verify` exit 1. The labels are on by default whenever there is a base commit (owner decision, ADR 0017); there is no flag to turn them on.
 - With no base that differs from the head commit and a clean tree, or outside git, verify behaves as it does today: every failure blocks.
-- The summary and `--json` carry the labels (bump the schema version; M10 took version 2 and 0.1.2 took version 3, so this is 4). Update `docs/verify.md` and `docs/affected.md`.
+- The summary and `--json` carry the labels (bump the schema version; M10 took version 2, 0.1.2 took version 3 and 0.1.3 took version 4, so this is 5). Update `docs/verify.md` and `docs/affected.md`.
+- **The base run needs a time budget** (from running 0.1.2 on the course project, where one service's tests took 13 minutes). A base run that does not finish within its budget is abandoned and verify falls back to today's behaviour for the steps it did not cover, with a note; it never makes the stop hook wait for the base. Each step of the base run keeps its own time limit (ADR 0024). The budget has a default and a config key.
 
 **Done when**
 
@@ -425,6 +441,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 - Rerun a `new` failure once before blocking. A pass on the rerun is labelled `flaky` and does not block. No flaky history is stored.
 - The stop hook (`fscale hooks run`) uses blame-aware verify, so an agent is only sent back for failures it introduced.
+- **The stop hook must be fast** (from running 0.1.2 on the course project, where a full verify took over ten minutes). It runs only the projects the change touches (the projects of the changed files, as `--affected` finds them, plus the root when root files changed), never a full run, and the base run stays within its time budget (M17). Record its latency on the course-project fixture.
 - `cargo test` per-test labels from its stable text output, if that proves reliable; otherwise recorded as a limit.
 - p50 and p99 of blame-aware verify, with a cold and a warm base cache, in `bench/RESULTS.md`.
 
@@ -433,6 +450,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 - ☐ A test that fails once and then passes is labelled `flaky` and does not block, proven with a fixture that fails on its first run only.
 - ☐ Nothing about past flaky results is written to disk, proven by a test.
 - ☐ The stop hook lets an agent stop when every failure is `pre-existing`, and blocks on a `new` one.
+- ☐ The stop hook runs only the projects a change touches: a change in one service runs that service's steps and no other project's, proven by a test.
 - ☐ Latency numbers are recorded.
 
 ---

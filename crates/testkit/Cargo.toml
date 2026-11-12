@@ -20,5 +20,22 @@ path = "src/node_stub.rs"
 name = "fscale-python-stub"
 path = "src/python_stub.rs"
 
+# A process tree that records its process ids. Used to prove that verify
+# stops every process a command started, on a timeout and on Ctrl+C.
+[[bin]]
+name = "fscale-tree-stub"
+path = "src/tree_stub.rs"
+
+# Sends Ctrl+Break to fscale on Windows, as a console does.
+[[bin]]
+name = "fscale-ctrl-break"
+path = "src/ctrl_break.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_System_Console",
+  "Win32_System_Threading",
+] }
+
 [lints]
 workspace = true

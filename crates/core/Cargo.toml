@@ -19,6 +19,21 @@ globset.workspace = true
 blake3.workspace = true
 tempfile = { workspace = true, optional = true }
 
+# Stopping a verify step's whole process tree, and Ctrl+C (ADR 0024). Both
+# were already in Cargo.lock through other dependencies.
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Console",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile.workspace = true
 

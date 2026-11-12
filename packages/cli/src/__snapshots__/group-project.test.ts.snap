@@ -111,7 +111,7 @@ To run one step on its own, run its command in that folder:
 | \`backend/ledger_service\` | - | - | \`python -m pytest\` |
 | \`backend/market_service\` | - | - | \`python -m pytest\` |
 | \`backend/realtime_service\` | - | - | \`python -m pytest\` |
-| \`frontend\` | \`npx --no oxlint\` | \`npx --no tsc --noEmit\` | - |
+| \`frontend\` | \`npx --no oxlint\` | \`npx --no tsc --noEmit\` | \`npm run test:run\` |
 
 ## Branches
 

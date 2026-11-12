@@ -115,6 +115,25 @@ mod failing_repo {
         assert_eq!(found.len(), 1);
         assert!(found[0].message.contains("`npm run lint`"));
     }
+
+    #[test]
+    fn a_watching_test_script_asks_for_its_run_once_sibling() {
+        // `npm test` would start vitest in watch mode; facts names test:run.
+        let package = "{\"scripts\":{\"test\":\"vitest\",\"test:run\":\"vitest run\"}}\n";
+        let agents = "Run `npm test`.\n";
+        let f = Fixture::new(
+            &[("package.json", package), ("AGENTS.md", agents)],
+            Track::All,
+        )
+        .unwrap();
+        let found = check(&f);
+        assert_eq!(found.len(), 1);
+        assert!(found[0]
+            .message
+            .contains("the test command `npm run test:run`"));
+        f.write("AGENTS.md", "Run `npm run test:run`.\n").unwrap();
+        assert!(check(&f).is_empty());
+    }
 }
 
 mod fixed_repo {

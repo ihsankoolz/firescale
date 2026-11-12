@@ -1,0 +1,111 @@
+//! Sends Ctrl+Break to `fscale` on Windows, the way a console does, for the
+//! test that proves verify stops every command it started.
+//!
+//! `fscale-ctrl-break <group|console> <ready-file> <output-file> <program> [arguments...]`
+//! gives itself a console of its own, starts the program in a new process
+//! group on that console with its output going to `<output-file>` (stdout)
+//! and `<output-file>.err` (stderr), waits until `<ready-file>` exists,
+//! sends Ctrl+Break, waits for the program, and exits with its exit code.
+//! With `group` the event goes to the program's process group only; with
+//! `console` it goes to every process on the console, as when a person
+//! presses Ctrl+Break, so the program's own commands get it too (the helper
+//! ignores it). Elsewhere it prints an error and exits with 2.
+
+#[cfg(windows)]
+fn main() -> std::process::ExitCode {
+    use std::fs::File;
+    use std::os::windows::process::CommandExt;
+    use std::path::Path;
+    use std::process::{Command, ExitCode, Stdio};
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::System::Console::{
+        AllocConsole, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
+        CTRL_BREAK_EVENT,
+    };
+
+    unsafe extern "system" fn ignore(_event: u32) -> windows_sys::core::BOOL {
+        1
+    }
+    use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let [mode, ready, output, program, rest @ ..] = args.as_slice() else {
+        eprintln!(
+            "usage: fscale-ctrl-break <group|console> <ready-file> <output-file> <program> [arguments...]"
+        );
+        return ExitCode::from(2);
+    };
+    let whole_console = match mode.as_str() {
+        "group" => false,
+        "console" => true,
+        _ => {
+            eprintln!("the mode must be group or console");
+            return ExitCode::from(2);
+        }
+    };
+    let (Ok(stdout), Ok(stderr)) = (File::create(output), File::create(format!("{output}.err")))
+    else {
+        eprintln!("could not create the output files");
+        return ExitCode::from(2);
+    };
+    // A console of our own, which the program shares: console control
+    // events only reach processes on the sender's console.
+    // SAFETY: plain Win32 calls with no pointers.
+    unsafe {
+        FreeConsole();
+        if AllocConsole() == 0 {
+            eprintln!(
+                "could not allocate a console: {}",
+                std::io::Error::last_os_error()
+            );
+            return ExitCode::from(2);
+        }
+        // The helper is on the console too: it must outlive the event.
+        SetConsoleCtrlHandler(Some(ignore), 1);
+    }
+    let mut child = match Command::new(program)
+        .args(rest)
+        .creation_flags(CREATE_NEW_PROCESS_GROUP)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("could not start {program}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !Path::new(ready).exists() {
+        if Instant::now() > deadline || matches!(child.try_wait(), Ok(Some(_))) {
+            eprintln!("{ready} did not appear");
+            let _ = child.kill();
+            return ExitCode::from(2);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // SAFETY: plain Win32 call; the group id is the program's process id,
+    // or 0 for every process on the console.
+    let target = if whole_console { 0 } else { child.id() };
+    let sent = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, target) };
+    if sent == 0 {
+        eprintln!(
+            "could not send Ctrl+Break: {}",
+            std::io::Error::last_os_error()
+        );
+        let _ = child.kill();
+        return ExitCode::from(2);
+    }
+    match child.wait() {
+        Ok(status) => ExitCode::from(u8::try_from(status.code().unwrap_or(2) & 0xff).unwrap_or(2)),
+        Err(_) => ExitCode::from(2),
+    }
+}
+
+#[cfg(not(windows))]
+fn main() -> std::process::ExitCode {
+    eprintln!("fscale-ctrl-break only works on Windows");
+    std::process::ExitCode::from(2)
+}

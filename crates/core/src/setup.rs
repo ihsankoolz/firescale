@@ -1,8 +1,9 @@
 //! Telling "the environment is not ready" apart from a real failure
 //! (ADR 0022).
 //!
-//! A verify step that fails because a dependency is not installed, or a
-//! program is not on the PATH, is not something a code change fixes. Verify
+//! A verify step that fails because a dependency is not installed, a
+//! program is not on the PATH, or a local service such as a test database is
+//! not running, is not something a code change fixes. Verify
 //! reports it as "setup needed", with the command that sets the environment
 //! up, so an agent does not edit code to make it pass.
 //!
@@ -21,6 +22,13 @@ pub struct SetupProblem {
     /// A program that is not on the PATH at all, such as `python` or `pnpm`.
     /// Installing the project's dependencies does not bring it back.
     pub missing_program: Option<String>,
+    /// A local service that could not be reached, such as `PostgreSQL on
+    /// localhost:5432`. Starting the service fixes it, not an install.
+    pub missing_service: Option<String>,
+    /// The command that starts the services of a Docker Compose file in the
+    /// step's folder or a folder above it, to be run in the step's folder:
+    /// `docker compose up -d`, or `docker compose -f ../compose.yaml up -d`.
+    pub start_services: Option<String>,
 }
 
 /// Programs that a project's own install command does not provide.
@@ -88,6 +96,8 @@ fn missing(program: &str) -> SetupProblem {
         SetupProblem {
             reason: format!("the program `{name}` was not found on the PATH"),
             missing_program: Some(name),
+            missing_service: None,
+            start_services: None,
         }
     } else {
         SetupProblem {
@@ -95,6 +105,8 @@ fn missing(program: &str) -> SetupProblem {
                 "the command `{name}` was not found; the dependencies are probably not installed"
             ),
             missing_program: None,
+            missing_service: None,
+            start_services: None,
         }
     }
 }
@@ -133,6 +145,402 @@ fn reports_failed_tests(output: &str) -> bool {
     })
 }
 
+/// Hosts that mean this machine. A refused connection to any other host is a
+/// normal failure.
+const LOCAL_HOSTS: [&str; 4] = ["localhost", "127.0.0.1", "::1", "0.0.0.0"];
+
+/// Error codes for a refused connection: ECONNREFUSED on Linux (111) and
+/// macOS (61), WSAECONNREFUSED (10061) and ERROR_CONNECTION_REFUSED (1225) on
+/// Windows.
+const REFUSED_CODES: [&str; 4] = ["111", "61", "10061", "1225"];
+
+/// Python's refused-connection errors that do not name the address.
+const REFUSED_WITHOUT_ADDRESS: [&str; 5] = [
+    "[Errno 111] Connection refused",
+    "[Errno 61] Connection refused",
+    "[WinError 10061] No connection could be made because the target machine actively refused it",
+    "[Errno 10061] No connection could be made because the target machine actively refused it",
+    "[WinError 1225] The remote computer refused the network connection",
+];
+
+/// Docker Compose file names, in the order Compose itself prefers them.
+const COMPOSE_FILES: [&str; 4] = [
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yaml",
+    "docker-compose.yml",
+];
+
+/// What a connection error names: the host, the port when known, and the
+/// service when the message comes from a client of one service.
+#[derive(Debug, Clone, Copy)]
+struct Target<'a> {
+    host: &'a str,
+    port: Option<u16>,
+    service: Option<&'static str>,
+}
+
+fn is_local_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    LOCAL_HOSTS
+        .iter()
+        .any(|local| host.eq_ignore_ascii_case(local))
+}
+
+/// The digits at the start of `text`.
+fn leading_digits(text: &str) -> &str {
+    let end = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+fn port_at(text: &str) -> Option<u16> {
+    leading_digits(text).parse().ok()
+}
+
+fn is_refused_code(code: &str) -> bool {
+    REFUSED_CODES.contains(&code)
+}
+
+/// `host:port`, with an IPv6 host as well: `::1:6379`, `[::1]:6379`.
+fn host_port(text: &str) -> Option<(&str, u16)> {
+    let (host, port) = text.rsplit_once(':')?;
+    if port.is_empty() || !port.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    (!host.is_empty()).then_some((host, port.parse().ok()?))
+}
+
+/// A Python address tuple at the start of `text`, after its `(`:
+/// `'127.0.0.1', 5432)` or `'::1', 5432, 0, 0)`.
+fn python_address(text: &str) -> Option<(&str, u16)> {
+    let inner = text.strip_prefix('\'')?;
+    let host = &inner[..inner.find('\'')?];
+    let rest = inner[host.len() + 1..].strip_prefix(", ")?;
+    let port = port_at(rest)?;
+    (!host.is_empty() && !host.contains(char::is_whitespace)).then_some((host, port))
+}
+
+/// The last Python address tuple in a line, such as the frame argument
+/// `address = ('localhost', 5432)` that pytest prints in a traceback.
+fn last_python_address(line: &str) -> Option<(&str, u16)> {
+    line.match_indices("('")
+        .filter_map(|(index, _)| python_address(&line[index + 1..]))
+        .last()
+}
+
+/// libpq 14 and later (psycopg2, psycopg, SQLAlchemy, Django):
+/// `connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused`,
+/// also without the address in brackets.
+fn libpq_at(line: &str) -> Option<Target<'_>> {
+    const AT: &str = "connection to server at \"";
+    let rest = &line[line.find(AT)? + AT.len()..];
+    let host = &rest[..rest.find('"')?];
+    let after = &rest[host.len()..];
+    let failed = after.find(" failed: Connection refused")?;
+    let port = after[..failed]
+        .rfind("port ")
+        .and_then(|index| port_at(&after[index + "port ".len()..]));
+    Some(Target {
+        host,
+        port: port.or(Some(5432)),
+        service: Some("PostgreSQL"),
+    })
+}
+
+/// libpq 14 and later on a Unix socket, which is always local:
+/// `connection to server on socket "/run/postgresql/.s.PGSQL.5432" failed: No such file or directory`
+/// (or `Connection refused`).
+fn libpq_socket(line: &str) -> Option<Target<'_>> {
+    const ON: &str = "connection to server on socket \"";
+    let rest = &line[line.find(ON)? + ON.len()..];
+    let path = &rest[..rest.find('"')?];
+    let after = &rest[path.len()..];
+    if !after.contains(" failed: No such file or directory")
+        && !after.contains(" failed: Connection refused")
+    {
+        return None;
+    }
+    let port = path
+        .rfind(".s.PGSQL.")
+        .and_then(|index| port_at(&path[index + ".s.PGSQL.".len()..]));
+    Some(Target {
+        host: "localhost",
+        port: port.or(Some(5432)),
+        service: Some("PostgreSQL"),
+    })
+}
+
+/// libpq 13 and earlier, over three lines:
+/// `could not connect to server: Connection refused`, then
+/// `Is the server running on host "localhost" (127.0.0.1) and accepting`,
+/// then `TCP/IP connections on port 5432?`.
+fn libpq_old<'a>(lines: &[&'a str], index: usize) -> Option<Target<'a>> {
+    const HOST: &str = "Is the server running on host \"";
+    const PORT: &str = "connections on port ";
+    if !lines[index].contains("could not connect to server: Connection refused") {
+        return None;
+    }
+    let next = lines.iter().skip(index + 1).take(3);
+    let mut host = None;
+    let mut port = None;
+    for line in next {
+        if let Some(start) = line.find(HOST).map(|start| start + HOST.len()) {
+            let rest = &line[start..];
+            host = host.or_else(|| rest.find('"').map(|end| &rest[..end]));
+        }
+        if let Some(start) = line.find(PORT) {
+            port = port.or_else(|| port_at(&line[start + PORT.len()..]));
+        }
+    }
+    Some(Target {
+        host: host?,
+        port: port.or(Some(5432)),
+        service: Some("PostgreSQL"),
+    })
+}
+
+/// redis-py: `Error 111 connecting to localhost:6379. Connection refused.`,
+/// on Windows `Error 10061 connecting to localhost:6379. No connection could
+/// be made because the target machine actively refused it.`
+fn redis(line: &str) -> Option<Target<'_>> {
+    const CONNECTING: &str = " connecting to ";
+    let index = line.find(CONNECTING)?;
+    let (_, code) = line[..index].rsplit_once("Error ")?;
+    if !is_refused_code(code) {
+        return None;
+    }
+    let rest = &line[index + CONNECTING.len()..];
+    let location = rest[..rest.find(". ").unwrap_or(rest.len())].trim_end_matches('.');
+    let (host, port) = host_port(location)?;
+    Some(Target {
+        host,
+        port: Some(port),
+        service: Some("Redis"),
+    })
+}
+
+/// MySQL clients: `Can't connect to MySQL server on 'localhost' (111)`,
+/// `on 'localhost:3306' (10061)`, PyMySQL's `on 'localhost' ([Errno 111]
+/// Connection refused)`; and `Can't connect to local MySQL server`.
+fn mysql(line: &str) -> Option<Target<'_>> {
+    const ON: &str = "Can't connect to MySQL server on ";
+    if line.contains("Can't connect to local MySQL server") {
+        return Some(Target {
+            host: "localhost",
+            port: None,
+            service: Some("MySQL"),
+        });
+    }
+    let rest = &line[line.find(ON)? + ON.len()..];
+    let quote = rest.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
+    let inner = &rest[1..];
+    let location = &inner[..inner.find(quote)?];
+    let after = inner[location.len() + 1..].trim_start().strip_prefix('(')?;
+    let after = after
+        .strip_prefix("[Errno ")
+        .or_else(|| after.strip_prefix("[WinError "))
+        .unwrap_or(after);
+    if !is_refused_code(leading_digits(after)) {
+        return None;
+    }
+    let (host, port) = if is_local_host(location) {
+        (location, 3306)
+    } else {
+        host_port(location).unwrap_or((location, 3306))
+    };
+    Some(Target {
+        host,
+        port: Some(port),
+        service: Some("MySQL"),
+    })
+}
+
+/// Prisma P1001: ``Can't reach database server at `localhost:5432` ``, and
+/// the older ``at `localhost`:`5432` ``.
+fn prisma(line: &str) -> Option<Target<'_>> {
+    const AT: &str = "Can't reach database server at ";
+    let rest = &line[line.find(AT)? + AT.len()..];
+    let token = rest.split_whitespace().next()?;
+    let token = token.trim_end_matches(['.', ',']);
+    let location = token.strip_prefix('`')?.strip_suffix('`')?;
+    // The older form: `localhost`:`5432`.
+    let (host, port) = match location.split_once("`:`") {
+        Some((host, port)) => (host, port.parse().ok()?),
+        None => host_port(location)?,
+    };
+    Some(Target {
+        host,
+        port: Some(port),
+        service: None,
+    })
+}
+
+/// Node: `connect ECONNREFUSED 127.0.0.1:5432`, `connect ECONNREFUSED ::1:6379`.
+fn node(line: &str) -> Option<Target<'_>> {
+    const REFUSED: &str = "connect ECONNREFUSED ";
+    let rest = &line[line.find(REFUSED)? + REFUSED.len()..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || matches!(c, ',' | ')' | '\'' | '"'))
+        .unwrap_or(rest.len());
+    let (host, port) = host_port(&rest[..end])?;
+    Some(Target {
+        host,
+        port: Some(port),
+        service: None,
+    })
+}
+
+/// asyncio (asyncpg and other async clients):
+/// `[Errno 111] Connect call failed ('127.0.0.1', 5432)`. With several
+/// addresses, `Multiple exceptions:` lists them all; the first one counts.
+fn connect_call_failed(line: &str) -> Option<Target<'_>> {
+    const FAILED: &str = "] Connect call failed (";
+    let index = line.find(FAILED)?;
+    let (_, code) = line[..index].rsplit_once("[Errno ")?;
+    if !is_refused_code(code) {
+        return None;
+    }
+    let (host, port) = python_address(&line[index + FAILED.len()..])?;
+    Some(Target {
+        host,
+        port: Some(port),
+        service: None,
+    })
+}
+
+/// `host:port: [Errno 111] Connection refused` (pymongo), on Windows
+/// `host:port: [WinError 10061] No connection could be made ...`.
+fn address_then_errno(line: &str) -> Option<Target<'_>> {
+    for marker in [": [Errno ", ": [WinError "] {
+        let Some(index) = line.find(marker) else {
+            continue;
+        };
+        if !is_refused_code(leading_digits(&line[index + marker.len()..])) {
+            continue;
+        }
+        let token = line[..index].rsplit(char::is_whitespace).next()?;
+        let (host, port) = host_port(token)?;
+        return Some(Target {
+            host,
+            port: Some(port),
+            service: None,
+        });
+    }
+    None
+}
+
+/// The service a port is known for.
+fn service_on_port(port: u16) -> Option<&'static str> {
+    match port {
+        5432 => Some("PostgreSQL"),
+        6379 => Some("Redis"),
+        3306 => Some("MySQL"),
+        27017 => Some("MongoDB"),
+        _ => None,
+    }
+}
+
+/// `PostgreSQL on localhost:5432`, `a service on localhost:8000`.
+fn describe(target: Target<'_>) -> String {
+    let name = target
+        .service
+        .or_else(|| target.port.and_then(service_on_port));
+    let place = match target.port {
+        Some(port) => format!("localhost:{port}"),
+        None => "localhost".to_owned(),
+    };
+    match name {
+        Some(name) => format!("{name} on {place}"),
+        None => format!("a service on {place}"),
+    }
+}
+
+/// True for a line that starts a pytest section (`____ test_x ____`, `==== ...`).
+/// A Python address seen before it belongs to another test.
+fn is_section_line(line: &str) -> bool {
+    line.starts_with("___") || line.starts_with("===")
+}
+
+/// The command that starts the services of the nearest Docker Compose file,
+/// from `dir` up to `root`, to be run in `dir`.
+fn start_services(root: &Path, dir: &Path) -> Option<String> {
+    let mut current = Some(dir);
+    let mut depth = 0;
+    while let Some(folder) = current {
+        for name in COMPOSE_FILES {
+            if folder.join(name).is_file() {
+                if depth == 0 {
+                    return Some("docker compose up -d".to_owned());
+                }
+                // A command, not a path on this machine: forward slashes everywhere.
+                let mut parts = vec![".."; depth];
+                parts.push(name);
+                return Some(format!("docker compose -f {} up -d", parts.join("/")));
+            }
+        }
+        if folder == root {
+            break;
+        }
+        current = folder.parent().filter(|parent| parent.starts_with(root));
+        depth += 1;
+    }
+    None
+}
+
+/// A refused connection to a service on this machine: a database or cache
+/// that is not running. Connections to other hosts are not counted.
+fn service_problem(output: &str, root: &Path, dir: &Path) -> Option<SetupProblem> {
+    let lines: Vec<&str> = output.lines().collect();
+    let mut last_address = None;
+    for (index, raw) in lines.iter().enumerate() {
+        let line = raw.trim();
+        if is_section_line(line) {
+            last_address = None;
+        }
+        if let Some(address) = last_python_address(line) {
+            last_address = Some(address);
+        }
+        let found = libpq_at(line)
+            .or_else(|| libpq_socket(line))
+            .or_else(|| libpq_old(&lines, index))
+            .or_else(|| redis(line))
+            .or_else(|| mysql(line))
+            .or_else(|| prisma(line))
+            .or_else(|| node(line))
+            .or_else(|| connect_call_failed(line))
+            .or_else(|| address_then_errno(line))
+            .or_else(|| {
+                // No address in the message: the nearest one before it in
+                // the same traceback, if any.
+                let refused = REFUSED_WITHOUT_ADDRESS
+                    .iter()
+                    .any(|message| line.contains(message));
+                let (host, port) = last_address.filter(|_| refused)?;
+                Some(Target {
+                    host,
+                    port: Some(port),
+                    service: None,
+                })
+            });
+        let Some(target) = found.filter(|target| is_local_host(target.host)) else {
+            continue;
+        };
+        let service = describe(target);
+        return Some(SetupProblem {
+            reason: format!(
+                "could not connect to {service}; the service is probably not running, so start it"
+            ),
+            missing_program: None,
+            missing_service: Some(service),
+            start_services: start_services(root, dir),
+        });
+    }
+    None
+}
+
 /// Looks at the output of a failed step for a sign that the environment is
 /// not set up. `dir` is the folder the step ran in, `root` the repo root.
 /// Returns `None` when unsure: then the step is a normal failure.
@@ -143,6 +551,11 @@ pub fn setup_problem(
     root: &Path,
     dir: &Path,
 ) -> Option<SetupProblem> {
+    // A service that is down fails tests too, so this comes first: tests
+    // that need the service cannot be judged while it is down.
+    if let Some(problem) = service_problem(output, root, dir) {
+        return Some(problem);
+    }
     if reports_failed_tests(output) {
         return None;
     }
@@ -158,6 +571,8 @@ pub fn setup_problem(
             return Some(SetupProblem {
                 reason: format!("the Python module '{module}' is not installed"),
                 missing_program: None,
+                missing_service: None,
+                start_services: None,
             });
         }
         // Windows: the Microsoft Store stand-in for a Python that is not installed.
@@ -177,6 +592,8 @@ pub fn setup_problem(
                     "npx found the tool not installed; the dependencies are probably not installed"
                         .to_owned(),
                 missing_program: None,
+                missing_service: None,
+                start_services: None,
             });
         }
         // pnpm exec: Command "oxlint" not found
@@ -213,6 +630,8 @@ pub fn setup_problem(
                     return Some(SetupProblem {
                         reason: format!("the package '{name}' is not installed"),
                         missing_program: None,
+                        missing_service: None,
+                        start_services: None,
                     });
                 }
             }
@@ -379,5 +798,381 @@ mod tests {
             None
         );
         assert_eq!(problem("", 1), None);
+    }
+
+    /// The service named by a local-service problem, or `None`.
+    fn service(output: &str) -> Option<String> {
+        problem(output, 1).and_then(|p| p.missing_service)
+    }
+
+    #[test]
+    fn libpq_refused_on_localhost_is_a_setup_problem() {
+        // psycopg2 / psycopg / SQLAlchemy over libpq 14+.
+        let out = "E   psycopg2.OperationalError: connection to server at \"localhost\" (127.0.0.1), port 5432 failed: Connection refused\n\tIs the server running on that host and accepting TCP/IP connections?\n";
+        let p = problem(out, 1).unwrap();
+        assert_eq!(
+            p.missing_service.as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        assert_eq!(p.missing_program, None);
+        assert_eq!(
+            p.reason,
+            "could not connect to PostgreSQL on localhost:5432; the service is probably not running, so start it"
+        );
+        // Windows, IPv6 loopback.
+        assert_eq!(
+            service("connection to server at \"localhost\" (::1), port 5432 failed: Connection refused (0x0000274D/10061)\n").as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        // psycopg 3 with an IP as the host, and a port of its own.
+        assert_eq!(
+            service("psycopg.OperationalError: connection failed: connection to server at \"127.0.0.1\", port 5433 failed: Connection refused\n").as_deref(),
+            Some("PostgreSQL on localhost:5433")
+        );
+        // SQLAlchemy wrapping psycopg2.
+        assert_eq!(
+            service("sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at \"0.0.0.0\", port 5432 failed: Connection refused\n").as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        // On a Unix socket, which is always local.
+        assert_eq!(
+            service("connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: No such file or directory\n\tIs the server running locally and accepting connections on that socket?\n").as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+    }
+
+    #[test]
+    fn libpq_refused_on_a_remote_host_is_a_normal_failure() {
+        assert_eq!(
+            problem("connection to server at \"db.internal\" (10.0.0.5), port 5432 failed: Connection refused\n", 1),
+            None
+        );
+        assert_eq!(
+            problem(
+                "connection to server at \"10.0.0.5\", port 5432 failed: Connection refused\n",
+                1
+            ),
+            None
+        );
+        // The server answered: not a service that is down.
+        assert_eq!(
+            problem("connection to server at \"localhost\" (127.0.0.1), port 5432 failed: FATAL:  password authentication failed for user \"app\"\n", 1),
+            None
+        );
+        assert_eq!(
+            problem("connection to server on socket \"/tmp/.s.PGSQL.5432\" failed: FATAL:  role \"app\" does not exist\n", 1),
+            None
+        );
+    }
+
+    #[test]
+    fn old_libpq_refused_is_caught_on_localhost_only() {
+        let local = "psycopg2.OperationalError: could not connect to server: Connection refused\n\tIs the server running on host \"localhost\" (127.0.0.1) and accepting\n\tTCP/IP connections on port 5432?\n";
+        assert_eq!(
+            service(local).as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        let remote = "psycopg2.OperationalError: could not connect to server: Connection refused\n\tIs the server running on host \"db.internal\" (10.0.0.5) and accepting\n\tTCP/IP connections on port 5432?\n";
+        assert_eq!(problem(remote, 1), None);
+        // No host named after it: unsure.
+        assert_eq!(
+            problem("could not connect to server: Connection refused\n", 1),
+            None
+        );
+    }
+
+    #[test]
+    fn asyncio_connect_call_failed_is_caught_on_localhost_only() {
+        assert_eq!(
+            service(
+                "ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', 5432)\n"
+            )
+            .as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        assert_eq!(
+            service("OSError: Multiple exceptions: [Errno 111] Connect call failed ('::1', 6379, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 6379)\n").as_deref(),
+            Some("Redis on localhost:6379")
+        );
+        assert_eq!(
+            service(
+                "ConnectionRefusedError: [Errno 10061] Connect call failed ('127.0.0.1', 8000)\n"
+            )
+            .as_deref(),
+            Some("a service on localhost:8000")
+        );
+        assert_eq!(
+            problem(
+                "ConnectionRefusedError: [Errno 111] Connect call failed ('10.0.0.5', 5432)\n",
+                1
+            ),
+            None
+        );
+        // A timeout is not a refusal.
+        assert_eq!(
+            problem(
+                "TimeoutError: [Errno 110] Connect call failed ('127.0.0.1', 5432)\n",
+                1
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_python_refusal_without_an_address_uses_the_address_in_the_traceback() {
+        // pytest prints each frame's arguments above the error.
+        let windows = "address = ('localhost', 5432), timeout = 10.0, source_address = None\n>               sock.connect(sa)\nE               ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it\n";
+        assert_eq!(
+            service(windows).as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        let proactor = "address = ('127.0.0.1', 6379)\nE   ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection\n";
+        assert_eq!(
+            service(proactor).as_deref(),
+            Some("Redis on localhost:6379")
+        );
+        let linux = "address = ('localhost', 27017)\nE   ConnectionRefusedError: [Errno 111] Connection refused\n";
+        assert_eq!(
+            service(linux).as_deref(),
+            Some("MongoDB on localhost:27017")
+        );
+        // A remote address, or none at all: a normal failure.
+        let remote = "address = ('10.0.0.5', 5432)\nE   ConnectionRefusedError: [WinError 10061] No connection could be made because the target machine actively refused it\n";
+        assert_eq!(problem(remote, 1), None);
+        assert_eq!(
+            problem("ConnectionRefusedError: [WinError 1225] The remote computer refused the network connection\n", 1),
+            None
+        );
+        // An address from another test's section does not count.
+        let other = "address = ('localhost', 5432)\n________ test_two ________\nE   ConnectionRefusedError: [Errno 111] Connection refused\n";
+        assert_eq!(problem(other, 1), None);
+    }
+
+    #[test]
+    fn redis_py_refused_is_caught_on_localhost_only() {
+        assert_eq!(
+            service("redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.\n").as_deref(),
+            Some("Redis on localhost:6379")
+        );
+        assert_eq!(
+            service("redis.exceptions.ConnectionError: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.\n").as_deref(),
+            Some("Redis on localhost:6379")
+        );
+        assert_eq!(
+            problem("redis.exceptions.ConnectionError: Error 111 connecting to db.internal:6379. Connection refused.\n", 1),
+            None
+        );
+        assert_eq!(
+            problem("redis.exceptions.TimeoutError: Error 110 connecting to localhost:6379. Connection timed out.\n", 1),
+            None
+        );
+    }
+
+    #[test]
+    fn node_econnrefused_is_caught_on_localhost_only() {
+        assert_eq!(
+            service("Error: connect ECONNREFUSED 127.0.0.1:5432\n    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1607:16)\n").as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        assert_eq!(
+            service("[ioredis] Unhandled error event: Error: connect ECONNREFUSED ::1:6379\n")
+                .as_deref(),
+            Some("Redis on localhost:6379")
+        );
+        assert_eq!(
+            service(
+                "TypeError: fetch failed\n  [cause]: Error: connect ECONNREFUSED 127.0.0.1:3000\n"
+            )
+            .as_deref(),
+            Some("a service on localhost:3000")
+        );
+        assert_eq!(
+            problem("Error: connect ECONNREFUSED 10.0.0.5:5432\n", 1),
+            None
+        );
+    }
+
+    #[test]
+    fn mysql_refused_is_caught_on_localhost_only() {
+        assert_eq!(
+            service("MySQLdb.OperationalError: (2003, \"Can't connect to MySQL server on 'localhost' (111)\")\n").as_deref(),
+            Some("MySQL on localhost:3306")
+        );
+        assert_eq!(
+            service("mysql.connector.errors.DatabaseError: 2003 (HY000): Can't connect to MySQL server on 'localhost:3307' (10061)\n").as_deref(),
+            Some("MySQL on localhost:3307")
+        );
+        assert_eq!(
+            service("pymysql.err.OperationalError: (2003, \"Can't connect to MySQL server on 'localhost' ([Errno 111] Connection refused)\")\n").as_deref(),
+            Some("MySQL on localhost:3306")
+        );
+        assert_eq!(
+            service("pymysql.err.OperationalError: (2003, \"Can't connect to MySQL server on '127.0.0.1' ([WinError 10061] No connection could be made because the target machine actively refused it)\")\n").as_deref(),
+            Some("MySQL on localhost:3306")
+        );
+        assert_eq!(
+            service("ERROR 2002 (HY000): Can't connect to local MySQL server through socket '/var/run/mysqld/mysqld.sock' (2)\n").as_deref(),
+            Some("MySQL on localhost")
+        );
+        assert_eq!(
+            problem(
+                "(2003, \"Can't connect to MySQL server on 'db.internal' (111)\")\n",
+                1
+            ),
+            None
+        );
+        assert_eq!(
+            problem("(2003, \"Can't connect to MySQL server on 'db.internal' ([Errno 111] Connection refused)\")\n", 1),
+            None
+        );
+        // A timeout is not a refusal.
+        assert_eq!(
+            problem(
+                "(2003, \"Can't connect to MySQL server on 'localhost' (110)\")\n",
+                1
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn prisma_unreachable_is_caught_on_localhost_only() {
+        assert_eq!(
+            service("Error: P1001: Can't reach database server at `localhost:5432`\n\nPlease make sure your database server is running at `localhost:5432`.\n").as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        assert_eq!(
+            service("Can't reach database server at `127.0.0.1`:`3306`\n").as_deref(),
+            Some("MySQL on localhost:3306")
+        );
+        assert_eq!(
+            problem(
+                "Error: P1001: Can't reach database server at `db.internal:5432`\n",
+                1
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn pymongo_refused_is_caught_on_localhost_only() {
+        assert_eq!(
+            service("pymongo.errors.ServerSelectionTimeoutError: localhost:27017: [Errno 111] Connection refused, Timeout: 30s, Topology Description: <...>\n").as_deref(),
+            Some("MongoDB on localhost:27017")
+        );
+        assert_eq!(
+            service("pymongo.errors.ServerSelectionTimeoutError: localhost:27017: [WinError 10061] No connection could be made because the target machine actively refused it, Timeout: 30s\n").as_deref(),
+            Some("MongoDB on localhost:27017")
+        );
+        assert_eq!(
+            problem("pymongo.errors.ServerSelectionTimeoutError: 10.0.0.5:27017: [Errno 111] Connection refused, Timeout: 30s\n", 1),
+            None
+        );
+    }
+
+    #[test]
+    fn the_course_project_shape_is_a_setup_problem() {
+        let mut out = String::from("============================= test session starts =============================\nplatform win32 -- Python 3.12.4, pytest-8.3.2\ncollected 236 items\n\ntests\\test_users.py ......EEEE\n");
+        out.push_str(
+            "=================================== ERRORS ====================================\n",
+        );
+        out.push_str("__________________ ERROR at setup of test_create_user __________________\n");
+        out.push_str("E   psycopg2.OperationalError: connection to server at \"localhost\" (::1), port 5432 failed: Connection refused (0x0000274D/10061)\n");
+        out.push_str(
+            "E   \tIs the server running on that host and accepting TCP/IP connections?\n",
+        );
+        out.push_str("E   connection to server at \"localhost\" (127.0.0.1), port 5432 failed: Connection refused (0x0000274D/10061)\n");
+        out.push_str(
+            "=========================== short test summary info ===========================\n",
+        );
+        for n in 0..187 {
+            out.push_str(&format!("ERROR tests/test_users.py::test_{n} - psycopg2.OperationalError: connection to server at \"localhost\" (::1), port 5432 failed: Connection refused (0x0000274D/10061)\n"));
+        }
+        out.push_str("============ 49 passed, 187 errors in 780.12s (0:13:00) ============\n");
+        let p = problem(&out, 1).unwrap();
+        assert_eq!(
+            p.missing_service.as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        assert_eq!(p.missing_program, None);
+        assert_eq!(p.start_services, None);
+    }
+
+    #[test]
+    fn a_local_service_that_is_down_is_setup_even_when_tests_failed() {
+        let out = "FAILED tests/test_cache.py::test_get - redis.exceptions.ConnectionError: Error 111 connecting to localhost:6379. Connection refused.\n===== 3 failed, 2 passed in 0.12s =====\n";
+        assert_eq!(service(out).as_deref(), Some("Redis on localhost:6379"));
+        let vitest =
+            "Error: connect ECONNREFUSED 127.0.0.1:5432\n Tests  2 failed | 4 passed (6)\n";
+        assert_eq!(
+            service(vitest).as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        // A remote host among failed tests stays a normal failure.
+        let remote =
+            "FAILED tests/test_db.py::test_q - connect ECONNREFUSED 10.0.0.5:5432\n1 failed\n";
+        assert_eq!(problem(remote, 1), None);
+    }
+
+    const REFUSED: &str = "Error: connect ECONNREFUSED 127.0.0.1:5432\n";
+
+    #[test]
+    fn a_compose_file_in_the_step_folder_is_started_there() {
+        let fixture = Fixture::new(
+            &[("svc/compose.yaml", ""), ("svc/main.py", "")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let dir = fixture.root().join("svc");
+        let p = setup_problem(REFUSED, Some(1), fixture.root(), &dir).unwrap();
+        assert_eq!(p.start_services.as_deref(), Some("docker compose up -d"));
+    }
+
+    #[test]
+    fn a_compose_file_above_the_step_folder_is_named_with_a_relative_path() {
+        let fixture = Fixture::new(
+            &[
+                ("docker-compose.yml", ""),
+                ("backend/audit_service/main.py", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let dir = fixture.root().join("backend").join("audit_service");
+        let p = setup_problem(REFUSED, Some(1), fixture.root(), &dir).unwrap();
+        assert_eq!(
+            p.start_services.as_deref(),
+            Some("docker compose -f ../../docker-compose.yml up -d")
+        );
+        // The nearest file wins.
+        let fixture = Fixture::new(
+            &[
+                ("docker-compose.yml", ""),
+                ("backend/compose.yml", ""),
+                ("backend/audit_service/main.py", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let dir = fixture.root().join("backend").join("audit_service");
+        let p = setup_problem(REFUSED, Some(1), fixture.root(), &dir).unwrap();
+        assert_eq!(
+            p.start_services.as_deref(),
+            Some("docker compose -f ../compose.yml up -d")
+        );
+    }
+
+    #[test]
+    fn no_compose_file_up_to_the_root_means_no_start_command() {
+        assert_eq!(problem(REFUSED, 1).unwrap().start_services, None);
+        // A compose file above the root does not count.
+        let fixture = Fixture::new(
+            &[("compose.yaml", ""), ("repo/svc/main.py", "")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root().join("repo");
+        let p = setup_problem(REFUSED, Some(1), &root, &root.join("svc")).unwrap();
+        assert_eq!(p.start_services, None);
     }
 }

@@ -12,9 +12,14 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 ## Needs your decision (all milestones, most important first)
 
+- **(0.1.3) The default time limit is 10 minutes a step.** Your 13-minute pytest run would now stop at 10 minutes as `TIMED OUT`. A suite that is slow on purpose needs `"test": { "timeout": "30m" }` (or per project). Say if the default should be longer, or off (ADR 0024).
+- **(0.1.3) A refused connection to a local service is setup needed even when tests also failed.** A test whose fixture starts the app on, say, port 3000, and the app crashes on a code bug, would read as "start the service". Limiting that exception to the known database ports would avoid it.
+- **(0.1.3) Progress is off when stderr is not a terminal.** CI logs therefore show nothing until the end, as before. `--progress` in the generated workflow would change that; I left the workflow as it is.
+- **(0.1.3) `CI=1` is on by default** and stdin is always empty, with no setting to give a step input. `verify.ci: false` turns the variable off.
+- **(0.1.3) Verify's JSON is schema version 4** (results `stopped`, statuses `timed-out` and `stopped`). Blame-aware verify (M17) will take 5.
+
 - **(M11) The default branch patterns and the guide's text.** Read them once: `fscale init --packs core,group-project` in an empty folder writes both. Say if the defaults should differ for your course (for example `<name>/<topic>` branches).
 - **(M11) Should `group-project` be on in `fscale init` by default?** Today `init` turns on `core` and `agent-ready`, as SPEC §16 says.
-- **(0.1.2) Release 0.1.2 when you are ready.** The version is 0.1.2 and no tag was pushed. Tag `v0.1.2` on `main` and push it (`RELEASING.md`).
 - **(0.1.2) Should the stop hook let an agent stop when the only problem is setup?** Today it blocks, with a message that says not to edit code and to run the setup command or tell the user; the loop guard releases the agent after 3 blocks. Letting it stop at once would save those turns, but the agent can often run the install command itself (ADR 0022).
 - **(0.1.2) The order of Python interpreters.** A `.venv` or `venv` in the project, then uv, poetry or pipenv, then an active `VIRTUAL_ENV`, then `python` from the PATH. Say if an activated venv should win over the project's manager (ADR 0022).
 - **(0.1.2) With no virtual environment, the install command is `python -m pip install -r requirements-dev.txt`**, into the same `python` the steps use, not into a new `.venv`. A `.venv` path differs by OS; the `note:` line suggests creating one. On Debian and Ubuntu that install is refused by the system Python, which is the right outcome.
@@ -51,6 +56,67 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## 0.1.3 — verify on slow, real projects
+
+**Recorded first:** 0.1.2 was released on 2026-11-12 through the Release workflow (see "Releases" below).
+
+Found by running 0.1.2 on your course project on Windows: verify silent for over ten minutes (a 13-minute pytest run waiting on a test database), Ctrl+C leaving two `node` and four `python` processes, later runs appearing to hang, and a frontend `test` script that watches. All decisions are in ADR 0024.
+
+**Built**
+
+1. **Progress on stderr**: `[verify] test in backend/audit_service: started: ...`, `... still running after 1m 00s; last output: ...`, `... FAILED after 13m 02s (exit 1)`. On in a terminal, off otherwise; `--progress` and `--no-progress` override. `--json` on stdout is unchanged.
+2. **Stopping cleanly**: Ctrl+C, `SIGTERM`, `SIGHUP`, Ctrl+Break and closing the console stop every command with its whole process tree (process groups on macOS and Linux, job objects on Windows), print the summary of what finished, and exit 130. Tested with a three-level process tree on Linux and macOS (`SIGINT`, `SIGTERM`) and on Windows (a real Ctrl+Break, and fscale killed outright).
+3. **Time limits**: 10 minutes a step by default; `verify.timeout`, `verify.<step>.timeout`, `verify.projects.<folder>.timeout` and `...<step>.timeout`. A step past its limit is stopped with its tree and reported as `TIMED OUT` with its last lines and the key that raises the limit. Other projects still run.
+4. **No input, `CI=1`**: unless the environment sets `CI` or `verify.ci` is `false`. `docs/verify.md` lists what `CI` changes (Jest stops writing new snapshots, Playwright configs turn on `forbidOnly`).
+5. **Watch mode**: `fscale facts` uses `test:run` (or `:ci`, `:once`) for a watching `test`, `lint` or `typecheck` script, with a note; without one it warns. Your frontend now runs `npm run test:run`.
+6. **Services not running**: a refused connection to localhost (libpq, redis-py, MySQL, Prisma, Node, asyncio, pymongo, Python sockets) is setup needed; with a Compose file the fix is `docker compose up -d` (or `-f ../../docker-compose.yml`).
+7. **`--jobs <n>`**: independent projects in parallel; the summary and JSON keep the plan's order.
+8. **Stale runs**: verify takes no lock. It names another verify that is running in the repo and what it runs, and commands an earlier killed run left behind, with the command that stops them.
+9. **PLAN.md**: M17 now asks for a time budget on the base run, and M19 says the stop hook runs only the projects a change touches.
+
+**What the later runs were waiting on.** Not a lock: fscale has none. 0.1.2 waited for a step's output pipes to close rather than for the step, so any process a step left in the background (a test server, a worker) kept verify waiting, silently, after the step had ended; a new test reproduces it with the old wait and passes with the fix. On top of that, each later run repeated the 13-minute pytest run with nothing printed, while the processes the interrupted run had left kept running. I could not confirm on your machine which of the two each run hit; both are fixed, and progress now shows which step runs and what it last printed.
+
+**Decisions made for you** (all ADR 0024)
+
+- **Default limit 10 minutes**, counted per step; `false` for no limit; `0` is refused.
+- **A timed-out step counts as a failure** (exit 1) and stops the rest of its project.
+- **Exit code 130** for a stopped run; the hook lets the agent stop when verify was stopped.
+- **`CI` from the environment wins** over `CI=1`.
+- **Grace period 2 seconds** between `SIGTERM` and `SIGKILL`; at most 2 seconds of waiting for output after a step ends.
+- **What a step leaves running is stopped when it ends.** On Windows that includes daemons (build servers), which restart on the next run.
+- **Root `commands` in facts use the run-once sibling too**, so `agent-ready/commands-documented` asks for `npm run test:run`.
+- **Run records live in the temp folder**, not in the repo.
+- **`libc` and `windows-sys` became direct dependencies**, at the versions already in `Cargo.lock`.
+
+**Independent review before the pull request** found eleven issues. Fixed:
+
+- On Windows the "left behind" note could name a reused process id with a `taskkill` command; it no longer comes up on Windows, and records older than a day are dropped.
+- A Ctrl+Break that also killed a step's shell was reported as FAILED; it is now STOPPED, tested with the event sent to the whole console.
+- Closing the console ended fscale before the summary; it now waits for it.
+- Ctrl+C during `check` gave an error; it is now a stop (exit 130).
+- A second Ctrl+C now kills at once.
+- A `try_wait` error was reported as a user stop.
+- A record being written could be deleted by another run, and notes came in random order.
+- Three tests were weak: one could kill a reused process id, the 3-second limit was tight for Windows runners, and the 2-second pipe wait had no test.
+
+Left: the facts schema stays at version 2 although its new `notes` field fails an old validator with `additionalProperties: false`. That is the policy 0.1.2 followed for `install` and `interpreter` (ADR 0022). Also left: on Windows, if no job can be made, what a step leaves running after it ends is not stopped (documented).
+
+**Tests changed on purpose, none weakened**
+
+- Verify snapshots and two assertions: schema version 4. The help snapshot: the new options and exit code 130. The "unknown verify step" message now also lists the other keys.
+- The course fixture's frontend gained `"test": "vitest"` and `"test:run": "vitest run"`, like your repo, so its frontend test step now runs (`npm run test:run`) instead of being skipped; the verify and facts snapshots, the plan test and the call-log tests changed with it, and the CLI tests got an `npm` stand-in.
+
+**Known limits**
+
+- On Unix, a process that leaves its process group (`setsid`) survives its step, and if fscale is killed with `SIGKILL` its commands keep running (the next run names them).
+- The heartbeat shows only the last line of output; the output itself is not streamed.
+- Setup detection still knows only the documented messages; an unknown port's refusal is reported as "a service on localhost:<port>".
+- Not measured: how much `--jobs` saves on the course project.
+
+## Releases
+
+- **0.1.2 was released on 2026-11-12 through the Release workflow**, with npm trusted publishing, like 0.1.1.
 
 ## M11 — The group-project pack
 

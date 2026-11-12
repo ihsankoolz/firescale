@@ -168,8 +168,23 @@ export interface FirescaleConfig {
   verify?: VerifyConfig;
 }
 
-/** A verify step's setting: the command to run, or `false` to turn the step off. */
-export type VerifyStepSetting = string | false;
+/**
+ * A time limit: a number of seconds, a text such as `"90s"`, `"10m"`, `"1h"`
+ * or `"1h 30m"`, or `false` for no limit. The default is 10 minutes a step.
+ */
+export type VerifyTimeout = number | string | false;
+
+/** A verify step with a command and a time limit; either may be left out. */
+export interface VerifyStepObject {
+  command?: string;
+  timeout?: VerifyTimeout;
+}
+
+/**
+ * A verify step's setting: the command to run, `false` to turn the step off,
+ * or an object with a `command` and a `timeout`.
+ */
+export type VerifyStepSetting = string | false | VerifyStepObject;
 
 /** The steps `fscale verify` runs after `check`. */
 export interface VerifySteps {
@@ -178,10 +193,20 @@ export interface VerifySteps {
   test?: VerifyStepSetting;
 }
 
+/** A project's settings under `verify.projects`. */
+export interface VerifyProjectSettings extends VerifySteps {
+  /** The time limit of each of the project's steps. */
+  timeout?: VerifyTimeout;
+}
+
 /** The `verify` section of the config. The top-level steps apply to the whole repo. */
 export interface VerifyConfig extends VerifySteps {
   /** `true` makes a step that was skipped for lack of a command fail the run. Default `false`. */
   failOnSkipped?: boolean;
+  /** The time limit of every step, unless a more specific one is set. Default `"10m"`. */
+  timeout?: VerifyTimeout;
+  /** `false`: do not set `CI=1` for the commands. Default `true`. */
+  ci?: boolean;
   /** Per project, keyed by its folder: `false` turns it off, an object sets single steps. */
-  projects?: Record<string, false | VerifySteps>;
+  projects?: Record<string, false | VerifyProjectSettings>;
 }

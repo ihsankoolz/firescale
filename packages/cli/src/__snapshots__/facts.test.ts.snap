@@ -23,6 +23,7 @@ Projects (6):
     stack: javascript, typescript, npm, knip, oxlint, playwright, vite
     lockfiles: package-lock.json
     build: npm run build
+    test: npm run test:run
     lint: npx --no oxlint
     typecheck: npx --no tsc --noEmit
     install: npm install
@@ -41,6 +42,8 @@ Projects (6):
     test: python -m pytest
     install: python -m pip install -r requirements-dev.txt
     interpreter: python (no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project)
+Notes:
+  frontend: the test script runs \`vitest\`, which watches for changes; verify uses test:run (\`vitest run\`) instead.
 "
 `;
 
@@ -140,6 +143,7 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
       "commands": {
         "install": "npm install",
         "build": "npm run build",
+        "test": "npm run test:run",
         "lint": "npx --no oxlint",
         "typecheck": "npx --no tsc --noEmit"
       },
@@ -224,7 +228,10 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
       }
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "notes": [
+    "frontend: the test script runs \`vitest\`, which watches for changes; verify uses test:run (\`vitest run\`) instead."
+  ]
 }
 "
 `;
@@ -319,7 +326,8 @@ exports[`fscale facts > prints schema-valid JSON for a pnpm monorepo 1`] = `
       "dependsOn": []
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "notes": []
 }
 "
 `;
