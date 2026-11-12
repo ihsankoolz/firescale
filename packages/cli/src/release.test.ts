@@ -271,7 +271,7 @@ describe('scripts/publish-npm.mjs', () => {
     expect(result.stdout).not.toContain('publish');
   }, 30_000);
 
-  /** A stand-in for npm: logs each call, and fails a publish whose tarball name contains FAKE_NPM_FAIL. */
+  /** A stand-in for npm: logs each call, and fails a publish whose tarball name contains FSCALE_FAKE_NPM_FAIL. */
   async function fakeNpm(
     version = '11.19.1',
   ): Promise<{ script: string; calls: () => Promise<string[]> }> {
@@ -287,7 +287,7 @@ describe('scripts/publish-npm.mjs', () => {
         `if (args[0] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0); }`,
         'const shown = args.map((arg) => (arg.endsWith(".tgz") ? path.basename(arg) : arg)).join(" ");',
         `appendFileSync(${JSON.stringify(log)}, shown + "\\n");`,
-        'const fail = process.env.FAKE_NPM_FAIL;',
+        'const fail = process.env.FSCALE_FAKE_NPM_FAIL;',
         'process.exit(fail && shown.includes(fail) ? 1 : 0);',
         '',
       ].join('\n'),
@@ -326,7 +326,9 @@ describe('scripts/publish-npm.mjs', () => {
   it('stops at the first publish that fails, and a second run finishes the release', async () => {
     const npm = await fakeNpm();
     const dir = await artifacts('1.2.3');
-    const first = await publish(dir, '1.2.3', npm.script, { FAKE_NPM_FAIL: 'firescale-sdk-' });
+    const first = await publish(dir, '1.2.3', npm.script, {
+      FSCALE_FAKE_NPM_FAIL: 'firescale-sdk-',
+    });
     expect(first.code).toBe(1);
     expect(first.stderr).toContain('npm publish failed for @firescale/sdk@1.2.3');
     expect(first.stderr).toContain('run the job again');
