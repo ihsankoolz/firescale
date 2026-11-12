@@ -290,6 +290,8 @@ Left: the facts schema stays at version 2 although its new `notes` field fails a
 
 ## Releases
 
+- **The version is 0.2.0 in every place it is recorded** (`node scripts/bump-version.mjs --check`), set after M16 in its own pull request. **No tag has been pushed and nothing was published:** tag `v0.2.0` on `main` yourself when ready (`RELEASING.md`). 0.2.0 holds M12 to M16: `fscale doctor`, the heartbeat counts and early stop for a service that is down, the agent files from `init`, `fscale add` and `fscale schema`, and the `nextjs` and `python` stack packs.
+
 - **0.1.3 was released on 2026-11-12** and run on your course project on Windows the same day. Progress lines, setup detection, parallel projects (`--jobs`) and Ctrl+C all worked, and no process was left behind after Ctrl+C. Two problems from that run are fixed in M12's pull request: the heartbeat showed `last output: E` (a pytest marker), and three services spent over six minutes with every test erroring because their test database was not running.
 - **0.1.2 was released on 2026-11-12 through the Release workflow**, with npm trusted publishing, like 0.1.1.
 
