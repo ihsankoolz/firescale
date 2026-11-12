@@ -1,0 +1,68 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > .gitignore 1`] = `
+"# Generated files and dependencies
+# Python caches and virtual environments
+__pycache__/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+"
+`;
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > app/__init__.py 1`] = `
+""""The app package."""
+"
+`;
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > app/main.py 1`] = `
+""""The app's entry point. Replace it with the real code."""
+
+
+def greet(name: str) -> str:
+    """Return a greeting for name."""
+    return f"Hello, {name}!"
+
+
+if __name__ == "__main__":
+    print(greet("world"))
+"
+`;
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > pytest.ini 1`] = `
+"[pytest]
+testpaths = tests
+pythonpath = .
+addopts = -ra
+"
+`;
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > requirements.txt 1`] = `
+"# What the app needs at run time, one package per line, pinned with ==.
+"
+`;
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > requirements-dev.txt 1`] = `
+"-r requirements.txt
+pytest==9.2.0
+ruff==0.17.5
+"
+`;
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > ruff.toml 1`] = `
+"line-length = 100
+
+[lint]
+select = ["E", "F", "W", "I"]
+"
+`;
+
+exports[`fscale init --packs core,python > builds a starter where the python pack reports no violations (snapshots) > tests/test_main.py 1`] = `
+"from app.main import greet
+
+
+def test_greet() -> None:
+    assert greet("world") == "Hello, world!"
+"
+`;

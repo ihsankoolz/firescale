@@ -85,10 +85,6 @@ impl Target {
         on_disk(ctx.root(), &self.path(file)).exists()
     }
 
-    pub(crate) fn read(&self, ctx: &RuleContext, file: &str) -> Option<String> {
-        std::fs::read_to_string(on_disk(ctx.root(), &self.path(file))).ok()
-    }
-
     /// True for the starter of a repo that has no Python project yet.
     pub(crate) fn is_new(&self) -> bool {
         self.new

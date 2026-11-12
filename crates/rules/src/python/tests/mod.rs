@@ -21,7 +21,7 @@ pub const APP_MAIN: &str = "\"\"\"The app's entry point. Replace it with the rea
 pub const TEST_MAIN: &str = "from app.main import greet\n\n\ndef test_greet() -> None:\n    assert greet(\"world\") == \"Hello, world!\"\n";
 
 /// True when the project has a tests folder or a test file.
-fn has_tests(ctx: &RuleContext, target: &Target) -> bool {
+pub(crate) fn has_tests(ctx: &RuleContext, target: &Target) -> bool {
     if target.exists(ctx, "tests") || target.exists(ctx, "test") {
         return true;
     }

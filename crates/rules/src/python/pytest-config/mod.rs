@@ -7,6 +7,7 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
+use super::tests_present::has_tests;
 use super::{create, finding, targets, Target, INPUTS};
 
 #[cfg(test)]
@@ -23,17 +24,30 @@ pub const PYTEST_INI: &str = "[pytest]\ntestpaths = tests\npythonpath = .\naddop
 /// pytest.ini for a project whose tests are beside its code.
 pub const PYTEST_INI_FLAT: &str = "[pytest]\npythonpath = .\naddopts = -ra\n";
 
+/// True when the project's folder, or a folder above it up to the root,
+/// configures pytest: pytest looks upward for its config too.
 fn configured(ctx: &RuleContext, target: &Target) -> bool {
-    target.exists(ctx, "pytest.ini")
-        || target
-            .read(ctx, "pyproject.toml")
-            .is_some_and(|t| t.contains("[tool.pytest"))
-        || target
-            .read(ctx, "setup.cfg")
-            .is_some_and(|t| t.contains("[tool:pytest]"))
-        || target
-            .read(ctx, "tox.ini")
-            .is_some_and(|t| t.contains("[pytest]"))
+    let mut parts: Vec<&str> = target.folder.split('/').filter(|p| *p != ".").collect();
+    loop {
+        let dir = parts
+            .iter()
+            .fold(ctx.root().to_path_buf(), |path, part| path.join(part));
+        let has = |file: &str, needle: &str| {
+            std::fs::read_to_string(dir.join(file)).is_ok_and(|text| text.contains(needle))
+        };
+        if dir.join("pytest.ini").is_file()
+            || dir.join("pytest.toml").is_file()
+            || dir.join(".pytest.toml").is_file()
+            || has("pyproject.toml", "[tool.pytest")
+            || has("setup.cfg", "[tool:pytest]")
+            || has("tox.ini", "[pytest]")
+        {
+            return true;
+        }
+        if parts.pop().is_none() {
+            return false;
+        }
+    }
 }
 
 impl BuiltinRule for PytestConfig {
@@ -56,7 +70,8 @@ impl BuiltinRule for PytestConfig {
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         for target in targets(ctx)? {
-            if configured(ctx, &target) {
+            // Configured, or nothing to test yet (python/tests reports that).
+            if configured(ctx, &target) || !(target.is_new() || has_tests(ctx, &target)) {
                 continue;
             }
             findings.push(finding(
@@ -72,7 +87,8 @@ impl BuiltinRule for PytestConfig {
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
         for target in targets(ctx)? {
-            if configured(ctx, &target) {
+            // Configured, or nothing to test yet (python/tests reports that).
+            if configured(ctx, &target) || !(target.is_new() || has_tests(ctx, &target)) {
                 continue;
             }
             let content = if target.is_new() || target.exists(ctx, "tests") {

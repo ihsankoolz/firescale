@@ -9,6 +9,7 @@ use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
 use super::requirements::dev_requirements;
+use super::tests_present::has_tests;
 use super::{create, finding, targets, Target, INPUTS};
 
 #[cfg(test)]
@@ -50,7 +51,9 @@ impl BuiltinRule for TestTools {
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         for target in targets(ctx)? {
-            if target.is_new() || declares_pytest(ctx, &target) {
+            // A project with no tests yet is python/tests's finding; asking
+            // for pytest first would only add files (found on microservices-demo).
+            if target.is_new() || declares_pytest(ctx, &target) || !has_tests(ctx, &target) {
                 continue;
             }
             findings.push(if can_create(ctx, &target) {
@@ -75,7 +78,11 @@ impl BuiltinRule for TestTools {
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
         for target in targets(ctx)? {
-            if !target.is_new() && !declares_pytest(ctx, &target) && can_create(ctx, &target) {
+            if !target.is_new()
+                && !declares_pytest(ctx, &target)
+                && has_tests(ctx, &target)
+                && can_create(ctx, &target)
+            {
                 create(
                     ctx,
                     &target.path("requirements-dev.txt"),

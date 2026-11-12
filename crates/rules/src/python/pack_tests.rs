@@ -95,3 +95,26 @@ fn a_service_with_a_gap_gets_exactly_that_file_in_its_own_folder() {
     assert_eq!(fix_all(&f), ["backend/payments/pytest.ini"]);
     assert_eq!(findings(&f), []);
 }
+
+/// Found on GoogleCloudPlatform/microservices-demo: services with code and
+/// no tests got a pytest.ini and a requirements-dev.txt, only adding files.
+#[test]
+fn a_service_with_no_tests_is_only_told_to_add_tests() {
+    let f = two_services(&[
+        "backend/orders/tests/test_main.py",
+        "backend/orders/pytest.ini",
+        "backend/orders/requirements-dev.txt",
+    ]);
+    let found = findings(&f);
+    let ids: Vec<&str> = found.iter().map(|d| d.rule_id.as_str()).collect();
+    assert_eq!(ids, ["python/tests"], "{found:?}");
+    assert!(fix_all(&f).is_empty());
+}
+
+/// pytest looks upward for its config, so a config in a folder above counts.
+#[test]
+fn a_pytest_config_in_a_folder_above_counts() {
+    let f = two_services(&["backend/orders/pytest.ini", "backend/payments/pytest.ini"]);
+    std::fs::write(f.root().join("backend/pytest.ini"), "[pytest]\n").unwrap();
+    assert_eq!(findings(&f), []);
+}
