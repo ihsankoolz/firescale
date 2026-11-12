@@ -52,7 +52,7 @@ fn normalise(line: &str) -> String {
 }
 
 /// Covered when the LAST line matching the entry is not a negation (`!entry`).
-fn is_covered(gitignore: &str, entry: &str) -> bool {
+pub(crate) fn is_covered(gitignore: &str, entry: &str) -> bool {
     let mut covered = false;
     for line in gitignore
         .trim_start_matches('\u{feff}')
