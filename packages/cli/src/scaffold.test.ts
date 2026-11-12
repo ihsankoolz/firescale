@@ -75,6 +75,23 @@ function everyLineSurvives(before: Buffer, after: Buffer): boolean {
   return true;
 }
 
+/** `after` is `before`, or `before`, a blank line and firescale's block. */
+function expectOnlyBlockAdded(
+  before: Buffer | undefined,
+  after: Buffer | undefined,
+  blockExpected: boolean,
+): void {
+  const was = (before ?? Buffer.alloc(0)).toString('utf8');
+  const now = (after ?? Buffer.alloc(0)).toString('utf8');
+  if (!blockExpected) {
+    expect(now).toBe(was);
+    return;
+  }
+  expect(now.startsWith(was)).toBe(true);
+  const added = now.slice(was.length);
+  expect(added).toMatch(/^\n<!-- BEGIN firescale[^\n]*-->\n[\s\S]*\n<!-- END firescale -->\n$/);
+}
+
 async function diagnostics(root: string): Promise<Diagnostic[]> {
   const result = await runCli(['check', '--json', '--no-cache'], root);
   return (JSON.parse(result.stdout) as { diagnostics: Diagnostic[] }).diagnostics;
@@ -116,7 +133,7 @@ describe('fscale init', () => {
     expect((await diagnostics(repo.root)).filter((d) => d.fixable === 'deterministic')).toEqual([]);
   });
 
-  it('turns on core and agent-ready by default and prints the violations left for a person', async () => {
+  it('turns on core and agent-ready by default and leaves nothing for a person', async () => {
     const repo = await emptyFolder();
     const result = await runCli(['init'], repo.root);
     expect(result.stderr).toBe('');
@@ -125,17 +142,10 @@ describe('fscale init', () => {
       '{\n  "packs": ["core", "agent-ready"]\n}\n',
     );
 
+    // Every agent-ready rule has a fix (M13), so nothing is left.
     const left = await diagnostics(repo.root);
-    expect(left.filter((d) => d.fixable === 'deterministic')).toEqual([]);
-    // The agent-ready pack has no fixes yet, so something is left, and init says so.
-    expect(left.length).toBeGreaterThan(0);
-    expect(result.stdout).toContain(
-      `Left for you: ${String(left.length)} violation${left.length === 1 ? '' : 's'} that a fix cannot repair.`,
-    );
-    for (const rule of new Set(left.map((d) => d.ruleId))) {
-      expect(result.stdout).toContain(`  ${rule}\n`);
-      expect(result.stdout).toContain(`How to fix: fscale explain ${rule}`);
-    }
+    expect(left).toEqual([]);
+    expect(result.stdout).toContain('Left for you: no violations.');
     expect(portable(result.stdout, repo)).toMatchSnapshot();
   });
 
@@ -318,16 +328,13 @@ describe('existing work survives', () => {
           true,
         );
       }
-      // The README, the workflow, AGENTS.md and the source are byte for byte the same.
-      for (const file of [
-        'README.md',
-        '.github/workflows/build.yml',
-        'AGENTS.md',
-        'package.json',
-        'src/index.js',
-      ]) {
+      // The README, the workflow and the source are byte for byte the same.
+      for (const file of ['README.md', '.github/workflows/build.yml', 'package.json', 'src/index.js']) {
         expect(after.get(file), file).toEqual(before.get(file));
       }
+      // AGENTS.md too, apart from firescale's block, added after it when
+      // agent-ready is on (M13).
+      expectOnlyBlockAdded(before.get('AGENTS.md'), after.get('AGENTS.md'), config !== undefined);
       // .gitignore only grew, after the person's last line, and kept its CRLF line endings.
       // Outside git there is nothing to ignore for, so it is not touched at all.
       const gitignore = (after.get('.gitignore') ?? Buffer.alloc(0)).toString('utf8');
@@ -336,7 +343,10 @@ describe('existing work survives', () => {
       else expect(gitignore).toContain('\r\nnode_modules/\r\n');
       expect(gitignore.replaceAll('\r\n', '')).not.toContain('\n');
       // No second README or workflow was put beside the person's own.
-      expect([...after.keys()].filter((file) => /readme/i.test(file))).toEqual(['README.md']);
+      // (Skill folders such as firescale-core-readme-setup are not READMEs.)
+      expect([...after.keys()].filter((file) => /^readme/i.test(path.posix.basename(file)))).toEqual([
+        'README.md',
+      ]);
       expect([...after.keys()].filter((file) => file.startsWith('.github/'))).toEqual([
         '.github/workflows/build.yml',
       ]);
@@ -400,7 +410,11 @@ describe('existing work survives', () => {
           everyLineSurvives(content, after.get(file) ?? Buffer.alloc(0)),
           `${argv.join(' ')}: ${file}`,
         ).toBe(true);
-        if (file !== '.gitignore') expect(after.get(file), file).toEqual(content);
+        if (file === 'AGENTS.md') {
+          expectOnlyBlockAdded(content, after.get(file), argv[0] === 'init');
+        } else if (file !== '.gitignore') {
+          expect(after.get(file), file).toEqual(content);
+        }
       }
     }
   });

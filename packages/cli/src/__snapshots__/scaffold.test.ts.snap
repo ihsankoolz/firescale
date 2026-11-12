@@ -144,12 +144,69 @@ Next: review the changes with \`git status\` and \`git diff\`, then commit them.
 "
 `;
 
-exports[`fscale init > turns on core and agent-ready by default and prints the violations left for a person 1`] = `
+exports[`fscale init > turns on core and agent-ready by default and leaves nothing for a person 1`] = `
 "Repo root: <root>
 Initialised a git repository (git init).
 
 firescale
   created firescale.config.json
+
+agent-ready/agent-skills
+  created .claude/skills/firescale-agent-ready-agent-permissions/SKILL.md (staged with git add)
+  created .claude/skills/firescale-agent-ready-agent-skills/SKILL.md (staged with git add)
+  created .claude/skills/firescale-agent-ready-agents-md/SKILL.md (staged with git add)
+  created .claude/skills/firescale-agent-ready-commands-documented/SKILL.md (staged with git add)
+  created .claude/skills/firescale-agent-ready-single-test-command/SKILL.md (staged with git add)
+  created .claude/skills/firescale-agent-ready-verify-hook/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-ci-exists/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-env-example/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-gitignore-basics/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-no-committed-env/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-no-secrets-in-source/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-readme-setup/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-scripts-present/SKILL.md (staged with git add)
+  created .claude/skills/firescale-core-single-lockfile/SKILL.md (staged with git add)
+  created .agents/skills/firescale-agent-ready-agent-permissions/SKILL.md (staged with git add)
+  created .agents/skills/firescale-agent-ready-agent-skills/SKILL.md (staged with git add)
+  created .agents/skills/firescale-agent-ready-agents-md/SKILL.md (staged with git add)
+  created .agents/skills/firescale-agent-ready-commands-documented/SKILL.md (staged with git add)
+  created .agents/skills/firescale-agent-ready-single-test-command/SKILL.md (staged with git add)
+  created .agents/skills/firescale-agent-ready-verify-hook/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-ci-exists/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-env-example/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-gitignore-basics/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-no-committed-env/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-no-secrets-in-source/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-readme-setup/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-scripts-present/SKILL.md (staged with git add)
+  created .agents/skills/firescale-core-single-lockfile/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-agent-ready-agent-permissions/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-agent-ready-agent-skills/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-agent-ready-agents-md/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-agent-ready-commands-documented/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-agent-ready-single-test-command/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-agent-ready-verify-hook/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-ci-exists/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-env-example/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-gitignore-basics/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-no-committed-env/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-no-secrets-in-source/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-readme-setup/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-scripts-present/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-core-single-lockfile/SKILL.md (staged with git add)
+
+agent-ready/agents-md
+  created AGENTS.md (staged with git add)
+
+agent-ready/verify-hook
+  created .claude/settings.json (staged with git add)
+  created .codex/hooks.json (staged with git add)
+  created .cursor/hooks.json (staged with git add)
+
+agent-ready/agent-permissions
+  edited .claude/settings.json
+  created .cursor/cli.json (staged with git add)
+  created .codex/config.toml (staged with git add)
 
 core/ci-exists
   created .github/workflows/ci.yml (staged with git add)
@@ -160,17 +217,14 @@ core/gitignore-basics
 core/readme-setup
   created README.md (staged with git add)
 
-Done: 4 changes.
+Done: 53 changes.
 
-Left for you: 2 violations that a fix cannot repair. A person or an agent has to.
-  agent-ready/agents-md
-    AGENTS.md: No AGENTS.md at the repo root. Create one that describes this project: what it is, the commands to build, test and lint it, and the rules a coding agent must follow. [agent-fixable]
-    How to fix: fscale explain agent-ready/agents-md
-  agent-ready/verify-hook
-    .claude/settings.json: No coding agent is set up to run fscale verify before it stops. Run \`fscale hooks install --all\` (or \`--agent <claude|codex|cursor>\`) and commit the files it writes. [manual fix]
-    How to fix: fscale explain agent-ready/verify-hook
+Left for you: no violations.
 
 To review:
+  agent-ready/agents-md: AGENTS.md lists the repo's commands. Describe the project and its conventions above the firescale block.
+  agent-ready/verify-hook: Codex runs a project's hooks only in a trusted project, and only after you approve the hook once in Codex (and again after it changes).
+  agent-ready/agent-permissions: .cursor/cli.json follows Cursor's CLI permission format as far as it could be checked; Cursor's own docs could not be read when it was written. Check it once in Cursor.
   core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 

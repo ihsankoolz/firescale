@@ -1,16 +1,34 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`the agent-ready pack > reports an empty repo as not agent-ready, and passes once the hook is installed 1`] = `
-"agent-ready/agents-md  (enforced, medium)
+exports[`the agent-ready pack > reports an empty repo as not agent-ready, and passes once sync has run 1`] = `
+"agent-ready/agent-permissions  (enforced, medium)
+  .claude/settings.json
+    .claude/settings.json does not keep Claude Code away from env files and keys, or does not allow the repo's check commands. \`fscale sync\` adds the missing entries and keeps everything else. [deterministic fix available]
+  .codex/config.toml
+    .codex/config.toml is missing, so Codex may read env files and keys. \`fscale sync\` creates it with a permission profile that denies them. [deterministic fix available]
+  .cursor/cli.json
+    .cursor/cli.json does not keep Cursor away from env files and keys, or does not allow the repo's check commands. \`fscale sync\` adds the missing entries and keeps everything else. [deterministic fix available]
+  How to fix: fscale explain agent-ready/agent-permissions
+
+agent-ready/agent-skills  (enforced, low)
+  .agents/skills/
+    6 skills of the enabled rules are missing or out of date in .agents/skills/ (Codex): firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
+  .claude/skills/
+    6 skills of the enabled rules are missing or out of date in .claude/skills/ (Claude Code): firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
+  .cursor/skills/
+    6 skills of the enabled rules are missing or out of date in .cursor/skills/ (Cursor): firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
+  How to fix: fscale explain agent-ready/agent-skills
+
+agent-ready/agents-md  (enforced, medium)
   AGENTS.md
-    No AGENTS.md at the repo root. Create one that describes this project: what it is, the commands to build, test and lint it, and the rules a coding agent must follow. [agent-fixable]
+    No AGENTS.md at the repo root. \`fscale sync\` creates one with the repo's commands and the definition of done; then describe the project above the block. [deterministic fix available]
   How to fix: fscale explain agent-ready/agents-md
 
 agent-ready/verify-hook  (enforced, medium)
   .claude/settings.json
-    No coding agent is set up to run fscale verify before it stops. Run \`fscale hooks install --all\` (or \`--agent <claude|codex|cursor>\`) and commit the files it writes. [manual fix]
+    No coding agent is set up to run fscale verify before it stops. \`fscale sync\` adds the stop hook for Claude Code, Codex and Cursor (or run \`fscale hooks install --all\`), then commit the files. [deterministic fix available]
   How to fix: fscale explain agent-ready/verify-hook
 
-FAILED: 4 rules checked, 2 violations (2 enforced, 0 report-only).
+FAILED: 6 rules checked, 8 violations (8 enforced, 0 report-only).
 "
 `;

@@ -72,3 +72,25 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - Anything with output has a snapshot test.
 - Cache behaviour and guardrails each get explicit tests.
 - Benchmarks live in `bench/` and their results in `bench/RESULTS.md`.
+
+<!-- BEGIN firescale: written by `fscale sync` from `fscale facts`. Edits inside this block are replaced; write your own notes outside it. -->
+## Commands
+
+Run each command in the folder it names.
+
+### The repo root
+
+- Install: `pnpm install`
+- Build: `pnpm run build`
+- Lint: `pnpm run lint`
+- Typecheck: `pnpm run typecheck`
+- Test: `pnpm run test`
+
+## Definition of done
+
+Before you say a task is done, run `pnpm --silent fscale verify` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.
+
+- Never skip, delete or weaken a test, a lint rule or a check to make it pass.
+- `SETUP NEEDED` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. `pnpm --silent fscale doctor` lists what is missing.
+- To learn how to fix a rule's finding: `pnpm --silent fscale explain <rule>`.
+<!-- END firescale -->

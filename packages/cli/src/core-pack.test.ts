@@ -26,7 +26,7 @@ describe('the core pack', () => {
 
   it('passes on the firescale repo itself, with the agent-ready pack on too (dogfooding)', async () => {
     const result = await runCli(['check'], REPO);
-    expect(result.stdout).toBe('OK: 12 rules checked, no violations.\n');
+    expect(result.stdout).toBe('OK: 14 rules checked, no violations.\n');
     expect(result.code).toBe(EXIT_OK);
   });
 });
@@ -43,7 +43,7 @@ describe('the agent-ready pack', () => {
     expect(result.code).toBe(EXIT_OK);
   });
 
-  it('reports an empty repo as not agent-ready, and passes once the hook is installed', async () => {
+  it('reports an empty repo as not agent-ready, and passes once sync has run', async () => {
     const repo = await fixtures.create({
       files: {
         'firescale.config.json': JSON.stringify({
@@ -56,10 +56,11 @@ describe('the agent-ready pack', () => {
     expect(before.code).toBe(1);
     expect(before.stdout).toMatchSnapshot();
 
-    await runCli(['hooks', 'install', '--agent', 'claude'], repo.root);
-    await repo.write('AGENTS.md', '# Agents\n\nNothing to build yet.\n');
+    // Every agent-ready rule has a fix now (M13): sync makes the repo pass.
+    const synced = await runCli(['sync'], repo.root);
+    expect(synced.code).toBe(EXIT_OK);
     const after = await runCli(['check'], repo.root);
-    expect(after.stdout).toBe('OK: 4 rules checked, no violations.\n');
+    expect(after.stdout).toBe('OK: 6 rules checked, no violations.\n');
     expect(after.code).toBe(EXIT_OK);
   });
 
