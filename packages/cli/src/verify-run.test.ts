@@ -359,6 +359,45 @@ describe('progress', () => {
     expect(lines.at(-1)).toMatch(/^\[verify\] test: passed after \d/);
   });
 
+  it('gives a running count of tests in the heartbeat when the last output is pytest markers', async () => {
+    // pytest writes one marker per test with no line end; "E" alone tells
+    // a person nothing (ADR 0025).
+    const repo = await repoWith(
+      { lint: false, typecheck: false, test: nodeScript('fake-pytest.js') },
+      {
+        'fake-pytest.js': [
+          "process.stdout.write('==== test session starts ====\\ncollected 9 items\\n\\ntests/test_orders.py ..F');",
+          "for (let n = 0; n < 6; n++) process.stdout.write('E');",
+          'setTimeout(() => process.exit(1), 3000);',
+          '',
+        ].join('\n'),
+      },
+    );
+    const result = await runCli(['verify', '--progress'], repo.root, {
+      FSCALE_HEARTBEAT_MS: '1500',
+    });
+    expect(result.stderr).toMatch(
+      /\[verify\] test: still running after [\d.]+s; tests so far: 2 passed, 1 failed, 6 errors \(in tests\/test_orders\.py\)\r?\n/,
+    );
+    expect(result.stderr).not.toContain('last output: E');
+  });
+
+  it('shows the last line with words when the last output is only symbols', async () => {
+    const repo = await repoWith(
+      { lint: false, typecheck: false, test: nodeScript('dots.js') },
+      {
+        'dots.js':
+          "console.log('compiling the schema');\nprocess.stdout.write('....');\nsetTimeout(() => {}, 1500);\n",
+      },
+    );
+    const result = await runCli(['verify', '--progress'], repo.root, {
+      FSCALE_HEARTBEAT_MS: '700',
+    });
+    expect(result.stderr).toMatch(
+      /\[verify\] test: still running after \d.*; last output: compiling the schema\r?\n/,
+    );
+  });
+
   it('is quiet when stderr is not a terminal, unless --progress is given', async () => {
     const repo = await repoWith({ lint: 'echo lint-ran', typecheck: false, test: false });
     const quiet = await runCli(['verify'], repo.root);
@@ -369,6 +408,64 @@ describe('progress', () => {
     const off = await runCli(['verify', '--progress', '--no-progress'], repo.root);
     expect(off.stderr).not.toContain('[verify]');
   });
+});
+
+/** A port on this machine with nothing listening on it. */
+async function closedPort(): Promise<number> {
+  const { createServer } = await import('node:net');
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address !== null ? address.port : 0;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+describe('a service that is not running, seen while the step runs', () => {
+  // Every test errors because the database is down; pytest prints why only
+  // at the very end (ADR 0025).
+  const erroring = {
+    'fake-pytest.js': [
+      "process.stdout.write('==== test session starts ====\\ntests/test_orders.py ');",
+      "setInterval(() => process.stdout.write('E'), 100);",
+      'setTimeout(() => process.exit(1), 30000);',
+      '',
+    ].join('\n'),
+  };
+
+  it('says so once a second probe confirms it, and stops the step early by default', async () => {
+    const port = await closedPort();
+    const repo = await repoWith(
+      { lint: false, typecheck: false, test: nodeScript('fake-pytest.js') },
+      {
+        ...erroring,
+        '.env.example': `DATABASE_URL=postgresql://app:Sup3rSecret@localhost:${port}/orders_db\n`,
+      },
+    );
+    const before = Date.now();
+    const result = await runCli(['verify', '--progress', '--json'], repo.root);
+    // A second probe 10 seconds after the first confirms it (ADR 0025).
+    expect(Date.now() - before).toBeGreaterThanOrEqual(10000);
+    expect(Date.now() - before).toBeLessThan(25000);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as Report;
+    const step = report.steps.find((s) => s.name === 'test');
+    // Every test erroring while a service is down is a likely cause, not a
+    // certain one: the step is a failure that names the service.
+    expect(step?.status).toBe('failed');
+    expect(result.stderr).toMatch(
+      new RegExp(
+        `\\[verify\\] test: LIKELY SETUP, seen while running: PostgreSQL on localhost:${port} is not running \\(every test so far has errored \\(0 passed, 0 failed, \\d+ errors\\), and \\.env\\.example \\(DATABASE_URL\\) names it\\); stopping the step`,
+      ),
+    );
+    expect(result.stdout).toContain(`while PostgreSQL on localhost:${port} was not running`);
+    for (const secret of ['Sup3rSecret', 'orders_db', 'postgresql://']) {
+      expect(result.stdout + result.stderr).not.toContain(secret);
+    }
+  }, 40_000);
 });
 
 describe('commands get no input and run with CI=1', () => {

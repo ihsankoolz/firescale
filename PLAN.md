@@ -314,9 +314,11 @@ Needs the publishing checkpoint: the CI this pack checks for runs `npx firescale
 
 ---
 
-## M12 — `fscale doctor` ☐
+## M12 — `fscale doctor` ☑
 
 Needs the publishing checkpoint: a teammate runs `doctor` from an npm install, and the generated CI that tells them to needs 0.1.0 on npm. If it is not published yet, say so at the top of the pull request.
+
+Also done (owner's additions, ADR 0025 and 0026): local services from Compose files and `.env.example` (reachable or not, with the start command, never a password); per-project virtual environment and requirements checks; verify's hint to run `fscale doctor` on setup needed; the heartbeat's running count for pytest and unittest; a running step stopped early when a service it needs is down (`verify.stopWhenServiceDown`).
 
 **Build**
 
@@ -329,10 +331,10 @@ Needs the publishing checkpoint: a teammate runs `doctor` from an npm install, a
 
 **Done when**
 
-- ☐ `fscale doctor` reports a missing tool, a wrong version, a missing env variable and missing dependencies in fixture setups, each with a next step, proven by tests.
-- ☐ `fscale doctor` exits 0 on this repo on a machine that can build it.
-- ☐ A test proves that no output contains the value of an env variable.
-- ☐ `--json` output validates against its schema, with a snapshot test.
+- ☑ `fscale doctor` reports a missing tool, a wrong version, a missing env variable and missing dependencies in fixture setups, each with a next step, proven by tests.
+- ☑ `fscale doctor` exits 0 on this repo on a machine that can build it.
+- ☑ A test proves that no output contains the value of an env variable.
+- ☑ `--json` output validates against its schema, with a snapshot test.
 
 ---
 

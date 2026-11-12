@@ -2,6 +2,13 @@
 
 Current state of the project, so a new session can resume cold. Updated in every milestone's pull request.
 
+## In progress
+
+- **Milestone:** M12 `fscale doctor`, with two fixes from the 0.1.3 run first (the heartbeat's `last output: E`, and a running step whose tests cannot reach their database). Started 2026-11-12 17:05 UTC.
+- **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each milestone is still one pull request).
+- **Session plan, in order:** M12, M13 agent files, M14 generators, M15 Next.js pack, M16 Python pack, then a 0.2.0 version bump. Deadline 22:00 UTC (06:00 Singapore time, 13 Nov). Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
+- **Done so far:** 0.1.3 release recorded. M12 code, tests, docs, ADRs 0025 and 0026, and its real-repo pass are done and committed; next is its pull request, review and CI.
+
 ## Where things stand
 
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M6 npm packaging, M7 `verify` and hooks, M8 the fix loop (pull request #12, with the plan update of ADR 0017 and the CI trim of ADR 0016), M9 `init`, `adopt` and `sync`.
@@ -9,7 +16,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Published:** the owner published 0.1.0 to npm by hand on 2026-11-12. **0.1.1 and 0.1.2 were released on 2026-11-12 through the Release workflow with trusted publishing; every stage passed.** The second box of the publishing checkpoint (a generated repo passing its own CI on GitHub) is still open.
 - **Done in the latest session:** the 0.1.2 fixes from running 0.1.1 on the course project (ADR 0022): each Python project runs with its own `.venv` interpreter (or uv, poetry, pipenv, an active `VIRTUAL_ENV`, then `python`), projects are independent in verify, `setup-needed` is reported apart from failures, ruff and mypy come from dependency lists, and test-runner config files are test code for `core/env-example`. 0.1.2 was released through the Release workflow on 2026-11-12. Earlier: automated releases (ADR 0021, `RELEASING.md`) and M10 (ADR 0020).
 - **Done in an earlier session, after 0.1.2:** M11 the group-project pack (ADR 0023).
-- **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. The version is 0.1.3 and **no tag has been pushed**.
+- **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. **0.1.3 was released on 2026-11-12** and run on the course project on Windows: progress lines, setup detection, parallel projects and Ctrl+C worked, and no process was left behind.
 - **Not started, in order:** M12 `doctor`, M13 agent files from `init`, M14 generators, M15 Next.js pack, M16 Python pack, M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
 
 ## How to resume
@@ -52,6 +59,14 @@ Notes on M11, for whoever touches the group-project pack or M12 (`doctor`, the o
 - `Git::current_branch` (in `crates/core/src/git.rs`) gives the branch name also before the first commit.
 - The skills test runs `fscale explain` in a scratch repo with every built-in pack on; a new pack needs nothing there.
 
+Notes on M12, for whoever touches doctor or verify's service watch:
+
+- Doctor is `crates/core/src/doctor.rs`; everything it asks the machine goes through the `Machine` trait (`ThisMachine` in production), so Rust tests can fake it. The CLI tests (`packages/cli/src/doctor.test.ts`) put version stand-ins on a PATH they control.
+- Services come from `crates/core/src/services.rs` (Compose and `.env.example`), shared with verify. Never add a field that keeps a URL, a user or a password there; a test checks the `Debug` text.
+- The live view of a running step's output is `crates/core/src/activity.rs` (heartbeat counts, the last 200 lines). Verify's early stop is `service_down_while_running` in `verify.rs`; a command stopped that way ends as `Ending::GaveUp`.
+- The python stand-in answers `--version` with `Python <FSCALE_STUB_PYTHON_VERSION>` (default 3.12.4).
+- The format research for M13 (Claude Code, Codex, Cursor) was done on 2026-11-12; see ADR 0027 once M13 lands. Cursor's hook format was confirmed from Cursor's public GitHub repositories (`cursor/cookbook`, `cursor/plugins`); cursor.com itself is still blocked.
+
 Notes for M13 (agent files), which stands on M9 like M11 did:
 
 - `init`, `adopt` and `sync` are `crates/cli/src/scaffold.rs`. They share one function, `run`, which uses `plan_fixes`, `FixPlan::run` and `render_fixes` from `crates/cli/src/main.rs`, the same pieces as `fscale fix`. A new pack needs no change there: give its rules fixes and `fscale init --packs core,<pack>` builds it.
@@ -79,8 +94,6 @@ Notes for M13 (agent files), which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Release 0.1.3 when ready: tag `v0.1.3` on `main` and push the tag (`RELEASING.md`).
-- Run 0.1.3 on the course project on Windows: check the progress lines, Ctrl+C (Task Manager should show no `node` or `python` left), and the 10-minute limit on the service whose database is not running.
 - Consider turning off token publishing for the eight packages now that two workflow releases have worked (`RELEASING.md`).
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.

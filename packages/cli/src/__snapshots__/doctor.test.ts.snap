@@ -1,0 +1,100 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale doctor > prints JSON that matches its schema 1`] = `
+"{
+  "schemaVersion": 1,
+  "ok": false,
+  "problems": 7,
+  "warnings": 0,
+  "checks": [
+    {
+      "section": "tools",
+      "subject": "node",
+      "status": "problem",
+      "detail": "node 18.19.0 is installed, but package.json (engines.node) asks for >=20.",
+      "fix": "install a Node.js version that matches >=20, for example with nvm or fnm"
+    },
+    {
+      "section": "tools",
+      "subject": "bun",
+      "status": "problem",
+      "detail": "bun is not installed, or not on the PATH; package.json (packageManager) asks for bun@1.1.0.",
+      "fix": "install Bun from https://bun.sh"
+    },
+    {
+      "section": "tools",
+      "project": "backend",
+      "subject": "backend python",
+      "status": "problem",
+      "detail": "python 3.11.9 is used for backend, but backend/.python-version asks for 3.12.",
+      "fix": "install Python 3.12, then make the virtual environment again with it"
+    },
+    {
+      "section": "env",
+      "subject": ".env.example",
+      "status": "problem",
+      "detail": "1 of 3 variables are not set in the environment or .env: DATABASE_URL.",
+      "fix": "add DATABASE_URL to .env (see .env.example for what each one is)"
+    },
+    {
+      "section": "dependencies",
+      "project": "backend",
+      "subject": "backend/.venv",
+      "status": "ok",
+      "detail": "virtual environment with Python 3.11.9"
+    },
+    {
+      "section": "dependencies",
+      "project": "backend",
+      "subject": "backend packages",
+      "status": "problem",
+      "detail": "1 of 2 packages in backend/requirements.txt are not installed: flask; 1 does not match its pinned version: requests 2.30.0 (wants 2.31.0).",
+      "fix": "in backend: .venv/bin/python -m pip install -r requirements.txt"
+    },
+    {
+      "section": "dependencies",
+      "project": ".",
+      "subject": "node_modules",
+      "status": "problem",
+      "detail": "the dependencies of package.json are not installed.",
+      "fix": "bun install"
+    },
+    {
+      "section": "services",
+      "subject": "PostgreSQL on localhost:<port>",
+      "status": "problem",
+      "detail": "not reachable: nothing listens on port <port> (.env.example (DATABASE_URL)).",
+      "fix": "start PostgreSQL so it listens on port <port> (no Compose file names it; for example: docker run -d -p <port>:5432 -e POSTGRES_PASSWORD=<password> postgres)"
+    }
+  ]
+}
+"
+`;
+
+exports[`fscale doctor > reports a missing tool, a wrong version, a missing variable, missing dependencies and a service, each with a next step 1`] = `
+"Tools
+  PROBLEM  node: node 18.19.0 is installed, but package.json (engines.node) asks for >=20.
+           next: install a Node.js version that matches >=20, for example with nvm or fnm
+  PROBLEM  bun: bun is not installed, or not on the PATH; package.json (packageManager) asks for bun@1.1.0.
+           next: install Bun from https://bun.sh
+  PROBLEM  backend python: python 3.11.9 is used for backend, but backend/.python-version asks for 3.12.
+           next: install Python 3.12, then make the virtual environment again with it
+
+Environment variables
+  PROBLEM  .env.example: 1 of 3 variables are not set in the environment or .env: DATABASE_URL.
+           next: add DATABASE_URL to .env (see .env.example for what each one is)
+
+Dependencies
+  ok       backend/.venv: virtual environment with Python 3.11.9
+  PROBLEM  backend packages: 1 of 2 packages in backend/requirements.txt are not installed: flask; 1 does not match its pinned version: requests 2.30.0 (wants 2.31.0).
+           next: in backend: .venv/bin/python -m pip install -r requirements.txt
+  PROBLEM  node_modules: the dependencies of package.json are not installed.
+           next: bun install
+
+Services
+  PROBLEM  PostgreSQL on localhost:<port>: not reachable: nothing listens on port <port> (.env.example (DATABASE_URL)).
+           next: start PostgreSQL so it listens on port <port> (no Compose file names it; for example: docker run -d -p <port>:5432 -e POSTGRES_PASSWORD=<password> postgres)
+
+doctor: 7 problems - run the \`next:\` commands above, then \`fscale doctor\` again.
+"
+`;

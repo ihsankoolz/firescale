@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ihsankoolz/firescale/blob/main/packages/cli/schemas/doctor-output.schema.json",
+  "title": "fscale doctor --json output",
+  "description": "What `fscale doctor --json` prints: whether this machine is ready for the repo. Paths are relative to the repo root with forward slashes. Values of env variables, passwords and connection strings never appear.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "ok", "problems", "warnings", "checks"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of this format. Changes only on a breaking change.",
+      "const": 1
+    },
+    "ok": {
+      "description": "True when no check found a problem. Warnings do not count. The exit code is 0 when true, 1 when false.",
+      "type": "boolean"
+    },
+    "problems": {
+      "description": "How many checks have the status problem.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "warnings": {
+      "description": "How many checks have the status warning.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "checks": {
+      "description": "Every check, grouped by section in the order tools, env, dependencies, services.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["section", "subject", "status", "detail"],
+        "properties": {
+          "section": {
+            "description": "tools: installed tool versions against what the repo declares. env: the names in each .env.example. dependencies: installed packages and virtual environments. services: local services the repo names.",
+            "enum": ["tools", "env", "dependencies", "services"]
+          },
+          "project": {
+            "description": "The folder of the project the check is about, as fscale facts prints it. Absent for checks about the whole repo.",
+            "type": "string"
+          },
+          "subject": {
+            "description": "What was checked, such as node, pnpm, backend/.env.example or PostgreSQL on localhost:5432.",
+            "type": "string"
+          },
+          "status": {
+            "description": "ok, problem (fscale doctor exits 1) or warning (worth a look, not wrong for certain).",
+            "enum": ["ok", "problem", "warning"]
+          },
+          "detail": {
+            "description": "One sentence on what was found. Names of variables, never their values.",
+            "type": "string"
+          },
+          "fix": {
+            "description": "The command or step that fixes a problem or a warning.",
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

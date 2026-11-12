@@ -30,7 +30,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::verify::strip_ansi;
+use crate::activity::Activity;
 
 /// Set once Ctrl+C or a termination signal arrives, after
 /// [`install_stop_handler`] ran.
@@ -38,6 +38,9 @@ pub static STOP: AtomicBool = AtomicBool::new(false);
 
 /// How often the watch loop looks at the child, the stop flag and the clock.
 const POLL: Duration = Duration::from_millis(20);
+
+/// How often new output is handed to `on_output`.
+pub const OUTPUT_CHECK: Duration = Duration::from_millis(500);
 
 /// How long a stopped tree gets to exit after `SIGTERM` before `SIGKILL`.
 #[cfg(unix)]
@@ -64,6 +67,9 @@ pub enum Ending {
     /// Verify was asked to stop (Ctrl+C or a termination signal), so the
     /// command was stopped, with its whole tree.
     Stopped,
+    /// `on_output` said the command cannot succeed (a service it needs is
+    /// not running), so it was stopped early, with its whole tree.
+    GaveUp,
 }
 
 /// A finished command: how it ended and what it printed.
@@ -83,33 +89,28 @@ pub struct Watch<'a> {
     pub stop: &'a AtomicBool,
     /// How often to call `on_heartbeat` while the command runs.
     pub heartbeat: Duration,
-    /// Called every `heartbeat` with the time so far and the last line of
-    /// output, if any.
+    /// Called every `heartbeat` with the time so far and what the command
+    /// is doing, read from its output ([`Activity::heartbeat`]), if anything.
     pub on_heartbeat: &'a (dyn Fn(Duration, Option<&str>) + Sync),
+    /// The command line, to know its test runner ([`Activity::new`]).
+    pub command: &'a str,
+    /// Called with the output so far every [`OUTPUT_CHECK`], once there is
+    /// any. Returning true stops the tree as [`Ending::GaveUp`].
+    pub on_output: &'a (dyn Fn(&Activity) -> bool + Sync),
     /// Called once the command started, with its process id (on macOS and
     /// Linux also the id of its process group).
     pub on_spawn: &'a (dyn Fn(u32) + Sync),
 }
 
 /// Output collected by a reader thread, shared with the watch loop.
-#[derive(Default)]
 struct Collected {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
-    last_line: Option<String>,
+    activity: Activity,
 }
 
 fn lock(collected: &Mutex<Collected>) -> std::sync::MutexGuard<'_, Collected> {
     collected.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// The last non-empty line of a chunk of output, without colour codes.
-fn last_line(chunk: &[u8]) -> Option<String> {
-    let text = strip_ansi(&String::from_utf8_lossy(chunk));
-    text.lines()
-        .map(str::trim)
-        .rfind(|line| !line.is_empty())
-        .map(|line| line.chars().take(160).collect())
 }
 
 /// Reads one stream to its end into `collected`, then reports on `done`.
@@ -137,9 +138,7 @@ fn spawn_reader(
                         let excess = target.len() - MAX_OUTPUT / 2;
                         target.drain(..excess);
                     }
-                    if let Some(line) = last_line(chunk) {
-                        collected.last_line = Some(line);
-                    }
+                    collected.activity.feed(usize::from(is_stderr), chunk);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(_) => break,
@@ -160,7 +159,11 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
     let started = Instant::now();
     let mut tree = Tree::spawn(command)?;
     (watch.on_spawn)(tree.child.id());
-    let collected = Arc::new(Mutex::new(Collected::default()));
+    let collected = Arc::new(Mutex::new(Collected {
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        activity: Activity::new(watch.command),
+    }));
     let (done, finished_readers) = mpsc::channel();
     let mut readers = 0;
     if let Some(stdout) = tree.child.stdout.take() {
@@ -174,6 +177,7 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
     drop(done);
 
     let mut next_heartbeat = watch.heartbeat;
+    let mut next_output_check = OUTPUT_CHECK;
     // The time is taken when the ending is known, before any stopping.
     let (ending, duration) = loop {
         let elapsed = started.elapsed();
@@ -209,8 +213,19 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
             tree.stop();
             break (Ending::TimedOut, elapsed);
         }
+        if elapsed >= next_output_check {
+            next_output_check = elapsed + OUTPUT_CHECK;
+            // A copy, so the readers are not held up while it is read. It
+            // is handed over even with no new output: a service found down
+            // is probed again later (ADR 0025).
+            let activity = lock(&collected).activity.clone();
+            if activity.generation() > 0 && (watch.on_output)(&activity) {
+                tree.stop();
+                break (Ending::GaveUp, elapsed);
+            }
+        }
         if !watch.heartbeat.is_zero() && elapsed >= next_heartbeat {
-            let line = lock(&collected).last_line.clone();
+            let line = lock(&collected).activity.heartbeat();
             (watch.on_heartbeat)(elapsed, line.as_deref());
             while next_heartbeat <= elapsed {
                 next_heartbeat += watch.heartbeat;
