@@ -436,7 +436,7 @@ describe('a service that is not running, seen while the step runs', () => {
     ].join('\n'),
   };
 
-  it('says so at once and stops the step early by default', async () => {
+  it('says so once a second probe confirms it, and stops the step early by default', async () => {
     const port = await closedPort();
     const repo = await repoWith(
       { lint: false, typecheck: false, test: nodeScript('fake-pytest.js') },
@@ -447,20 +447,25 @@ describe('a service that is not running, seen while the step runs', () => {
     );
     const before = Date.now();
     const result = await runCli(['verify', '--progress', '--json'], repo.root);
-    expect(Date.now() - before).toBeLessThan(20000);
+    // A second probe 10 seconds after the first confirms it (ADR 0025).
+    expect(Date.now() - before).toBeGreaterThanOrEqual(10000);
+    expect(Date.now() - before).toBeLessThan(25000);
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const report = JSON.parse(result.stdout) as Report;
     const step = report.steps.find((s) => s.name === 'test');
-    expect(step?.status).toBe('setup-needed');
+    // Every test erroring while a service is down is a likely cause, not a
+    // certain one: the step is a failure that names the service.
+    expect(step?.status).toBe('failed');
     expect(result.stderr).toMatch(
       new RegExp(
-        `\\[verify\\] test: SETUP NEEDED, seen while running: PostgreSQL on localhost:${port} is not running \\(every test so far has errored \\(0 passed, 0 failed, \\d+ errors\\), and \\.env\\.example \\(DATABASE_URL\\) names it\\); stopping the step`,
+        `\\[verify\\] test: LIKELY SETUP, seen while running: PostgreSQL on localhost:${port} is not running \\(every test so far has errored \\(0 passed, 0 failed, \\d+ errors\\), and \\.env\\.example \\(DATABASE_URL\\) names it\\); stopping the step`,
       ),
     );
+    expect(result.stdout).toContain(`while PostgreSQL on localhost:${port} was not running`);
     for (const secret of ['Sup3rSecret', 'orders_db', 'postgresql://']) {
       expect(result.stdout + result.stderr).not.toContain(secret);
     }
-  });
+  }, 40_000);
 });
 
 describe('commands get no input and run with CI=1', () => {

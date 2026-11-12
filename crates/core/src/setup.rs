@@ -432,16 +432,7 @@ fn address_then_errno(line: &str) -> Option<Target<'_>> {
     None
 }
 
-/// The service a port is known for.
-fn service_on_port(port: u16) -> Option<&'static str> {
-    match port {
-        5432 => Some("PostgreSQL"),
-        6379 => Some("Redis"),
-        3306 => Some("MySQL"),
-        27017 => Some("MongoDB"),
-        _ => None,
-    }
-}
+use crate::services::service_on_port;
 
 /// `PostgreSQL on localhost:5432`, `a service on localhost:8000`.
 fn describe(target: Target<'_>) -> String {

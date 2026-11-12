@@ -23,8 +23,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::SystemTime;
+use std::process::Command;
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -32,7 +33,11 @@ use serde_json::Value;
 use crate::facts::{
     parse_toml, read_requirements, requirement_name, venv_python, RepoFacts, VENV_DIRS,
 };
-use crate::services::{listening, services_in, ENV_EXAMPLE, PROBE_TIMEOUT};
+use crate::process::{run_tree, Ending, Watch};
+use crate::services::{folders_up, listening, services_in, ENV_EXAMPLE, PROBE_TIMEOUT};
+
+/// How long a version command may take.
+pub const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Version of the `fscale doctor --json` format.
 pub const DOCTOR_SCHEMA_VERSION: u32 = 1;
@@ -109,27 +114,49 @@ pub struct ThisMachine;
 
 impl Machine for ThisMachine {
     fn run(&self, dir: &Path, program: &str, args: &[&str]) -> Option<String> {
-        // Through the shell, so `pnpm.cmd` and the like are found on Windows.
-        let line = std::iter::once(quote_program(program))
-            .chain(args.iter().map(|arg| (*arg).to_owned()))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let mut command = shell(&line);
+        let mut command = if Path::new(program).is_absolute() {
+            // An interpreter path is run as it is, with no shell to read
+            // `$`, `&` or quotes in it.
+            let mut direct = Command::new(program);
+            direct.args(args);
+            direct
+        } else {
+            // A tool name goes through the shell, so `pnpm.cmd` and the
+            // like are found on Windows.
+            let line = std::iter::once(program.to_owned())
+                .chain(args.iter().map(|arg| (*arg).to_owned()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            shell(&line)
+        };
         command
             .current_dir(dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // Corepack must not offer to download a package manager.
-            .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0");
-        let output = command.output().ok()?;
-        if !output.status.success() {
+            // Asking for a version must never download anything: not a
+            // package manager through corepack, not a Go toolchain that
+            // go.mod names.
+            .env("COREPACK_ENABLE_NETWORK", "0")
+            .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
+            .env("GOTOOLCHAIN", "local");
+        let never = AtomicBool::new(false);
+        let watch = Watch {
+            timeout: Some(VERSION_TIMEOUT),
+            stop: &never,
+            heartbeat: Duration::ZERO,
+            on_heartbeat: &|_, _| {},
+            command: "",
+            on_output: &|_| false,
+            on_spawn: &|_| {},
+        };
+        // The command runs as a tree with a time limit: a shim that hangs
+        // (a version manager waiting on the network) cannot hang doctor.
+        let finished = run_tree(command, &watch).ok()?;
+        if finished.ending != Ending::Exited(Some(0)) {
             return None;
         }
         Some(format!(
             "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&finished.stdout),
+            String::from_utf8_lossy(&finished.stderr)
         ))
     }
 
@@ -139,14 +166,6 @@ impl Machine for ThisMachine {
 
     fn listening(&self, host: &str, port: u16) -> bool {
         listening(host, port, PROBE_TIMEOUT)
-    }
-}
-
-fn quote_program(program: &str) -> String {
-    if program.contains(' ') {
-        format!("\"{program}\"")
-    } else {
-        program.to_owned()
     }
 }
 
@@ -225,7 +244,27 @@ fn same_prefix(want: &[u64], have: &[u64]) -> bool {
 }
 
 /// One comparison of a range: `>=22.18.0`, `^3.1`, `~1.2`, `22.x`, `<4`.
-fn satisfies_one(term: &str, have: &[u64]) -> Option<bool> {
+/// Which rules a version range follows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    /// npm's semver ranges (`engines`): `<=22` means below 23.
+    Npm,
+    /// Python's PEP 440 specifiers (`requires-python`): `==3.12` means
+    /// exactly 3.12.0, and `.*` is a prefix.
+    Pep440,
+}
+
+/// The version just above every version that starts with `want`:
+/// `22` gives `23`, `3.12` gives `3.13`.
+fn next_after(want: &[u64]) -> Vec<u64> {
+    let mut next = want.to_vec();
+    if let Some(last) = next.last_mut() {
+        *last += 1;
+    }
+    next
+}
+
+fn satisfies_one(term: &str, have: &[u64], flavor: Flavor) -> Option<bool> {
     let term = term.trim();
     if term.is_empty() || term == "*" || term == "x" {
         return Some(true);
@@ -238,13 +277,19 @@ fn satisfies_one(term: &str, have: &[u64]) -> Option<bool> {
     let wildcard = rest.contains(".x") || rest.contains(".*") || rest.ends_with(".X");
     let want = version_numbers(rest)?;
     let ordering = compare(have, &want);
+    // npm reads a partial version as a range: `<=22` is `<23`, `>22` is `>=23`.
+    let partial = flavor == Flavor::Npm && want.len() < 3 && !wildcard;
     use std::cmp::Ordering::{Equal, Greater, Less};
     Some(match op {
         ">=" => ordering != Less,
+        ">" if partial => compare(have, &next_after(&want)) != Less,
         ">" => ordering == Greater,
+        "<=" if partial => compare(have, &next_after(&want)) == Less,
         "<=" => ordering != Greater,
         "<" => ordering == Less,
+        "!=" if wildcard => !same_prefix(&want, have),
         "!=" => ordering != Equal,
+        "==" if flavor == Flavor::Pep440 && !wildcard => ordering == Equal,
         "^" => {
             // The left-most non-zero part stays the same.
             let fixed = want
@@ -276,6 +321,12 @@ fn satisfies_one(term: &str, have: &[u64]) -> Option<bool> {
 /// read.
 #[must_use]
 pub fn satisfies(range: &str, have: &str) -> Option<bool> {
+    satisfies_as(range, have, Flavor::Npm)
+}
+
+/// [`satisfies`], with the rules of `flavor`.
+#[must_use]
+pub fn satisfies_as(range: &str, have: &str, flavor: Flavor) -> Option<bool> {
     let have = version_numbers(have)?;
     let mut any = false;
     for alternative in range.split("||") {
@@ -298,7 +349,7 @@ pub fn satisfies(range: &str, have: &str) -> Option<bool> {
             .filter(|term| !term.is_empty())
         {
             // `>= 22`: the operator and the number may be apart.
-            all &= satisfies_one(term, &have)?;
+            all &= satisfies_one(term, &have, flavor)?;
         }
         any |= all;
     }
@@ -773,7 +824,7 @@ impl Doctor<'_> {
                     self.add(
                         "tools",
                         Some(&project),
-                        "go",
+                        subject_in(&project, "go"),
                         Status::Problem,
                         format!(
                             "go {have} is installed, but {} asks for go {want} or later.",
@@ -785,7 +836,7 @@ impl Doctor<'_> {
                 (Some(have), _) => self.add(
                     "tools",
                     Some(&project),
-                    "go",
+                    subject_in(&project, "go"),
                     Status::Ok,
                     format!("go {have}"),
                     None,
@@ -828,6 +879,50 @@ impl Doctor<'_> {
                         break;
                     }
                     current = at.parent();
+                }
+            }
+            // An active virtual environment outside the project, which
+            // verify uses too (ADR 0022): check that one.
+            if venv.is_none() && source == "active" {
+                if let Some(active) = std::env::var_os("VIRTUAL_ENV")
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from)
+                {
+                    let python = if cfg!(windows) {
+                        active.join("Scripts").join("python.exe")
+                    } else {
+                        active.join("bin").join("python")
+                    };
+                    let have = self
+                        .machine
+                        .version(&dir, &python.to_string_lossy(), &["--version"])
+                        .and_then(|line| find_version(&line));
+                    let name = active
+                        .file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                    match &have {
+                        Some(version) => self.add(
+                            "dependencies",
+                            Some(&folder),
+                            format!("{} (active)", subject_in(&folder, "virtual environment")),
+                            Status::Ok,
+                            format!("the active virtual environment {name} (VIRTUAL_ENV), with Python {version}"),
+                            None,
+                        ),
+                        None => self.add(
+                            "dependencies",
+                            Some(&folder),
+                            format!("{} (active)", subject_in(&folder, "virtual environment")),
+                            Status::Problem,
+                            format!("VIRTUAL_ENV names {name}, which has no working Python interpreter."),
+                            Some("deactivate it, or make it again".to_owned()),
+                        ),
+                    }
+                    self.python_version(&project.root, &dir, have.as_deref());
+                    if have.is_some() {
+                        self.python_packages(&folder, &dir, &active, install.as_deref());
+                    }
+                    continue;
                 }
             }
             // The interpreter: the venv's, else python from the PATH.
@@ -979,7 +1074,7 @@ impl Doctor<'_> {
             return;
         };
         for (want, source) in wants {
-            match satisfies(&tighten(&want), have) {
+            match satisfies_as(&tighten(&want), have, Flavor::Pep440) {
                 Some(true) => self.add(
                     "tools",
                     Some(folder),
@@ -1405,11 +1500,19 @@ impl Doctor<'_> {
     // --- services
 
     fn services(&mut self) {
-        let folders: Vec<PathBuf> = self
-            .folders()
-            .iter()
-            .map(|folder| dir_of(self.root, folder))
-            .collect();
+        // Every folder a project's verify step reads services from: the
+        // project's own and those above it, up to the root.
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for folder in self.folders() {
+            for up in folders_up(self.root, &dir_of(self.root, &folder))
+                .into_iter()
+                .rev()
+            {
+                if !folders.contains(&up) {
+                    folders.push(up);
+                }
+            }
+        }
         for service in services_in(self.root, &folders) {
             if self.machine.listening(&service.host, service.port) {
                 self.add(
@@ -1700,6 +1803,28 @@ mod tests {
             );
         }
         assert_eq!(satisfies(&tighten(">= 22"), "22.1.0"), Some(true));
+        // npm reads partial versions as ranges (review of M12).
+        assert_eq!(satisfies(">=18 <=22", "22.11.0"), Some(true));
+        assert_eq!(satisfies(">16", "16.5.0"), Some(false));
+        assert_eq!(satisfies(">16", "17.0.0"), Some(true));
+        // PEP 440: wildcards for != and exact ==.
+        assert_eq!(
+            satisfies_as(">=3.10,!=3.12.*", "3.12.4", Flavor::Pep440),
+            Some(false)
+        );
+        assert_eq!(
+            satisfies_as(">=3.10,!=3.12.*", "3.13.0", Flavor::Pep440),
+            Some(true)
+        );
+        assert_eq!(
+            satisfies_as("==3.12", "3.12.4", Flavor::Pep440),
+            Some(false)
+        );
+        assert_eq!(satisfies_as("==3.12", "3.12.0", Flavor::Pep440), Some(true));
+        assert_eq!(
+            satisfies_as("==3.12.*", "3.12.4", Flavor::Pep440),
+            Some(true)
+        );
     }
 
     #[test]

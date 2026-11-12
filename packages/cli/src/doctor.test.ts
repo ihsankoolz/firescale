@@ -222,6 +222,63 @@ describe('fscale doctor', () => {
     }
   });
 
+  it('never lets a version command download anything', async () => {
+    // Review of M12: go.mod can make `go version` fetch a toolchain, and
+    // corepack can fetch a package manager.
+    const repo = await fixtures.create({
+      files: {
+        'svc/go.mod': 'module example.com/svc\n\ngo 1.99.0\n',
+        'svc/main.go': 'package main\n',
+        'package.json': JSON.stringify({ name: 'x', packageManager: 'pnpm@9.1.0' }),
+        'pnpm-lock.yaml': '',
+      },
+    });
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await mkdir(tools, { recursive: true });
+    const shims: [string, string, string, string][] = [
+      ['go', 'GOTOOLCHAIN', 'local', 'go version go1.22.0 linux/amd64'],
+      ['pnpm', 'COREPACK_ENABLE_NETWORK', '0', '9.1.0'],
+    ];
+    for (const [tool, variable, wanted, output] of shims) {
+      if (WINDOWS) {
+        await writeFile(
+          path.join(tools, `${tool}.cmd`),
+          `@echo off\r\nif not "%${variable}%"=="${wanted}" exit /b 1\r\necho ${output}\r\n`,
+        );
+      } else {
+        const file = path.join(tools, tool);
+        const check = '[ "$' + variable + '" = "' + wanted + '" ] || exit 1';
+        await writeFile(file, `#!/bin/sh\n${check}\necho "${output}"\n`);
+        await chmod(file, 0o755);
+      }
+    }
+    await writeVersionTools(tools, { node: 'v22.0.0' });
+    const result = await runCli(['doctor', '--json'], repo.root, toolPath(tools));
+    const report = await validate(result.stdout);
+    const go = report.checks.find((c) => c.subject === 'svc go');
+    expect(go?.detail).toBe('go 1.22.0 is installed, but svc/go.mod asks for go 1.99.0 or later.');
+    const pnpm = report.checks.find((c) => c.subject === 'pnpm');
+    expect(pnpm?.status).toBe('ok');
+  });
+
+  it('checks the active virtual environment that verify uses', async () => {
+    const repo = await fixtures.create({
+      files: { 'requirements.txt': 'requests==2.31.0\n', 'main.py': '' },
+    });
+    const outside = path.join(repo.root, '..', `${path.basename(repo.root)}-env`);
+    const site = await makeVenv(outside);
+    await mkdir(path.join(site, 'requests-2.31.0.dist-info'));
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await writeVersionTools(tools, {});
+    const result = await runCli(['doctor', '--json'], repo.root, {
+      ...toolPath(tools),
+      VIRTUAL_ENV: path.join(outside, '.venv'),
+    });
+    const report = await validate(result.stdout);
+    expect(report.checks.filter((c) => c.status !== 'ok')).toEqual([]);
+    expect(report.checks.map((c) => c.subject)).toContain('virtual environment (active)');
+  });
+
   it('exits 0 on this repo on a machine that can build it', async () => {
     const result = await runCli(['doctor'], REPO);
     expect(result.stdout).toContain('doctor: OK');

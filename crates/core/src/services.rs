@@ -108,10 +108,13 @@ pub fn is_local_host(host: &str) -> bool {
 pub fn listening(host: &str, port: u16, timeout: Duration) -> bool {
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let host = if host == "0.0.0.0" { "127.0.0.1" } else { host };
-    let addresses: Vec<SocketAddr> = match (host, port).to_socket_addrs() {
+    let mut addresses: Vec<SocketAddr> = match (host, port).to_socket_addrs() {
         Ok(addresses) => addresses.collect(),
         Err(_) => return false,
     };
+    // IPv4 first: a local service usually listens there, and on Windows a
+    // probe of `::1` for a service that does not waits the whole timeout.
+    addresses.sort_by_key(|address| u8::from(address.is_ipv6()));
     addresses
         .iter()
         .any(|address| TcpStream::connect_timeout(address, timeout).is_ok())
@@ -123,8 +126,10 @@ fn service_for(word: &str) -> Option<(&'static str, u16)> {
     if word.starts_with("pgadmin") {
         return None;
     }
-    let known: [(&str, &str, u16); 17] = [
+    let known: [(&str, &str, u16); 19] = [
         ("postgres", "PostgreSQL", 5432),
+        ("postgis", "PostgreSQL", 5432),
+        ("timescale", "PostgreSQL", 5432),
         ("pg", "PostgreSQL", 5432),
         ("redis", "Redis", 6379),
         ("valkey", "Redis", 6379),
@@ -166,8 +171,10 @@ fn docker_image(name: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// The name of the service at a port, for a port no file names.
-fn service_on_port(port: u16) -> Option<&'static str> {
+/// The name of the service at a port, for a port no file names. The one
+/// table of usual ports: setup detection uses it too.
+#[must_use]
+pub fn service_on_port(port: u16) -> Option<&'static str> {
     match port {
         5432 => Some("PostgreSQL"),
         6379 => Some("Redis"),
@@ -557,7 +564,8 @@ fn relative(root: &Path, dir: &Path) -> String {
 }
 
 /// The folders from `dir` up to `root`, nearest first.
-fn folders_up(root: &Path, dir: &Path) -> Vec<PathBuf> {
+#[must_use]
+pub fn folders_up(root: &Path, dir: &Path) -> Vec<PathBuf> {
     let mut folders = Vec::new();
     let mut current = Some(dir);
     while let Some(folder) = current {

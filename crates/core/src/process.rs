@@ -94,9 +94,8 @@ pub struct Watch<'a> {
     pub on_heartbeat: &'a (dyn Fn(Duration, Option<&str>) + Sync),
     /// The command line, to know its test runner ([`Activity::new`]).
     pub command: &'a str,
-    /// Called with the output so far, at most every [`OUTPUT_CHECK`] and
-    /// only when new output came. Returning true stops the tree as
-    /// [`Ending::GaveUp`].
+    /// Called with the output so far every [`OUTPUT_CHECK`], once there is
+    /// any. Returning true stops the tree as [`Ending::GaveUp`].
     pub on_output: &'a (dyn Fn(&Activity) -> bool + Sync),
     /// Called once the command started, with its process id (on macOS and
     /// Linux also the id of its process group).
@@ -179,7 +178,6 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
 
     let mut next_heartbeat = watch.heartbeat;
     let mut next_output_check = OUTPUT_CHECK;
-    let mut seen_generation = 0;
     // The time is taken when the ending is known, before any stopping.
     let (ending, duration) = loop {
         let elapsed = started.elapsed();
@@ -217,18 +215,13 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
         }
         if elapsed >= next_output_check {
             next_output_check = elapsed + OUTPUT_CHECK;
-            // A copy, so the readers are not held up while it is read.
-            let activity = {
-                let collected = lock(&collected);
-                (collected.activity.generation() != seen_generation)
-                    .then(|| collected.activity.clone())
-            };
-            if let Some(activity) = activity {
-                seen_generation = activity.generation();
-                if (watch.on_output)(&activity) {
-                    tree.stop();
-                    break (Ending::GaveUp, elapsed);
-                }
+            // A copy, so the readers are not held up while it is read. It
+            // is handed over even with no new output: a service found down
+            // is probed again later (ADR 0025).
+            let activity = lock(&collected).activity.clone();
+            if activity.generation() > 0 && (watch.on_output)(&activity) {
+                tree.stop();
+                break (Ending::GaveUp, elapsed);
             }
         }
         if !watch.heartbeat.is_zero() && elapsed >= next_heartbeat {

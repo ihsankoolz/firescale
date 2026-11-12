@@ -96,6 +96,32 @@ enum Kind {
     Noise,
 }
 
+/// `scheme://user:password@host` with the user and password replaced by
+/// `***`, so a heartbeat never shows a connection string's secret.
+#[must_use]
+pub fn redact(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(index) = rest.find("://") {
+        let (before, after) = rest.split_at(index + 3);
+        out.push_str(before);
+        let authority_end = after
+            .find(|c: char| {
+                c == '/' || c == '?' || c == '#' || c.is_whitespace() || c == '"' || c == '\''
+            })
+            .unwrap_or(after.len());
+        match after[..authority_end].rfind('@') {
+            Some(at) => {
+                out.push_str("***");
+                rest = &after[at..];
+            }
+            None => rest = after,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// True when `text` has a run of two letters or more.
 fn has_words(text: &str) -> bool {
     let mut run = 0;
@@ -165,6 +191,31 @@ fn marker_line(line: &str) -> Option<(Tally, Option<String>)> {
         return None;
     }
     Some((tally, file))
+}
+
+/// A `pytest -v` result line: `tests/test_a.py::test_x PASSED [ 10%]`.
+fn verbose_line(line: &str) -> Option<(Tally, Option<String>)> {
+    let (id, _) = line.split_once("::")?;
+    if id.contains(char::is_whitespace) {
+        return None;
+    }
+    let mut rest = line.trim_end();
+    if let Some(open) = rest.rfind('[') {
+        if rest.ends_with("%]") {
+            rest = rest[..open].trim_end();
+        }
+    }
+    let word = rest.rsplit(char::is_whitespace).next()?;
+    let mut tally = Tally::default();
+    match word {
+        "PASSED" => tally.passed = 1,
+        "FAILED" => tally.failed = 1,
+        "ERROR" => tally.errors = 1,
+        "SKIPPED" => tally.skipped = 1,
+        "XFAIL" | "XPASS" => {}
+        _ => return None,
+    }
+    Some((tally, Some(id.to_owned())))
 }
 
 /// The output of one running command, read as it arrives.
@@ -243,8 +294,13 @@ impl Activity {
                 return Kind::Markers(tally, file);
             }
         }
+        if self.runner == Some(Runner::Pytest) {
+            if let Some((tally, file)) = verbose_line(line) {
+                return Kind::Markers(tally, file);
+            }
+        }
         if has_words(line) {
-            Kind::Words(line.chars().take(MAX_SHOWN).collect())
+            Kind::Words(redact(line).chars().take(MAX_SHOWN).collect())
         } else {
             Kind::Noise
         }
@@ -383,6 +439,28 @@ mod tests {
     }
 
     #[test]
+    fn verbose_pytest_lines_are_counted_too() {
+        let activity = fed(
+            "pytest -v",
+            &[
+                "tests/test_a.py::test_one PASSED    [ 33%]\n",
+                "tests/test_a.py::test_two ERROR     [ 66%]\n",
+                "tests/test_b.py::test_three ERROR   [100%]\n",
+            ],
+        );
+        assert_eq!(
+            activity.heartbeat().as_deref(),
+            Some("tests so far: 1 passed, 0 failed, 2 errors (in tests/test_b.py)")
+        );
+        // The summary at the end is words, not a result line.
+        let summary = fed(
+            "pytest -v",
+            &["ERROR tests/test_a.py::test_two - OperationalError\n"],
+        );
+        assert!(summary.tally().is_empty());
+    }
+
+    #[test]
     fn a_finished_marker_line_is_not_counted_twice() {
         let activity = fed("pytest", &["tests/a.py ..", "EE", " [100%]\n"]);
         assert_eq!(activity.tally().passed, 2);
@@ -447,6 +525,18 @@ mod tests {
         assert_eq!(
             activity.heartbeat().as_deref(),
             Some("last output: building the index")
+        );
+    }
+
+    #[test]
+    fn a_connection_string_in_the_output_is_shown_without_its_secret() {
+        let activity = fed(
+            "node x.js",
+            &["connecting to postgresql://app:Sup3r@localhost:5432/db and redis://cache:6379\n"],
+        );
+        assert_eq!(
+            activity.heartbeat().as_deref(),
+            Some("last output: connecting to postgresql://***@localhost:5432/db and redis://cache:6379")
         );
     }
 

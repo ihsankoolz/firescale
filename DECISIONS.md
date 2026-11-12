@@ -22,7 +22,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
-- **(M12) A running step is stopped early by default when a service it needs is down** (`verify.stopWhenServiceDown`, default `true`, ADR 0025). It needs a probe to find nothing listening, plus either a refused-connection message for a known service or the repo's own port, or at least 3 errors and nothing else from pytest or unittest. A wrong stop takes a suite that connects to such a port on purpose and would still pass. Say if the default should be `false` (print the line, let the step run on), or if the thresholds (3 errors, a probe every 5 seconds) should differ.
+- **(M12) A running step is stopped early by default when a service it needs is down** (`verify.stopWhenServiceDown`, default `true`, ADR 0025). It needs two probes 10 seconds apart to find nothing listening, plus either a refused-connection message for a known service or the repo's own port (then the step is setup needed), or at least 3 errors and nothing else from pytest or unittest (then the step is failed, with the service named as the likely cause). A wrong stop takes a suite that connects to such a port on purpose and would still pass. Say if the default should be `false` (print the line, let the step run on), or if the thresholds (3 errors, 10 seconds, a probe every 5 seconds) should differ.
 - **(M12) An unreachable service is a problem in `fscale doctor`** (exit 1), not a warning: tests that need it cannot pass. If you often run doctor without wanting the database up, a warning would suit better (ADR 0026).
 - **(M12) Doctor's `packageManager` rule:** a different major version is a problem, the same major version with another minor or patch is a warning. Say if any difference should be a problem.
 - **(M12) Doctor reads only `.env` and `.env.local` beside each `.env.example`** for names (never values). `.env.development`, `.env.test` and the like are not counted.
@@ -96,6 +96,16 @@ The publishing checkpoint this milestone needs is met: 0.1.0 to 0.1.3 are on npm
 - _Left (by design):_ `adopt --dry-run` on the FastAPI template untracks its committed `.env` and `frontend/.env` (the files stay on disk). The template commits development defaults on purpose; `core/no-committed-env` treats every tracked env file the same. Its "To review" note says so.
 - _Left:_ on `GoogleCloudPlatform/microservices-demo`, `core/env-example` proposes one root `.env.example` listing the variables of all eleven services (27 names), because no service has its own example file. A per-service example would fit that repo better; this is the rule's "nearest example" design (M5).
 - _Left:_ doctor reports each Python service of `microservices-demo` without a `.venv` as a problem. Those services are meant to be built in Docker; doctor checks a machine for local work, so the report is right for that use.
+
+**Independent review before merging** found six real issues, all fixed with tests:
+
+- A step that waits for its own database was stopped on the first probe. A service now counts only when a second probe, 10 seconds later, still finds it down (`a_service_that_comes_up_before_the_second_probe_is_not_down`).
+- "Every test errored while a named service is down" labelled a possible code failure as setup needed, which tells an agent not to change code. It is now a failure that names the service (`LIKELY SETUP` in the progress line). Only refused connections make a step setup needed.
+- `go version` in a module folder could download the toolchain `go.mod` names, and corepack could download the declared package manager (the `COREPACK_ENABLE_DOWNLOAD_PROMPT` variable does not stop that). Doctor now sets `GOTOOLCHAIN=local` and `COREPACK_ENABLE_NETWORK=0`, and each version command has a 10-second limit (`never lets a version command download anything`).
+- An active `VIRTUAL_ENV`, which verify uses, was reported by doctor as "no virtual environment". It is now checked like a project venv (`checks the active virtual environment that verify uses`).
+- Version ranges: npm partial versions (`<=22`, `>16`) and PEP 440 `!=3.12.*` and `==3.12` were matched wrongly (`versions_are_read_and_compared`).
+- Also fixed from the smaller findings: `pytest -v` lines are counted; doctor reads services from the same folders as verify; localhost is probed on IPv4 first; one table of usual ports; interpreter paths run with no shell; a heartbeat shows a URL's password as `***`; `postgis` and `timescale` images count as PostgreSQL.
+- Left: requirements with environment markers are not checked; a `host_ip:` after `published:` in a Compose port is not read; `refused_service` reports only the first refused connection in the output.
 
 **Known limits:** in `docs/doctor.md` and `docs/verify.md`: no `volta`/`.tool-versions`; Node "matches the lockfile" is a file-time comparison; the Compose reader is a line reader; a suite that waits on a service in silence is only caught when it ends or times out.
 

@@ -76,7 +76,8 @@ While verify runs, it prints a line on stderr when each step starts and when it 
 What the heartbeat says (ADR 0025):
 
 - **pytest and unittest** print one character per test (`.` passed, `F` failed, `E` error, `s` skipped), often with no line end until a file is done. When those markers are the latest output, the heartbeat gives a running count, `tests so far: 12 passed, 0 failed, 40 errors`, with the file pytest is in. pytest is known by `pytest` in the command or its `test session starts` header; unittest by `unittest` or `manage.py test` in the command.
-- **Anything else** gets `last output:` and the last line that contains words (two letters in a row), so a line of dots or a lone `E` is never shown.
+- `pytest -v` result lines (`tests/test_a.py::test_x ERROR`) are counted the same way.
+- **Anything else** gets `last output:` and the last line that contains words (two letters in a row), so a line of dots or a lone `E` is never shown. A URL's user name and password are shown as `***`.
 
 Progress is on when stderr is a terminal, and off when stderr goes to a file or a pipe (CI logs, agent hooks), so logs and hook messages stay as they were. `--progress` turns it on anyway, `--no-progress` turns it off. It never touches stdout: the summary and `--json` are the same with or without it. `fscale hooks run` prints no progress unless `--progress` is given, because an agent reads the hook's stderr. The variable `FSCALE_HEARTBEAT_MS` sets the heartbeat interval in milliseconds (`0` turns heartbeats off); it is meant for tests.
 
@@ -117,14 +118,14 @@ The most specific setting wins: the project's step (`projects.<folder>.<step>.ti
 
 Setup detection (above) reads a step's output when the step ends. A test suite whose database is not running can take many minutes to end, with every test erroring, and pytest prints why only at the very end. So verify also watches a running step (ADR 0025). It is clear the step cannot succeed when:
 
-- the output so far shows a refused connection (a message from the table above) to a service on this machine that is known by its client or its usual port, or that the project's `.env.example` or Compose file names, and nothing listens on that port now; or
+- the output so far shows a refused connection (a message from the table above) to a service on this machine that is known by its client or its usual port, or that the project's `.env.example` or Compose file names, and nothing listens on that port; or
 - pytest or unittest has reported at least 3 tests, every one an error (no pass, no failure), and a service that the project's `.env.example` or Compose file names, in its folder or a folder above it, is not listening.
 
-verify checks the port itself, at most every 5 seconds, with a connection that it closes at once. It then prints one line at once, and by default stops the step and reports it as setup needed:
+verify checks the port itself, with a connection that it closes at once, and **checks again 10 seconds later**: only a service that is still down then counts, so a step that starts its own database, or waits for one, is left alone. It then prints one line at once, and by default stops the step. A refused connection makes the step **setup needed**. Tests that all error while a named service is down make it **failed**, with the service named as the likely cause, because the errors could also come from the code:
 
 ```
-[verify] test in backend/audit_service: SETUP NEEDED, seen while running: PostgreSQL on localhost:5432 is not running (every test so far has errored (0 passed, 0 failed, 3 errors), and backend/audit_service/.env.example (DATABASE_URL) names it); start it with: docker compose -f ../../docker-compose.yml up -d; stopping the step (set verify.stopWhenServiceDown to false to let it run on)
-[verify] test in backend/audit_service: SETUP NEEDED after 9.4s (stopped early)
+[verify] test in backend/audit_service: LIKELY SETUP, seen while running: PostgreSQL on localhost:5432 is not running (every test so far has errored (0 passed, 0 failed, 3 errors), and backend/audit_service/.env.example (DATABASE_URL) names it); start it with: docker compose -f ../../docker-compose.yml up -d; stopping the step (set verify.stopWhenServiceDown to false to let it run on)
+[verify] test in backend/audit_service: FAILED after 14.2s (stopped early)
 ```
 
 To let such a step run to its end instead, set `"stopWhenServiceDown": false` in `verify`. The line is still printed, and the step is still reported as setup needed if it fails. Only host, port and service name are ever shown, never a connection string or a password. `fscale doctor` checks the same services before a run (see [doctor.md](doctor.md)).

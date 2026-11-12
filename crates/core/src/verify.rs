@@ -776,13 +776,52 @@ const ERRORS_BEFORE_PROBE: u64 = 3;
 /// How often a running step may probe a service.
 const PROBE_EVERY: Duration = Duration::from_secs(5);
 
+/// How long a service must stay down, from the first probe that found it
+/// down to a second one, before a running step is judged (ADR 0025). A
+/// step that starts its own database, or waits for one, gets this long.
+pub const CONFIRM_AFTER: Duration = Duration::from_secs(10);
+
+/// Why a running step looks like it cannot succeed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EarlyKind {
+    /// The output shows refused connections to the service: setup needed.
+    Refused,
+    /// Every test so far has errored and a service the repo names is down:
+    /// a likely cause, not a certain one, so the step counts as failed.
+    AllErrored,
+}
+
+/// A service found down while a step runs, before it is confirmed.
+#[derive(Debug, Clone)]
+struct Suspect {
+    described: String,
+    evidence: String,
+    host: String,
+    port: u16,
+    kind: EarlyKind,
+    since: Instant,
+}
+
 /// What a running step's output showed about the services it needs.
-#[derive(Default)]
 struct Early {
     /// Set once it is clear the step cannot succeed.
-    problem: Option<SetupProblem>,
+    problem: Option<(SetupProblem, EarlyKind)>,
+    suspect: Option<Suspect>,
     last_probe: Option<Instant>,
     declared: Option<Vec<Service>>,
+    confirm_after: Duration,
+}
+
+impl Early {
+    fn new(confirm_after: Duration) -> Self {
+        Self {
+            problem: None,
+            suspect: None,
+            last_probe: None,
+            declared: None,
+            confirm_after,
+        }
+    }
 }
 
 /// True for a refused connection whose service is known by its client or
@@ -796,35 +835,55 @@ fn known_service(found: &crate::setup::RefusedService, declared: &[Service]) -> 
 }
 
 /// Looks at a running step's output for a local service that is not
-/// running, and probes the service to be sure (ADR 0025). Returns the
-/// service and what showed it, once it is clear the step cannot succeed:
+/// running, and probes the service to be sure (ADR 0025). It is clear the
+/// step cannot succeed when a service found down by one of these stays
+/// down on a second probe [`CONFIRM_AFTER`] later:
 ///
 /// - the output shows a refused connection to a known local service, and
-///   nothing listens on its port now; or
+///   nothing listens on its port (setup needed); or
 /// - a known test runner reports only errors so far (at least
 ///   [`ERRORS_BEFORE_PROBE`]), and a service that the step's
-///   `.env.example` or Compose file names is not listening.
+///   `.env.example` or Compose file names is not listening (a likely cause:
+///   the step counts as failed, with the service named).
 fn service_down_while_running(
     activity: &Activity,
     early: &mut Early,
     root: &Path,
     dir: &Path,
-) -> Option<(String, String)> {
+) -> Option<(String, String, EarlyKind)> {
     if early
         .last_probe
         .is_some_and(|last| last.elapsed() < PROBE_EVERY)
     {
         return None;
     }
+    let tally = activity.tally();
+    let all_errored = activity.runner().is_some()
+        && tally.errors >= ERRORS_BEFORE_PROBE
+        && tally.passed == 0
+        && tally.failed == 0;
+    // A suspect from before: probe it again once enough time has passed.
+    if let Some(suspect) = early.suspect.clone() {
+        if suspect.since.elapsed() < early.confirm_after {
+            return None;
+        }
+        early.last_probe = Some(Instant::now());
+        let still = suspect.kind == EarlyKind::Refused || all_errored;
+        if still && !listening(&suspect.host, suspect.port, PROBE_TIMEOUT) {
+            return Some((suspect.described, suspect.evidence, suspect.kind));
+        }
+        early.suspect = None;
+        return None;
+    }
     let declared = early
         .declared
-        .get_or_insert_with(|| services_for_folder(root, dir));
-    let tally = activity.tally();
+        .get_or_insert_with(|| services_for_folder(root, dir))
+        .clone();
     let runner_failing = activity.runner().is_none() || tally.failed + tally.errors > 0;
     if let Some(found) = refused_service(&activity.recent().join("\n")) {
         if let Some(port) = found
             .port
-            .filter(|_| runner_failing && known_service(&found, declared))
+            .filter(|_| runner_failing && known_service(&found, &declared))
         {
             early.last_probe = Some(Instant::now());
             if !listening(&found.host, port, PROBE_TIMEOUT) {
@@ -835,34 +894,38 @@ fn service_down_while_running(
                         service.port == port && found.described.starts_with("a service on")
                     })
                     .map_or(found.described, Service::describe);
-                return Some((
+                early.suspect = Some(Suspect {
                     described,
-                    "the output shows refused connections and nothing listens on that port"
-                        .to_owned(),
-                ));
+                    evidence:
+                        "the output shows refused connections and nothing listens on that port"
+                            .to_owned(),
+                    host: found.host,
+                    port,
+                    kind: EarlyKind::Refused,
+                    since: Instant::now(),
+                });
             }
             return None;
         }
     }
-    if activity.runner().is_some()
-        && tally.errors >= ERRORS_BEFORE_PROBE
-        && tally.passed == 0
-        && tally.failed == 0
-        && !declared.is_empty()
-    {
+    if all_errored && !declared.is_empty() {
         early.last_probe = Some(Instant::now());
         if let Some(down) = declared
             .iter()
             .find(|service| !listening(&service.host, service.port, PROBE_TIMEOUT))
         {
-            return Some((
-                down.describe(),
-                format!(
+            early.suspect = Some(Suspect {
+                described: down.describe(),
+                evidence: format!(
                     "every test so far has errored ({}), and {} names it",
                     tally.describe(),
                     down.source
                 ),
-            ));
+                host: down.host.clone(),
+                port: down.port,
+                kind: EarlyKind::AllErrored,
+                since: Instant::now(),
+            });
         }
     }
     None
@@ -961,19 +1024,23 @@ fn run_step(
             });
         }
     };
-    let early = Mutex::new(Early::default());
+    let early = Mutex::new(Early::new(CONFIRM_AFTER));
     let stop_early = !options.config.keep_running_when_service_down;
     let on_output = |activity: &Activity| {
         let mut early = early.lock().unwrap_or_else(PoisonError::into_inner);
         if early.problem.is_some() {
             return false;
         }
-        let Some((service, evidence)) =
+        let Some((service, evidence, kind)) =
             service_down_while_running(activity, &mut early, unit.root, &dir)
         else {
             return false;
         };
         let problem = service_down(&service, unit.root, &dir);
+        let label = match kind {
+            EarlyKind::Refused => "SETUP NEEDED",
+            EarlyKind::AllErrored => "LIKELY SETUP",
+        };
         let then = if stop_early {
             "stopping the step (set verify.stopWhenServiceDown to false to let it run on)"
         } else {
@@ -982,9 +1049,9 @@ fn run_step(
         let start = setup_fix(&problem, unit.install)
             .map_or_else(String::new, |fix| format!("; start it with: {fix}"));
         options.say(&format!(
-            "{place}: SETUP NEEDED, seen while running: {service} is not running ({evidence}){start}; {then}"
+            "{place}: {label}, seen while running: {service} is not running ({evidence}){start}; {then}"
         ));
-        early.problem = Some(problem);
+        early.problem = Some((problem, kind));
         stop_early
     };
     let watch = Watch {
@@ -1034,22 +1101,44 @@ fn run_step(
             String::from_utf8_lossy(&finished.stderr)
         ))
     };
-    let seen_early = early
+    let early_seen = early
         .into_inner()
         .unwrap_or_else(PoisonError::into_inner)
         .problem;
+    // Only refused connections are certain enough to call the step setup.
+    let seen_early = early_seen
+        .clone()
+        .filter(|(_, kind)| *kind == EarlyKind::Refused)
+        .map(|(problem, _)| problem);
     let code = match finished.ending {
         Ending::Exited(code) => code,
         Ending::GaveUp => {
-            let problem =
-                seen_early.unwrap_or_else(|| service_down("a local service", unit.root, &dir));
-            report.status = StepStatus::SetupNeeded;
-            report.detail = format!("{command} (stopped early after {took}): {}", problem.reason);
             report.output_tail = tail(&finished.stdout, &finished.stderr);
-            report.fix = setup_fix(&problem, unit.install);
-            options.say(&format!(
-                "{place}: SETUP NEEDED after {took} (stopped early)"
-            ));
+            match early_seen {
+                Some((problem, EarlyKind::AllErrored)) => {
+                    let start = setup_fix(&problem, unit.install)
+                        .map_or_else(String::new, |fix| format!(" ({fix})"));
+                    let service = problem.missing_service.clone().unwrap_or_default();
+                    report.status = StepStatus::Failed;
+                    report.detail = format!(
+                        "{command} (stopped early after {took}: every test errored while {service} was not running; start it{start} and run again. If the tests do not use it, the errors are in the code or the tests.)"
+                    );
+                    options.say(&format!("{place}: FAILED after {took} (stopped early)"));
+                }
+                other => {
+                    let problem = other.map_or_else(
+                        || service_down("a local service", unit.root, &dir),
+                        |(problem, _)| problem,
+                    );
+                    report.status = StepStatus::SetupNeeded;
+                    report.detail =
+                        format!("{command} (stopped early after {took}): {}", problem.reason);
+                    report.fix = setup_fix(&problem, unit.install);
+                    options.say(&format!(
+                        "{place}: SETUP NEEDED after {took} (stopped early)"
+                    ));
+                }
+            }
             return Ok(report);
         }
         Ending::Stopped => {
@@ -2950,9 +3039,51 @@ mod tests {
         listener.local_addr().unwrap().port()
     }
 
+    /// Runs the watch twice, as if the confirming probe came later.
     fn early_in(fixture: &Fixture, activity: &Activity) -> Option<(String, String)> {
-        let mut early = Early::default();
+        let mut early = Early::new(Duration::ZERO);
+        let first =
+            service_down_while_running(activity, &mut early, fixture.root(), fixture.root());
+        assert_eq!(
+            first.map(|(service, _, _)| service),
+            None,
+            "never judged on one probe"
+        );
+        early.last_probe = None;
         service_down_while_running(activity, &mut early, fixture.root(), fixture.root())
+            .map(|(service, evidence, _)| (service, evidence))
+    }
+
+    #[test]
+    fn a_service_that_comes_up_before_the_second_probe_is_not_down() {
+        // A step that starts or waits for its own database (ADR 0025).
+        let port = closed_port();
+        let fixture = Fixture::new(
+            &[(
+                ".env.example",
+                &format!("DATABASE_URL=postgresql://u:p@localhost:{port}/db\n"),
+            )],
+            Track::NoGit,
+        )
+        .unwrap();
+        let activity = fed(
+            "node test.js",
+            &format!("Error: connect ECONNREFUSED 127.0.0.1:{port}\n"),
+        );
+        let mut early = Early::new(Duration::ZERO);
+        assert!(
+            service_down_while_running(&activity, &mut early, fixture.root(), fixture.root())
+                .is_none()
+        );
+        assert!(early.suspect.is_some());
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        early.last_probe = None;
+        assert!(
+            service_down_while_running(&activity, &mut early, fixture.root(), fixture.root())
+                .is_none()
+        );
+        assert!(early.suspect.is_none());
+        drop(listener);
     }
 
     fn fed(command: &str, output: &str) -> Activity {
@@ -3063,10 +3194,10 @@ mod tests {
         .unwrap();
         let hang = if cfg!(windows) {
             format!(
-                "echo connect ECONNREFUSED 127.0.0.1:{port} & ping -n 4 127.0.0.1 > NUL & exit 1"
+                "echo connect ECONNREFUSED 127.0.0.1:{port} & ping -n 16 127.0.0.1 > NUL & exit 1"
             )
         } else {
-            format!("echo 'connect ECONNREFUSED 127.0.0.1:{port}'; sleep 3; exit 1")
+            format!("echo 'connect ECONNREFUSED 127.0.0.1:{port}'; sleep 15; exit 1")
         };
         let plan = VerifyPlan {
             runner: "projects".to_owned(),
@@ -3086,7 +3217,8 @@ mod tests {
         let step = &report.steps[1];
         assert_eq!(step.status, StepStatus::SetupNeeded);
         assert!(
-            started.elapsed() < Duration::from_millis(2900),
+            // Judged after the confirming probe, before the step's own end.
+            started.elapsed() >= CONFIRM_AFTER && started.elapsed() < Duration::from_millis(14_500),
             "{:?}",
             started.elapsed()
         );

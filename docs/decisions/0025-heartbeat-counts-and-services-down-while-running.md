@@ -25,7 +25,7 @@ Every 500 ms, when new output came, the last 200 lines and the counts are looked
 - **(a) a refused connection in the output so far:** one of the documented messages (`docs/verify.md`) names a service on this machine, the service is known by its client (libpq, redis-py, Prisma...) or its usual port, or the project's `.env.example` or Compose file names that port; for a known runner at least one test has failed or errored. A refused connection to an unknown port that the repo does not name is ignored, because a test may connect to a closed port on purpose.
 - **(b) every test so far has errored:** a known runner has reported at least 3 errors and no pass or failure, and a service named by the `.env.example` or Compose files of the step's folder or a folder above it, up to the root, is not listening. This is the owner's case: pytest shows only `EEEE` until the end.
 
-The **probe** is a TCP connection to the host and port with a 400 ms limit, closed at once; at most one round of probes every 5 seconds per step. Something listening means "not clear", and the step goes on.
+The **probe** is a TCP connection to the host and port with a 400 ms limit, closed at once (IPv4 first); at most one round of probes every 5 seconds per step. A service found down is a **suspect** only: it counts once a **second probe, 10 seconds after the first, finds it still down** (and, for (b), the tests are still all errors). Something listening at either probe means "not clear", and the step goes on. The independent review found that one probe was not enough: a test script that waits for its own database (`docker compose up -d && wait-on tcp:5432 && jest`) prints refused connections for a few seconds and then passes.
 
 When it is clear, verify prints one progress line at once: what is down, why it thinks so, the start command (`docker compose up -d` from the nearest Compose file, as for setup detection), and what happens next.
 
@@ -33,7 +33,12 @@ The services a repo declares are read by a new module, `services.rs`, which `fsc
 
 ### The step is stopped early by default: `verify.stopWhenServiceDown`, default `true`
 
-`"verify": { "stopWhenServiceDown": false }` lets the step run on to its end; the line is still printed, and a failed step is still reported as setup needed with that reason when its own output shows nothing else. With the default the step is stopped with its whole tree and reported as **setup needed** (`SETUP NEEDED after 9.4s (stopped early)`), with the start command as its fix. The rest of that project is not run, as after any blocking step; other projects still run.
+`"verify": { "stopWhenServiceDown": false }` lets the step run on to its end; the line is still printed. With the default the step is stopped with its whole tree. The rest of that project is not run, as after any blocking step; other projects still run.
+
+**The label depends on the evidence** (changed after the review):
+
+- **(a), refused connections:** the step is **setup needed** (`SETUP NEEDED after 12.1s (stopped early)`), with the start command as its fix. This is the case setup detection already treats as setup when a step ends.
+- **(b), all tests erroring while a named service is down:** the progress line says `LIKELY SETUP`, and the step is **failed**, with a detail that names the service, the command that starts it, and that the errors are in the code or the tests if they do not use it. A failure, not setup needed, because an agent that breaks a shared fixture also makes every test error, and the stop hook tells an agent not to change code for setup needed. When the step ends by itself, only (a) can turn its failure into setup needed.
 
 Why stop by default:
 
@@ -44,6 +49,10 @@ Why stop by default:
 What a wrong stop would take: a suite that connects on purpose to a known service port (5432, 6379, 3306, 27017, 5672) or to a port the repo's own `.env.example` names, with nothing listening there, and that would still pass. Or a suite whose every test errors for a reason other than the service, while a service the folder names happens to be down; the step fails either way, so only the label (setup needed instead of failed) and the time saved differ.
 
 ### Other choices
+
+- A heartbeat line shows a URL's user name and password as `***`.
+- `pytest -v` result lines are counted as well as markers.
+- The usual ports (5432, 6379, 3306, 27017, 5672) are one table, in `services.rs`, used by setup detection too.
 
 - `Ending::GaveUp` is the new way a command can end in `process.rs`; verify maps it to `setup-needed`. The JSON schema does not change (version 4): the status already exists.
 - The step's detail says `(stopped early after <time>)`, so the JSON tells an early stop apart from a step that ended by itself.
