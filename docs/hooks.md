@@ -14,7 +14,7 @@ fscale hooks install --all --bin "npx firescale"
 | Codex       | `.codex/hooks.json`     | The same shape as Claude Code.                                  |
 | Cursor      | `.cursor/hooks.json`    | `version: 1`, `hooks.stop[]`: `{ "command" }`. **Unconfirmed.** |
 
-The Claude Code format was checked against its documentation and the Codex format against its source on 2026-11-11. Cursor's documentation could not be reached from the build environment, so its format is a best reading and `hooks install` prints a note saying so. Check `.cursor/hooks.json` against your Cursor version before relying on it.
+The Claude Code format was checked against its documentation and the Codex format against its source on 2026-11-11. Cursor's documentation could not be reached from the build environment. On 2026-11-12 the format was checked against Cursor's own example repositories on GitHub (`cursor/cookbook`, `cursor/plugins`), and it matches (ADR 0027); `hooks install` still prints a note until it is checked against the docs page. `fscale sync` with the `agent-ready` pack writes the same hooks (see [init.md](init.md)).
 
 Installing keeps everything else that is in the file, and running it again changes nothing. A hook counts as installed only when the command is under the agent's stop event. A file that is not valid JSON is left alone and reported. Commit the files so every teammate's agent gets the hook.
 

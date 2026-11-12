@@ -797,6 +797,14 @@ volumes:
         let port = listener.local_addr().expect("addr").port();
         assert!(listening("127.0.0.1", port, PROBE_TIMEOUT));
         drop(listener);
-        assert!(!listening("127.0.0.1", port, PROBE_TIMEOUT));
+        // Tests run in parallel and another one may take the freed port at
+        // once: one of a few freed ports must read as closed.
+        let closed = (0..5).any(|_| {
+            let other = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = other.local_addr().expect("addr").port();
+            drop(other);
+            !listening("127.0.0.1", port, PROBE_TIMEOUT)
+        });
+        assert!(closed);
     }
 }

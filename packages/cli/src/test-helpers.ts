@@ -124,6 +124,8 @@ export const ALL_CORE_RULES = [
 
 /** Every built-in rule of the agent-ready pack, sorted. */
 export const ALL_AGENT_READY_RULES = [
+  'agent-ready/agent-permissions',
+  'agent-ready/agent-skills',
   'agent-ready/agents-md',
   'agent-ready/commands-documented',
   'agent-ready/single-test-command',

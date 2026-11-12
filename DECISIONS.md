@@ -22,6 +22,12 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M13) A repo with CLAUDE.md and no AGENTS.md:** `adopt` (with `agent-ready` on) and `sync` create AGENTS.md and append a three-line managed block with `@AGENTS.md` to the end of CLAUDE.md, because Claude Code reads only CLAUDE.md when it exists. Nothing else in CLAUDE.md changes, and nested CLAUDE.md files are untouched. The alternative is to leave CLAUDE.md alone and print a note, at the cost of Claude Code never seeing the commands (ADR 0027).
+- **(M13) Codex's permission profile was not run.** `.codex/config.toml` (`default_permissions = "firescale"`, extending `:workspace`, denying env files and keys) follows Codex's source and tests at `rust-v0.167.2`; developers.openai.com was blocked. Open the repo once in Codex (as a trusted project) and check it starts. A Codex config you wrote is never edited.
+- **(M13) Cursor's `.cursor/cli.json` permissions are unconfirmed** (cursor.com blocked). Cursor's hooks and skills formats were confirmed from Cursor's own GitHub examples. Allow `cursor.com` in the environment's network settings so a session can check the docs page.
+- **(M13) Which env files agents may not read:** `.env`, `.env.local`, `.env.*.local`, `.env.development`, `.env.production`, `.env.staging`, `.env.test`, plus `*.pem`, `*.key` and `secrets/`. `.env.*` as a whole is not denied, because that would also block `.env.example`, which agents keep up to date. Other names (`.env.qa`) are not covered.
+- **(M13) A new repo gets 42 skill files** (14 rules, 3 agents). Say if you would rather install skills for one agent only, or only for the rules that are enforced.
+
 - **(M12) A running step is stopped early by default when a service it needs is down** (`verify.stopWhenServiceDown`, default `true`, ADR 0025). It needs two probes 10 seconds apart to find nothing listening, plus either a refused-connection message for a known service or the repo's own port (then the step is setup needed), or at least 3 errors and nothing else from pytest or unittest (then the step is failed, with the service named as the likely cause). A wrong stop takes a suite that connects to such a port on purpose and would still pass. Say if the default should be `false` (print the line, let the step run on), or if the thresholds (3 errors, 10 seconds, a probe every 5 seconds) should differ.
 - **(M12) An unreachable service is a problem in `fscale doctor`** (exit 1), not a warning: tests that need it cannot pass. If you often run doctor without wanting the database up, a warning would suit better (ADR 0026).
 - **(M12) Doctor's `packageManager` rule:** a different major version is a problem, the same major version with another minor or patch is a warning. Say if any difference should be a problem.
@@ -72,6 +78,47 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M13 — Born agent-ready: agent files from `init`
+
+**Formats confirmed first** (ADR 0027, 2026-11-12): Claude Code from its docs (code.claude.com); Codex from its source at `rust-v0.167.2` (developers.openai.com was blocked); Cursor's hooks and skills from Cursor's own GitHub repositories `cursor/cookbook` and `cursor/plugins` (cursor.com was blocked). The Cursor hook format that M7 marked unconfirmed matches those examples. **Cursor's `.cursor/cli.json` permission format is still unconfirmed** and is written with a note.
+
+**Built**
+
+1. `agent-ready/agents-md` has a fix: AGENTS.md with a **managed block** (`<!-- BEGIN firescale ...` to `<!-- END firescale -->`) holding the commands from `fscale facts` for the root and each project, and the definition of done. Text outside the block is kept byte for byte; a hand edit inside it is a finding, so `fscale sync --check` fails and `fscale sync` repairs it. Python commands are written `python -m ...`, the same on every machine.
+2. A root CLAUDE.md that does not import AGENTS.md gets a three-line block with `@AGENTS.md` at its end.
+3. `agent-ready/verify-hook` has a fix: the stop hooks for Claude Code, Codex and Cursor, started with the repo's own `fscale` script or `npx firescale`.
+4. New rule `agent-ready/agent-permissions`: Claude Code `permissions.deny`/`allow`, a Codex permission profile in a new `.codex/config.toml`, Cursor `cli.json` deny entries.
+5. New rule `agent-ready/agent-skills`: the SKILL.md of every enabled rule in `.claude/skills/`, `.agents/skills/` and `.cursor/skills/`, marked as generated.
+6. `crates/core/src/jsonedit.rs`: existing JSON settings get new lines only; every existing line stays.
+7. This repo runs its own fixes: its AGENTS.md has the block, its `.claude/settings.json` the permissions, and the skills are committed.
+
+**Decisions made for you:** all in ADR 0027, and under "Needs your decision" above.
+
+**Tests changed on purpose, none weakened**
+
+- `agents-md` tests: an AGENTS.md without the block is now a finding, and the rule has a fix. The old "a file with content passes" became "a file with a current block passes".
+- `verify-hook` tests: the finding is deterministic with a fix; "fix does nothing" became "the fix sets up every agent, and a second run changes nothing".
+- `scaffold.test.ts`: `init` now leaves nothing for a person (snapshot updated). AGENTS.md is compared byte for byte except for the block added after it. The "no second README" check now looks at file names, not paths, because `firescale-core-readme-setup/SKILL.md` is not a README.
+- `core-pack.test.ts`: 14 rules on this repo; the empty agent-ready repo passes after `sync` instead of after `hooks install` plus a hand-written AGENTS.md.
+
+**Found on real repos** (copies of the three repos with `agent-ready` turned on, `adopt --dry-run`)
+
+- `fastapi/full-stack-fastapi-template` already has `.claude/skills/` and `.agents/skills/` of its own. firescale's skills go in their own `firescale-*` folders beside them; nothing of theirs would change.
+- `GoogleCloudPlatform/microservices-demo`: the block lists ten services, each with its commands; the Python services have only an install command (no test config), which is what facts finds.
+- `vercel/commerce`: a block with the root's scripts. Nothing wrong found in this pass.
+
+**Independent review before merging** found five real bugs, all fixed with regression tests:
+
+- The AGENTS.md block depended on the machine: a uv project read `uv run pytest` without a local `.venv` and `python -m pytest` with one, so `sync --check` flipped. Managed Python projects are now always written through their manager (`uv run`, `uv sync`), others with `python -m` (`a_uv_project_reads_the_same_with_and_without_a_local_venv`).
+- Marker lines inside a code fence (an example in CLAUDE.md) were taken for the block and replaced. Fences are skipped now (`markers_inside_a_code_fence_are_an_example_not_the_block`).
+- A CLAUDE.md that is a symbolic link to AGENTS.md made every `adopt` and `sync` stop with an error. It now counts as AGENTS.md; a link elsewhere is a manual finding (`a_claude_md_that_links_to_agents_md_is_agents_md`).
+- With Git for Windows' `core.autocrlf`, every generated skill read as out of date. Line endings are ignored when comparing (`a_skill_checked_out_with_crlf_is_current`).
+- A Python project at the root got only its install command in the block. Its own test, lint and typecheck are listed now, and allowed in Claude Code's permissions (`a_python_project_at_the_root_lists_its_own_commands`).
+- Also fixed: a settings value of another type (`"Stop": "none"`) and a CLAUDE.md that is not UTF-8 are manual findings instead of stopping the fix loop.
+- Left: `jsonedit` cannot add to an empty list written on one line (`"deny": []`), so such a file is a manual finding as a whole; the doc comment now says so.
+
+**Known limits:** a rule turned off keeps its generated skills until they are deleted by hand; skills of custom TypeScript rules are not installed; with a `firescale.config.ts`, `agent-skills` asks for a JSON config.
 
 ## M12 — `fscale doctor`, and two fixes from the 0.1.3 run
 

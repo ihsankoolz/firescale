@@ -16,7 +16,7 @@ Every command prints the repo root it works in (`Repo root: ...`, which can be a
 - **Overwrite or delete a file.** The fixes that ship with firescale create a file only when it is absent, or add lines to the end of one (`.gitignore`, `.env.example`). The config file, the starter workflow and the README skeleton are created with a call that fails if anything is at that path.
 - **Write outside the repo.** A fix does not write to a symbolic link or below one. With a linked `.github` no workflow is created; with a linked `.gitignore` the run stops and says so.
 - **Replace what is in the git index.** If git tracks a README or a workflow that is missing from disk, nothing is created in its place: the index may hold work you staged. The rule tells you to `git restore` the file or commit its deletion.
-- **Edit a README, a CI workflow or an AGENTS.md that you wrote.** If your README has no install steps, or your workflow does not run on pull requests, that is reported as left for you. It is not rewritten.
+- **Edit a README or a CI workflow that you wrote, or AGENTS.md outside firescale's block.** If your README has no install steps, or your workflow does not run on pull requests, that is reported as left for you. It is not rewritten.
 - **Put a second file beside yours.** With a `ReadMe.MD`, a `README.adoc` or an untracked `README.md` in the repo, no `README.md` is created. With any workflow file in `.github/workflows`, tracked or not, or another CI system's config, no workflow is created.
 - **Commit.** Two fixes run `git add` on the one file they have just created (see "Staging" below). Nothing else is staged, and nothing is committed. If that `git add` fails, the new file is removed again.
 
@@ -122,3 +122,15 @@ A bad config, an unknown pack and a bad `after` declaration are all found before
 - The starter workflow calls `npx firescale verify`, which needs firescale on npm. Until 0.1.0 is published it fails at that step.
 - The starter workflow has an install step only for npm and pnpm. For anything else it says so under "To review".
 - These commands print text only. There is no `--json` output yet.
+
+## Agent files (the `agent-ready` pack)
+
+With `agent-ready` on (the default for `init`), the loop also writes what coding agents need (ADR 0027):
+
+- `AGENTS.md` with a **managed block**: the repo's commands from `fscale facts` and the definition of done. The block runs from `<!-- BEGIN firescale ...` to `<!-- END firescale -->`. Write your own notes outside it; `fscale sync` replaces only what is inside, and `fscale sync --check` fails after a hand edit inside it.
+- In an existing `CLAUDE.md` at the root, a three-line block at the end with `@AGENTS.md`, because Claude Code reads only `CLAUDE.md` when there is one. Nothing else in `CLAUDE.md` changes, and nested `CLAUDE.md` files are not touched.
+- The stop hooks for Claude Code, Codex and Cursor (see [hooks.md](hooks.md)).
+- Safe permissions: Claude Code and Cursor may not read env files (`.env`, `.env.local`, ...), keys or a `secrets/` folder, and Claude Code may run the repo's checks without asking; Codex gets a permission profile in a new `.codex/config.toml`. A Codex config you wrote is never edited.
+- The SKILL.md of every enabled rule in `.claude/skills/`, `.agents/skills/` (Codex) and `.cursor/skills/`.
+
+A settings file you already have keeps every line: firescale adds its entries as new lines and never re-formats the file. If it cannot do that (a list written on one line, invalid JSON), it leaves the file and tells you what to add.

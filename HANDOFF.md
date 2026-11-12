@@ -4,10 +4,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-- **Milestone:** M12 `fscale doctor`, with two fixes from the 0.1.3 run first (the heartbeat's `last output: E`, and a running step whose tests cannot reach their database). Started 2026-11-12 17:05 UTC.
+- **Milestone:** M13 agent files from `init` (M12 is in pull request #19, being merged).
 - **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each milestone is still one pull request).
 - **Session plan, in order:** M12, M13 agent files, M14 generators, M15 Next.js pack, M16 Python pack, then a 0.2.0 version bump. Deadline 22:00 UTC (06:00 Singapore time, 13 Nov). Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
-- **Done so far:** 0.1.3 release recorded. M12 code, tests, docs, ADRs 0025 and 0026, and its real-repo pass are done and committed; next is its pull request, review and CI.
+- **Done so far:** 0.1.3 release recorded. M12 (#19): doctor and the two fixes, reviewed and fixed. M13: code, tests, ADR 0027, docs and its real-repo pass done on the local branch `m13-work`; next is its pull request after #19 merges.
 
 ## Where things stand
 
@@ -67,7 +67,14 @@ Notes on M12, for whoever touches doctor or verify's service watch:
 - The python stand-in answers `--version` with `Python <FSCALE_STUB_PYTHON_VERSION>` (default 3.12.4).
 - The format research for M13 (Claude Code, Codex, Cursor) was done on 2026-11-12; see ADR 0027 once M13 lands. Cursor's hook format was confirmed from Cursor's public GitHub repositories (`cursor/cookbook`, `cursor/plugins`); cursor.com itself is still blocked.
 
-Notes for M13 (agent files), which stands on M9 like M11 did:
+Notes on M13, for whoever touches the agent files:
+
+- The shared pieces are `crates/rules/src/agent-ready/managed.rs`: the block markers, `with_block` (append or replace, keeping line endings), `fscale_command` (how this repo starts fscale), `agents_block`, `claude_block`, and `FACTS_INPUTS` (cache inputs of rules whose output lists commands).
+- Existing JSON settings are only ever changed through `firescale_core::jsonedit::insert_merge`, which adds new lines and refuses otherwise. Keep it that way: the owner's course project has hand-made `.claude` settings.
+- `agent-skills` reads `firescale.config.json` itself (`resolve_config` with custom packs removed). M14's generator skill goes in `pack_skills`.
+- `fscale hooks install` still re-serialises a settings file (M7); only the fixes use `insert_merge`.
+
+Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 - `init`, `adopt` and `sync` are `crates/cli/src/scaffold.rs`. They share one function, `run`, which uses `plan_fixes`, `FixPlan::run` and `render_fixes` from `crates/cli/src/main.rs`, the same pieces as `fscale fix`. A new pack needs no change there: give its rules fixes and `fscale init --packs core,<pack>` builds it.
 - A fix that creates a file must look at the disk itself before writing and write only where nothing is. `core/ci-exists` (`starter_can_be_created`) and `core/readme-setup` are the models. The check uses the same precondition, so a finding is `deterministic` only when the fix will act; otherwise the loop stops with "changed nothing".

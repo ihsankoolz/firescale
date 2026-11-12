@@ -17,6 +17,7 @@ pub mod facts;
 pub mod fixloop;
 pub mod git;
 pub mod hooks;
+pub mod jsonedit;
 pub mod model;
 pub mod node;
 pub mod process;

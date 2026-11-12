@@ -1,0 +1,19 @@
+# Written by firescale (agent-ready/agent-permissions). Codex reads this file only
+# in a project you have marked as trusted. The profile keeps env files and keys out
+# of the agent's sandbox.
+default_permissions = "firescale"
+
+[permissions.firescale]
+extends = ":workspace"
+
+[permissions.firescale.filesystem.":project_roots"]
+"**/.env" = "deny"
+"**/.env.local" = "deny"
+"**/.env.*.local" = "deny"
+"**/.env.development" = "deny"
+"**/.env.production" = "deny"
+"**/.env.staging" = "deny"
+"**/.env.test" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+"**/secrets/**" = "deny"
