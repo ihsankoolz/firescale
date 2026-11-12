@@ -62,7 +62,15 @@ After the first release through the workflow has worked, npm recommends closing 
    ```
 
    ```bash
+   git checkout -b release-0.1.2
+   ```
+
+   ```bash
    git commit -am "chore: release 0.1.2"
+   ```
+
+   ```bash
+   git push -u origin release-0.1.2
    ```
 
 3. Tag the merged commit on `main` and push the tag. The tag is `v` plus the version:
@@ -98,25 +106,42 @@ After the first release through the workflow has worked, npm recommends closing 
 
 A published version cannot be replaced, only deprecated. So the workflow is built to be **run again**, not to be undone: the publish job skips every package version that is already on the registry.
 
-| What you see                                               | What to do                                                                                                                                                                       |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| "check version" fails: the tag does not match              | Nothing was built or published. Delete the tag (`git push origin :refs/tags/v0.1.2`, `git tag -d v0.1.2`), fix the version or the tag, and push the right tag.                   |
-| A build job fails                                          | Nothing was published. Open the run and choose **Re-run failed jobs**.                                                                                                           |
-| Publish fails with "Unable to authenticate" or `ENEEDAUTH` | The trusted publisher of that package is missing, expired or mistyped. Fix it on npmjs.com (see above), then **Re-run failed jobs**. The packages already published are skipped. |
-| Publish fails partway for any other reason                 | **Re-run failed jobs**. The log lists `skip` for what is already there and `publish` for the rest.                                                                               |
-| Verify fails, publish was green                            | npm can take a few minutes to serve a new version. **Re-run failed jobs** after a while. If it still fails, run `npx firescale@0.1.2 --version` yourself and read the error.     |
-| The release itself is bad                                  | Deprecate it and release a fix: `npm deprecate firescale@0.1.2 "use 0.1.3"`, then start again from step 1 with the next version. Do not reuse a version number.                  |
+| What you see                                               | What to do                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "check version" fails: the tag does not match              | Nothing was built or published. Delete the tag (`git push origin :refs/tags/v0.1.2`, `git tag -d v0.1.2`), fix the version or the tag, and push the right tag.                                                                                                                                                                                                         |
+| A build job fails                                          | Nothing was published. Open the run and choose **Re-run failed jobs**.                                                                                                                                                                                                                                                                                                 |
+| Publish fails with "Unable to authenticate" or `ENEEDAUTH` | The trusted publisher of that package is missing, expired or mistyped. Fix it on npmjs.com (see above), then **Re-run failed jobs**. The packages already published are skipped.                                                                                                                                                                                       |
+| Publish fails partway for any other reason                 | **Re-run failed jobs**. The log lists `skip` for what is already there and `publish` for the rest.                                                                                                                                                                                                                                                                     |
+| Verify fails, publish was green                            | npm can take a few minutes to serve a new version. **Re-run failed jobs** after a while. If it still fails, run `npx firescale@0.1.2 --version` yourself and read the error.                                                                                                                                                                                           |
+| The workflow or a script has a bug                         | **Re-run failed jobs** runs the same commit again, so it cannot pick up a fix. Merge the fix to `main` without changing the version, delete the tag (`git push origin :refs/tags/v0.1.2`, `git tag -d v0.1.2`), tag the new commit on `main` with the same version and push the tag. What is already published is skipped. This is the only case where a tag is moved. |
+| "check version" fails: the commit is not on main           | The tag was put on a branch commit. Merge the branch, delete the tag, and tag the commit on `main`.                                                                                                                                                                                                                                                                    |
+| The release itself is bad                                  | Deprecate it and release a fix: `npm deprecate firescale@0.1.2 "use 0.1.3"`, then start again from step 1 with the next version. Do not reuse a version number.                                                                                                                                                                                                        |
 
 Do not publish by hand to finish a release that the workflow started, unless the workflow cannot be made to work. If you must, the old manual steps are under "Publishing to npm" in `DECISIONS.md`.
+
+## Pre-releases and older lines
+
+- A version with a pre-release part, such as `1.0.0-rc.1`, is published under the npm dist-tag `next`, not `latest`. `npx firescale` keeps giving the last normal release; `npx firescale@next` gives the pre-release.
+- A version lower than the current `latest` (a fix for an older line, such as 0.1.3 after 0.2.0) is refused by npm without a dist-tag. The workflow does not handle that case. Ask for it to be added before you need it.
+
+## Reading a failed publish
+
+npm prints little when the OIDC exchange fails: usually just `ENEEDAUTH`. It nearly always means that package's trusted publisher is missing, mistyped, expired, or does not allow `npm publish`. The log line before the error names the package.
 
 ## Building without publishing
 
 Start the **Release** workflow by hand from the Actions tab (**Run workflow**). A run started this way builds the six sets of tarballs and uploads them as artifacts. It publishes nothing: the publish job only exists for a pushed tag.
 
-To see what a publish would do without doing it, download the artifacts into one folder and run:
+To see what a publish would do without doing it, download the run's artifacts so that each one has its own subfolder (`npm-linux-x64`, `npm-darwin-arm64` and so on), which is what the GitHub CLI does:
 
 ```bash
-node scripts/publish-npm.mjs --dir <that folder> --version 0.1.2 --dry-run
+gh run download <run id> --dir artifacts
+```
+
+Then run:
+
+```bash
+node scripts/publish-npm.mjs --dir artifacts --version 0.1.2 --dry-run
 ```
 
 ## What the workflow needs, and why

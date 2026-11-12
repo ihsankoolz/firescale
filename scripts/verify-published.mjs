@@ -38,41 +38,56 @@ for (let i = 0; i < argv.length; i += 1) {
   }
 }
 if (!version) fail('no version given. Usage: node scripts/verify-published.mjs <version>');
+// The version goes into a command line, so it must be a plain version.
+if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
+  fail(`"${version}" is not a version such as 0.1.1.`);
+}
 
-// An empty folder outside any repo, and an empty npm cache, so nothing from
-// this checkout or an earlier install can answer instead of the registry.
-const folder = mkdtempSync(path.join(os.tmpdir(), 'firescale-verify-'));
-const cache = mkdtempSync(path.join(os.tmpdir(), 'firescale-npm-cache-'));
+// An empty folder outside any repo, and a new, empty npm cache for every
+// attempt. npm keeps a package's metadata for five minutes without asking
+// again, so one shared cache would repeat the first "not found" for the whole
+// retry window, and would reuse a half-finished install.
 const command = process.env.FSCALE_NPX_COMMAND ?? `npx --yes firescale@${version} --version`;
 
 let last = '';
-try {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+let ok = false;
+for (let attempt = 1; attempt <= attempts && !ok; attempt += 1) {
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'firescale-verify-'));
+  const cache = mkdtempSync(path.join(os.tmpdir(), 'firescale-npm-cache-'));
+  try {
     const result = spawnSync(command, {
       cwd: folder,
       encoding: 'utf8',
       shell: true,
-      env: { ...process.env, npm_config_cache: cache, npm_config_update_notifier: 'false' },
+      // A hung install counts as a failed attempt.
+      timeout: 180_000,
+      env: {
+        ...process.env,
+        npm_config_cache: cache,
+        npm_config_prefer_online: 'true',
+        npm_config_update_notifier: 'false',
+      },
     });
     const printed = (result.stdout ?? '').trim();
     if (result.status === 0 && printed === version) {
       process.stdout.write(`firescale@${version} is installable: --version printed ${printed}\n`);
-      process.exit(0);
+      ok = true;
+    } else {
+      last =
+        result.status === 0
+          ? `it printed "${printed}"`
+          : `exit ${result.status ?? 'none, timed out or killed'}: ${(result.stderr ?? '').trim().split(/\r?\n/).slice(-3).join(' | ')}`;
+      process.stdout.write(`attempt ${attempt} of ${attempts}: not yet (${last})\n`);
     }
-    last =
-      result.status === 0
-        ? `it printed "${printed}"`
-        : `exit ${result.status ?? 'unknown'}: ${(result.stderr ?? '').trim().split(/\r?\n/).slice(-3).join(' | ')}`;
-    process.stdout.write(`attempt ${attempt} of ${attempts}: not yet (${last})\n`);
-    if (attempt < attempts) {
-      await sleep(wait * 1000);
+  } finally {
+    for (const dir of [folder, cache]) {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
     }
   }
-} finally {
-  for (const dir of [folder, cache]) {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
-  }
+  if (!ok && attempt < attempts) await sleep(wait * 1000);
 }
-fail(
-  `\`${command}\` did not print ${version} after ${attempts} attempts (${last}). Check https://www.npmjs.com/package/firescale and that all eight packages have version ${version}; then run this job again.`,
-);
+if (!ok) {
+  fail(
+    `\`${command}\` did not print ${version} after ${attempts} attempts (${last}). Check https://www.npmjs.com/package/firescale and that all eight packages have version ${version}; then run this job again.`,
+  );
+}

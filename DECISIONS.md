@@ -76,12 +76,17 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 - **Node 24's own npm is used**; npm is not upgraded during a release.
 - **`actions/download-artifact` v8.0.2 was added**, pinned to a commit.
 - **Runs for the same tag never overlap, and a run in progress is never cancelled.**
+- **A tag is only published when its commit is on `main`.**
+- **A pre-release version (such as `1.0.0-rc.1`) is published under the dist-tag `next`**, never `latest`.
+- **Each attempt of the check after publishing uses a new npm cache**, because npm remembers "not found" for five minutes.
 
 **Known limits**
 
 - The publish and verify stages are untested end to end until the first tag.
 - The `linux-arm64` runner and the two cross-compiled targets (`darwin-x64`, `win32-arm64`) have still never been built by the workflow, unless you started a manual run.
 - Renaming `release.yml` or moving the repository breaks publishing until the eight entries are made again.
+- A version lower than the current `latest` (a fix for an older line) is refused by npm and is not handled.
+- If the workflow itself has a bug, re-running cannot fix it: the tag has to be moved to the fixed commit (`RELEASING.md`).
 - A release uses six build jobs, one publish job and three verify jobs of Actions time.
 
 ## A note on milestone numbers

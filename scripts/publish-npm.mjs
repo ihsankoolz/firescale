@@ -10,8 +10,14 @@
 // Authentication is npm trusted publishing (OIDC). There is no token: the
 // job needs `id-token: write`, npm 11.5.1 or later and Node 22.14.0 or later.
 //
+// A pre-release version (one with a "-" part, such as 1.0.0-rc.1) is
+// published under the dist-tag "next", never "latest". npm refuses a
+// pre-release without a tag.
+//
 // Usage: node scripts/publish-npm.mjs --dir <folder with the artifacts> --version <version> [--dry-run]
 //   --dry-run   look everything up and print the plan, publish nothing
+//   <folder> holds one subfolder per artifact, named npm-<platform>.
+// FSCALE_NPM_COMMAND replaces `npm` (used by the tests).
 // The registry can be changed with FSCALE_NPM_REGISTRY (used by the tests).
 import { spawnSync } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
@@ -120,7 +126,7 @@ async function isPublished(registry, name, version) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    await sleep(attempt * 2000);
+    if (attempt < 3) await sleep(attempt * 2000);
   }
   return fail(
     `could not find out whether ${name}@${version} is on the registry (${lastError}). Nothing more was published. Run the job again.`,
@@ -128,12 +134,16 @@ async function isPublished(registry, name, version) {
 }
 
 function npm(args, options = {}) {
-  // On Windows npm is a .cmd file and needs a shell.
-  return spawnSync('npm', args, {
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-    ...options,
-  });
+  const override = process.env.FSCALE_NPM_COMMAND;
+  if (override) {
+    // A stand-in for npm: a Node script that gets the same arguments.
+    return spawnSync(process.execPath, [override, ...args], { encoding: 'utf8', ...options });
+  }
+  // On Windows npm is a .cmd file and needs a shell, so an argument with a
+  // space in it must be quoted by hand.
+  const windows = process.platform === 'win32';
+  const quoted = windows ? args.map((arg) => (/\s/.test(arg) ? `"${arg}"` : arg)) : args;
+  return spawnSync('npm', quoted, { encoding: 'utf8', shell: windows, ...options });
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -158,6 +168,9 @@ if (!options.dryRun) {
   }
 }
 
+// npm refuses to publish a pre-release as "latest".
+const distTag = options.version.includes('-') ? ['--tag', 'next'] : [];
+
 let published = 0;
 let skipped = 0;
 for (const step of steps) {
@@ -172,7 +185,11 @@ for (const step of steps) {
     continue;
   }
   process.stdout.write(`publish  ${label} from ${path.basename(step.file)}\n`);
-  const result = npm(['publish', step.file, '--access', 'public'], { stdio: 'inherit' });
+  // A hung publish must not hold the runner: ten minutes is far more than one needs.
+  const result = npm(['publish', step.file, '--access', 'public', ...distTag], {
+    stdio: 'inherit',
+    timeout: 600_000,
+  });
   if (result.status !== 0) {
     // A second run of this job may have published it in the meantime.
     if (await isPublished(registry, step.name, options.version)) {
@@ -181,7 +198,7 @@ for (const step of steps) {
       continue;
     }
     fail(
-      `npm publish failed for ${label}. ${published} package(s) were published before it. Fix the cause (RELEASING.md lists the usual ones) and run the job again: packages that are already published are skipped.`,
+      `npm publish failed for ${label}. ${published} package(s) were published before it in this run. Fix the cause (RELEASING.md lists the usual ones: a missing or expired trusted publisher shows as ENEEDAUTH) and run the job again: packages that are already published are skipped.`,
     );
   }
   published += 1;

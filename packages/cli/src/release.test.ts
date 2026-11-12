@@ -202,7 +202,7 @@ describe('scripts/publish-npm.mjs', () => {
       FSCALE_NPM_REGISTRY: registry,
     });
 
-  it('publishes the six platform packages, then the sdk, then firescale', async () => {
+  it('plans the six platform packages, then the sdk, then firescale', async () => {
     const result = await plan(await artifacts('1.2.3'), '1.2.3');
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
@@ -271,6 +271,96 @@ describe('scripts/publish-npm.mjs', () => {
     expect(result.stdout).not.toContain('publish');
   }, 30_000);
 
+  /** A stand-in for npm: logs each call, and fails a publish whose tarball name contains FAKE_NPM_FAIL. */
+  async function fakeNpm(
+    version = '11.19.1',
+  ): Promise<{ script: string; calls: () => Promise<string[]> }> {
+    const dir = await scratch();
+    const script = path.join(dir, 'fake-npm.mjs');
+    const log = path.join(dir, 'calls.log');
+    await writeFile(
+      script,
+      [
+        "import { appendFileSync } from 'node:fs';",
+        "import path from 'node:path';",
+        'const args = process.argv.slice(2);',
+        `if (args[0] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0); }`,
+        'const shown = args.map((arg) => (arg.endsWith(".tgz") ? path.basename(arg) : arg)).join(" ");',
+        `appendFileSync(${JSON.stringify(log)}, shown + "\\n");`,
+        'const fail = process.env.FAKE_NPM_FAIL;',
+        'process.exit(fail && shown.includes(fail) ? 1 : 0);',
+        '',
+      ].join('\n'),
+    );
+    const calls = async () =>
+      (await readFile(log, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+    return { script, calls };
+  }
+
+  const publish = (
+    dir: string,
+    version: string,
+    script: string,
+    env: Record<string, string> = {},
+  ) =>
+    node('publish-npm.mjs', ['--dir', dir, '--version', version], {
+      FSCALE_NPM_REGISTRY: registry,
+      FSCALE_NPM_COMMAND: script,
+      ...env,
+    });
+
+  it('publishes the eight tarballs in order, the shared two from the linux-x64 build', async () => {
+    const npm = await fakeNpm();
+    const dir = await artifacts('1.2.3');
+    const result = await publish(dir, '1.2.3', npm.script);
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(0);
+    expect(await npm.calls()).toEqual([
+      ...PLATFORMS.map((p) => `publish firescale-cli-${p}-1.2.3.tgz --access public`),
+      'publish firescale-sdk-1.2.3.tgz --access public',
+      'publish firescale-1.2.3.tgz --access public',
+    ]);
+    expect(result.stdout).toContain('Done: 8 published, 0 already on the registry.');
+  });
+
+  it('stops at the first publish that fails, and a second run finishes the release', async () => {
+    const npm = await fakeNpm();
+    const dir = await artifacts('1.2.3');
+    const first = await publish(dir, '1.2.3', npm.script, { FAKE_NPM_FAIL: 'firescale-sdk-' });
+    expect(first.code).toBe(1);
+    expect(first.stderr).toContain('npm publish failed for @firescale/sdk@1.2.3');
+    expect(first.stderr).toContain('run the job again');
+    // firescale itself was never attempted.
+    expect(await npm.calls()).toHaveLength(7);
+
+    // The registry now has the six that went through.
+    published = new Set(PLATFORMS.map((p) => `/@firescale%2fcli-${p}/1.2.3`));
+    const second = await publish(dir, '1.2.3', npm.script);
+    expect(second.code).toBe(0);
+    expect(second.stdout).toContain('Done: 2 published, 6 already on the registry.');
+    expect((await npm.calls()).slice(7)).toEqual([
+      'publish firescale-sdk-1.2.3.tgz --access public',
+      'publish firescale-1.2.3.tgz --access public',
+    ]);
+  });
+
+  it('publishes a pre-release under the dist-tag next', async () => {
+    const npm = await fakeNpm();
+    const result = await publish(await artifacts('2.0.0-rc.1'), '2.0.0-rc.1', npm.script);
+    expect(result.code).toBe(0);
+    const calls = await npm.calls();
+    expect(calls).toHaveLength(8);
+    expect(calls.every((call) => call.endsWith('--access public --tag next'))).toBe(true);
+  });
+
+  it('refuses an npm too old for trusted publishing, before anything is published', async () => {
+    const npm = await fakeNpm('10.9.9');
+    const result = await publish(await artifacts('1.2.3'), '1.2.3', npm.script);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('needs npm 11.5.1 or later, and this is 10.9.9');
+    expect(await npm.calls()).toEqual([]);
+  });
+
   it('needs --dir and --version', async () => {
     const result = await node('publish-npm.mjs', ['--dry-run']);
     expect(result.code).toBe(1);
@@ -309,6 +399,12 @@ describe('scripts/verify-published.mjs', () => {
     expect(failing.code).toBe(1);
     expect(failing.stdout).toContain('not yet (exit 7');
   });
+
+  it('rejects something that is not a version', async () => {
+    const result = await node('verify-published.mjs', ['1.2.3 && echo hi', '--attempts', '1']);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('is not a version');
+  });
 });
 
 describe('.github/workflows/release.yml', () => {
@@ -346,6 +442,13 @@ describe('.github/workflows/release.yml', () => {
     expect(job(text, 'build')).toContain('needs: version');
     expect(job(text, 'build')).not.toContain('npm publish');
     expect(job(text, 'version')).toContain('bump-version.mjs --check --tag "$TAG"');
+    // A tag on a commit that is not on main is refused before any build.
+    expect(job(text, 'version')).toContain(
+      'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
+    );
+    for (const name of ['version', 'publish', 'verify']) {
+      expect(job(text, name)).toMatch(/timeout-minutes: \d+/);
+    }
     // A manual run has no job that publishes: verify needs publish, which is skipped.
     const verify = job(text, 'verify');
     expect(verify).toContain('needs: [version, publish]');

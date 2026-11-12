@@ -170,6 +170,11 @@ if (options.check) {
       `the version is not the same everywhere:\n${lines.join('\n')}\nRun \`node scripts/bump-version.mjs <version>\` to set them all.`,
     );
   }
+  if (!VERSION.test(expected)) {
+    fail(
+      `the recorded version "${expected}" is not a version such as 0.1.1 or 1.0.0-rc.1. Set it with \`node scripts/bump-version.mjs <version>\`.`,
+    );
+  }
   if (options.tag !== undefined && options.tag !== `v${expected}`) {
     fail(
       `the tag "${options.tag}" does not match the version ${expected} in Cargo.toml and the package manifests. Tag the commit v${expected}, or bump the version first with \`node scripts/bump-version.mjs <version>\` and tag the new commit.`,
