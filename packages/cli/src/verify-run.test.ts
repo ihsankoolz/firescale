@@ -123,7 +123,9 @@ function startVerify(cwd: string, args: string[] = []) {
   let stderr = '';
   child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
   child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
-  const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+  const exited = new Promise<number | null>((resolve) =>
+    child.on('close', (code) => resolve(code)),
+  );
   return { child, exited, out: () => ({ stdout, stderr }) };
 }
 
@@ -159,7 +161,11 @@ describe('stopping verify stops every process it started', () => {
       const scratch = await fixtures.create({ files: {}, track: 'no-git' });
       const pids = path.join(scratch.root, 'pids');
       const output = path.join(scratch.root, 'verify.out');
-      const repo = await repoWith({ lint: 'echo lint-ran', typecheck: false, test: treeCommand(pids) });
+      const repo = await repoWith({
+        lint: 'echo lint-ran',
+        typecheck: false,
+        test: treeCommand(pids),
+      });
       const helper = spawn(
         CTRL_BREAK,
         [path.join(pids, 'ready'), output, BIN, 'verify', '--progress'],
@@ -179,16 +185,38 @@ describe('stopping verify stops every process it started', () => {
     },
   );
 
-  it.runIf(WINDOWS)('when fscale itself is killed, the job takes its processes with it', async () => {
+  it.runIf(WINDOWS)(
+    'when fscale itself is killed, the job takes its processes with it',
+    async () => {
+      const scratch = await fixtures.create({ files: {}, track: 'no-git' });
+      const pids = path.join(scratch.root, 'pids');
+      const repo = await repoWith({ lint: false, typecheck: false, test: treeCommand(pids) });
+      const run = startVerify(repo.root);
+      await until(() => existsSync(path.join(pids, 'ready')));
+      // TerminateProcess: no handler runs. The job object's last handle closes.
+      run.child.kill();
+      await run.exited;
+      await expectTreeGone(pids, 3);
+    },
+  );
+});
+
+describe('a process a step leaves behind', () => {
+  it('does not keep verify waiting on its output, and is stopped with the step', async () => {
     const scratch = await fixtures.create({ files: {}, track: 'no-git' });
     const pids = path.join(scratch.root, 'pids');
-    const repo = await repoWith({ lint: false, typecheck: false, test: treeCommand(pids) });
-    const run = startVerify(repo.root);
-    await until(() => existsSync(path.join(pids, 'ready')));
-    // TerminateProcess: no handler runs. The job object's last handle closes.
-    run.child.kill();
-    await run.exited;
-    await expectTreeGone(pids, 3);
+    // The command starts the stub in the background, which holds the
+    // output pipe open, and ends at once. 0.1.2 waited for the pipe.
+    const background = WINDOWS
+      ? `start /B "" ${treeCommand(pids, 0)} & ping -n 3 127.0.0.1 > NUL`
+      : `${treeCommand(pids, 0)} & sleep 2`;
+    const repo = await repoWith({ lint: false, typecheck: false, test: background });
+    const begun = Date.now();
+    const result = await runCli(['verify'], repo.root);
+    expect(Date.now() - begun).toBeLessThan(30_000);
+    expect(result.code).toBe(EXIT_OK);
+    expect(existsSync(path.join(pids, 'ready'))).toBe(true);
+    await expectTreeGone(pids, 1);
   });
 });
 
@@ -363,7 +391,10 @@ describe('a second verify never waits silently on another', () => {
     // The second run gets a quick command of its own.
     await writeFile(
       path.join(repo.root, 'firescale.config.json'),
-      JSON.stringify({ packs: ['core'], verify: { lint: false, typecheck: false, test: 'echo second' } }),
+      JSON.stringify({
+        packs: ['core'],
+        verify: { lint: false, typecheck: false, test: 'echo second' },
+      }),
     );
     const begun = Date.now();
     const second = await runCli(['verify'], repo.root);
