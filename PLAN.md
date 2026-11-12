@@ -265,6 +265,18 @@ Added by the owner after running 0.1.0 on a real course project (ADR 0020). Its 
 
 ---
 
+## Fixes in 0.1.2 ☑ (after running 0.1.1 on the same course project)
+
+Not a milestone. 0.1.1 was released through the Release workflow on 2026-11-12 with npm trusted publishing, and every stage passed. Running it on the course project found five problems, fixed in one pull request (ADR 0022):
+
+- ☑ Python steps run with the project's own `.venv` or `venv` (`Scripts/python.exe` on Windows, `bin/python` elsewhere), else uv, poetry or pipenv, else an active `VIRTUAL_ENV`, else `python` from the PATH, which is said. `fscale facts` shows the interpreter of each project.
+- ☑ One project's failure no longer stops the others; the headline names every failure.
+- ☑ A step that fails because the environment is not ready is reported as setup needed, with the command that fixes it, and the stop hook tells an agent not to edit code for it.
+- ☑ Ruff and mypy are detected from requirements files and dev-dependency lists.
+- ☑ `core/env-example` treats test-runner config files as test code.
+
+---
+
 ## M11 — The group-project pack ☐
 
 Needs the publishing checkpoint: the CI this pack checks for runs `npx firescale verify`, which only works for a real team once 0.1.0 is on npm. If it is not published yet, say so at the top of the pull request.
@@ -378,7 +390,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 - Cache base results under `.firescale/` keyed by base SHA + toolchain versions + lockfile hash.
 - Label at step level and for rule diagnostics: `new`, `pre-existing`, `fixed`. Only `new` makes `fscale verify` exit 1. The labels are on by default whenever there is a base commit (owner decision, ADR 0017); there is no flag to turn them on.
 - With no base that differs from the head commit and a clean tree, or outside git, verify behaves as it does today: every failure blocks.
-- The summary and `--json` carry the labels (bump the schema version; M10 already took version 2). Update `docs/verify.md` and `docs/affected.md`.
+- The summary and `--json` carry the labels (bump the schema version; M10 took version 2 and 0.1.2 took version 3, so this is 4). Update `docs/verify.md` and `docs/affected.md`.
 
 **Done when**
 

@@ -14,5 +14,11 @@ publish = false
 name = "fscale-node-stub"
 path = "src/node_stub.rs"
 
+# A stand-in for a virtual environment's `python`. Used to prove that verify
+# runs a Python project's steps with the interpreter in its .venv.
+[[bin]]
+name = "fscale-python-stub"
+path = "src/python_stub.rs"
+
 [lints]
 workspace = true

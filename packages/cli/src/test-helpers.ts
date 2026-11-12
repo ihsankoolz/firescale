@@ -27,6 +27,15 @@ export const NODE_STUB = path.join(
   process.platform === 'win32' ? 'fscale-node-stub.exe' : 'fscale-node-stub',
 );
 
+/**
+ * The stand-in for a virtual environment's `python` built next to the
+ * `fscale` binary (see crates/testkit/src/python_stub.rs).
+ */
+export const PYTHON_STUB = path.join(
+  path.dirname(BIN),
+  process.platform === 'win32' ? 'fscale-python-stub.exe' : 'fscale-python-stub',
+);
+
 export interface RunOptions {
   /** Run this binary instead of `BIN`. */
   bin?: string;
@@ -50,7 +59,14 @@ export function runCli(
   options: RunOptions = {},
 ): Promise<CliResult> {
   const bin = options.bin ?? BIN;
-  const base: NodeJS.ProcessEnv = options.fullEnv ?? { ...process.env, FSCALE_NODE_HOST: HOST };
+  // An active virtual environment of the person running the tests must not
+  // change what fscale detects; a test that wants one passes VIRTUAL_ENV.
+  const base: NodeJS.ProcessEnv = options.fullEnv ?? {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'VIRTUAL_ENV'),
+    ),
+    FSCALE_NODE_HOST: HOST,
+  };
   const removed = new Set(
     Object.entries(env).flatMap(([key, value]) => (value === undefined ? [key.toLowerCase()] : [])),
   );

@@ -1,16 +1,50 @@
 # fscale verify
 
-`fscale verify [--affected [--base <ref>]] [--json]` is the one command that says whether work is done. People, CI and agent hooks all call it. It runs these steps in order and stops at the first one that fails:
+`fscale verify [--affected [--base <ref>]] [--json]` is the one command that says whether work is done. People, CI and agent hooks all call it. It runs these steps in order:
 
-1. `check`: the firescale rules, exactly as `fscale check` runs them. It fails when an enforced rule has violations.
+1. `check`: the firescale rules, exactly as `fscale check` runs them. It fails when an enforced rule has violations. **When `check` fails, nothing else runs.**
 2. `lint`, `typecheck` and `test` at the repo root.
 3. `lint`, `typecheck` and `test` in each project found below the root, in that project's folder.
+
+The repo root and each project are **independent**. A failure stops the rest of that project's steps, which are listed as `not run`, and every other project still runs. The headline names every step that failed (ADR 0022).
 
 | Exit code | Meaning                                                                                           |
 | --------- | ------------------------------------------------------------------------------------------------- |
 | 0         | No step failed. The headline says `OK` when every step ran, and `PARTIAL` when some were skipped. |
-| 1         | A step failed, or steps were skipped and `verify.failOnSkipped` is on.                            |
+| 1         | A step failed, a step needs setup, or steps were skipped and `verify.failOnSkipped` is on.        |
 | 2         | Bad usage or a bad config.                                                                        |
+
+## Setup needed is not a failure in the code
+
+A step can fail because the machine is not ready: a dependency is not installed, or a program is not on the PATH. Changing code cannot fix that, so verify reports such a step as **setup needed** (`SETUP` in the summary, `setup-needed` in JSON), with the command that sets it up, apart from real failures:
+
+```
+verify: SETUP NEEDED for test in backend/audit_service
+  ...
+Setup needed for test in backend/audit_service: the environment is not ready, so this is not a problem in the code. Do not change code for it.
+Set it up in backend/audit_service: .venv/bin/python -m pip install -r requirements-dev.txt
+Then run again in backend/audit_service: .venv/bin/python -m pytest
+```
+
+With failures of both kinds the headline names both: `verify: FAILED at lint in frontend; SETUP NEEDED for test in backend/audit_service`.
+
+The detection is a short list of exact messages in the step's output. Anything else is a normal failure, and so is anything that could be a mistake in the code. Output that reports failed tests (a line starting with `FAILED `, or a count such as `2 failed`) is always a normal failure, even when a test failed on a missing module: the tests ran, so the environment was ready enough. A pytest collection error, which stops pytest before any test runs, is setup.
+
+| Message                                                                                    | Setup needed unless                                                                                                                                |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `No module named 'x'` (Python, also `python: No module named pytest`)                      | `x` (its first part) is a folder or `x.py` in the project's folder or its `src/`, or in a folder above it or that folder's `src/`, up to the root. |
+| `Python was not found` (the Windows stand-in for a missing Python)                         | never                                                                                                                                              |
+| `'x' is not recognized as an internal or external command` (cmd)                           | never                                                                                                                                              |
+| `x: not found` or `x: command not found` (sh), only with exit code 127                     | never                                                                                                                                              |
+| `canceled due to missing packages` (`npx --no` with the tool not installed)                | never                                                                                                                                              |
+| `Command "x" not found` (pnpm), `Command not found: x` (poetry), `Failed to spawn: x` (uv) | never                                                                                                                                              |
+| `Cannot find package 'x'` with `ERR_MODULE_NOT_FOUND` (Node)                               | `x` is a path (`./`, `/`, a drive letter).                                                                                                         |
+
+The command that sets it up is the project's `install` command from `fscale facts`: for a Python project it installs the dependency file into the project's interpreter, for a Node project it is `<pm> install`. When the missing program is one an install does not bring (`python`, `node`, `npm`, `pnpm`, `uv`, `poetry`, `go`, `cargo` and the like), the summary says to install that program instead.
+
+## Python projects use their own virtual environment
+
+Each Python project's steps run with the interpreter `fscale facts` shows for it: a `.venv` or `venv` in the project's folder first, then the project's uv, poetry or pipenv, then an active `VIRTUAL_ENV`, and `python` from the PATH last. [facts.md](facts.md) has the order and why. When verify falls back to `python` from the PATH for a project, it says so in a `note:` line under the summary and in `notes` in JSON.
 
 ## A skipped step is never a clean pass
 
@@ -122,41 +156,45 @@ verify: PARTIAL - 5 of 7 steps ran, 2 skipped
     test       skipped  package.json has no test script, and no vitest or jest config was found
 
 warning: steps were skipped because no command was found: typecheck in backend/auth_service, test in frontend. Set verify.projects["backend/auth_service"].typecheck in your firescale config to a command, or to false if that project has none.
+
+note: no virtual environment was found for backend/auth_service, so its Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.
 ```
 
 A failure in a project names it: `verify: FAILED at test in backend/auth_service`, and `Fix the failure, then run again in backend/auth_service: python -m pytest`.
 
-At most the last 30 non-empty lines of the failed command are kept, with colour codes removed. Steps after the failure are listed as `not run`. When `check` is the step that failed, the lines are the violations of enforced rules, one per line, with the same cap; report-only rules are left out.
+At most the last 30 non-empty lines of the failed command are kept, with colour codes removed. The steps of the same project after the failure are listed as `not run`; other projects run. Each failure gets its own `Last lines of ...` block and its own line with the command to run again. When `check` is the step that failed, the lines are the violations of enforced rules, one per line, with the same cap; report-only rules are left out.
 
 `--json` prints the format described by `packages/cli/schemas/verify-output.schema.json` (JSON Schema draft-07, published as `firescale/schemas/verify-output.schema.json`).
 
-| Field           | Meaning                                                                                                                                                                                                                                         |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | Always `2`. Changes only on a breaking change. Version 2 added `result`, the counts, `skipped`, `failOnSkipped`, `failedProject`, the `project` of a step, and the step status `off`.                                                           |
-| `version`       | The firescale version.                                                                                                                                                                                                                          |
-| `ok`            | `true` when the exit code is 0: `result` is `ok` or `partial`.                                                                                                                                                                                  |
-| `result`        | `ok` (every step ran and passed), `partial` (nothing failed, at least one step skipped) or `failed` (a step failed, or steps were skipped with `failOnSkipped` on). **Read this, not `ok` alone.**                                              |
-| `runner`        | How the root's commands were chosen: `config` (all three steps set in the config), `nx`, `turbo`, `scripts`, `cargo`, `python`, `go`, `projects` (only the projects below the root) or `none`.                                                  |
-| `stepsTotal`    | Steps that should run: every step except those that are `off`.                                                                                                                                                                                  |
-| `stepsRun`      | Steps that did run, passing or failing.                                                                                                                                                                                                         |
-| `failOnSkipped` | The config setting.                                                                                                                                                                                                                             |
-| `failedStep`    | The first failed step. Absent when no step failed.                                                                                                                                                                                              |
-| `failedProject` | The folder of the project whose step failed. Absent for a root step.                                                                                                                                                                            |
-| `rerun`         | The command to run again, from the folder in `failedProject` when that is present. Absent when no step failed.                                                                                                                                  |
-| `steps`         | `check` first, then the root's steps, then each project's. Each has `name`, `status` (`passed`, `failed`, `skipped`, `not-run`, `off`), `durationMs`, `detail`, and where they apply `project`, `kind`, `command`, `exitCode` and `outputTail`. |
-| `skipped`       | Every skipped step: `step`, `reason`, and `project` for a project's step. Empty when nothing was skipped.                                                                                                                                       |
-| `warnings`      | One sentence naming the skipped steps. Absent when there are none.                                                                                                                                                                              |
+| Field           | Meaning                                                                                                                                                                                                                                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | Always `3`. Changes only on a breaking change. Version 3 added the result and step status `setup-needed`, the step's `fix`, and `notes`. Version 2 added `result`, the counts, `skipped`, `failOnSkipped`, `failedProject`, the `project` of a step, and the step status `off`.                                     |
+| `version`       | The firescale version.                                                                                                                                                                                                                                                                                              |
+| `ok`            | `true` when the exit code is 0: `result` is `ok` or `partial`.                                                                                                                                                                                                                                                      |
+| `result`        | `ok` (every step ran and passed), `partial` (nothing failed, at least one step skipped), `failed` (a step failed, or steps were skipped with `failOnSkipped` on) or `setup-needed` (nothing failed in the code, but a step needs setup). **Read this, not `ok` alone.**                                             |
+| `runner`        | How the root's commands were chosen: `config` (all three steps set in the config), `nx`, `turbo`, `scripts`, `cargo`, `python`, `go`, `projects` (only the projects below the root) or `none`.                                                                                                                      |
+| `stepsTotal`    | Steps that should run: every step except those that are `off`.                                                                                                                                                                                                                                                      |
+| `stepsRun`      | Steps that did run: passed, failed or needs setup.                                                                                                                                                                                                                                                                  |
+| `failOnSkipped` | The config setting.                                                                                                                                                                                                                                                                                                 |
+| `failedStep`    | The first step that failed or needs setup. The others are in `steps` and in the headline. Absent when no step failed.                                                                                                                                                                                               |
+| `failedProject` | The folder of the project whose step failed. Absent for a root step.                                                                                                                                                                                                                                                |
+| `rerun`         | The command to run again, from the folder in `failedProject` when that is present. Absent when no step failed.                                                                                                                                                                                                      |
+| `steps`         | `check` first, then the root's steps, then each project's. Each has `name`, `status` (`passed`, `failed`, `setup-needed`, `skipped`, `not-run`, `off`), `durationMs`, `detail`, and where they apply `project`, `kind`, `command`, `exitCode`, `outputTail` and `fix` (the setup command of a `setup-needed` step). |
+| `skipped`       | Every skipped step: `step`, `reason`, and `project` for a project's step. Empty when nothing was skipped.                                                                                                                                                                                                           |
+| `notes`         | Things that are not failures: Python projects that ran with `python` from the PATH. Absent when there are none.                                                                                                                                                                                                     |
+| `warnings`      | One sentence naming the skipped steps. Absent when there are none.                                                                                                                                                                                                                                                  |
 
 ## The stop hook
 
-`fscale hooks run` blocks an agent only when verify fails. On a partial run the agent may stop, and the hook prints a line on stderr that says the run was not a clean pass and names the skipped steps. That line is for the person reading the hook's output or its log: an agent may not be shown the stderr of a hook that lets it stop. With `verify.failOnSkipped` on, a partial run is a failure and the hook blocks. ADR 0020 explains the default.
+`fscale hooks run` blocks an agent only when verify fails. When a step needs setup, the message the agent gets starts with `SETUP NEEDED:`, says that it is not a problem in the code, tells the agent not to edit code, tests or config to get past it, and names the setup command to run or to ask the user for. On a partial run the agent may stop, and the hook prints a line on stderr that says the run was not a clean pass and names the skipped steps. That line is for the person reading the hook's output or its log: an agent may not be shown the stderr of a hook that lets it stop. With `verify.failOnSkipped` on, a partial run is a failure and the hook blocks. ADR 0020 explains the default.
 
 ## Limits
 
 - There is no time limit on a step. A command that hangs makes `verify` hang.
 - Output is captured, not streamed, so nothing is printed until a step ends.
 - With Nx, the task names must be `lint`, `typecheck` and `test`. Use the `verify` config key for other names.
-- A project's commands run with the tools found on the PATH. A Python service needs its virtual environment active, or its own command under `verify.projects`.
+- A Node, Rust or Go project's commands run with the tools found on the PATH. A Python project's run with its interpreter (see above).
+- Setup detection only knows the messages in the table. A setup problem with another message is a normal failure.
 - Projects run one after another, not in parallel.
 - A step that is skipped in every run stays in the summary until it gets a command or is set to `false`.
 - `verify` is as fast as the repo's own commands. firescale's share is a few milliseconds (see `bench/RESULTS.md`).

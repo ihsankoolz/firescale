@@ -20,7 +20,7 @@
   "properties": {
     "schemaVersion": {
       "description": "Version of this format. Changes only on a breaking change.",
-      "const": 2
+      "const": 3
     },
     "version": {
       "description": "The firescale version that produced the report.",
@@ -31,8 +31,8 @@
       "type": "boolean"
     },
     "result": {
-      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on.",
-      "enum": ["ok", "partial", "failed"]
+      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up.",
+      "enum": ["ok", "partial", "failed", "setup-needed"]
     },
     "runner": {
       "description": "How the commands of the repo root were chosen: all three from the config, Nx, Turborepo, package.json scripts, Cargo, a Python or Go project at the root, none found, or projects when the root has no commands of its own and the projects below it supply them.",
@@ -44,7 +44,7 @@
       "minimum": 1
     },
     "stepsRun": {
-      "description": "Steps that did run, passing or failing.",
+      "description": "Steps that did run: passed, failed or needs setup.",
       "type": "integer",
       "minimum": 0
     },
@@ -53,15 +53,15 @@
       "type": "boolean"
     },
     "failedStep": {
-      "description": "Name of the first step that failed. Absent when no step failed.",
+      "description": "Name of the first step that failed or needs setup. Every one is in steps and in the headline. Absent when no step failed.",
       "enum": ["check", "lint", "typecheck", "test"]
     },
     "failedProject": {
-      "description": "Folder of the project whose step failed. Absent when the step belongs to the repo root.",
+      "description": "Folder of the project of failedStep. Absent when that step belongs to the repo root.",
       "type": "string"
     },
     "rerun": {
-      "description": "The command to run again after fixing the failure, from the folder in failedProject when that is present. Absent when no step failed.",
+      "description": "The command of failedStep, to run again after fixing it, from the folder in failedProject when that is present. Absent when no step failed.",
       "type": "string"
     },
     "warnings": {
@@ -90,8 +90,8 @@
             "enum": ["go", "node", "python", "rust"]
           },
           "status": {
-            "description": "skipped: no command was found, so nothing was verified. not-run: an earlier step failed, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",
-            "enum": ["passed", "failed", "skipped", "not-run", "off"]
+            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",
+            "enum": ["passed", "failed", "setup-needed", "skipped", "not-run", "off"]
           },
           "command": {
             "description": "The command that ran, or would have. Absent for a skipped step and for one that is off.",
@@ -110,11 +110,15 @@
             "type": "string"
           },
           "outputTail": {
-            "description": "The last lines of a failed step's output, without colour codes. Absent unless the step failed.",
+            "description": "The last lines of the output of a step that failed or needs setup, without colour codes. Absent otherwise.",
             "type": "array",
             "items": {
               "type": "string"
             }
+          },
+          "fix": {
+            "description": "For a step that needs setup: the command that sets the environment up, run from the project's folder. Absent when no command is known.",
+            "type": "string"
           }
         }
       }
@@ -138,6 +142,13 @@
             "type": "string"
           }
         }
+      }
+    },
+    "notes": {
+      "description": "Things worth knowing that are not failures: Python projects whose commands use python from the PATH because no virtual environment was found for them. Absent when there are none.",
+      "type": "array",
+      "items": {
+        "type": "string"
       }
     }
   }

@@ -379,6 +379,58 @@ pub struct HookReply {
     pub exit_code: u8,
 }
 
+/// What the stop hook sends an agent with a block: the verify summary,
+/// opened by a note when a step failed because the environment is not set
+/// up. That note tells the agent not to change code for it (ADR 0022).
+#[must_use]
+pub fn block_summary(report: &crate::verify::VerifyReport) -> String {
+    let summary = crate::verify::format_verify_human(report);
+    let setup: Vec<&crate::verify::StepReport> = report
+        .steps
+        .iter()
+        .filter(|step| step.status == crate::verify::StepStatus::SetupNeeded)
+        .collect();
+    if setup.is_empty() {
+        return summary;
+    }
+    let fixes: Vec<String> = setup
+        .iter()
+        .filter_map(|step| {
+            step.fix.as_ref().map(|fix| match &step.project {
+                Some(project) if project != "." => format!("`{fix}` in {project}"),
+                _ => format!("`{fix}`"),
+            })
+        })
+        .collect();
+    let next = if fixes.is_empty() {
+        "Set up what the summary names, or tell the user it is needed.".to_owned()
+    } else {
+        format!(
+            "Run {} to set it up, or tell the user it is needed.",
+            fixes.join(", ")
+        )
+    };
+    let failed = report
+        .steps
+        .iter()
+        .filter(|step| step.status == crate::verify::StepStatus::Failed)
+        .count();
+    let also = if failed == 0 {
+        String::new()
+    } else {
+        format!(
+            " Separately, {} FAILED in the code: {} need{} a code fix as usual.",
+            if failed == 1 { "1 step" } else { "other steps" },
+            if failed == 1 { "it" } else { "they" },
+            if failed == 1 { "s" } else { "" }
+        )
+    };
+    format!(
+        "SETUP NEEDED: {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}{also}\n\n{summary}",
+        if setup.len() == 1 { "1 step" } else { "some steps" }
+    )
+}
+
 /// Turns a decision into the output the agent expects.
 ///
 /// Claude Code and Codex: exit code 2 with the message on stderr blocks the
@@ -752,5 +804,110 @@ mod tests {
         assert_eq!(give_up.exit_code, 0);
         assert_eq!(give_up.stdout, "{}\n");
         assert!(give_up.stderr.contains("allowed to stop"));
+    }
+
+    fn report_with(output: &str) -> crate::verify::VerifyReport {
+        use crate::verify::{run_verify, CheckStep, Planned, ProjectPlan, VerifyPlan};
+        let fixture = Fixture::new(&[("svc/main.py", "")], Track::NoGit).unwrap();
+        let command = if cfg!(windows) {
+            format!("echo {output} 1>&2 & exit /b 1")
+        } else {
+            format!("echo \"{output}\" >&2; exit 1")
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![ProjectPlan {
+                root: "svc".to_owned(),
+                kind: Some("python".to_owned()),
+                steps: vec![("test".to_owned(), Planned::Command(command))],
+                install: Some("uv sync".to_owned()),
+                python_from_path: false,
+            }],
+            ..VerifyPlan::default()
+        };
+        let check = CheckStep {
+            ok: true,
+            detail: "no rules".to_owned(),
+            output: Vec::new(),
+            duration_ms: 0,
+            command: "fscale check".to_owned(),
+        };
+        run_verify(fixture.root(), "0.0.0", check, &plan).unwrap()
+    }
+
+    #[test]
+    fn a_block_for_a_setup_problem_tells_the_agent_not_to_edit_code() {
+        let report = report_with("ModuleNotFoundError: No module named 'jwt'");
+        let summary = block_summary(&report);
+        assert!(
+            summary.starts_with(
+                "SETUP NEEDED: 1 step could not run because the environment is not ready"
+            ),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("Do not edit code, tests or config to get past it."),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("Run `uv sync` in svc to set it up"),
+            "{summary}"
+        );
+        let block = reply(Agent::Claude, &Decision::Block { blocks: 1 }, &summary, 3);
+        assert_eq!(block.exit_code, 2);
+        assert!(block.stderr.contains("Do not edit code"));
+    }
+
+    #[test]
+    fn a_block_with_setup_and_real_failures_says_the_failures_need_code_fixes() {
+        use crate::verify::{run_verify, CheckStep, Planned, ProjectPlan, VerifyPlan};
+        let fixture = Fixture::new(&[("a/x.txt", ""), ("b/x.txt", "")], Track::NoGit).unwrap();
+        let say = |text: &str| {
+            if cfg!(windows) {
+                format!("echo {text} 1>&2 & exit /b 1")
+            } else {
+                format!("echo \"{text}\" >&2; exit 1")
+            }
+        };
+        let unit = |root: &str, command: String| ProjectPlan {
+            root: root.to_owned(),
+            kind: Some("python".to_owned()),
+            steps: vec![("test".to_owned(), Planned::Command(command))],
+            install: Some("uv sync".to_owned()),
+            python_from_path: false,
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                unit("a", say("No module named jwt")),
+                unit("b", say("assert 1 == 2")),
+            ],
+            ..VerifyPlan::default()
+        };
+        let check = CheckStep {
+            ok: true,
+            detail: "no rules".to_owned(),
+            output: Vec::new(),
+            duration_ms: 0,
+            command: "fscale check".to_owned(),
+        };
+        let report = run_verify(fixture.root(), "0.0.0", check, &plan).unwrap();
+        let summary = block_summary(&report);
+        assert!(summary.starts_with("SETUP NEEDED: 1 step"), "{summary}");
+        assert!(
+            summary
+                .contains("Separately, 1 step FAILED in the code: it needs a code fix as usual."),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn a_block_for_a_real_failure_is_the_plain_summary() {
+        let report = report_with("assert 1 == 2");
+        assert_eq!(
+            block_summary(&report),
+            crate::verify::format_verify_human(&report)
+        );
+        assert!(!block_summary(&report).contains("SETUP"));
     }
 }

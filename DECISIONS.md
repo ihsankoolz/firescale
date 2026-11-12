@@ -12,16 +12,19 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 ## Needs your decision (all milestones, most important first)
 
-- **(Releases) Set up the eight trusted publishers, then tag 0.1.1.** The version is 0.1.1 everywhere and nothing is tagged. `RELEASING.md` has the steps: on npmjs.com, for each of the eight packages, add a GitHub Actions trusted publisher (user `ihsankoolz`, repository `firescale`, workflow `release.yml`, `npm publish` ticked), then `git tag v0.1.1` on `main` and push the tag. A new trusted publisher expires unless a publish succeeds within 2 days, so set them up shortly before tagging.
-- **(Releases) The publish and verify stages have never run.** They cannot be tried without publishing. The scripts are tested against a stand-in registry, and a failed run can be repeated: what is already published is skipped. Expect to watch the first run.
+- **(0.1.2) Release 0.1.2 when you are ready.** The version is 0.1.2 and no tag was pushed. Tag `v0.1.2` on `main` and push it (`RELEASING.md`).
+- **(0.1.2) Should the stop hook let an agent stop when the only problem is setup?** Today it blocks, with a message that says not to edit code and to run the setup command or tell the user; the loop guard releases the agent after 3 blocks. Letting it stop at once would save those turns, but the agent can often run the install command itself (ADR 0022).
+- **(0.1.2) The order of Python interpreters.** A `.venv` or `venv` in the project, then uv, poetry or pipenv, then an active `VIRTUAL_ENV`, then `python` from the PATH. Say if an activated venv should win over the project's manager (ADR 0022).
+- **(0.1.2) With no virtual environment, the install command is `python -m pip install -r requirements-dev.txt`**, into the same `python` the steps use, not into a new `.venv`. A `.venv` path differs by OS; the `note:` line suggests creating one. On Debian and Ubuntu that install is refused by the system Python, which is the right outcome.
+- **(0.1.2) Verify's JSON is schema version 3.** It added the status `setup-needed`. Blame-aware verify (M17) will take version 4.
+- **(0.1.2) A failing `check` still stops every project.** Only the root and the projects are independent of each other. Say if `check` should not stop the rest.
+- **(0.1.2) Ruff or mypy in a requirements file above a service does not count for it.** Only the service's own folder is read (or what its files include with `-r`). Ruff in `[project] dependencies` or `[packages]` (not only dev lists) also counts.
 - **(Releases) No approval step between the tag and the publish.** Pushing the tag is the approval. A GitHub environment with a required reviewer can be added; it must then be entered in each package's trusted publisher too.
 - **(Releases) After the first automated release works, turn off token publishing** for each package on npmjs.com ("Require two-factor authentication and disallow tokens"). npm recommends it. I left it as a step in `RELEASING.md`, since it is your account.
 - **(M10) Should the agent stop hook block when verify is only partial?** Today it does not. With steps skipped for lack of a command, `fscale verify` prints `verify: PARTIAL`, exits 0, and the hook lets the agent stop with a one-line note on stderr. To make it block, set `"verify": { "failOnSkipped": true }`; then verify exits 1 and the hook blocks. I kept "do not block" as the default because a missing command is not something the agent's change broke, because the easy way past such a block is to set the steps to `false` (the weakening the tamper guard is meant to catch), and because the hook lets go after 3 blocks anyway. The cost: in a repo with nothing to run, an agent can stop with no check having run. Say if you want the hook to block by default, or want `failOnSkipped` on by default (ADR 0020).
 - **(M10) A partial verify exits 0.** That follows your earlier answer that a skipped step is not a failure. CI therefore stays green on `PARTIAL` unless `failOnSkipped` is on. The starter workflow that `fscale init` writes does not turn it on. Say if generated CI should.
 - **(M10) Projects are searched four folder levels deep, and the search has no setting.** Deeper projects are reached by naming their folder under `verify.projects`. Say if you want a config key for the depth or for extra folders to skip.
 - **(M10) A `requirements.txt` alone is not a project.** It needs a `.py` file or a Python config file beside it. Your services qualify through `pytest.ini`, `alembic.ini` and `main.py`.
-- **(M10) Python commands are `python -m pytest` and `python -m ruff check .`** They need `python` on the PATH with the tools installed, so an activated virtual environment. If your services each have their own `.venv`, verify will not find it by itself: set the command per project under `verify.projects`, or say if verify should look for `.venv` in the project's folder.
-- **(M10) Ruff counts as configured** when a `ruff.toml`, `.ruff.toml` or `[tool.ruff]` section is in the service's folder or a folder above it, or when a `requirements*.txt` of the service lists `ruff`. Otherwise the service's lint step is skipped and named.
 - **(M10) Playwright is listed as a tool but never run as the test step.** End-to-end tests need browsers and running services. Your frontend's test step is therefore skipped until it has a `test` script, a vitest or jest config, or a command under `verify.projects`.
 - **(M10) Which variables `core/env-example` always ignores.** The list is in `docs/rules.md`. It includes `DEBUG`, `HTTP_PROXY` and `NODE_OPTIONS`, and has no `DOCKER_` prefix. There is no option to take a name off it.
 - **(Plan) The second box of the publishing checkpoint is still open.** A repo made by `npx firescale@0.1.0 init` has not yet been seen passing its own generated CI on GitHub. Step 7 under "Publishing to npm" below says how to check it.
@@ -46,6 +49,55 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## 0.1.2 — fixes from running 0.1.1 on your course project
+
+**Recorded first**
+
+- **0.1.1 was released on 2026-11-12 through the Release workflow, with npm trusted publishing.** All four stages passed: check version, the six builds, publish to npm, and the check from Linux, macOS and Windows. It was the first release that no person published by hand.
+- From that release: a trusted publisher with a wrong **workflow filename** fails as `E404 Not Found` on the `PUT` of the package, not only as `ENEEDAUTH`. Added to the table in `RELEASING.md` and to its notes on setting up publishers.
+
+**Built** (ADR 0022)
+
+1. **Each Python project runs with its own interpreter.** A `.venv` or `venv` in the project's folder (`.venv/Scripts/python.exe` on Windows, `.venv/bin/python` elsewhere), then uv, poetry or pipenv, then an active `VIRTUAL_ENV`, then `python` from the PATH. `fscale facts` shows each project's choice (`interpreter:` and the `interpreter` object in JSON). With none found, the commands are today's, `fscale facts` says "no virtual environment found", and verify prints a `note:`.
+2. **Projects are independent.** One project's failure stops only the rest of that project. Every project's result is reported, and the headline names every failure: `verify: FAILED at test in backend/audit_service, lint in frontend`.
+3. **Setup needed is reported apart from failures.** A missing module, a command that is not found or dependencies that are not installed give the status `SETUP` (`setup-needed`), with the command that sets it up, from the project's new `install` command. The detection is a short documented list; when unsure, it is a normal failure. The stop hook's message starts with `SETUP NEEDED:` and tells the agent not to edit code, tests or config for it.
+4. **Ruff and mypy are found in dependency lists**: requirements files (with `-r` includes), `pyproject.toml` dependency and dev lists (PEP 621, PEP 735, uv, pdm, poetry) and `Pipfile`.
+5. **`core/env-example` treats `playwright.config.*`, `vitest.config.*`, `vitest.workspace.*`, `jest.config.*` and `cypress.config.*` as test code.**
+
+- Each has a caught case and a not-a-finding case. Rust tests run on all three OSes; a Windows-only test pins `.venv\Scripts\python.exe`. New CLI tests (`python-env.test.ts`) copy a stand-in interpreter (`fscale-python-stub`, in the testkit) into a real `.venv` and run verify, so the venv's interpreter is really started on Linux, macOS and Windows.
+- Version 0.1.2. **No tag was pushed.**
+
+**Decisions made for you** (all ADR 0022)
+
+- **The interpreter order** above. The project's own `.venv` is the most specific and never installs anything; uv and poetry pick their environment themselves; an activated venv belongs to the shell, so it only fills in.
+- **A uv or poetry project with a `.venv` runs that `.venv` directly**, not through `uv run`, so verify never syncs or installs.
+- **On Windows a command has a backslash path** (`.venv\Scripts\python.exe -m pytest`), because `cmd` cannot start `.venv/Scripts/python.exe`. The one exception to forward slashes in output.
+- **A `.venv` without an interpreter for this platform is passed over**, and the reason is in `detail`.
+- **`commands.install` is new in facts** for Python projects and Node projects that are not workspace members. The facts schema stays at 2, since the change only adds fields.
+- **A failing `check` still stops everything.** The root and each project are the independent units.
+- **`failedStep`, `failedProject` and `rerun` name the first failure**; every failure is in `steps` and the headline.
+- **Setup needed exits 1** and makes the result `setup-needed` (or `failed`, when something else failed too).
+- **A missing Python module that is a folder or `.py` file of the project, or above it, is a normal failure**, since it can be a code mistake.
+- **Setup detection reads the whole output** of a failed step, not only the last 30 lines.
+- **The stop hook still blocks on setup**, with the message above.
+- **The CLI test helper removes `VIRTUAL_ENV`** from every test's environment unless the test sets it.
+
+**Tests changed on purpose, none weakened**
+
+- Facts snapshots: Python projects gained `install` and `interpreter`, Node projects that are not workspace members gained `install`.
+- Verify snapshots: schema version 3, and the `note:` line for services with no venv.
+- Rust tests that build a `ProjectPlan` or `VerifyPlan` by hand gained the two new fields. Rust tests that detect facts now pass "no active venv" explicitly.
+- One new facts test of my own expected `pip install -r requirements-dev.txt` for a service whose dev file does not include `requirements.txt`. The review showed that would leave `jwt` missing, the exact case you hit; it now expects `-r requirements.txt -r requirements-dev.txt`.
+
+**Independent review before the pull request** found seven issues, all fixed: a missing module among real test failures (or in a `src/` package) was called setup; a uv project with `.venv` got a pip install command (uv's venvs have no pip); the install could miss `requirements.txt`; the hook message did not say that other failures still need code fixes; a `%` in a Windows `VIRTUAL_ENV` path; `stepsRun` did not count setup steps, and the note named projects whose commands all come from the config; and a few test-runner config names (`playwright-ct.config.*`, `vitest.setup.*`, `jest.setup.*`, `vitest.e2e.config.*`, any letter case).
+
+**Known limits**
+
+- Setup detection knows only the messages in `docs/verify.md`. Others are normal failures.
+- `VIRTUAL_ENV` is the only activation that is read. A conda environment is not recognised unless it sets `VIRTUAL_ENV`.
+- A requirements file that only a Dockerfile or a CI step uses still counts as the project's dependency list.
+- The pyproject reader does not handle inline-table spellings such as `optional-dependencies = { dev = [...] }` under `[project]`, or quoted dotted section names.
 
 ## Automated releases (after M10, at your request)
 

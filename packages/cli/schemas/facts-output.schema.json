@@ -175,6 +175,10 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "install": {
+                "description": "Installs the project's dependencies: '<package manager> install' for a Node project that is not a workspace member, and for a Python project the command for its environment (ADR 0022).",
+                "type": "string"
+              },
               "build": {
                 "type": "string"
               },
@@ -195,6 +199,26 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "interpreter": {
+            "description": "Python projects only: the interpreter their commands run with, and why (ADR 0022).",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "command", "detail"],
+            "properties": {
+              "source": {
+                "description": "venv: a .venv or venv folder in the project. uv, poetry, pipenv: the project's manager picks the environment. active: the virtual environment named by VIRTUAL_ENV. path: no virtual environment was found, so python from the PATH.",
+                "enum": ["venv", "uv", "poetry", "pipenv", "active", "path"]
+              },
+              "command": {
+                "description": "What each command starts with, for example '.venv/bin/python -m', 'uv run' or 'python -m'.",
+                "type": "string"
+              },
+              "detail": {
+                "description": "Where the interpreter came from, for people.",
+                "type": "string"
+              }
             }
           }
         }

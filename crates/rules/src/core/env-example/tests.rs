@@ -1089,3 +1089,73 @@ mod review_findings {
             .is_empty());
     }
 }
+
+mod test_runner_config {
+    use super::super::is_test_path;
+    use super::*;
+
+    #[test]
+    fn test_runner_config_files_are_test_code() {
+        for file in [
+            "frontend/playwright.config.ts",
+            "playwright.config.js",
+            "web/vitest.config.mts",
+            "vitest.workspace.ts",
+            "jest.config.cjs",
+            "app/cypress.config.ts",
+            "playwright-ct.config.ts",
+            "vitest.e2e.config.ts",
+            "jest.setup.js",
+            "vitest.setup.ts",
+            "Playwright.Config.TS",
+        ] {
+            assert!(is_test_path(file), "{file}");
+        }
+        // Build and app config is not test code, and neither is a file that
+        // only mentions a runner in its name.
+        for file in [
+            "frontend/vite.config.ts",
+            "next.config.js",
+            "src/playwright.ts",
+            "src/jest.setup-config.ts",
+            "src/my-vitest.config.ts",
+        ] {
+            assert!(!is_test_path(file), "{file}");
+        }
+    }
+
+    #[test]
+    fn a_variable_read_only_by_a_playwright_config_is_low_severity() {
+        let f = repo(&[
+            (".env.example", ""),
+            (
+                "frontend/playwright.config.ts",
+                "export default { use: { baseURL: process.env.EXAMPLE_E2E_BASE_URL } };\n",
+            ),
+            (
+                "frontend/vitest.config.ts",
+                "export default { test: { env: { A: process.env.EXAMPLE_VITEST_SEED } } };\n",
+            ),
+        ]);
+        let found = check(&f);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found.iter().all(|d| d.severity == Some(Severity::Low)));
+        assert!(found
+            .iter()
+            .all(|d| d.message.contains("only by test code")));
+    }
+
+    #[test]
+    fn a_variable_read_by_the_vite_config_is_a_normal_finding() {
+        let f = repo(&[
+            (".env.example", ""),
+            (
+                "frontend/vite.config.ts",
+                "export default { server: { port: Number(process.env.EXAMPLE_DEV_PORT) } };\n",
+            ),
+        ]);
+        let found = check(&f);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].severity, None);
+    }
+}

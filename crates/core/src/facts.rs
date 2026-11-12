@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 use serde::Serialize;
@@ -90,11 +90,40 @@ pub struct Project {
     /// Commands to run from the project's folder.
     pub commands: Commands,
     pub depends_on: Vec<String>,
+    /// For a Python project: the interpreter its commands use (ADR 0022).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<Interpreter>,
+}
+
+/// The Python interpreter a project's commands run with, and why that one
+/// (ADR 0022). The first match wins:
+///
+/// 1. `venv`: a `.venv` or `venv` folder in the project's folder with an
+///    interpreter in it (`Scripts\python.exe` on Windows, `bin/python`
+///    elsewhere).
+/// 2. `uv`, `poetry`, `pipenv`: the project's own manager picks the
+///    environment (`uv run`, `poetry run`, `pipenv run`).
+/// 3. `active`: the virtual environment named by `VIRTUAL_ENV`.
+/// 4. `path`: no virtual environment was found; `python` from the PATH.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Interpreter {
+    /// `venv`, `uv`, `poetry`, `pipenv`, `active` or `path`.
+    pub source: String,
+    /// What each command starts with, for example `.venv/bin/python -m`,
+    /// `uv run` or `python -m`.
+    pub command: String,
+    /// One sentence for people: where the interpreter came from.
+    pub detail: String,
 }
 
 /// Commands to run, by purpose. Absent when the repo has no such script.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Commands {
+    /// For a project: installs its dependencies. Verify names it when a step
+    /// fails because the environment is not set up. Never set at the repo
+    /// level, which lists scripts only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -368,6 +397,7 @@ struct Detail {
     lockfiles: Vec<String>,
     tools: Vec<String>,
     commands: Commands,
+    interpreter: Option<Interpreter>,
 }
 
 const LOCKFILE_NAMES: [&str; 10] = [
@@ -534,6 +564,7 @@ fn script_commands(json: Option<&Value>, package_manager: &str) -> Commands {
             .then(|| format!("{package_manager} run {name}"))
     };
     Commands {
+        install: None,
         build: script("build"),
         test: script("test"),
         lint: script("lint"),
@@ -578,6 +609,7 @@ fn node_tool_commands(
         .filter(|text| !text.contains("\"references\""))
         .map(|_| format!("{exec} tsc --noEmit"));
     Commands {
+        install: None,
         build: None,
         test,
         lint,
@@ -587,6 +619,7 @@ fn node_tool_commands(
 
 fn or_else(first: Commands, second: Commands) -> Commands {
     Commands {
+        install: first.install.or(second.install),
         build: first.build.or(second.build),
         test: first.test.or(second.test),
         lint: first.lint.or(second.lint),
@@ -644,6 +677,11 @@ fn node_detail(
         &configured,
         node_exec(package_manager.as_deref()),
     );
+    // A manifest that cannot be read gives no commands at all.
+    let install = Commands {
+        install: json.map(|_| format!("{} install", package_manager.as_deref().unwrap_or("npm"))),
+        ..Commands::default()
+    };
     let detail = Detail {
         languages,
         package_manager,
@@ -652,9 +690,11 @@ fn node_detail(
             .filter(|lock| !matches!(lock.as_str(), "Cargo.lock" | "go.sum"))
             .collect(),
         tools,
-        commands: or_else(scripts.clone(), from_tools.clone()),
+        commands: or_else(or_else(scripts.clone(), from_tools.clone()), install),
+        interpreter: None,
     };
     let only_tools = Commands {
+        install: None,
         build: None,
         test: scripts.test.is_none().then_some(from_tools.test).flatten(),
         lint: scripts.lint.is_none().then_some(from_tools.lint).flatten(),
@@ -693,7 +733,9 @@ fn rust_detail(root: &Path, dir: &str, cargo: &[TomlEntry]) -> Detail {
             test: Some(format!("cargo test{all}")),
             lint: Some(format!("cargo clippy{all} --all-targets -- -D warnings")),
             typecheck: None,
+            install: None,
         },
+        interpreter: None,
     }
 }
 
@@ -718,29 +760,188 @@ fn go_detail(root: &Path, dir: &str) -> Detail {
             test: Some("go test ./...".to_owned()),
             lint: Some("go vet ./...".to_owned()),
             typecheck: None,
+            install: None,
         },
+        interpreter: None,
     }
 }
 
-/// Lower-case names of the packages listed in the `requirements*.txt` files
-/// of a folder.
-fn python_requirements(root: &Path, dir: &str, names: &[String]) -> BTreeSet<String> {
-    let mut out = BTreeSet::new();
-    for file in names.iter().filter(|name| {
-        let lower = name.to_lowercase();
-        lower.starts_with("requirements") && lower.ends_with(".txt")
-    }) {
-        let Some(text) = read_text(root, &in_dir(dir, file)) else {
+/// How many levels of `-r` includes between requirements files are followed.
+const MAX_REQUIREMENT_INCLUDES: usize = 5;
+
+/// The package name at the start of a requirement such as `Ruff[x]>=1`,
+/// lower-cased with `_` as `-`. `None` for a URL, a VCS link or a path.
+fn requirement_name(spec: &str) -> Option<String> {
+    let spec = spec.trim();
+    let name: String = spec
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        .collect();
+    let starts_well = name.starts_with(|c: char| c.is_ascii_alphanumeric());
+    // `git+https://…`, `https://…`, `file:…` and `C:\…` are not names.
+    let looks_like_link = spec[name.len()..].starts_with([':', '+', '/', '\\']);
+    (starts_well && !looks_like_link).then(|| name.to_lowercase().replace('_', "-"))
+}
+
+/// The quoted strings of an array value, leaving out inline tables such as
+/// `{include-group = "test"}`.
+fn array_strings(value: &str) -> Vec<String> {
+    let mut kept = String::new();
+    let mut quote: Option<char> = None;
+    let mut depth = 0usize;
+    for c in value.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '{') => {
+                depth += 1;
+                continue;
+            }
+            (None, '}') => {
+                depth = depth.saturating_sub(1);
+                continue;
+            }
+            _ => {}
+        }
+        if depth == 0 {
+            kept.push(c);
+        }
+    }
+    quoted_strings(&kept)
+}
+
+/// The file named by a `-r <file>`, `--requirement <file>` or
+/// `--requirement=<file>` line.
+fn requirement_include(line: &str) -> Option<String> {
+    let rest = if let Some(rest) = line.strip_prefix("--requirement") {
+        if !rest.starts_with(|c: char| c == '=' || c.is_whitespace()) {
+            return None;
+        }
+        rest
+    } else {
+        line.strip_prefix("-r")?
+    };
+    let target = unquote(rest.trim_start().trim_start_matches('=').trim());
+    (!target.is_empty()).then_some(target)
+}
+
+/// `target`, as written in the repo-relative `file`, as a repo-relative
+/// path. `None` when it is absolute or leaves the repo.
+fn resolve_include(file: &str, target: &str) -> Option<String> {
+    let absolute = target.starts_with(['/', '\\'])
+        || target.as_bytes().get(1) == Some(&b':')
+        || target.contains("://");
+    if absolute {
+        return None;
+    }
+    let mut parts: Vec<&str> = file.split('/').collect();
+    parts.pop();
+    for part in target.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            _ => parts.push(part),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// Adds the packages of a requirements file, and of the files it includes,
+/// to `out`. Constraint files (`-c`), editable installs (`-e`), other
+/// options and links are left out.
+fn read_requirements(
+    root: &Path,
+    file: &str,
+    depth: usize,
+    seen: &mut BTreeSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    if !seen.insert(file.to_owned()) {
+        return;
+    }
+    let Some(text) = read_text(root, file) else {
+        return;
+    };
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        let line = strip_comment(line).trim();
+        if line.starts_with('-') {
+            if let Some(target) = requirement_include(line) {
+                if depth < MAX_REQUIREMENT_INCLUDES {
+                    if let Some(included) = resolve_include(file, &target) {
+                        read_requirements(root, &included, depth + 1, seen, out);
+                    }
+                }
+            }
             continue;
-        };
-        for line in text.lines() {
-            let name: String = strip_comment(line)
-                .trim()
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-                .collect();
-            if !name.is_empty() {
-                out.insert(name.to_lowercase().replace('_', "-"));
+        }
+        out.extend(requirement_name(line));
+    }
+}
+
+/// Packages from the dependency lists of a `pyproject.toml`: PEP 621
+/// dependencies and extras, PEP 735 dependency groups, uv, PDM and Poetry.
+fn pyproject_dependencies(text: &str, out: &mut BTreeSet<String>) {
+    for entry in parse_toml(text) {
+        let section = entry.section.as_str();
+        let array = (section == "project" && entry.key == "dependencies")
+            || (section == "tool.uv" && entry.key == "dev-dependencies")
+            || matches!(
+                section,
+                "project.optional-dependencies" | "dependency-groups" | "tool.pdm.dev-dependencies"
+            );
+        let poetry_table = matches!(
+            section,
+            "tool.poetry.dependencies" | "tool.poetry.dev-dependencies"
+        ) || section
+            .strip_prefix("tool.poetry.group.")
+            .is_some_and(|rest| rest.ends_with(".dependencies"));
+        if array {
+            out.extend(
+                array_strings(&entry.value)
+                    .iter()
+                    .filter_map(|spec| requirement_name(spec)),
+            );
+        } else if poetry_table {
+            out.extend(requirement_name(&entry.key));
+        }
+    }
+}
+
+/// Lower-case names of the packages a Python project declares: in its
+/// requirements files (`.txt` files with `requirements` in the name, the
+/// `.txt` files of a `requirements/` folder, and the files they include with
+/// `-r`), its `pyproject.toml` and its `Pipfile`. Only the project's own
+/// folder is searched.
+fn python_dependencies(root: &Path, dir: &str, names: &[String]) -> BTreeSet<String> {
+    let is_txt = |name: &String| name.to_lowercase().ends_with(".txt");
+    let mut files: Vec<String> = names
+        .iter()
+        .filter(|name| is_txt(name) && name.to_lowercase().contains("requirements"))
+        .map(|name| in_dir(dir, name))
+        .collect();
+    let folder = in_dir(dir, "requirements");
+    files.extend(
+        file_names(root, &folder)
+            .iter()
+            .filter(|name| is_txt(name))
+            .map(|name| in_dir(&folder, name)),
+    );
+
+    let mut out = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    for file in &files {
+        read_requirements(root, file, 0, &mut seen, &mut out);
+    }
+    if let Some(text) = read_text(root, &in_dir(dir, "pyproject.toml")) {
+        pyproject_dependencies(&text, &mut out);
+    }
+    if let Some(text) = read_text(root, &in_dir(dir, "Pipfile")) {
+        for entry in parse_toml(&text) {
+            if matches!(entry.section.as_str(), "packages" | "dev-packages") {
+                out.extend(requirement_name(&entry.key));
             }
         }
     }
@@ -815,15 +1016,228 @@ fn is_python_project(root: &Path, dir: &str, names: &[String]) -> bool {
                 || names.iter().any(|name| name.ends_with(".py"))))
 }
 
-/// A Python project's folder.
-fn python_detail(root: &Path, dir: &str) -> Detail {
+/// The folders that hold a project's own virtual environment, in order.
+pub const VENV_DIRS: [&str; 2] = [".venv", "venv"];
+
+/// The interpreter inside a virtual environment folder, relative to it, as
+/// the platform's shell runs it.
+#[must_use]
+pub fn venv_python(venv: &str) -> String {
+    if cfg!(windows) {
+        format!("{venv}\\Scripts\\python.exe")
+    } else {
+        format!("{venv}/bin/python")
+    }
+}
+
+/// The parts of `venv_python` as path segments, for checking the disk.
+fn venv_python_parts() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["Scripts", "python.exe"]
+    } else {
+        &["bin", "python"]
+    }
+}
+
+/// Quotes a path for the platform's shell when it holds anything other than
+/// plain path characters. Both `sh` and `cmd` take double quotes; `sh` gets
+/// single quotes when the path has a character double quotes would expand.
+#[must_use]
+pub fn shell_quote(path: &str) -> String {
+    // A backslash is a path separator only for cmd; sh reads it as an escape.
+    let allowed = if cfg!(windows) {
+        "/\\._-:+@"
+    } else {
+        "/._-:+@"
+    };
+    let plain = !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || allowed.contains(c));
+    if plain {
+        path.to_owned()
+    } else if cfg!(windows) || !path.contains(['$', '`', '"', '\\', '!']) {
+        format!("\"{path}\"")
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    }
+}
+
+/// The dependency file to install a Python project from: the first of these
+/// in its folder. Development lists come first, because they also hold the
+/// test runner and the linters that verify runs.
+const PYTHON_INSTALL_FILES: [&str; 7] = [
+    "requirements-dev.txt",
+    "requirements_dev.txt",
+    "dev-requirements.txt",
+    "requirements-test.txt",
+    "requirements_test.txt",
+    "test-requirements.txt",
+    "requirements.txt",
+];
+
+/// Picks the interpreter for a Python project's commands (see `Interpreter`
+/// for the order) and the command that installs its dependencies.
+/// `manager` is `uv`, `poetry`, `pipenv` or `pip`. `active` is the value of
+/// `VIRTUAL_ENV`, if any.
+fn python_interpreter(
+    root: &Path,
+    dir: &str,
+    names: &[String],
+    manager: &str,
+    active: Option<&Path>,
+) -> (Interpreter, Option<String>) {
+    let folder = in_dir(dir, ".");
+    let base = folder
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .fold(root.to_path_buf(), |path, part| path.join(part));
+    let has = |file: &str| names.iter().any(|name| name == file);
+    // A development list that does not include requirements.txt itself
+    // (`-r requirements.txt`) is installed together with it, so the app's
+    // own dependencies are there too.
+    let includes_base = |file: &str| {
+        read_text(root, &in_dir(dir, file)).is_some_and(|text| {
+            text.lines().any(|line| {
+                let line = strip_comment(line).trim();
+                let target = line
+                    .strip_prefix("--requirement=")
+                    .or_else(|| line.strip_prefix("--requirement"))
+                    .or_else(|| line.strip_prefix("-r"))
+                    .map(str::trim);
+                target == Some("requirements.txt")
+            })
+        })
+    };
+    let install_from = |python: &str| {
+        PYTHON_INSTALL_FILES
+            .iter()
+            .find(|file| has(file))
+            .map(|file| {
+                if *file != "requirements.txt" && has("requirements.txt") && !includes_base(file) {
+                    format!("{python} -m pip install -r requirements.txt -r {file}")
+                } else {
+                    format!("{python} -m pip install -r {file}")
+                }
+            })
+            .or_else(|| {
+                (has("pyproject.toml") || has("setup.py"))
+                    .then(|| format!("{python} -m pip install -e ."))
+            })
+    };
+
+    let managed = match manager {
+        "uv" => Some((
+            "uv run",
+            "uv sync",
+            "a uv project: uv picks the environment",
+        )),
+        "poetry" => Some((
+            "poetry run",
+            "poetry install",
+            "a poetry project: poetry picks the environment",
+        )),
+        "pipenv" => Some((
+            "pipenv run",
+            "pipenv install --dev",
+            "a Pipfile project: pipenv picks the environment",
+        )),
+        _ => None,
+    };
+    let mut broken = Vec::new();
+    for venv in VENV_DIRS {
+        let folder = base.join(venv);
+        if !folder.is_dir() {
+            continue;
+        }
+        let interpreter = venv_python_parts()
+            .iter()
+            .fold(folder.clone(), |path, part| path.join(part));
+        if interpreter.is_file() {
+            let python = venv_python(venv);
+            // A uv, poetry or pipenv project installs with its manager, also
+            // when its .venv runs the commands: uv's venvs have no pip.
+            let install = match managed {
+                Some((_, install, _)) => Some(install.to_owned()),
+                None => install_from(&python),
+            };
+            return (
+                Interpreter {
+                    source: "venv".to_owned(),
+                    command: format!("{python} -m"),
+                    detail: format!("the virtual environment in the project's {venv} folder"),
+                },
+                install,
+            );
+        }
+        broken.push(venv);
+    }
+    let not_usable = if broken.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {} has no {}",
+            broken.join(" and "),
+            venv_python_parts().join("/")
+        )
+    };
+
+    if let Some((command, install, detail)) = managed {
+        return (
+            Interpreter {
+                source: manager.to_owned(),
+                command: command.to_owned(),
+                detail: format!("{detail}{not_usable}"),
+            },
+            Some(install.to_owned()),
+        );
+    }
+
+    // cmd expands `%NAME%` even inside quotes, so on Windows a path with `%`
+    // cannot be written into a command safely; such an environment is skipped.
+    let quotable = |path: &Path| !(cfg!(windows) && path.to_string_lossy().contains(['%', '"']));
+    if let Some(active) = active.filter(|path| path.is_absolute() && quotable(path)) {
+        let interpreter: PathBuf = venv_python_parts()
+            .iter()
+            .fold(active.to_path_buf(), |path, part| path.join(part));
+        if interpreter.is_file() {
+            let python = shell_quote(&interpreter.to_string_lossy());
+            let install = install_from(&python);
+            return (
+                Interpreter {
+                    source: "active".to_owned(),
+                    command: format!("{python} -m"),
+                    detail: format!("the active virtual environment (VIRTUAL_ENV){not_usable}"),
+                },
+                install,
+            );
+        }
+    }
+
+    // Today's behaviour: install into the same `python` the steps run with.
+    // Creating `.venv` first (`python -m venv .venv`) makes the next run use it.
+    let install = install_from("python");
+    (
+        Interpreter {
+            source: "path".to_owned(),
+            command: "python -m".to_owned(),
+            detail: format!(
+                "no virtual environment found, so python from the PATH: no .venv or venv folder in the project{not_usable}, no active VIRTUAL_ENV, and not a uv or poetry project"
+            ),
+        },
+        install,
+    )
+}
+
+/// A Python project's folder. `active` is the value of `VIRTUAL_ENV`.
+fn python_detail(root: &Path, dir: &str, active: Option<&Path>) -> Detail {
     let names = file_names(root, dir);
     let has = |file: &str| names.iter().any(|name| name == file);
     let pyproject = read_text(root, &in_dir(dir, "pyproject.toml")).unwrap_or_default();
     let contains = |file: &str, needle: &str| {
         read_text(root, &in_dir(dir, file)).is_some_and(|text| text.contains(needle))
     };
-    let requirements = python_requirements(root, dir, &names);
+    let requirements = python_dependencies(root, dir, &names);
 
     let package_manager = if has("uv.lock") || pyproject.contains("[tool.uv") {
         "uv"
@@ -834,13 +1248,10 @@ fn python_detail(root: &Path, dir: &str) -> Detail {
     } else {
         "pip"
     };
-    let run = match package_manager {
-        "uv" => "uv run ",
-        "poetry" => "poetry run ",
-        "pipenv" => "pipenv run ",
-        // The module form works in any environment that has the tool installed.
-        _ => "python -m ",
-    };
+    // The module form (`python -m pytest`) works in any environment that
+    // has the tool installed.
+    let (interpreter, install) = python_interpreter(root, dir, &names, package_manager, active);
+    let run = format!("{} ", interpreter.command);
 
     let pytest = has("pytest.ini")
         || has("conftest.py")
@@ -875,11 +1286,13 @@ fn python_detail(root: &Path, dir: &str) -> Detail {
             .collect(),
         tools,
         commands: Commands {
+            install,
             build: None,
             test: pytest.then(|| format!("{run}pytest")),
             lint: ruff.then(|| format!("{run}ruff check .")),
             typecheck: mypy.then(|| format!("{run}mypy .")),
         },
+        interpreter: Some(interpreter),
     }
 }
 
@@ -1140,6 +1553,7 @@ fn discovered_projects(
     known: &[Raw],
     node_workspace: bool,
     cargo_workspace: bool,
+    active: Option<&Path>,
     warnings: &mut Vec<String>,
 ) -> Vec<Raw> {
     let mut out: Vec<Raw> = Vec::new();
@@ -1200,7 +1614,7 @@ fn discovered_projects(
                 kind: "python",
                 source: source::DISCOVERED,
                 deps: Vec::new(),
-                detail: python_detail(root, &dir),
+                detail: python_detail(root, &dir, active),
             });
         }
         if has("go.mod") {
@@ -1238,6 +1652,11 @@ fn finish_projects(raw: Vec<Raw>) -> Vec<Project> {
                 .collect();
             depends_on.sort();
             depends_on.dedup();
+            let mut commands = project.detail.commands.clone();
+            // The root installs a workspace's members.
+            if project.source == source::WORKSPACE {
+                commands.install = None;
+            }
             Project {
                 name: project.name.clone(),
                 root: project.root.clone(),
@@ -1247,8 +1666,9 @@ fn finish_projects(raw: Vec<Raw>) -> Vec<Project> {
                 package_manager: project.detail.package_manager.clone(),
                 lockfiles: project.detail.lockfiles.clone(),
                 tools: project.detail.tools.clone(),
-                commands: project.detail.commands.clone(),
+                commands,
                 depends_on,
+                interpreter: project.detail.interpreter.clone(),
             }
         })
         .collect();
@@ -1259,8 +1679,18 @@ fn finish_projects(raw: Vec<Raw>) -> Vec<Project> {
 
 // ---------------------------------------------------------------- facts
 
-/// Detects the facts of the repo at `root`.
+/// Detects the facts of the repo at `root`. A Python project with no
+/// environment of its own uses the one named by `VIRTUAL_ENV` (ADR 0022).
 pub fn detect_facts(root: &Path) -> Result<RepoFacts> {
+    let active = std::env::var_os("VIRTUAL_ENV")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    detect_facts_with(root, active.as_deref())
+}
+
+/// `detect_facts` with the active virtual environment given, not read from
+/// the process environment.
+pub fn detect_facts_with(root: &Path, active: Option<&Path>) -> Result<RepoFacts> {
     if !root.is_dir() {
         return Err(Error::user(format!(
             "Folder \"{}\" does not exist. Run fscale from a repo folder or pass --cwd.",
@@ -1350,7 +1780,7 @@ pub fn detect_facts(root: &Path) -> Result<RepoFacts> {
             kind: "python",
             source: source::ROOT,
             deps: Vec::new(),
-            detail: python_detail(root, "."),
+            detail: python_detail(root, ".", active),
         });
     }
     if exists(root, "go.mod") {
@@ -1363,8 +1793,14 @@ pub fn detect_facts(root: &Path) -> Result<RepoFacts> {
             detail: go_detail(root, "."),
         });
     }
-    let discovered =
-        discovered_projects(root, &raw, node_workspace, cargo_workspace, &mut warnings);
+    let discovered = discovered_projects(
+        root,
+        &raw,
+        node_workspace,
+        cargo_workspace,
+        active,
+        &mut warnings,
+    );
     raw.extend(discovered);
     let projects = finish_projects(raw);
 
@@ -1410,6 +1846,7 @@ fn command_lines(commands: &Commands, indent: &str) -> Vec<String> {
         ("test", &commands.test),
         ("lint", &commands.lint),
         ("typecheck", &commands.typecheck),
+        ("install", &commands.install),
     ]
     .into_iter()
     .filter_map(|(name, command)| {
@@ -1462,6 +1899,13 @@ pub fn format_facts_human(facts: &RepoFacts) -> String {
             ));
         }
         out.extend(command_lines(&project.commands, "    "));
+        if let Some(interpreter) = &project.interpreter {
+            out.push_str(&format!(
+                "    interpreter: {} ({})\n",
+                interpreter.command.trim_end_matches(" -m"),
+                interpreter.detail
+            ));
+        }
         if !project.depends_on.is_empty() {
             out.push_str(&format!(
                 "    depends on: {}\n",
@@ -1485,7 +1929,7 @@ mod tests {
 
     fn facts(files: &[(&str, &str)]) -> RepoFacts {
         let fixture = Fixture::new(files, Track::NoGit).unwrap();
-        detect_facts(fixture.root()).unwrap()
+        detect_facts_with(fixture.root(), None).unwrap()
     }
 
     #[test]
@@ -1685,7 +2129,7 @@ mod tests {
     #[test]
     fn a_course_project_reports_its_services_and_its_frontend_as_projects() {
         let fixture = crate::testing::course_project().unwrap();
-        let facts = detect_facts(fixture.root()).unwrap();
+        let facts = detect_facts_with(fixture.root(), None).unwrap();
 
         // The repo-level summary lists what every project uses.
         assert_eq!(facts.package_manager, None);
@@ -1766,7 +2210,7 @@ mod tests {
     #[test]
     fn a_folder_without_a_marker_is_not_a_project() {
         let fixture = crate::testing::course_project().unwrap();
-        let facts = detect_facts(fixture.root()).unwrap();
+        let facts = detect_facts_with(fixture.root(), None).unwrap();
         // `backend/` has only a .coveragerc, and `backend/shared` only code.
         assert!(facts
             .projects
@@ -2014,5 +2458,533 @@ mod tests {
             Some("npx --no eslint .")
         );
         assert_eq!(facts.root_tool_commands.typecheck, None);
+    }
+
+    // ------------------------------------------- python dependency lists
+
+    fn ends_with(command: Option<&String>, suffix: &str) -> bool {
+        command.is_some_and(|command| command.ends_with(suffix))
+    }
+
+    #[test]
+    fn requirement_names_are_cut_at_the_version_extras_or_marker() {
+        for (spec, name) in [
+            ("ruff>=0.4", Some("ruff")),
+            ("ruff[extra]", Some("ruff")),
+            ("ruff ; python_version>\"3.8\"", Some("ruff")),
+            ("Ruff==1", Some("ruff")),
+            ("ruff @ https://example.com/ruff.whl", Some("ruff")),
+            ("Ruff_LSP", Some("ruff-lsp")),
+            ("git+https://github.com/astral-sh/ruff#egg=ruff", None),
+            ("https://example.com/ruff.whl", None),
+            ("file:ruff", None),
+            ("./ruff", None),
+            ("", None),
+        ] {
+            assert_eq!(requirement_name(spec).as_deref(), name, "{spec}");
+        }
+    }
+
+    #[test]
+    fn requirement_includes_are_resolved_inside_the_repo_only() {
+        assert_eq!(
+            requirement_include("-r dev.txt").as_deref(),
+            Some("dev.txt")
+        );
+        assert_eq!(requirement_include("-rdev.txt").as_deref(), Some("dev.txt"));
+        assert_eq!(
+            requirement_include("--requirement dev.txt").as_deref(),
+            Some("dev.txt")
+        );
+        assert_eq!(
+            requirement_include("--requirement=dev.txt").as_deref(),
+            Some("dev.txt")
+        );
+        for line in ["-c constraints.txt", "-e .", "--index-url https://x", "-r"] {
+            assert_eq!(requirement_include(line), None, "{line}");
+        }
+        assert_eq!(
+            resolve_include("app/requirements.txt", "../shared/dev.txt").as_deref(),
+            Some("shared/dev.txt")
+        );
+        assert_eq!(
+            resolve_include("requirements.txt", "./requirements\\dev.txt").as_deref(),
+            Some("requirements/dev.txt")
+        );
+        for target in ["../dev.txt", "/etc/dev.txt", "\\dev.txt", "C:\\dev.txt"] {
+            assert_eq!(
+                resolve_include("requirements.txt", target),
+                None,
+                "{target}"
+            );
+        }
+    }
+
+    #[test]
+    fn ruff_and_mypy_in_dev_requirements_files_count() {
+        let facts = facts(&[
+            ("app/requirements.txt", "flask\n"),
+            ("app/dev-requirements.txt", "Ruff==0.4.4\n"),
+            ("app/test_requirements.txt", "mypy>=1.10\n"),
+            ("app/main.py", ""),
+        ]);
+        let app = by_root(&facts, "app");
+        assert_eq!(app.tools, ["mypy", "ruff"]);
+        assert!(ends_with(app.commands.lint.as_ref(), "ruff check ."));
+        assert!(ends_with(app.commands.typecheck.as_ref(), "mypy ."));
+    }
+
+    #[test]
+    fn ruff_in_a_requirements_folder_counts() {
+        let facts = facts(&[
+            ("app/requirements.txt", "flask\n"),
+            (
+                "app/requirements/dev.txt",
+                "ruff>=0.4 ; python_version > \"3.8\"\n",
+            ),
+            ("app/main.py", ""),
+        ]);
+        let app = by_root(&facts, "app");
+        assert_eq!(app.tools, ["ruff"]);
+        assert!(ends_with(app.commands.lint.as_ref(), "ruff check ."));
+        assert_eq!(app.commands.typecheck, None);
+    }
+
+    #[test]
+    fn a_requirements_include_inside_the_repo_is_followed() {
+        let facts = facts(&[
+            (
+                "services/api/requirements.txt",
+                "flask\n-r ../shared/requirements-dev.txt\n",
+            ),
+            ("services/api/main.py", ""),
+            (
+                "services/shared/requirements-dev.txt",
+                "--requirement=lint.txt\n",
+            ),
+            ("services/shared/lint.txt", "ruff[toml]\r\n"),
+        ]);
+        let roots: Vec<_> = facts.projects.iter().map(|p| p.root.as_str()).collect();
+        assert_eq!(roots, ["services/api"]);
+        let api = by_root(&facts, "services/api");
+        assert_eq!(api.tools, ["ruff"]);
+        assert!(ends_with(api.commands.lint.as_ref(), "ruff check ."));
+    }
+
+    #[test]
+    fn ruff_and_mypy_in_pyproject_optional_dependencies_count() {
+        let facts = facts(&[(
+            "app/pyproject.toml",
+            "[project]\nname = \"app\"\ndependencies = [\"fastapi\"]\n\n\
+             [project.optional-dependencies]\ndev = [\n  \"ruff>=0.4\",\n  \"mypy\",  # types\n]\n",
+        )]);
+        let app = by_root(&facts, "app");
+        assert_eq!(app.tools, ["mypy", "ruff"]);
+        assert!(ends_with(app.commands.lint.as_ref(), "ruff check ."));
+        assert!(ends_with(app.commands.typecheck.as_ref(), "mypy ."));
+    }
+
+    #[test]
+    fn ruff_in_pyproject_dependency_groups_counts() {
+        let facts = facts(&[(
+            "app/pyproject.toml",
+            "[project]\nname = \"app\"\n\n[dependency-groups]\n\
+             lint = [\"ruff\"]\nmypy = [\"types-requests\"]\n\
+             dev = [{ include-group = \"lint\" }, { include-group = \"mypy\" }, \"pytest\"]\n",
+        )]);
+        let app = by_root(&facts, "app");
+        // The group named `mypy` is not the package.
+        assert_eq!(app.tools, ["pytest", "ruff"]);
+        assert!(ends_with(app.commands.lint.as_ref(), "ruff check ."));
+        assert_eq!(app.commands.typecheck, None);
+    }
+
+    #[test]
+    fn mypy_in_the_dev_dependencies_of_uv_and_pdm_counts() {
+        for section in [
+            "[tool.uv]\ndev-dependencies = [\"mypy>=1\"]\n",
+            "[tool.pdm.dev-dependencies]\ntyping = [\"mypy>=1\"]\n",
+        ] {
+            let pyproject = format!("[project]\nname = \"app\"\n\n{section}");
+            let facts = facts(&[("app/pyproject.toml", pyproject.as_str())]);
+            let app = by_root(&facts, "app");
+            assert_eq!(app.tools, ["mypy"], "{section}");
+            assert!(ends_with(app.commands.typecheck.as_ref(), "mypy ."));
+            assert_eq!(app.commands.lint, None);
+        }
+    }
+
+    #[test]
+    fn ruff_and_mypy_in_poetry_dependency_groups_count() {
+        let facts = facts(&[(
+            "app/pyproject.toml",
+            "[tool.poetry]\nname = \"app\"\n\n[tool.poetry.dependencies]\npython = \"^3.11\"\n\n\
+             [tool.poetry.group.dev.dependencies]\nruff = \"^0.4\"\n\
+             MyPy = { version = \"^1.10\", optional = true }\n",
+        )]);
+        let app = by_root(&facts, "app");
+        assert_eq!(app.tools, ["mypy", "ruff"]);
+        assert!(ends_with(app.commands.lint.as_ref(), "ruff check ."));
+        assert!(ends_with(app.commands.typecheck.as_ref(), "mypy ."));
+    }
+
+    #[test]
+    fn ruff_in_the_dev_packages_of_a_pipfile_counts() {
+        let facts = facts(&[(
+            "app/Pipfile",
+            "[packages]\nflask = \"*\"\n\n[dev-packages]\nruff = \"*\"\n\"pytest\" = \"*\"\n",
+        )]);
+        let app = by_root(&facts, "app");
+        assert_eq!(app.tools, ["pytest", "ruff"]);
+        assert!(ends_with(app.commands.lint.as_ref(), "ruff check ."));
+        assert_eq!(app.commands.typecheck, None);
+    }
+
+    #[test]
+    fn names_that_only_look_like_ruff_do_not_count() {
+        let facts = facts(&[
+            (
+                "app/requirements.txt",
+                "ruff-lsp\nruffus==2\nmypy-extensions\n# ruff\nflask  # ruff is set up elsewhere\n\
+                 git+https://github.com/astral-sh/ruff#egg=ruff\n-e ./ruff\n\
+                 -c ruff-constraints.txt\n--index-url https://example.com/simple\n",
+            ),
+            ("app/ruff-constraints.txt", "ruff==0.4\n"),
+            (
+                "app/pyproject.toml",
+                "[project]\nname = \"app\"\ndependencies = [\n  \"flask\",\n  # \"ruff\",\n]\n",
+            ),
+        ]);
+        let app = by_root(&facts, "app");
+        assert!(app.tools.is_empty(), "{:?}", app.tools);
+        assert_eq!(app.commands.lint, None);
+        assert_eq!(app.commands.typecheck, None);
+    }
+
+    #[test]
+    fn a_requirements_file_above_the_project_does_not_count() {
+        let facts = facts(&[
+            ("requirements.txt", "ruff\n"),
+            ("requirements-dev.txt", "ruff\nmypy\n"),
+            ("app/requirements.txt", "flask\n"),
+            ("app/main.py", ""),
+        ]);
+        let roots: Vec<_> = facts.projects.iter().map(|p| p.root.as_str()).collect();
+        assert_eq!(roots, ["app"]);
+        let app = by_root(&facts, "app");
+        assert!(app.tools.is_empty(), "{:?}", app.tools);
+        assert_eq!(app.commands.lint, None);
+        assert_eq!(app.commands.typecheck, None);
+    }
+
+    #[test]
+    fn a_requirements_include_that_leaves_the_repo_is_ignored() {
+        let fixture = Fixture::new(
+            &[
+                ("app/main.py", ""),
+                ("shared/requirements-lint.txt", "ruff\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        // Absolute, even when it points into the repo: not followed.
+        let absolute = fixture
+            .root()
+            .join("shared")
+            .join("requirements-lint.txt")
+            .display()
+            .to_string();
+        fixture
+            .write(
+                "app/requirements.txt",
+                &format!("flask\n-r ../../../outside/requirements.txt\n-r {absolute}\n"),
+            )
+            .unwrap();
+        let facts = detect_facts_with(fixture.root(), None).unwrap();
+        assert!(facts.warnings.is_empty(), "{:?}", facts.warnings);
+        let app = by_root(&facts, "app");
+        assert!(app.tools.is_empty(), "{:?}", app.tools);
+        assert_eq!(app.commands.lint, None);
+    }
+
+    #[test]
+    fn a_requirements_include_cycle_ends() {
+        let facts = facts(&[
+            ("app/requirements.txt", "-r deps/base.txt\nflask\n"),
+            (
+                "app/deps/base.txt",
+                "-r base.txt\n-r ../requirements.txt\nmypy\n",
+            ),
+            ("app/main.py", ""),
+        ]);
+        let app = by_root(&facts, "app");
+        assert_eq!(app.tools, ["mypy"]);
+        assert!(ends_with(app.commands.typecheck.as_ref(), "mypy ."));
+        assert_eq!(app.commands.lint, None);
+    }
+
+    #[test]
+    fn requirement_includes_stop_at_the_depth_limit() {
+        let facts = facts(&[
+            ("app/requirements.txt", "-r deps/1.txt\n"),
+            ("app/deps/1.txt", "-r 2.txt\n"),
+            ("app/deps/2.txt", "-r 3.txt\n"),
+            ("app/deps/3.txt", "-r 4.txt\n"),
+            ("app/deps/4.txt", "-r 5.txt\n"),
+            ("app/deps/5.txt", "mypy\n-r 6.txt\n"),
+            ("app/deps/6.txt", "ruff\n"),
+            ("app/main.py", ""),
+        ]);
+        let app = by_root(&facts, "app");
+        assert_eq!(app.tools, ["mypy"]);
+    }
+
+    #[test]
+    fn a_python_project_without_dependency_lists_gets_no_lint_command() {
+        let facts = facts(&[("app/setup.py", ""), ("app/main.py", "")]);
+        let app = by_root(&facts, "app");
+        assert!(app.tools.is_empty(), "{:?}", app.tools);
+        assert_eq!(app.commands.lint, None);
+        assert_eq!(app.commands.typecheck, None);
+    }
+
+    // ------------------------------------------- Python interpreters (ADR 0022)
+
+    /// The interpreter a venv folder holds on this platform.
+    fn venv_file(venv: &str) -> String {
+        if cfg!(windows) {
+            format!("{venv}/Scripts/python.exe")
+        } else {
+            format!("{venv}/bin/python")
+        }
+    }
+
+    /// A venv interpreter file for the other platform: never used here.
+    fn foreign_venv_file(venv: &str) -> String {
+        if cfg!(windows) {
+            format!("{venv}/bin/python")
+        } else {
+            format!("{venv}/Scripts/python.exe")
+        }
+    }
+
+    fn service(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut files = vec![
+            (
+                "svc/requirements-dev.txt".to_owned(),
+                "pytest\nruff\n".to_owned(),
+            ),
+            ("svc/requirements.txt".to_owned(), "pyjwt\n".to_owned()),
+            ("svc/main.py".to_owned(), String::new()),
+        ];
+        files.extend(
+            extra
+                .iter()
+                .map(|(file, content)| ((*file).to_owned(), (*content).to_owned())),
+        );
+        files
+    }
+
+    fn svc_with(extra: &[(&str, &str)], active: Option<&Path>) -> (Fixture, Project) {
+        let files = service(extra);
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(file, content)| (file.as_str(), content.as_str()))
+            .collect();
+        let fixture = Fixture::new(&borrowed, Track::NoGit).unwrap();
+        let facts = detect_facts_with(fixture.root(), active).unwrap();
+        let project = by_root(&facts, "svc").clone();
+        (fixture, project)
+    }
+
+    #[test]
+    fn a_venv_in_the_project_folder_runs_its_steps() {
+        let file = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&file, "")], None);
+        let python = venv_python(".venv");
+        let interpreter = svc.interpreter.unwrap();
+        assert_eq!(interpreter.source, "venv");
+        assert_eq!(interpreter.command, format!("{python} -m"));
+        assert_eq!(svc.commands.test, Some(format!("{python} -m pytest")));
+        assert_eq!(svc.commands.lint, Some(format!("{python} -m ruff check .")));
+        // requirements-dev.txt does not include requirements.txt, so both
+        // are installed: the app's own dependencies (pyjwt) are needed too.
+        assert_eq!(
+            svc.commands.install,
+            Some(format!(
+                "{python} -m pip install -r requirements.txt -r requirements-dev.txt"
+            ))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_venv_interpreter_is_scripts_python_exe() {
+        let (_f, svc) = svc_with(&[("svc/.venv/Scripts/python.exe", "")], None);
+        assert_eq!(
+            svc.commands.test.as_deref(),
+            Some(".venv\\Scripts\\python.exe -m pytest")
+        );
+        // A venv made on Linux or macOS has no Scripts\python.exe.
+        let (_f, svc) = svc_with(&[("svc/.venv/bin/python", "")], None);
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+        assert!(svc
+            .interpreter
+            .unwrap()
+            .detail
+            .contains(".venv has no Scripts/python.exe"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn elsewhere_the_venv_interpreter_is_bin_python() {
+        let (_f, svc) = svc_with(&[("svc/.venv/bin/python", "")], None);
+        assert_eq!(
+            svc.commands.test.as_deref(),
+            Some(".venv/bin/python -m pytest")
+        );
+        // A venv made on Windows has no bin/python.
+        let (_f, svc) = svc_with(&[("svc/.venv/Scripts/python.exe", "")], None);
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+        assert!(svc
+            .interpreter
+            .unwrap()
+            .detail
+            .contains(".venv has no bin/python"));
+    }
+
+    #[test]
+    fn a_venv_folder_named_venv_counts_and_dot_venv_comes_first() {
+        let venv = format!("svc/{}", venv_file("venv"));
+        let (_f, svc) = svc_with(&[(&venv, "")], None);
+        assert_eq!(
+            svc.commands.test,
+            Some(format!("{} -m pytest", venv_python("venv")))
+        );
+        let dot = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&venv, ""), (&dot, "")], None);
+        assert_eq!(
+            svc.commands.test,
+            Some(format!("{} -m pytest", venv_python(".venv")))
+        );
+    }
+
+    #[test]
+    fn a_venv_without_an_interpreter_for_this_platform_is_not_used() {
+        let foreign = format!("svc/{}", foreign_venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&foreign, "")], None);
+        let interpreter = svc.interpreter.unwrap();
+        assert_eq!(interpreter.source, "path");
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+    }
+
+    #[test]
+    fn uv_and_poetry_projects_use_their_manager_unless_the_folder_has_a_venv() {
+        let (_f, svc) = svc_with(&[("svc/uv.lock", "")], None);
+        assert_eq!(svc.interpreter.as_ref().unwrap().source, "uv");
+        assert_eq!(svc.commands.test.as_deref(), Some("uv run pytest"));
+        assert_eq!(svc.commands.install.as_deref(), Some("uv sync"));
+        let (_f, svc) = svc_with(&[("svc/poetry.lock", "")], None);
+        assert_eq!(svc.interpreter.as_ref().unwrap().source, "poetry");
+        assert_eq!(svc.commands.test.as_deref(), Some("poetry run pytest"));
+        assert_eq!(svc.commands.install.as_deref(), Some("poetry install"));
+        // The project's own .venv wins: it is what uv made, and running it
+        // directly never installs anything.
+        let dot = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[("svc/uv.lock", ""), (&dot, "")], None);
+        assert_eq!(svc.interpreter.as_ref().unwrap().source, "venv");
+        // It still installs with its manager: uv's venvs have no pip.
+        assert_eq!(svc.commands.install.as_deref(), Some("uv sync"));
+        let (_f, svc) = svc_with(&[("svc/poetry.lock", ""), (&dot, "")], None);
+        assert_eq!(svc.commands.install.as_deref(), Some("poetry install"));
+    }
+
+    #[test]
+    fn an_active_virtual_env_is_used_when_the_project_has_none_of_its_own() {
+        let outside = Fixture::new(&[(&venv_file("env"), "")], Track::NoGit).unwrap();
+        let active = outside.root().join("env");
+        let (_f, svc) = svc_with(&[], Some(&active));
+        let interpreter = svc.interpreter.unwrap();
+        assert_eq!(interpreter.source, "active");
+        let expected = shell_quote(
+            &venv_python_parts()
+                .iter()
+                .fold(active.clone(), |path, part| path.join(part))
+                .to_string_lossy(),
+        );
+        assert_eq!(svc.commands.test, Some(format!("{expected} -m pytest")));
+        // The project's own venv comes first, and so does a uv project.
+        let dot = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&dot, "")], Some(&active));
+        assert_eq!(svc.interpreter.unwrap().source, "venv");
+        let (_f, svc) = svc_with(&[("svc/uv.lock", "")], Some(&active));
+        assert_eq!(svc.interpreter.unwrap().source, "uv");
+        // A VIRTUAL_ENV with no interpreter in it is ignored.
+        let empty = outside.root().join("nothing-here");
+        let (_f, svc) = svc_with(&[], Some(&empty));
+        assert_eq!(svc.interpreter.unwrap().source, "path");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_an_active_env_whose_path_has_a_percent_sign_is_skipped() {
+        // cmd would expand %...% inside the quotes.
+        let outside = Fixture::new(&[("100%done/Scripts/python.exe", "")], Track::NoGit).unwrap();
+        let active = outside.root().join("100%done");
+        let (_f, svc) = svc_with(&[], Some(&active));
+        assert_eq!(svc.interpreter.unwrap().source, "path");
+    }
+
+    #[test]
+    fn with_no_virtual_environment_python_from_the_path_is_used_and_said() {
+        let (_f, svc) = svc_with(&[], None);
+        let interpreter = svc.interpreter.clone().unwrap();
+        assert_eq!(interpreter.source, "path");
+        assert_eq!(interpreter.command, "python -m");
+        assert!(interpreter
+            .detail
+            .starts_with("no virtual environment found"));
+        // Today's commands, unchanged.
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+        assert_eq!(
+            svc.commands.install.as_deref(),
+            Some("python -m pip install -r requirements.txt -r requirements-dev.txt")
+        );
+        // A development list that includes requirements.txt is enough alone.
+        let (_f, svc) = svc_with(
+            &[("svc/requirements-dev.txt", "-r requirements.txt\npytest\n")],
+            None,
+        );
+        assert_eq!(
+            svc.commands.install.as_deref(),
+            Some("python -m pip install -r requirements-dev.txt")
+        );
+        let facts = RepoFacts {
+            projects: vec![svc],
+            ..RepoFacts::default()
+        };
+        let text = format_facts_human(&facts);
+        assert!(
+            text.contains("    interpreter: python (no virtual environment found"),
+            "{text}"
+        );
+        let json = format_facts_json(&facts);
+        assert!(json.contains("\"source\": \"path\""), "{json}");
+    }
+
+    #[test]
+    fn shell_quote_leaves_plain_paths_alone() {
+        assert_eq!(
+            shell_quote("/home/me/env/bin/python"),
+            "/home/me/env/bin/python"
+        );
+        assert_eq!(
+            shell_quote("/my envs/a/bin/python"),
+            "\"/my envs/a/bin/python\""
+        );
+        if !cfg!(windows) {
+            assert_eq!(shell_quote("/a/$b/python"), "'/a/$b/python'");
+            assert_eq!(shell_quote("/a/it's/python"), "\"/a/it's/python\"");
+        }
     }
 }

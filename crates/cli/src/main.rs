@@ -19,7 +19,8 @@ use firescale_core::fixloop::{
     plan_order, run_fix_loop, LoopFailure, LoopReport, LoopRule, MAX_PASSES,
 };
 use firescale_core::hooks::{
-    decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent, AGENTS,
+    block_summary, decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent,
+    AGENTS,
 };
 use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
@@ -750,7 +751,7 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             };
             let max_blocks = max_blocks_from_env();
             let decision = decide(root, agent, &input, report.ok, max_blocks);
-            let answer = reply(agent, &decision, &format_verify_human(&report), max_blocks);
+            let answer = reply(agent, &decision, &block_summary(&report), max_blocks);
             let mut notes = if answer.stderr.is_empty() {
                 Vec::new()
             } else {

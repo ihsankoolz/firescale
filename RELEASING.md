@@ -38,7 +38,7 @@ Do this for **each of the eight packages**. It takes about a minute per package.
 
 Things to know:
 
-- **npm does not check the fields when you save.** A typo shows up only when the workflow tries to publish, as an "Unable to authenticate" (`ENEEDAUTH`) error.
+- **npm does not check the fields when you save.** A typo shows up only when the workflow tries to publish: as an "Unable to authenticate" (`ENEEDAUTH`) error, or, for a wrong workflow filename, as an `E404 Not Found` on the `PUT` of the package.
 - **A new trusted publisher must be used within 2 days.** If no publish succeeds in that time the entry expires: delete it and add it again. So set the eight up shortly before you push the tag.
 - The workflow filename is only the file's name, `release.yml`, not its path. If the file is ever renamed, every package's entry must be made again.
 - All eight packages already exist on npm (0.1.0 was published by hand), so each has a settings page.
@@ -111,6 +111,7 @@ A published version cannot be replaced, only deprecated. So the workflow is buil
 | "check version" fails: the tag does not match              | Nothing was built or published. Delete the tag (`git push origin :refs/tags/v0.1.2`, `git tag -d v0.1.2`), fix the version or the tag, and push the right tag.                                                                                                                                                                                                         |
 | A build job fails                                          | Nothing was published. Open the run and choose **Re-run failed jobs**.                                                                                                                                                                                                                                                                                                 |
 | Publish fails with "Unable to authenticate" or `ENEEDAUTH` | The trusted publisher of that package is missing, expired or mistyped. Fix it on npmjs.com (see above), then **Re-run failed jobs**. The packages already published are skipped.                                                                                                                                                                                       |
+| Publish fails with `E404` on the `PUT`                     | npm hides a trusted publisher that does not match as "not found". The usual cause is a wrong **workflow filename** in that package's trusted publisher (it must be exactly `release.yml`). Fix it on npmjs.com, then **Re-run failed jobs**. The packages already published are skipped.                                                                               |
 | Publish fails partway for any other reason                 | **Re-run failed jobs**. The log lists `skip` for what is already there and `publish` for the rest.                                                                                                                                                                                                                                                                     |
 | Verify fails, publish was green                            | npm can take a few minutes to serve a new version. **Re-run failed jobs** after a while. If it still fails, run `npx firescale@0.1.2 --version` yourself and read the error.                                                                                                                                                                                           |
 | The workflow or a script has a bug                         | **Re-run failed jobs** runs the same commit again, so it cannot pick up a fix. Merge the fix to `main` without changing the version, delete the tag (`git push origin :refs/tags/v0.1.2`, `git tag -d v0.1.2`), tag the new commit on `main` with the same version and push the tag. What is already published is skipped. This is the only case where a tag is moved. |
@@ -126,7 +127,7 @@ Do not publish by hand to finish a release that the workflow started, unless the
 
 ## Reading a failed publish
 
-npm prints little when the OIDC exchange fails: usually just `ENEEDAUTH`. It nearly always means that package's trusted publisher is missing, mistyped, expired, or does not allow `npm publish`. The log line before the error names the package.
+npm prints little when the OIDC exchange fails: usually just `ENEEDAUTH`, and for a wrong workflow filename an `E404` on the `PUT`. It nearly always means that package's trusted publisher is missing, mistyped, expired, or does not allow `npm publish`. The log line before the error names the package.
 
 ## Building without publishing
 
