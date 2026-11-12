@@ -88,7 +88,7 @@
           "type": "string"
         }
       },
-      "description": "Commands to run from the repo root, for each of the root package.json scripts build, test, lint and typecheck that exists."
+      "description": "Commands to run from the repo root, for each of the root package.json scripts build, test, lint and typecheck that exists. A test, lint or typecheck script that watches for changes gives way to its run-once sibling (<step>:run, <step>:ci or <step>:once)."
     },
     "projects": {
       "description": "The projects of the repo, sorted by name: the root, workspace members, and projects found in subfolders.",
@@ -192,7 +192,7 @@
                 "type": "string"
               }
             },
-            "description": "Commands to run from the project's folder: package scripts first, then commands worked out from tool config files."
+            "description": "Commands to run from the project's folder: package scripts first, then commands worked out from tool config files. A test, lint or typecheck script that watches for changes gives way to its run-once sibling (<step>:run, <step>:ci or <step>:once)."
           },
           "dependsOn": {
             "description": "Names of other projects of the same kind in this repo that this one depends on.",
@@ -225,7 +225,14 @@
       }
     },
     "warnings": {
-      "description": "Things that were skipped, such as a marker file that is not valid JSON.",
+      "description": "Things that were skipped, such as a marker file that is not valid JSON, and things that may go wrong, such as a test script that watches for changes and has no run-once sibling.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "description": "Sorted. Things worth knowing that need no action, such as a test script that watches for changes and is replaced by its run-once sibling (test:run). Always printed; not required here, so that version 2 output from before the field was added stays valid.",
       "type": "array",
       "items": {
         "type": "string"

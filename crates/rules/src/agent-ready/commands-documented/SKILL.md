@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule agent-ready/commands-documen
 
 ## What this rule enforces and why
 
-`AGENTS.md` at the repo root mentions every command that `fscale facts` detects for the repo: `build`, `test`, `lint` and `typecheck`, each of which is a script of the root `package.json`. A command counts as mentioned when the file contains it as `fscale facts` prints it (`pnpm run test`) or in the short form that runs the same script (`pnpm test`, `yarn test`, `bun test`; for npm only `npm test`). A longer script name such as `pnpm test:unit` does not count as `pnpm test`.
+`AGENTS.md` at the repo root mentions every command that `fscale facts` detects for the repo: `build`, `test`, `lint` and `typecheck`, each of which is a script of the root `package.json`. A command counts as mentioned when the file contains it as `fscale facts` prints it (`pnpm run test`) or in the short form that runs the same script (`pnpm test`, `yarn test`, `bun test`; for npm only `npm test`). A longer script name such as `pnpm test:unit` does not count as `pnpm test`. When the `test`, `lint` or `typecheck` script watches for changes (`"test": "vitest"`) and a run-once sibling exists (`test:run`, `test:ci` or `test:once`), the detected command is the sibling (`npm run test:run`): that is the one an agent should run, because the watching script may never exit.
 
 The rule is silent when there is no `AGENTS.md` (the rule `agent-ready/agents-md` reports that) and when no commands are detected, for example in a repo without a `package.json`.
 

@@ -149,6 +149,9 @@ pub struct RepoFacts {
     pub commands: Commands,
     pub projects: Vec<Project>,
     pub warnings: Vec<String>,
+    /// Things worth knowing that need no action, such as a watch-mode script
+    /// replaced by its run-once sibling. Sorted.
+    pub notes: Vec<String>,
     /// Commands for the repo root worked out from tool config files, for the
     /// steps the root `package.json` has no script for. `commands` stays
     /// "scripts only", because rules compare it with what a repo documents.
@@ -398,6 +401,8 @@ struct Detail {
     tools: Vec<String>,
     commands: Commands,
     interpreter: Option<Interpreter>,
+    /// Node only: the steps whose package script watches for changes.
+    watching: Vec<WatchScript>,
 }
 
 const LOCKFILE_NAMES: [&str; 10] = [
@@ -555,20 +560,185 @@ fn has_node_dependency(json: Option<&Value>, package: &str) -> bool {
     })
 }
 
-/// The commands a `package.json` gives through its scripts.
-fn script_commands(json: Option<&Value>, package_manager: &str) -> Commands {
-    let script = |name: &str| {
-        json.and_then(|json| json.get("scripts"))
-            .and_then(|scripts| scripts.get(name))
-            .is_some()
-            .then(|| format!("{package_manager} run {name}"))
+/// The run-once siblings of a step's script, tried in this order when the
+/// step's own script watches for changes: `test:run`, `test:ci`, `test:once`.
+pub const RUN_ONCE_SUFFIXES: [&str; 3] = ["run", "ci", "once"];
+
+/// The commands of `vitest`. Any other word is a test filter.
+const VITEST_COMMANDS: [&str; 8] = [
+    "run",
+    "watch",
+    "dev",
+    "related",
+    "bench",
+    "list",
+    "init",
+    "typecheck",
+];
+
+/// True for a `NAME=value` word in front of a command.
+fn is_env_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// The tool of a package script that watches for changes and so may never
+/// exit, or `None`. Each command of the script, split at `&&`, `||`, `;` and
+/// `|`, is read: its words after any `NAME=value` and after `npx`,
+/// `pnpm exec`, `yarn`, `yarn exec` or `bunx`. The list is in docs/facts.md
+/// ("Watch-mode scripts").
+fn watch_tool(script: &str) -> Option<&'static str> {
+    script.split(['&', '|', ';']).find_map(command_watch_tool)
+}
+
+/// `watch_tool` for one command.
+fn command_watch_tool(command: &str) -> Option<&'static str> {
+    let all: Vec<&str> = command.split_whitespace().collect();
+    let start = all
+        .iter()
+        .take_while(|word| is_env_assignment(word))
+        .count();
+    let mut words = &all[start..];
+    match words {
+        ["npx", rest @ ..] => {
+            // `npx --no vitest`, `npx -y vitest`
+            let flags = rest.iter().take_while(|word| word.starts_with('-')).count();
+            words = &rest[flags..];
+        }
+        ["pnpm" | "yarn", "exec", rest @ ..] | ["yarn" | "bunx", rest @ ..] => words = rest,
+        _ => {}
+    }
+    let (tool, args) = words.split_first()?;
+    let any = |flags: &[&str]| args.iter().any(|arg| flags.contains(arg));
+    let first_word = args.iter().find(|arg| !arg.starts_with('-')).copied();
+    let (name, watches) = match *tool {
+        "vitest" => {
+            let command = args
+                .iter()
+                .find(|arg| VITEST_COMMANDS.contains(arg))
+                .copied();
+            (
+                "vitest",
+                matches!(command, None | Some("watch" | "dev"))
+                    && !any(&["--run", "--watch=false", "--no-watch"]),
+            )
+        }
+        "jest" => (
+            "jest",
+            any(&["--watch", "--watchAll", "--watch=true", "--watchAll=true"]),
+        ),
+        "react-scripts" => (
+            "react-scripts",
+            first_word == Some("test") && !any(&["--watchAll=false", "--watch=false"]),
+        ),
+        "ng" => (
+            "ng",
+            matches!(first_word, Some("test" | "t")) && !any(&["--watch=false", "--no-watch"]),
+        ),
+        "mocha" => ("mocha", any(&["--watch", "-w"])),
+        "ava" => ("ava", any(&["--watch", "-w"])),
+        "node" => ("node", any(&["--test"]) && any(&["--watch"])),
+        "tsc" => ("tsc", any(&["--watch", "-w"])),
+        "vue-cli-service" => (
+            "vue-cli-service",
+            first_word == Some("test:unit") && any(&["--watch"]),
+        ),
+        _ => return None,
     };
-    Commands {
+    watches.then_some(name)
+}
+
+/// A step whose package script watches for changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchScript {
+    /// `test`, `lint` or `typecheck`.
+    step: &'static str,
+    /// The text of the step's script.
+    script: String,
+    /// The tool that watches, such as `vitest`.
+    tool: &'static str,
+    /// The run-once sibling the step uses instead: its name and its text.
+    sibling: Option<(String, String)>,
+}
+
+/// The commands a `package.json` gives through its scripts. A test, lint or
+/// typecheck script that watches for changes is replaced by its first
+/// run-once sibling (`<step>:run`, `<step>:ci`, `<step>:once`) that does not
+/// watch; such steps are returned too, for the notes and warnings.
+fn script_commands(json: Option<&Value>, package_manager: &str) -> (Commands, Vec<WatchScript>) {
+    let scripts = json.and_then(|json| json.get("scripts"));
+    let text = |name: &str| {
+        scripts
+            .and_then(|scripts| scripts.get(name))
+            .and_then(Value::as_str)
+    };
+    let has = |name: &str| scripts.and_then(|scripts| scripts.get(name)).is_some();
+    let run = |name: &str| has(name).then(|| format!("{package_manager} run {name}"));
+    let mut watching = Vec::new();
+    let mut step = |name: &'static str| -> Option<String> {
+        let script = text(name)?;
+        let Some(tool) = watch_tool(script) else {
+            return run(name);
+        };
+        let sibling = RUN_ONCE_SUFFIXES.iter().find_map(|suffix| {
+            let sibling = format!("{name}:{suffix}");
+            text(&sibling)
+                .filter(|command| watch_tool(command).is_none())
+                .map(|command| (sibling, command.to_owned()))
+        });
+        let command = run(sibling
+            .as_ref()
+            .map_or(name, |(sibling, _)| sibling.as_str()));
+        watching.push(WatchScript {
+            step: name,
+            script: script.to_owned(),
+            tool,
+            sibling,
+        });
+        command
+    };
+    let commands = Commands {
         install: None,
-        build: script("build"),
-        test: script("test"),
-        lint: script("lint"),
-        typecheck: script("typecheck"),
+        build: run("build"),
+        test: step("test").or_else(|| run("test")),
+        lint: step("lint").or_else(|| run("lint")),
+        typecheck: step("typecheck").or_else(|| run("typecheck")),
+    };
+    (commands, watching)
+}
+
+/// Adds what `fscale facts` says about the watch-mode scripts of the Node
+/// project in `folder`: a note when a run-once sibling is used, else a
+/// warning.
+fn watch_messages(
+    folder: &str,
+    watching: &[WatchScript],
+    notes: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    let place = if folder == "." { "repo root" } else { folder };
+    for watch in watching {
+        let WatchScript {
+            step,
+            script,
+            tool,
+            sibling,
+        } = watch;
+        let runs = format!("{place}: the {step} script runs `{script}`, which watches for changes");
+        match sibling {
+            Some((name, command)) => {
+                notes.push(format!("{runs}; verify uses {name} (`{command}`) instead."));
+            }
+            // These tools turn watch mode off when CI is set.
+            None if matches!(*tool, "vitest" | "react-scripts") => warnings.push(format!(
+                "{runs} and may never exit. verify runs it with CI=1, which turns watch mode off for most tools (vitest, react-scripts); add a {step}:run script that runs once to be sure."
+            )),
+            None => warnings.push(format!(
+                "{runs} and may never exit: CI=1, which verify sets, does not turn off watch mode for {tool}. Add a {step}:run script that runs once."
+            )),
+        }
     }
 }
 
@@ -669,7 +839,7 @@ fn node_detail(
         tools.push("docker".to_owned());
     }
     tools.sort();
-    let scripts = script_commands(json, package_manager.as_deref().unwrap_or("npm"));
+    let (scripts, watching) = script_commands(json, package_manager.as_deref().unwrap_or("npm"));
     let from_tools = node_tool_commands(
         root,
         dir,
@@ -692,6 +862,7 @@ fn node_detail(
         tools,
         commands: or_else(or_else(scripts.clone(), from_tools.clone()), install),
         interpreter: None,
+        watching,
     };
     let only_tools = Commands {
         install: None,
@@ -736,6 +907,7 @@ fn rust_detail(root: &Path, dir: &str, cargo: &[TomlEntry]) -> Detail {
             install: None,
         },
         interpreter: None,
+        watching: Vec::new(),
     }
 }
 
@@ -763,6 +935,7 @@ fn go_detail(root: &Path, dir: &str) -> Detail {
             install: None,
         },
         interpreter: None,
+        watching: Vec::new(),
     }
 }
 
@@ -1293,6 +1466,7 @@ fn python_detail(root: &Path, dir: &str, active: Option<&Path>) -> Detail {
             typecheck: mypy.then(|| format!("{run}mypy .")),
         },
         interpreter: Some(interpreter),
+        watching: Vec::new(),
     }
 }
 
@@ -1759,8 +1933,10 @@ pub fn detect_facts_with(root: &Path, active: Option<&Path>) -> Result<RepoFacts
         tools.insert("github-actions");
     }
 
-    // Scripts only: rules compare these with what the repo documents.
-    let commands = script_commands(
+    // Scripts only: rules compare these with what the repo documents. A
+    // script that watches for changes gives way to its run-once sibling, as
+    // in a project, so verify never runs a command that does not exit.
+    let (commands, _) = script_commands(
         package_json.as_ref(),
         package_manager.as_deref().unwrap_or("npm"),
     );
@@ -1802,6 +1978,22 @@ pub fn detect_facts_with(root: &Path, active: Option<&Path>) -> Result<RepoFacts
         &mut warnings,
     );
     raw.extend(discovered);
+    // The root's scripts once, then every other Node project's. The root's
+    // own project, if any, has the same scripts.
+    let mut notes = Vec::new();
+    watch_messages(".", &root_node.watching, &mut notes, &mut warnings);
+    for project in raw
+        .iter()
+        .filter(|project| project.kind == "node" && project.root != ".")
+    {
+        watch_messages(
+            &project.root,
+            &project.detail.watching,
+            &mut notes,
+            &mut warnings,
+        );
+    }
+    notes.sort();
     let projects = finish_projects(raw);
 
     let mut package_managers: BTreeSet<String> = package_manager.iter().cloned().collect();
@@ -1820,6 +2012,7 @@ pub fn detect_facts_with(root: &Path, active: Option<&Path>) -> Result<RepoFacts
         commands,
         projects,
         warnings,
+        notes,
         root_tool_commands,
     })
 }
@@ -1911,6 +2104,12 @@ pub fn format_facts_human(facts: &RepoFacts) -> String {
                 "    depends on: {}\n",
                 project.depends_on.join(", ")
             ));
+        }
+    }
+    if !facts.notes.is_empty() {
+        out.push_str("Notes:\n");
+        for note in &facts.notes {
+            out.push_str(&format!("  {note}\n"));
         }
     }
     if !facts.warnings.is_empty() {
@@ -2458,6 +2657,273 @@ mod tests {
             Some("npx --no eslint .")
         );
         assert_eq!(facts.root_tool_commands.typecheck, None);
+    }
+
+    // ------------------------------------------- watch-mode scripts
+
+    #[test]
+    fn watch_commands_are_detected() {
+        for (script, tool) in [
+            ("vitest", "vitest"),
+            ("vitest watch", "vitest"),
+            ("vitest dev", "vitest"),
+            ("vitest --coverage", "vitest"),
+            ("vitest src/login", "vitest"),
+            ("vitest --config vitest.config.ts", "vitest"),
+            ("NODE_ENV=test vitest", "vitest"),
+            ("npx vitest", "vitest"),
+            ("npx --no vitest", "vitest"),
+            ("pnpm exec vitest", "vitest"),
+            ("yarn vitest", "vitest"),
+            ("yarn exec vitest", "vitest"),
+            ("bunx vitest", "vitest"),
+            ("jest --watch", "jest"),
+            ("jest --watchAll", "jest"),
+            ("npx jest --watchAll --coverage", "jest"),
+            ("react-scripts test", "react-scripts"),
+            ("react-scripts test --env=jsdom", "react-scripts"),
+            ("ng test", "ng"),
+            ("ng t --code-coverage", "ng"),
+            ("mocha --watch", "mocha"),
+            ("mocha -w test/*.js", "mocha"),
+            ("ava --watch", "ava"),
+            ("ava -w", "ava"),
+            ("node --test --watch", "node"),
+            ("node --watch --test test/", "node"),
+            ("tsc --watch", "tsc"),
+            ("tsc -w --noEmit", "tsc"),
+            ("tsc --noEmit --watch", "tsc"),
+            ("vue-cli-service test:unit --watch", "vue-cli-service"),
+            ("  vitest  ", "vitest"),
+            ("tsc --noEmit && vitest", "vitest"),
+            ("prisma generate; jest --watch", "jest"),
+            ("tsc -b || mocha -w", "mocha"),
+        ] {
+            assert_eq!(watch_tool(script), Some(tool), "{script}");
+        }
+    }
+
+    #[test]
+    fn run_once_commands_are_not_watch_commands() {
+        for script in [
+            "vitest run",
+            "vitest --run",
+            "vitest run --coverage",
+            "vitest --config vitest.config.ts run",
+            "vitest --watch=false",
+            "vitest --no-watch",
+            "vitest related src/a.ts --run",
+            "vitest bench",
+            "vitest list",
+            "npx vitest run",
+            "pnpm exec vitest run",
+            "jest",
+            "jest --ci",
+            "jest --coverage",
+            "jest --watchAll=false",
+            "react-scripts test --watchAll=false",
+            "react-scripts build",
+            "ng test --watch=false",
+            "ng test --no-watch",
+            "ng build",
+            "mocha",
+            "ava",
+            "node --test",
+            "node --watch server.js",
+            "tsc",
+            "tsc --noEmit",
+            "tsc -b",
+            "vue-cli-service test:unit",
+            "vite",
+            "eslint .",
+            "playwright test",
+            "echo vitest",
+            "tsc --noEmit && vitest run",
+            "vitest run | tee out.txt",
+            "eslint . && tsc --noEmit",
+            "",
+            "npx",
+        ] {
+            assert_eq!(watch_tool(script), None, "{script}");
+        }
+    }
+
+    fn web_project(scripts: &str) -> (RepoFacts, Project) {
+        let manifest = format!(r#"{{"name":"web","scripts":{scripts}}}"#);
+        let facts = facts(&[("web/package.json", manifest.as_str())]);
+        let web = by_root(&facts, "web").clone();
+        (facts, web)
+    }
+
+    #[test]
+    fn a_watch_script_gives_way_to_its_run_once_sibling() {
+        let (facts, web) = web_project(r#"{"test":"vitest","test:run":"vitest run"}"#);
+        assert_eq!(web.commands.test.as_deref(), Some("npm run test:run"));
+        assert_eq!(
+            facts.notes,
+            ["web: the test script runs `vitest`, which watches for changes; verify uses test:run (`vitest run`) instead."]
+        );
+        assert!(facts.warnings.is_empty(), "{:?}", facts.warnings);
+    }
+
+    #[test]
+    fn run_once_siblings_are_tried_in_order() {
+        let (_, web) = web_project(
+            r#"{"test":"vitest","test:once":"vitest run","test:ci":"vitest run --reporter=junit","test:run":"vitest run --coverage"}"#,
+        );
+        assert_eq!(web.commands.test.as_deref(), Some("npm run test:run"));
+        let (_, web) =
+            web_project(r#"{"test":"vitest","test:once":"vitest run","test:ci":"vitest --run"}"#);
+        assert_eq!(web.commands.test.as_deref(), Some("npm run test:ci"));
+        let (_, web) = web_project(r#"{"test":"vitest","test:once":"vitest run"}"#);
+        assert_eq!(web.commands.test.as_deref(), Some("npm run test:once"));
+    }
+
+    #[test]
+    fn a_sibling_that_watches_too_is_not_used() {
+        let (facts, web) =
+            web_project(r#"{"test":"vitest","test:run":"vitest watch","test:ci":"vitest run"}"#);
+        assert_eq!(web.commands.test.as_deref(), Some("npm run test:ci"));
+        assert_eq!(facts.notes.len(), 1);
+        assert!(facts.notes[0].contains("verify uses test:ci (`vitest run`)"));
+        // Only watching siblings: the step keeps its own script.
+        let (facts, web) = web_project(r#"{"test":"vitest","test:run":"vitest dev"}"#);
+        assert_eq!(web.commands.test.as_deref(), Some("npm run test"));
+        assert!(facts.notes.is_empty());
+        assert_eq!(facts.warnings.len(), 1);
+    }
+
+    #[test]
+    fn a_watch_script_with_no_sibling_is_kept_with_a_warning() {
+        let (facts, web) = web_project(r#"{"test":"vitest"}"#);
+        assert_eq!(web.commands.test.as_deref(), Some("npm run test"));
+        assert!(facts.notes.is_empty());
+        assert_eq!(
+            facts.warnings,
+            ["web: the test script runs `vitest`, which watches for changes and may never exit. verify runs it with CI=1, which turns watch mode off for most tools (vitest, react-scripts); add a test:run script that runs once to be sure."]
+        );
+        // A tool that keeps watching with CI set is named as such.
+        let (facts, web) = web_project(r#"{"typecheck":"tsc --noEmit --watch"}"#);
+        assert_eq!(web.commands.typecheck.as_deref(), Some("npm run typecheck"));
+        assert_eq!(
+            facts.warnings,
+            ["web: the typecheck script runs `tsc --noEmit --watch`, which watches for changes and may never exit: CI=1, which verify sets, does not turn off watch mode for tsc. Add a typecheck:run script that runs once."]
+        );
+    }
+
+    #[test]
+    fn lint_and_typecheck_scripts_get_the_same_treatment() {
+        let (facts, web) = web_project(
+            r#"{"lint":"npx eslint . && tsc -w","typecheck":"tsc --watch","typecheck:ci":"tsc --noEmit","build":"tsc --watch","build:run":"tsc"}"#,
+        );
+        // Every command of a script is read.
+        assert_eq!(web.commands.lint.as_deref(), Some("npm run lint"));
+        assert_eq!(facts.warnings.len(), 1);
+        assert!(facts.warnings[0].starts_with(
+            "web: the lint script runs `npx eslint . && tsc -w`, which watches for changes and may never exit: CI=1, which verify sets, does not turn off watch mode for tsc."
+        ));
+        assert_eq!(
+            web.commands.typecheck.as_deref(),
+            Some("npm run typecheck:ci")
+        );
+        // build is not a step verify runs.
+        assert_eq!(web.commands.build.as_deref(), Some("npm run build"));
+        assert_eq!(
+            facts.notes,
+            ["web: the typecheck script runs `tsc --watch`, which watches for changes; verify uses typecheck:ci (`tsc --noEmit`) instead."]
+        );
+    }
+
+    #[test]
+    fn the_sibling_runs_with_the_projects_package_manager() {
+        for (lockfile, manager) in [
+            ("pnpm-lock.yaml", "pnpm"),
+            ("yarn.lock", "yarn"),
+            ("bun.lock", "bun"),
+            ("package-lock.json", "npm"),
+        ] {
+            let lock = format!("web/{lockfile}");
+            let facts = facts(&[
+                (
+                    "web/package.json",
+                    r#"{"scripts":{"test":"pnpm exec vitest","test:run":"pnpm exec vitest run"}}"#,
+                ),
+                (lock.as_str(), ""),
+            ]);
+            let web = by_root(&facts, "web");
+            assert_eq!(
+                web.commands.test,
+                Some(format!("{manager} run test:run")),
+                "{lockfile}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_root_commands_use_the_sibling_too_and_are_named_once() {
+        let facts = facts(&[
+            (
+                "package.json",
+                r#"{"name":"app","scripts":{"test":"jest --watch","test:ci":"jest --ci"}}"#,
+            ),
+            ("pnpm-lock.yaml", ""),
+        ]);
+        // verify's root runner reads `commands`, so it must not run the
+        // watching script either.
+        assert_eq!(facts.commands.test.as_deref(), Some("pnpm run test:ci"));
+        assert_eq!(
+            by_root(&facts, ".").commands.test.as_deref(),
+            Some("pnpm run test:ci")
+        );
+        assert_eq!(
+            facts.notes,
+            ["repo root: the test script runs `jest --watch`, which watches for changes; verify uses test:ci (`jest --ci`) instead."]
+        );
+        let text = format_facts_human(&facts);
+        assert!(
+            text.contains("Commands at the repo root:\n  test: pnpm run test:ci\n"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with(&format!("Notes:\n  {}\n", facts.notes[0])),
+            "{text}"
+        );
+        let json = format_facts_json(&facts);
+        assert!(
+            json.contains("\n  \"notes\": [\n    \"repo root: "),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn workspace_members_with_watch_scripts_are_named_by_folder() {
+        let facts = facts(&[
+            (
+                "package.json",
+                r#"{"name":"root","workspaces":["packages/*"]}"#,
+            ),
+            (
+                "packages/b/package.json",
+                r#"{"name":"b","scripts":{"test":"vitest"}}"#,
+            ),
+            (
+                "packages/a/package.json",
+                r#"{"name":"a","scripts":{"test":"vitest","test:run":"vitest run"}}"#,
+            ),
+        ]);
+        assert_eq!(
+            by_root(&facts, "packages/a").commands.test.as_deref(),
+            Some("npm run test:run")
+        );
+        assert_eq!(facts.notes.len(), 1);
+        assert!(facts.notes[0].starts_with("packages/a: the test script"));
+        assert_eq!(facts.warnings.len(), 1);
+        assert!(facts.warnings[0].starts_with("packages/b: the test script"));
+        // No watching scripts: empty lists, still in the JSON.
+        let plain = self::facts(&[("package.json", r#"{"scripts":{"test":"vitest run"}}"#)]);
+        assert!(plain.notes.is_empty() && plain.warnings.is_empty());
+        assert!(format_facts_json(&plain).contains("\"notes\": []"));
+        assert!(!format_facts_human(&plain).contains("Notes:"));
     }
 
     // ------------------------------------------- python dependency lists

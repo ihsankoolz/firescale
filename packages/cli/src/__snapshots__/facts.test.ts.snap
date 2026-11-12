@@ -224,7 +224,8 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
       }
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "notes": []
 }
 "
 `;
@@ -319,7 +320,8 @@ exports[`fscale facts > prints schema-valid JSON for a pnpm monorepo 1`] = `
       "dependsOn": []
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "notes": []
 }
 "
 `;
