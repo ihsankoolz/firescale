@@ -12,7 +12,15 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 ## Needs your decision (all milestones, most important first)
 
-- **(Plan) Publish 0.1.0 to npm now.** M9 is merged, so this is the next step, and it is yours. The steps are under "Publishing to npm" below. Until it is done, the CI workflow that `fscale init` and `fscale adopt` generate fails at `npx firescale verify`, and M10 and M11 only work in tests.
+- **(M10) Should the agent stop hook block when verify is only partial?** Today it does not. With steps skipped for lack of a command, `fscale verify` prints `verify: PARTIAL`, exits 0, and the hook lets the agent stop with a one-line note on stderr. To make it block, set `"verify": { "failOnSkipped": true }`; then verify exits 1 and the hook blocks. I kept "do not block" as the default because a missing command is not something the agent's change broke, because the easy way past such a block is to set the steps to `false` (the weakening the tamper guard is meant to catch), and because the hook lets go after 3 blocks anyway. The cost: in a repo with nothing to run, an agent can stop with no check having run. Say if you want the hook to block by default, or want `failOnSkipped` on by default (ADR 0020).
+- **(M10) A partial verify exits 0.** That follows your earlier answer that a skipped step is not a failure. CI therefore stays green on `PARTIAL` unless `failOnSkipped` is on. The starter workflow that `fscale init` writes does not turn it on. Say if generated CI should.
+- **(M10) Projects are searched four folder levels deep, and the search has no setting.** Deeper projects are reached by naming their folder under `verify.projects`. Say if you want a config key for the depth or for extra folders to skip.
+- **(M10) A `requirements.txt` alone is not a project.** It needs a `.py` file or a Python config file beside it. Your services qualify through `pytest.ini`, `alembic.ini` and `main.py`.
+- **(M10) Python commands are `python -m pytest` and `python -m ruff check .`** They need `python` on the PATH with the tools installed, so an activated virtual environment. If your services each have their own `.venv`, verify will not find it by itself: set the command per project under `verify.projects`, or say if verify should look for `.venv` in the project's folder.
+- **(M10) Ruff counts as configured** when a `ruff.toml`, `.ruff.toml` or `[tool.ruff]` section is in the service's folder or a folder above it, or when a `requirements*.txt` of the service lists `ruff`. Otherwise the service's lint step is skipped and named.
+- **(M10) Playwright is listed as a tool but never run as the test step.** End-to-end tests need browsers and running services. Your frontend's test step is therefore skipped until it has a `test` script, a vitest or jest config, or a command under `verify.projects`.
+- **(M10) Which variables `core/env-example` always ignores.** The list is in `docs/rules.md`. It includes `DEBUG`, `HTTP_PROXY` and `NODE_OPTIONS`, and has no `DOCKER_` prefix. There is no option to take a name off it.
+- **(Plan) The second box of the publishing checkpoint is still open.** A repo made by `npx firescale@0.1.0 init` has not yet been seen passing its own generated CI on GitHub. Step 7 under "Publishing to npm" below says how to check it.
 - **(M9) `init` and `adopt` run `git add` on the README and the workflow they create.** Nothing else is staged and nothing is committed (ADR 0019). The alternative is to make the two rules count untracked files. Say if you would rather have that.
 - **(M9) `adopt` writes a config with `core` only; `init` uses `core` and `agent-ready`.** That follows SPEC §6. Say if `adopt` should turn on `agent-ready` too.
 - **(M9) `fscale init` takes no folder argument.** It works on the current folder: `mkdir my-app && cd my-app && fscale init`. `fscale init my-app` could be added.
@@ -34,6 +42,66 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## A note on milestone numbers
+
+M10 was added on 2026-11-12 (ADR 0020), and every later milestone moved up by one: the group-project pack is now M11, `doctor` M12, agent files M13, generators M14, Next.js M15, Python M16, blame-aware verify M17 to M19, the tamper guard M20 to M23, the runner M24, adapters and the ledger M25, Supabase M26 and Expo M27. The sections below, from M9 down, keep the numbers they were written with.
+
+## M10 — Detection that works on real repos
+
+Built from what you found when running 0.1.0 on your course project. All decisions are in ADR 0020.
+
+**Recorded first**
+
+- You published 0.1.0 to npm on 2026-11-12. `npx firescale@0.1.0 init` and `adopt --dry-run` work on Windows and Linux. The first box of the checkpoint in PLAN.md is ticked; the second is open.
+
+**Built**
+
+- `fscale facts` finds projects in subfolders and reports each with its own languages, package manager, lockfiles, tools and commands. A repo-level summary lists every language and package manager. Docker Compose at the root is a tool. On a repo shaped like yours it reports five Python projects (pip, pytest, and ruff where configured) and one TypeScript project (npm, Vite, Playwright, oxlint, knip).
+- `fscale verify` runs each discovered project's lint, typecheck and test in that project's folder. A run with a skipped step prints `verify: PARTIAL - 9 of 19 steps ran, 10 skipped`, never `verify: OK`, and names every skipped step with its reason.
+- `verify.failOnSkipped` makes skipped steps fail. `verify.projects` sets or turns off the steps of a single project, and can name a folder the search did not find.
+- `core/env-example`: system and tooling variables are ignored from one documented list; variables only test code reads are low severity and go under a "test-only" comment; a read is satisfied by the nearest `.env.example` at or above the file.
+- Both JSON formats are now schema version 2: `fscale facts --json` and `fscale verify --json`.
+- `docs/facts.md` and `docs/verify.md` rewritten, ADR 0020, and a benchmark entry in `bench/RESULTS.md`.
+
+**Decisions made for you** (all ADR 0020; the ones you may disagree with are also under "Needs your decision")
+
+- **Depth limit: four folder levels below the root.** Not configurable.
+- **Skipped while searching:** everything `.gitignore` ignores, every folder starting with a dot (`.venv`, `.pytest_cache`, `.ruff_cache`), and `node_modules`, `bower_components`, `vendor`, `site-packages`, `venv`, `env`, `__pycache__`, `dist`, `build`, `out`, `target`, `coverage`, `htmlcov`, `test-results`, `playwright-report`, `tmp`, `temp`, `logs`.
+- **Nested projects: a project's folder is not searched further.** A `package.json` inside a project (an example, a fixture) belongs to that project. Only the root is always searched.
+- **A workspace file at the root decides its ecosystem.** With a pnpm or npm workspace, Node projects are its members only; a folder the workspace excludes stays excluded. The same for a Cargo workspace. Other ecosystems are still searched. This keeps every repo that has a workspace file as it was.
+- **The repo-level `packageManager`, `lockfiles` and `commands` still describe the root only.** Five rules read them. New: `packageManagers` lists them all, and `languages` includes every project's.
+- **Commands from config files:** `oxlint`, `eslint .` or `biome check .`; `vitest run` or `jest`; `tsc --noEmit`. A script of the same name wins. npm tools run through `npx --no`, which never downloads.
+- **No typecheck command for a `tsconfig.json` with `references`.** `tsc --noEmit` checks nothing there and `tsc -b` could write files.
+- **`off` is a new step status.** A step you set to `false`, or one that another step covers, used to show as `skipped`. It now shows as `off` and does not make a run partial.
+- **A top-level `verify.lint`, `typecheck` or `test` applies to the whole repo.** A command runs once from the root in place of each project's own; `false` turns the step off everywhere. A project's entry under `verify.projects` wins for that project.
+- **A folder under `verify.projects` that does not exist is an error** (exit 2).
+- **Projects run in full with `--affected`.**
+- **A root Python or Go project now gets commands.** Before, such a repo skipped every step.
+- **`core/gitignore-basics` now asks for the entries of every project's language**, so a repo with a Python service in a subfolder needs `__pycache__` and `.venv` ignored. This is the one rule whose findings can change in an existing repo.
+- **`agent-ready/single-test-command` still looks at the root only.**
+- **Test-only variables are low severity, not hidden.** A teammate running the tests still needs them.
+- **The fix adds a missing variable to the nearest existing `.env.example`** at or above the reading file, else to the root file. It never creates a nested one.
+- **A finding can have its own severity.** Built-in rules only; the TypeScript SDK cannot set it yet.
+
+**Tests changed on purpose, none weakened**
+
+- The unit test that asserted `verify: OK` for a run with a skipped step now asserts `PARTIAL`. That assertion was the false green.
+- One CLI test expects `off` where it expected `skipped`, for a step the config turns off. Five snapshots changed the same way.
+- Facts: schema version 2; the mixed-repo test now lists the root's Python project; the human-output test and two snapshots show the new per-project lines.
+- No `core/env-example` test and no `init`, `adopt` or `sync` test changed.
+
+**Known limits**
+
+- `fscale check` is 7 to 15% slower on a 50,000-file repo, because four rules each detect the facts. See `bench/RESULTS.md`.
+- No project graph (`dependsOn`) for Python or Go projects.
+- A discovered project that is itself a workspace is listed as one project.
+- Two projects can share a name; `root` tells them apart.
+- Projects run one after another. On your repo that is six test runs in sequence.
+- Test code is recognised by its path only, and case-sensitively.
+- The always-ignored variable list cannot be shortened by config.
+- Custom TypeScript rules cannot give a finding its own severity.
+- Other limits are in `docs/facts.md` and `docs/verify.md`.
 
 ## M9 — `init`, `adopt` and `sync`
 
@@ -368,11 +436,11 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 - Decide the items under "Needs your decision" at the top of this file.
 - Commits made by the build sessions use your name and email but are not signed, so GitHub shows them as "Unverified". If you want verified history, sign going forward; re-signing old commits means rewriting history.
 - The branches `m0-skeleton`, `m1-rule-sdk`, `m2-rust-front-door`, `m3-engine-cache` and `m4-fix-sarif-facts` are merged and can be deleted.
-- The manual test with a real agent (now M24) is not reachable yet.
+- The manual test with a real agent (now M25) is not reachable yet.
 
 ## Publishing to npm
 
-Nothing has been published. The packaging is built and tested (M6), on all three OSes; publishing is yours to do, and with M9 merged it is the next step in PLAN.md. Exact steps:
+**0.1.0 was published by you on 2026-11-12.** `npx firescale@0.1.0 init` and `npx firescale@0.1.0 adopt --dry-run` work on Windows and Linux. Step 7 below, the generated CI passing on GitHub, is still open. The steps are kept for the next release:
 
 **Once, before the first publish**
 

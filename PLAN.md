@@ -162,22 +162,23 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ## Direction change after M7
 
-On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit for small teams, the rules become the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Everything below was rewritten then, and reordered once more by the owner (ADR 0017): the Next.js and Python stack packs moved up to directly after M13, and a publishing checkpoint was added after M9. Milestones are sized for one session each. Themes, in order:
+On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit for small teams, the rules become the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Everything below was rewritten then, and reordered once more by the owner (ADR 0017): the Next.js and Python stack packs moved up, and a publishing checkpoint was added after M9. On 2026-11-12 the owner added M10 from findings on a real repo, and every later milestone moved up by one (ADR 0020); the numbers below are the current ones. Milestones are sized for one session each. Themes, in order:
 
 | Theme                        | Milestones |
 | ---------------------------- | ---------- |
 | Rules are the scaffold           | M8, M9, then the publishing checkpoint |
-| Group-project mode               | M10, M11   |
-| Born agent-ready                 | M12, M13   |
-| Stack packs: Next.js and Python  | M14, M15   |
-| Referee: blame-aware verify      | M16 to M18 |
-| Referee: tamper guard            | M19 to M22 |
-| Guarded agent runner, ledger     | M23, M24   |
-| Stack packs: Supabase and Expo   | M25, M26   |
+| Detection that works on real repos | M10      |
+| Group-project mode               | M11, M12   |
+| Born agent-ready                 | M13, M14   |
+| Stack packs: Next.js and Python  | M15, M16   |
+| Referee: blame-aware verify      | M17 to M19 |
+| Referee: tamper guard            | M20 to M23 |
+| Guarded agent runner, ledger     | M24, M25   |
+| Stack packs: Supabase and Expo   | M26, M27   |
 
 One thing outside the milestones that they depend on:
 
-- **Cursor's documentation.** It could not be reached from the build environment during M7. M12 needs it.
+- **Cursor's documentation.** It could not be reached from the build environment during M7. M13 needs it.
 
 Owner decisions that apply to everything below (ADR 0017):
 
@@ -229,20 +230,42 @@ The engine under `init`, `adopt` and `sync`: run fixes in order until nothing is
 
 ---
 
-## Checkpoint — Owner publishes 0.1.0 to npm ☐ (manual, after M9)
+## Checkpoint — Owner publishes 0.1.0 to npm ◐ (manual, after M9)
 
 Not a build milestone. The owner publishes `firescale` 0.1.0 to npm by hand, following "Publishing to npm" in DECISIONS.md.
 
 Why here: the CI workflow that `init` generates (M9) runs `npx firescale verify`, and teammates install firescale from npm. Until 0.1.0 is published, generated CI and group-project mode work only in tests.
 
+Published by the owner on 2026-11-12. `npx firescale@0.1.0 init` and `npx firescale@0.1.0 adopt --dry-run` work on Windows and on Linux.
+
 **Done when**
 
-- ☐ `npx firescale@0.1.0 --version` works from an empty folder on a machine without this repo.
+- ☑ `npx firescale@0.1.0 --version` works from an empty folder on a machine without this repo.
 - ☐ A repo made by `fscale init` passes its own generated CI on GitHub.
 
 ---
 
-## M10 — The group-project pack ☐
+## M10 — Detection that works on real repos ☑
+
+Added by the owner after running 0.1.0 on a real course project (ADR 0020). Its root has `docker-compose.yml`, `.env.example`, a README and `.github/`, with the code in subfolders: `backend/` holds five Python services and `frontend/` a Vite app. There is no workspace file at the root. 0.1.0 reported no package manager, no languages and no projects there, printed "verify: OK" with lint, typecheck and test all skipped, and nine of the eleven `core/env-example` findings came from test code.
+
+**Build**
+
+- `fscale facts` finds projects in subfolders: marker files (`package.json`, `pyproject.toml`, `requirements.txt`, `setup.py`, `Pipfile`, `Cargo.toml`, `go.mod`) down to four folder levels, respecting `.gitignore` and skipping dependency, cache and build folders. Each project gets its own languages, package manager, lockfiles, tools and commands, and the repo-level summary lists them all. Linters and test runners are detected from their config files, not only from package scripts. Docker Compose at the root is a tool.
+- `fscale verify` runs each discovered project's steps in that project's folder. The headline never reads as a clean pass when a step was skipped: it says `verify: PARTIAL - 1 of 4 steps ran, 3 skipped` and names each skipped step. `verify.failOnSkipped` makes skipped steps fail, and `verify.projects` sets or turns off the steps of one project. `--json` carries the same information (schema version 2).
+- `core/env-example`: well-known system and tooling variables are ignored, from one documented list; variables read only by test code are reported at low severity and written under a separate "test-only" comment by the fix; a read is satisfied by the nearest `.env.example` at or above the reading file.
+
+**Done when**
+
+- ☑ A fixture repo shaped like the one described reports its Python services and its frontend as separate projects in `fscale facts`, with correct languages and commands, on all three OSes.
+- ☑ `fscale verify` in that fixture runs the frontend's and the backend's steps, and names every step it skipped.
+- ☑ No output says a plain "OK" when any step was skipped, proven by a test.
+- ☑ The three env-example changes each have a caught case and a not-a-finding case.
+- ☑ `init`, `adopt` and `sync` behave as before on existing fixtures.
+
+---
+
+## M11 — The group-project pack ☐
 
 Needs the publishing checkpoint: the CI this pack checks for runs `npx firescale verify`, which only works for a real team once 0.1.0 is on npm. If it is not published yet, say so at the top of the pull request.
 
@@ -264,7 +287,7 @@ Needs the publishing checkpoint: the CI this pack checks for runs `npx firescale
 
 ---
 
-## M11 — `fscale doctor` ☐
+## M12 — `fscale doctor` ☐
 
 Needs the publishing checkpoint: a teammate runs `doctor` from an npm install, and the generated CI that tells them to needs 0.1.0 on npm. If it is not published yet, say so at the top of the pull request.
 
@@ -286,7 +309,7 @@ Needs the publishing checkpoint: a teammate runs `doctor` from an npm install, a
 
 ---
 
-## M12 — Born agent-ready: agent files from `init` ☐
+## M13 — Born agent-ready: agent files from `init` ☐
 
 **Build**
 
@@ -306,14 +329,14 @@ Needs the publishing checkpoint: a teammate runs `doctor` from an npm install, a
 
 ---
 
-## M13 — Generators: `add` and `schema` ☐
+## M14 — Generators: `add` and `schema` ☐
 
 **Build**
 
 - `packages/generators`: the generator interface in TypeScript, called through the bridge.
 - `fscale add <generator> --json <input> [--dry-run]` and `fscale schema <generator>`. Input is validated against the schema before anything is written.
 - Two real generators to prove the interface: a workspace package, and a custom rule (rule folder with check, SKILL.md and test).
-- A skill that tells agents to call `fscale add` instead of hand-writing boilerplate, shipped by the `agent-ready` pack and installed by M12's skills rule.
+- A skill that tells agents to call `fscale add` instead of hand-writing boilerplate, shipped by the `agent-ready` pack and installed by M13's skills rule.
 
 **Done when**
 
@@ -324,11 +347,11 @@ Needs the publishing checkpoint: a teammate runs `doctor` from an npm install, a
 
 ---
 
-## M14 — Stack pack: Next.js ☐
+## M15 — Stack pack: Next.js ☐
 
-## M15 — Stack pack: Python ☐
+## M16 — Stack pack: Python ☐
 
-One milestone and one pull request per pack. Moved up from the end of the plan by the owner (ADR 0017), so that real stacks can be scaffolded before the referee is built. Every stack pack, here and in M25 and M26, has this shape.
+One milestone and one pull request per pack. Moved up from the end of the plan by the owner (ADR 0017), so that real stacks can be scaffolded before the referee is built. Every stack pack, here and in M26 and M27, has this shape.
 
 **Build**
 
@@ -345,7 +368,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M16 — Blame-aware verify: the base run ☐
+## M17 — Blame-aware verify: the base run ☐
 
 **Build**
 
@@ -355,7 +378,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 - Cache base results under `.firescale/` keyed by base SHA + toolchain versions + lockfile hash.
 - Label at step level and for rule diagnostics: `new`, `pre-existing`, `fixed`. Only `new` makes `fscale verify` exit 1. The labels are on by default whenever there is a base commit (owner decision, ADR 0017); there is no flag to turn them on.
 - With no base that differs from the head commit and a clean tree, or outside git, verify behaves as it does today: every failure blocks.
-- The summary and `--json` carry the labels (schema version 2). Update `docs/verify.md` and `docs/affected.md`.
+- The summary and `--json` carry the labels (bump the schema version; M10 already took version 2). Update `docs/verify.md` and `docs/affected.md`.
 
 **Done when**
 
@@ -368,7 +391,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M17 — Blame-aware verify: per-test labels ☐
+## M18 — Blame-aware verify: per-test labels ☐
 
 **Build**
 
@@ -384,7 +407,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M18 — Blame-aware verify: reruns and the stop hook ☐
+## M19 — Blame-aware verify: reruns and the stop hook ☐
 
 **Build**
 
@@ -402,7 +425,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M19 — Tamper guard: design and the first language ☐
+## M20 — Tamper guard: design and the first language ☐
 
 **Build**
 
@@ -420,7 +443,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M20 — Tamper guard: more languages and policy ☐
+## M21 — Tamper guard: more languages and policy ☐
 
 **Build**
 
@@ -435,7 +458,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M21 — Tamper guard: config and CI ☐
+## M22 — Tamper guard: config and CI ☐
 
 **Build**
 
@@ -452,7 +475,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M22 — Tamper guard: approvals and measured rates ☐
+## M23 — Tamper guard: approvals and measured rates ☐
 
 **Build**
 
@@ -467,7 +490,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M23 — Guarded agent runner ☐
+## M24 — Guarded agent runner ☐
 
 **Build**
 
@@ -483,7 +506,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M24 — Agent adapters and `fscale ledger` ☐ (finish and test locally)
+## M25 — Agent adapters and `fscale ledger` ☐ (finish and test locally)
 
 **Build**
 
@@ -499,11 +522,11 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M25 — Stack pack: Supabase ☐
+## M26 — Stack pack: Supabase ☐
 
-## M26 — Stack pack: Expo ☐
+## M27 — Stack pack: Expo ☐
 
-One milestone and one pull request per pack, with the same "Build" and "Done when" lists as M14 and M15.
+One milestone and one pull request per pack, with the same "Build" and "Done when" lists as M15 and M16.
 
 ---
 

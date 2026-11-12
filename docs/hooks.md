@@ -53,3 +53,7 @@ An agent that cannot fix a failure must not be held forever. The hook counts how
 - Hooks are written to the repo's project config only, never to user-level settings.
 - The hook runs the whole of `fscale verify`. If the repo's tests take longer than the agent's own hook time limit, the agent ends the hook. Give the hook a faster command with the `verify` config key if that happens.
 - Gemini CLI is not supported yet.
+
+## When verify is only partial
+
+A run where steps were skipped for lack of a command is `PARTIAL`, not a pass (see [verify.md](verify.md)). The hook does not block on it: the agent may stop, and the hook prints one line on stderr that names the skipped steps. To make the hook block until every step has a command or is set to `false`, turn on `verify.failOnSkipped` in the firescale config. ADR 0020 gives the reasons for the default.
