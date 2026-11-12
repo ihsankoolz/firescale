@@ -9,7 +9,7 @@ The `core` pack is on by default. Every rule is report-only (`evaluated`) until 
 | `core/single-lockfile`      | Exactly one JavaScript lockfile, matching `packageManager`.                 | high     | no           |
 | `core/gitignore-basics`     | `.gitignore` exists and covers the detected languages.                      | medium   | yes          |
 | `core/ci-exists`            | A CI workflow exists and runs on pull requests.                             | medium   | yes¹         |
-| `core/env-example`          | Env vars read in code are listed in `.env.example`.                         | medium   | yes          |
+| `core/env-example`          | Env vars read in code are listed in the nearest `.env.example`.             | medium   | yes          |
 | `core/scripts-present`      | `package.json` has `lint`, `test` and `build` scripts.                      | medium   | no           |
 | `core/readme-setup`         | The README shows how to install and how to run.                             | low      | yes¹         |
 
@@ -38,3 +38,19 @@ Not on by default. Add `"agent-ready"` to `packs` in your config. It checks that
 | `agent-ready/verify-hook`   | `agents`       | Agents that must each have the hook. Default: any one of the three.     |
 
 To silence one line for the secrets rule, put `firescale:allow-secret` in a comment on that line.
+
+## `core/env-example` in detail
+
+`fscale explain core/env-example` prints the full text. In short:
+
+- **Nearest example file.** A read is fine when a `.env.example` in the reading file's folder, or in any folder above it up to the repo root, lists the name. A sibling folder's file does not count. A missing name belongs in the nearest `.env.example` at or above the reading file, or in the root one when there is none. The finding names that file and `fscale fix` adds the name there.
+- **Test-only variables.** A name that only test code reads is reported at low severity. Test code is anything below a folder named `test`, `tests`, `__tests__`, `unit_test`, `unit_tests`, `integration_test`, `integration_tests`, `e2e`, `spec`, `specs`, `testing`, `cypress` or `playwright`, plus `conftest.py`, `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*` and `*.spec.*` files. `fscale fix` writes these names under their own comment, `# Test-only variables: read only by test code.`
+- **Example files are read from disk.** A `.env.example` that git does not track yet still counts, in the root and in nested folders.
+
+### Variables that are always ignored
+
+The operating system, the shell, CI services and development tools set these, so the rule never asks for them. The list lives in `crates/rules/src/core/env-example/well_known.rs`, and a test keeps this section equal to it. The `ignore` option adds names. There is no option to remove one.
+
+Exact names: `PATH`, `HOME`, `PWD`, `OLDPWD`, `USER`, `USERNAME`, `LOGNAME`, `HOSTNAME`, `SHELL`, `SHLVL`, `TERM`, `TERM_PROGRAM`, `COLORTERM`, `COLUMNS`, `LINES`, `DISPLAY`, `EDITOR`, `VISUAL`, `PAGER`, `LANG`, `LANGUAGE`, `TZ`, `TMPDIR`, `TEMP`, `TMP`, `SSH_AUTH_SOCK`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `PROGRAMFILES`, `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `HOMEDRIVE`, `HOMEPATH`, `COMPUTERNAME`, `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_BUILDKIT`, `DOCKER_CONFIG`, `DOCKER_CONTEXT`, `COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `CI`, `CONTINUOUS_INTEGRATION`, `GITLAB_CI`, `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, `DEBUG`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_ENV`, `NODE_OPTIONS`, `NODE_PATH`, `NODE_DEBUG`, `NODE_NO_WARNINGS`, `NODE_EXTRA_CA_CERTS`, `JEST_WORKER_ID`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUNBUFFERED`, `PYTHONDONTWRITEBYTECODE`, `PYTHONIOENCODING`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `RUST_BACKTRACE`, `GOPATH`, `GOROOT`, `JAVA_HOME`.
+
+Names that start with: `LC_*`, `XDG_*`, `npm_*`, `GITHUB_*`, `RUNNER_*`, `FSCALE_*`, `CARGO_*`, `RUSTC_*`, `RUSTUP_*`, `PYTEST_*`, `PLAYWRIGHT_*`, `VITEST*`.
