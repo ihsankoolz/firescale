@@ -251,6 +251,7 @@ mod tests {
                     range: None,
                     project: None,
                     fixable: Fixable::Manual,
+                    severity: None,
                 })
                 .collect())
         }

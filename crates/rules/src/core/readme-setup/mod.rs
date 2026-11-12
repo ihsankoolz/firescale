@@ -219,7 +219,11 @@ fn project_name(facts: &RepoFacts) -> String {
         .iter()
         .filter(|project| project.root == ".")
         .map(|project| project.name.trim())
-        .find(|name| !name.is_empty() && !name.chars().any(char::is_control))
+        .find(|name| {
+            !name.is_empty()
+                && *name != firescale_core::facts::UNNAMED_ROOT
+                && !name.chars().any(char::is_control)
+        })
         .unwrap_or("Project name")
         .to_owned()
 }
@@ -392,6 +396,7 @@ impl BuiltinRule for ReadmeSetup {
                 range: None,
                 project: None,
                 fixable,
+                severity: None,
             }]);
         };
         // Bytes plus a lossy decode: a README in another encoding must not abort the run.
@@ -411,6 +416,7 @@ impl BuiltinRule for ReadmeSetup {
                 range: None,
                 project: None,
                 fixable: Fixable::Agent,
+                severity: None,
             });
         };
         if !satisfied(&text, &INSTALL_HEADINGS, &INSTALL_COMMANDS) {

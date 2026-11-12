@@ -4,7 +4,7 @@ exports[`fscale verify > exits 0 when every step passes 1`] = `
 "verify: OK
   check      passed   8 rules, no enforced violations
   lint       passed   node lint.js
-  typecheck  skipped  turned off in your firescale config
+  typecheck  off      turned off in your firescale config
   test       passed   node test.js
 "
 `;
@@ -13,7 +13,7 @@ exports[`fscale verify > exits 1 with a compact summary when a test fails 1`] = 
 "verify: FAILED at test
   check      passed   8 rules, no enforced violations
   lint       passed   node lint.js
-  typecheck  skipped  turned off in your firescale config
+  typecheck  off      turned off in your firescale config
   test       FAILED   node test.js (exit 1)
 
 Last lines of test:
@@ -24,11 +24,33 @@ Fix the failure, then run again: node test.js
 "
 `;
 
-exports[`fscale verify > prints a visible warning for a step with no command, and none for a step turned off 1`] = `
-"verify: OK
+exports[`fscale verify > fails on a skipped step when verify.failOnSkipped is on 1`] = `
+"verify: FAILED - 2 of 4 steps skipped, and verify.failOnSkipped is on
   check      passed   8 rules, no enforced violations
   lint       skipped  package.json has no lint script
-  typecheck  skipped  turned off in your firescale config
+  typecheck  skipped  package.json has no typecheck script
+  test       passed   npm run test
+
+warning: steps were skipped because no command was found: lint, typecheck. Set verify.lint in your firescale config to a command, or to false if this repo has none.
+"
+`;
+
+exports[`fscale verify > never prints a plain OK when a step was skipped 1`] = `
+"verify: PARTIAL - 1 of 4 steps ran, 3 skipped
+  check      passed   8 rules, no enforced violations
+  lint       skipped  no lint command found; set verify.lint in your firescale config
+  typecheck  skipped  no typecheck command found; set verify.typecheck in your firescale config
+  test       skipped  no test command found; set verify.test in your firescale config
+
+warning: steps were skipped because no command was found: lint, typecheck, test. Set verify.lint in your firescale config to a command, or to false if this repo has none.
+"
+`;
+
+exports[`fscale verify > prints a visible warning for a step with no command, and none for a step turned off 1`] = `
+"verify: PARTIAL - 2 of 3 steps ran, 1 skipped
+  check      passed   8 rules, no enforced violations
+  lint       skipped  package.json has no lint script
+  typecheck  off      turned off in your firescale config
   test       passed   npm run test
 
 warning: 1 step was skipped because no command was found: lint. Set verify.lint in your firescale config to a command, or to false if this repo has none.
@@ -37,11 +59,14 @@ warning: 1 step was skipped because no command was found: lint. Set verify.lint 
 
 exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
 {
+  "failOnSkipped": false,
   "failedStep": "test",
   "ok": false,
   "rerun": "node test.js",
+  "result": "failed",
   "runner": "config",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "skipped": [],
   "steps": [
     {
       "command": "fscale check",
@@ -63,7 +88,7 @@ exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
       "detail": "turned off in your firescale config",
       "durationMs": 0,
       "name": "typecheck",
-      "status": "skipped",
+      "status": "off",
     },
     {
       "command": "node test.js",
@@ -78,6 +103,321 @@ exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
       "status": "failed",
     },
   ],
+  "stepsRun": 3,
+  "stepsTotal": 3,
   "version": "<version>",
 }
+`;
+
+exports[`fscale verify in a repo with projects in subfolders > does not say OK when a project is missing from the plan 1`] = `
+"verify: PARTIAL - 4 of 7 steps ran, 3 skipped
+  check      passed   8 rules, no enforced violations
+  lint       passed   npm run lint
+  typecheck  passed   npm run typecheck
+  test       passed   npm run test
+  in the repo root (python):
+    lint       skipped  no linter was found (looked for ruff)
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       skipped  no test runner was found (looked for pytest)
+
+warning: steps were skipped because no command was found: lint in the repo root, typecheck in the repo root, test in the repo root. Set verify.projects["."].lint in your firescale config to a command, or to false if that project has none.
+"
+`;
+
+exports[`fscale verify in a repo with projects in subfolders > runs the backend's and the frontend's steps, each in its own folder, and names every skipped step 1`] = `
+"verify: PARTIAL - 9 of 19 steps ran, 10 skipped
+  check      passed   8 rules, no enforced violations
+  in backend/audit_service:
+    lint       skipped  no linter was found (looked for ruff)
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       passed   python -m pytest
+  in backend/auth_service:
+    lint       passed   python -m ruff check .
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       passed   python -m pytest
+  in backend/ledger_service:
+    lint       skipped  no linter was found (looked for ruff)
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       passed   python -m pytest
+  in backend/market_service:
+    lint       skipped  no linter was found (looked for ruff)
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       passed   python -m pytest
+  in backend/realtime_service:
+    lint       skipped  no linter was found (looked for ruff)
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       passed   python -m pytest
+  in frontend:
+    lint       passed   npx --no oxlint
+    typecheck  passed   npx --no tsc --noEmit
+    test       skipped  package.json has no test script, and no vitest or jest config was found
+
+warning: steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service, test in frontend. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.
+"
+`;
+
+exports[`fscale verify in a repo with projects in subfolders > runs the backend's and the frontend's steps, each in its own folder, and names every skipped step 2`] = `
+{
+  "failOnSkipped": false,
+  "ok": true,
+  "result": "partial",
+  "runner": "projects",
+  "schemaVersion": 2,
+  "skipped": [
+    {
+      "project": "backend/audit_service",
+      "reason": "no linter was found (looked for ruff)",
+      "step": "lint",
+    },
+    {
+      "project": "backend/audit_service",
+      "reason": "no type checker was found (looked for mypy)",
+      "step": "typecheck",
+    },
+    {
+      "project": "backend/auth_service",
+      "reason": "no type checker was found (looked for mypy)",
+      "step": "typecheck",
+    },
+    {
+      "project": "backend/ledger_service",
+      "reason": "no linter was found (looked for ruff)",
+      "step": "lint",
+    },
+    {
+      "project": "backend/ledger_service",
+      "reason": "no type checker was found (looked for mypy)",
+      "step": "typecheck",
+    },
+    {
+      "project": "backend/market_service",
+      "reason": "no linter was found (looked for ruff)",
+      "step": "lint",
+    },
+    {
+      "project": "backend/market_service",
+      "reason": "no type checker was found (looked for mypy)",
+      "step": "typecheck",
+    },
+    {
+      "project": "backend/realtime_service",
+      "reason": "no linter was found (looked for ruff)",
+      "step": "lint",
+    },
+    {
+      "project": "backend/realtime_service",
+      "reason": "no type checker was found (looked for mypy)",
+      "step": "typecheck",
+    },
+    {
+      "project": "frontend",
+      "reason": "package.json has no test script, and no vitest or jest config was found",
+      "step": "test",
+    },
+  ],
+  "steps": [
+    {
+      "command": "fscale check",
+      "detail": "8 rules, no enforced violations",
+      "durationMs": 0,
+      "exitCode": 0,
+      "name": "check",
+      "status": "passed",
+    },
+    {
+      "detail": "no linter was found (looked for ruff)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "lint",
+      "project": "backend/audit_service",
+      "status": "skipped",
+    },
+    {
+      "detail": "no type checker was found (looked for mypy)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "typecheck",
+      "project": "backend/audit_service",
+      "status": "skipped",
+    },
+    {
+      "command": "python -m pytest",
+      "detail": "python -m pytest",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "python",
+      "name": "test",
+      "project": "backend/audit_service",
+      "status": "passed",
+    },
+    {
+      "command": "python -m ruff check .",
+      "detail": "python -m ruff check .",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "python",
+      "name": "lint",
+      "project": "backend/auth_service",
+      "status": "passed",
+    },
+    {
+      "detail": "no type checker was found (looked for mypy)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "typecheck",
+      "project": "backend/auth_service",
+      "status": "skipped",
+    },
+    {
+      "command": "python -m pytest",
+      "detail": "python -m pytest",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "python",
+      "name": "test",
+      "project": "backend/auth_service",
+      "status": "passed",
+    },
+    {
+      "detail": "no linter was found (looked for ruff)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "lint",
+      "project": "backend/ledger_service",
+      "status": "skipped",
+    },
+    {
+      "detail": "no type checker was found (looked for mypy)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "typecheck",
+      "project": "backend/ledger_service",
+      "status": "skipped",
+    },
+    {
+      "command": "python -m pytest",
+      "detail": "python -m pytest",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "python",
+      "name": "test",
+      "project": "backend/ledger_service",
+      "status": "passed",
+    },
+    {
+      "detail": "no linter was found (looked for ruff)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "lint",
+      "project": "backend/market_service",
+      "status": "skipped",
+    },
+    {
+      "detail": "no type checker was found (looked for mypy)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "typecheck",
+      "project": "backend/market_service",
+      "status": "skipped",
+    },
+    {
+      "command": "python -m pytest",
+      "detail": "python -m pytest",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "python",
+      "name": "test",
+      "project": "backend/market_service",
+      "status": "passed",
+    },
+    {
+      "detail": "no linter was found (looked for ruff)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "lint",
+      "project": "backend/realtime_service",
+      "status": "skipped",
+    },
+    {
+      "detail": "no type checker was found (looked for mypy)",
+      "durationMs": 0,
+      "kind": "python",
+      "name": "typecheck",
+      "project": "backend/realtime_service",
+      "status": "skipped",
+    },
+    {
+      "command": "python -m pytest",
+      "detail": "python -m pytest",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "python",
+      "name": "test",
+      "project": "backend/realtime_service",
+      "status": "passed",
+    },
+    {
+      "command": "npx --no oxlint",
+      "detail": "npx --no oxlint",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "node",
+      "name": "lint",
+      "project": "frontend",
+      "status": "passed",
+    },
+    {
+      "command": "npx --no tsc --noEmit",
+      "detail": "npx --no tsc --noEmit",
+      "durationMs": 0,
+      "exitCode": 0,
+      "kind": "node",
+      "name": "typecheck",
+      "project": "frontend",
+      "status": "passed",
+    },
+    {
+      "detail": "package.json has no test script, and no vitest or jest config was found",
+      "durationMs": 0,
+      "kind": "node",
+      "name": "test",
+      "project": "frontend",
+      "status": "skipped",
+    },
+  ],
+  "stepsRun": 9,
+  "stepsTotal": 19,
+  "version": "<version>",
+  "warnings": [
+    "steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service, test in frontend. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.",
+  ],
+}
+`;
+
+exports[`fscale verify in a repo with projects in subfolders > takes commands and switches for single projects from the config 1`] = `
+"verify: OK
+  check      passed   8 rules, no enforced violations
+  typecheck  off      turned off in your firescale config
+  in backend/audit_service:
+    lint       off      this project is turned off in your firescale config
+    typecheck  off      this project is turned off in your firescale config
+    test       off      this project is turned off in your firescale config
+  in backend/auth_service:
+    lint       off      turned off in your firescale config
+    test       passed   python -m pytest
+  in backend/ledger_service:
+    lint       passed   python -m ruff check .
+    test       passed   python -m pytest
+  in backend/market_service:
+    lint       off      turned off in your firescale config
+    test       passed   python -m pytest
+  in backend/realtime_service:
+    lint       off      turned off in your firescale config
+    test       passed   python -m pytest
+  in backend/shared:
+    lint       passed   python -m ruff check .
+  in frontend:
+    lint       passed   npx --no oxlint
+    test       passed   npx --no playwright test
+"
 `;

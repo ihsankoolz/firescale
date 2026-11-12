@@ -361,6 +361,7 @@ impl BuiltinRule for CiExists {
                 range: None,
                 project: None,
                 fixable,
+                severity: None,
             };
             let (message, fixable) = starter_blocker(ctx)?.unwrap_or_else(|| {
                 (
@@ -386,6 +387,7 @@ impl BuiltinRule for CiExists {
             range: None,
             project: None,
             fixable: Fixable::Agent,
+            severity: None,
         }])
     }
 

@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::model::{RuleMeta, Status};
 use crate::node::NodeHost;
 use crate::rule::{BuiltinPack, BuiltinRule, Options};
-use crate::verify::StepOverride;
+use crate::verify::{ProjectOverride, StepOverride, VerifyConfig};
 
 pub const TS_CONFIG: &str = "firescale.config.ts";
 pub const JSON_CONFIG: &str = "firescale.config.json";
@@ -52,8 +52,9 @@ pub struct ResolvedConfig<'a> {
     /// Every rule of every enabled pack, including ones that are off. Sorted by id.
     pub rules: Vec<ConfiguredRule<'a>>,
     pub protected_paths: Vec<String>,
-    /// Per-step settings for `fscale verify`, keyed by `lint`, `typecheck` or `test`.
-    pub verify: BTreeMap<String, StepOverride>,
+    /// The `verify` section: per-step settings, per-project settings and
+    /// whether a skipped step fails the run.
+    pub verify: VerifyConfig,
 }
 
 /// One custom rule, as described by the Node host.
@@ -288,36 +289,7 @@ pub fn resolve_config<'a>(
         })?,
     };
 
-    let mut verify = BTreeMap::new();
-    match object.get("verify") {
-        None | Some(Value::Null) => {}
-        Some(Value::Object(steps)) => {
-            for (step, value) in steps {
-                let setting = match value {
-                    Value::String(command) if !command.trim().is_empty() => {
-                        StepOverride::Command(command.clone())
-                    }
-                    Value::Bool(false) => StepOverride::Skip,
-                    _ => {
-                        return Err(Error::user(format!(
-                            "{name}: verify.{step} must be a command (a string) or false to skip the step."
-                        )));
-                    }
-                };
-                if !crate::verify::STEPS.contains(&step.as_str()) {
-                    return Err(Error::user(format!(
-                        "{name}: unknown verify step \"{step}\". Allowed steps: lint, typecheck, test."
-                    )));
-                }
-                verify.insert(step.clone(), setting);
-            }
-        }
-        Some(_) => {
-            return Err(Error::user(format!(
-                "{name}: \"verify\" must be an object, for example {{ \"test\": \"pnpm test\" }}."
-            )));
-        }
-    }
+    let verify = parse_verify(name, object.get("verify"))?;
 
     rules.sort_by(|a, b| a.meta.id.cmp(&b.meta.id));
     Ok(ResolvedConfig {
@@ -327,6 +299,120 @@ pub fn resolve_config<'a>(
         protected_paths,
         verify,
     })
+}
+
+/// Reads one step setting: a command, or `false` for "do not run this step".
+fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepOverride> {
+    if !crate::verify::STEPS.contains(&step) {
+        return Err(Error::user(format!(
+            "{name}: unknown verify step \"{step}\". Allowed steps: lint, typecheck, test."
+        )));
+    }
+    match value {
+        Value::String(command) if !command.trim().is_empty() => {
+            Ok(StepOverride::Command(command.clone()))
+        }
+        Value::Bool(false) => Ok(StepOverride::Skip),
+        _ => Err(Error::user(format!(
+            "{name}: {key}.{step} must be a command (a string) or false to skip the step."
+        ))),
+    }
+}
+
+/// Reads the `verify` section of the config.
+fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
+    let mut verify = VerifyConfig::default();
+    let entries = match value {
+        None | Some(Value::Null) => return Ok(verify),
+        Some(Value::Object(entries)) => entries,
+        Some(_) => {
+            return Err(Error::user(format!(
+                "{name}: \"verify\" must be an object, for example {{ \"test\": \"pnpm test\" }}."
+            )));
+        }
+    };
+    for (key, value) in entries {
+        match key.as_str() {
+            "failOnSkipped" => {
+                verify.fail_on_skipped = value.as_bool().ok_or_else(|| {
+                    Error::user(format!(
+                        "{name}: verify.failOnSkipped must be true or false."
+                    ))
+                })?;
+            }
+            "projects" => {
+                let Value::Object(projects) = value else {
+                    return Err(Error::user(format!(
+                        "{name}: verify.projects must be an object keyed by project folder, for example {{ \"backend/api\": {{ \"test\": \"pytest\" }} }}."
+                    )));
+                };
+                for (folder, setting) in projects {
+                    let clean = folder.trim_end_matches('/');
+                    // "." names the projects at the repo root that the root's
+                    // own commands do not run.
+                    let plain = clean == "."
+                        || !clean.is_empty()
+                            && !clean.starts_with('/')
+                            && !clean.contains('\\')
+                            && !clean.contains(':')
+                            && clean
+                                .split('/')
+                                .all(|part| !part.is_empty() && part != "." && part != "..");
+                    if !plain {
+                        return Err(Error::user(format!(
+                            "{name}: verify.projects key \"{folder}\" must be a folder inside the repo, relative to its root and written with forward slashes, for example \"backend/api\"."
+                        )));
+                    }
+                    let parsed = match setting {
+                        Value::Bool(false) => ProjectOverride::Off,
+                        Value::Object(steps) => {
+                            let mut map = BTreeMap::new();
+                            for (step, value) in steps {
+                                let key = format!("verify.projects[\"{folder}\"]");
+                                map.insert(step.clone(), parse_step(name, &key, step, value)?);
+                            }
+                            ProjectOverride::Steps(map)
+                        }
+                        _ => {
+                            return Err(Error::user(format!(
+                                "{name}: verify.projects[\"{folder}\"] must be false, to leave the project out, or an object with lint, typecheck and test."
+                            )));
+                        }
+                    };
+                    if verify.projects.insert(clean.to_owned(), parsed).is_some() {
+                        return Err(Error::user(format!(
+                            "{name}: verify.projects lists the folder \"{clean}\" twice, once with a trailing slash. Keep one entry."
+                        )));
+                    }
+                }
+            }
+            step if crate::verify::STEPS.contains(&step) => {
+                verify
+                    .steps
+                    .insert(step.to_owned(), parse_step(name, "verify", step, value)?);
+            }
+            other => {
+                // A misspelt option must not read as a misspelt step.
+                let lower = other.to_lowercase();
+                let meant = if lower.starts_with("fail") || lower.contains("skip") {
+                    Some("failOnSkipped")
+                } else if lower.starts_with("proj") {
+                    Some("projects")
+                } else {
+                    None
+                };
+                return Err(Error::user(match meant {
+                    Some(meant) => format!(
+                        "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
+                    ),
+                    None => format!(
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test."
+                    ),
+                }));
+            }
+        }
+    }
+    Ok(verify)
 }
 
 fn read_json(root: &Path) -> Result<Value> {

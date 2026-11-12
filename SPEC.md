@@ -52,7 +52,7 @@ Every command is served by the native `fscale` binary. Commands marked **Node** 
 | `fscale explain <rule>` | Print what a rule checks, why, and how to fix it by hand. |
 | `fscale verify [--affected] [--base <ref>] [--json]` | Conformance, then lint, typecheck and tests, judged by the referee (§8) against the base commit. One compact failure summary. |
 | `fscale hooks install [--agent <name>\|--all]` | Write agent hook config that calls `fscale verify` before the agent may stop. |
-| `fscale facts [--json]` | Print detected repo facts: projects, package manager, commands, project graph. |
+| `fscale facts [--json]` | Print detected repo facts: the projects, also those in subfolders, each with its package manager, tools and commands; and the project graph. |
 
 ### Scaffold: init, adopt, sync, add
 
@@ -122,7 +122,7 @@ A custom pack is listed in the config by path (`packs: ['core', './tools/rules/p
 ### Shared contract
 
 - `ctx` gives read access to files, git state, and `facts` (detected stack and project graph).
-- A `Diagnostic` has: rule id, message, file, optional line range, optional project, and `fixable: 'deterministic' | 'agent' | 'manual'`.
+- A `Diagnostic` has: rule id, message, file, optional line range, optional project, and `fixable: 'deterministic' | 'agent' | 'manual'`. A built-in rule may give one diagnostic its own severity, lower or higher than the rule's.
 - `fix()` must be idempotent. Running it twice changes nothing the second time.
 - A fix may create files. A rule may declare, with `after`, the rules whose fixes must run before its own. A cycle is an error.
 
@@ -145,7 +145,7 @@ A custom pack is listed in the config by path (`packs: ['core', './tools/rules/p
 3. `single-lockfile` — exactly one lockfile, matching the declared package manager.
 4. `ci-exists` — a CI workflow exists and runs on pull requests.
 5. `readme-setup` — README has install and run steps.
-6. `env-example` — if code reads env vars, `.env.example` lists them.
+6. `env-example` — if code reads env vars, the nearest `.env.example` lists them. Variables only tests read are low severity.
 7. `scripts-present` — standard scripts exist: lint, test, build (per detected stack).
 8. `no-secrets-in-source` — no obvious keys or tokens in tracked files.
 
@@ -184,7 +184,8 @@ Each agent sits behind an adapter interface. Exact CLI flags must be confirmed a
 - It uses `nx affected` or `turbo` when present. Otherwise it falls back to package scripts.
 - Output is one compact summary written for an agent to act on: what failed, where, and the command to re-run.
 - `fscale hooks install` writes hook config for each supported agent so the agent can't stop while verify fails.
-- A step with no command is skipped, and verify prints a visible warning that names it. A skipped step is not a failure.
+- With no workspace file at the root, verify runs each project that `fscale facts` finds in a subfolder: that project's lint, typecheck and test, in its folder (ADR 0020).
+- A step with no command is skipped, and verify prints a visible warning that names it. A skipped step is not a failure unless `verify.failOnSkipped` is on, but a run with a skipped step is never reported as a clean pass: the headline says `PARTIAL` and how many steps ran.
 - Hooks must guard against loops: detect a repeated stop attempt and cap retries. The hook releases an agent after 3 blocks in a row.
 
 ### Blame-aware verify
@@ -265,7 +266,7 @@ firescale/
 
 **Distribution:** installed through npm. The `firescale` package depends on one prebuilt binary package per platform, so `npx firescale` works with no Rust toolchain on the user's machine.
 
-**Project graph:** read from Nx when present. Otherwise build a simple one from workspace files (pnpm/npm/yarn workspaces, Cargo workspace, uv workspace).
+**Project graph:** read from Nx when present. Otherwise build a simple one from workspace files (pnpm/npm/yarn workspaces, Cargo workspace, uv workspace). Projects in subfolders that no workspace file lists are found by their marker files, four folder levels deep (ADR 0020).
 
 ## 10. Config
 

@@ -70,8 +70,18 @@ impl BuiltinRule for SingleTestCommand {
             || ctx.root().join("Cargo.toml").is_file()
             || has_pytest_config(ctx)
             || text(ctx, "Makefile").is_some_and(|makefile| makefile_has_test(&makefile));
-        // With no detected language there is nothing to say what "tests" would mean.
-        if has_test_command || facts.languages.is_empty() {
+        // With no stack at the repo root there is nothing to say what "tests"
+        // would mean. This rule is about the root: projects that `fscale facts`
+        // finds in subfolders run their tests through `fscale verify`.
+        let root_has_stack = [
+            "package.json",
+            "tsconfig.json",
+            "pyproject.toml",
+            "requirements.txt",
+        ]
+        .iter()
+        .any(|file| ctx.root().join(file).is_file());
+        if has_test_command || !root_has_stack {
             return Ok(Vec::new());
         }
         let file = MANIFESTS
@@ -86,6 +96,7 @@ impl BuiltinRule for SingleTestCommand {
             range: None,
             project: None,
             fixable: Fixable::Agent,
+            severity: None,
         }])
     }
 }

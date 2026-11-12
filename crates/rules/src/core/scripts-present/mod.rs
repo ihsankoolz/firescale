@@ -76,6 +76,7 @@ impl BuiltinRule for ScriptsPresent {
                 range: None,
                 project: None,
                 fixable: Fixable::Manual,
+                severity: None,
             }]);
         };
         let shape_problem = if !package.is_object() {
@@ -94,6 +95,7 @@ impl BuiltinRule for ScriptsPresent {
                 range: None,
                 project: None,
                 fixable: Fixable::Manual,
+                severity: None,
             }]);
         }
         let scripts = package.get("scripts");
@@ -108,6 +110,7 @@ impl BuiltinRule for ScriptsPresent {
                 range: None,
                 project: None,
                 fixable: Fixable::Agent,
+                severity: None,
             })
             .collect())
     }

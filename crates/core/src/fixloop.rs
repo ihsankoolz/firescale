@@ -679,6 +679,7 @@ mod tests {
                 range: None,
                 project: None,
                 fixable,
+                severity: None,
             }])
         }
 

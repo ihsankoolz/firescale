@@ -142,3 +142,16 @@ node bench/startup.mjs --runs 50 --cwd <fixture repo> -- <absolute path>/target/
 - One machine, Linux only. Windows and macOS process startup costs differ, usually upward.
 - The fixture is tiny. These numbers measure startup, not rule throughput on a large repo; that is M3's benchmark.
 - "Before" could only be measured before the TypeScript CLI was removed, so it cannot be re-run from this commit. Check out `406799d` to repeat it.
+
+## M10: subfolder discovery, before and after
+
+`fscale facts` now walks four folder levels to find projects (ADR 0020), and four rules call it during `check`. `core/env-example` also looks for nested `.env.example` files. Release builds of the commit before M10 (`f891759`) and of M10, same machine (Linux x64, 4 cpus), the 50,000-file fixture, 10 runs:
+
+| Command            | before p50 | after p50 | before p95 | after p95 |
+| ------------------ | ---------: | --------: | ---------: | --------: |
+| `--version`        |     2.4 ms |    2.8 ms |     3.7 ms |    3.8 ms |
+| check (cold cache) |   674.2 ms |  719.3 ms |   736.1 ms |  858.1 ms |
+| check (warm cache) |   312.2 ms |  339.6 ms |   319.7 ms |  375.5 ms |
+| check `--no-cache` |   352.5 ms |  405.9 ms |   382.2 ms |  449.8 ms |
+
+So `check` is 7 to 15% slower on a very large repo. The cost is the repeated walk: each of the four rules detects the facts for itself. Detecting them once per run would remove most of it. Linux only; not measured on macOS or Windows.

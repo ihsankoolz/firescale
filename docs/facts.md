@@ -1,38 +1,100 @@
 # fscale facts
 
-`fscale facts [--json]` prints what firescale detects about the repo: package manager, languages, tools, commands and a simple project graph. It reads marker files on disk only. It does not load `firescale.config.*` and does not start Node. It always exits 0 unless usage is wrong (exit 2).
+`fscale facts [--json]` prints what firescale detects about the repo: package managers, languages, tools, commands and the projects, with a simple graph between them. It reads marker files on disk only. It does not load `firescale.config.*` and does not start Node. It always exits 0 unless usage is wrong (exit 2).
 
 `--json` prints the format described by `packages/cli/schemas/facts-output.schema.json` (JSON Schema draft-07, published as `firescale/schemas/facts-output.schema.json`). Output is pretty-printed with 2 spaces and a trailing newline. All lists are sorted, and all paths use forward slashes.
 
 ## Fields
 
-| Field            | Meaning                                                                                                                                                 |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion`  | Always `1`. Changes only on a breaking change.                                                                                                          |
-| `packageManager` | `"pnpm"`, `"npm"`, `"yarn"`, `"bun"` or `null`.                                                                                                         |
-| `lockfiles`      | Sorted lockfiles at the repo root: `Cargo.lock`, `bun.lock`, `bun.lockb`, `package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `yarn.lock`. |
-| `languages`      | Sorted subset of `javascript`, `python`, `rust`, `typescript`.                                                                                          |
-| `tools`          | Sorted subset of `cargo-workspace`, `github-actions`, `nx`, `pnpm-workspace`, `turbo`.                                                                  |
-| `commands`       | Object with optional keys `build`, `test`, `lint`, `typecheck`.                                                                                         |
-| `projects`       | Sorted by name. Each has `name`, `root`, `kind` (`node` or `rust`) and `dependsOn`.                                                                     |
-| `warnings`       | Strings. Things that were skipped.                                                                                                                      |
+| Field             | Meaning                                                                                                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion`   | Always `2`. Changes only on a breaking change. Version 2 added the per-project fields, `packageManagers`, the project kinds `python` and `go`, and projects found in subfolders.  |
+| `packageManager`  | The JavaScript package manager of the repo root: `"pnpm"`, `"npm"`, `"yarn"`, `"bun"` or `null`.                                                                                  |
+| `packageManagers` | Every package manager in use, the root's and each project's: a sorted subset of `bun`, `cargo`, `go`, `npm`, `pip`, `pipenv`, `pnpm`, `poetry`, `uv`, `yarn`.                     |
+| `lockfiles`       | Sorted lockfiles at the repo root: `Cargo.lock`, `Pipfile.lock`, `bun.lock`, `bun.lockb`, `go.sum`, `package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `yarn.lock`. |
+| `languages`       | Sorted subset of `go`, `javascript`, `python`, `rust`, `typescript`: the root's languages and every project's.                                                                    |
+| `tools`           | Tools of the repo root: a sorted subset of `cargo-workspace`, `docker-compose`, `github-actions`, `nx`, `pnpm-workspace`, `turbo`.                                                |
+| `commands`        | Commands to run from the repo root: optional keys `build`, `test`, `lint`, `typecheck`, one for each script of that name in the root `package.json`.                              |
+| `projects`        | Sorted by name. See below.                                                                                                                                                        |
+| `warnings`        | Strings. Things that were skipped.                                                                                                                                                |
 
-Each project: `root` is repo-relative with forward slashes (`.` is the repo root). `dependsOn` is the sorted list of other projects of the same kind in this repo.
+Each project:
+
+| Field            | Meaning                                                                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `name`           | The name in the project's manifest, or else the name of its folder. `.` for a project at the repo root with no name of its own. |
+| `root`           | Repo-relative folder with forward slashes. `.` is the repo root.                                                                |
+| `kind`           | `node`, `rust`, `python` or `go`.                                                                                               |
+| `source`         | `root` (it is the repo root), `workspace` (a workspace file at the root lists it) or `discovered` (found in a subfolder).       |
+| `languages`      | The project's languages.                                                                                                        |
+| `packageManager` | The project's package manager, or `null` for a Node project that names none and has no lockfile.                                |
+| `lockfiles`      | Names of the lockfiles in the project's folder.                                                                                 |
+| `tools`          | Linters, test runners and other tools found in the project's folder.                                                            |
+| `commands`       | Commands to run **from the project's folder**: optional keys `build`, `test`, `lint`, `typecheck`.                              |
+| `dependsOn`      | Sorted names of other projects of the same kind in this repo that this one depends on.                                          |
+
+## Projects in subfolders
+
+Many repos keep their code below the root with no workspace file: a `backend/` with a few services, a `frontend/` with an app. `fscale facts` finds these.
+
+- **What is searched.** Every folder down to **four levels** below the repo root. `backend/auth_service` is level 2.
+- **What is skipped.** Everything `.gitignore` ignores (only `.gitignore` files inside the repo count, so the answer is the same on every machine), every folder whose name starts with a dot (`.venv`, `.pytest_cache`, `.ruff_cache`, `.git`), and these folders: `node_modules`, `bower_components`, `vendor`, `site-packages`, `venv`, `env`, `__pycache__`, `dist`, `build`, `out`, `target`, `coverage`, `htmlcov`, `test-results`, `playwright-report`, `tmp`, `temp`, `logs`, and the folders of samples and test input `fixtures`, `__fixtures__`, `test-fixtures`, `testdata`, `examples`, `example`, `samples`, `templates`. Symbolic links are not followed.
+- **What makes a folder a project.**
+  - `package.json`: a `node` project.
+  - `Cargo.toml`: a `rust` project.
+  - `go.mod`: a `go` project.
+  - `setup.py`, `Pipfile`, or a `pyproject.toml` that describes a package (it has a `[project]`, `[tool.poetry]` or `[build-system]` table): a `python` project. So is a `requirements.txt` together with a `.py` file or one of `pyproject.toml`, `pytest.ini`, `tox.ini`, `setup.cfg`, `conftest.py`, `ruff.toml`, `.ruff.toml`, `mypy.ini`, `manage.py`, `alembic.ini`.
+  - A `requirements.txt` with nothing beside it is not a project: it is often only the input of a docs build or a container image. A `pyproject.toml` with only `[tool.*]` tables is not one either: it is shared tool config, often placed above the real projects, and the search goes on below it.
+  - A `package.json` that is not valid JSON still makes a project. It has no commands, and the problem is listed under `warnings`.
+  - A folder with marker files of two kinds is two projects with the same `root`.
+- **Nested projects.** A project's folder is not searched any further. A marker file inside a project (an example, a fixture, a `fuzz/` crate) belongs to that project. The repo root is the one exception: it is always searched.
+- **Workspace files decide.** When the root declares a Node workspace (`pnpm-workspace.yaml`, or `workspaces` in `package.json`), the Node projects are its members and no others are looked for; a folder the workspace leaves out stays out. The same goes for a Cargo workspace and Rust projects. Projects of the other kinds are still searched for.
+- **Deeper projects.** A project below level 4 is not found. Name its folder under `verify.projects` in the config to have `fscale verify` run commands there (see [verify.md](verify.md)).
 
 ## Detection rules
 
+At the repo root:
+
 - **packageManager**: the name before `@` in the `packageManager` field of the root `package.json`, if it is one of the four. Otherwise by lockfile, first match of `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `bun.lock`, `bun.lockb`.
-- **languages**: `package.json` gives javascript. A root `tsconfig.json`, or `typescript` in `dependencies` or `devDependencies`, gives typescript. `Cargo.toml` gives rust. `pyproject.toml` or `requirements.txt` gives python.
-- **tools**: `nx.json` gives `nx` (the Nx graph itself is not read), `turbo.json` gives `turbo`, `pnpm-workspace.yaml` gives `pnpm-workspace`, a `[workspace]` table in `Cargo.toml` gives `cargo-workspace`, and a `.yml` or `.yaml` file in `.github/workflows` gives `github-actions`.
-- **commands**: for each of build, test, lint and typecheck that is a script of the root `package.json`: `"<pm> run <script>"`. The package manager defaults to `npm`. Keys without a script are left out.
+- **languages**: `package.json` gives javascript. A root `tsconfig.json`, or `typescript` in `dependencies` or `devDependencies`, gives typescript. `Cargo.toml` gives rust. `pyproject.toml` or `requirements.txt` gives python. `go.mod` gives go. The languages of every project are added.
+- **tools**: `nx.json` gives `nx` (the Nx graph itself is not read), `turbo.json` gives `turbo`, `pnpm-workspace.yaml` gives `pnpm-workspace`, a `[workspace]` table in `Cargo.toml` gives `cargo-workspace`, a `.yml` or `.yaml` file in `.github/workflows` gives `github-actions`, and `docker-compose.yml`, `docker-compose.yaml`, `compose.yml` or `compose.yaml` gives `docker-compose`.
+- **commands**: for each of build, test, lint and typecheck that is a script of the root `package.json`: `"<pm> run <script>"`. The package manager defaults to `npm`. Keys without a script are left out. These are scripts only, because rules such as `agent-ready/commands-documented` compare them with what the repo documents.
+
+For each project, from the files in its own folder:
+
+- **Node** (`package.json`)
+  - Package manager: the `packageManager` field, else a lockfile in the folder, else the root's package manager for a workspace member, else `null`.
+  - Languages: javascript, plus typescript with a `tsconfig.json` or a `typescript` dependency.
+  - Tools, each from a config file or a dependency: `biome` (`biome.json`), `cypress` (`cypress.config.*`), `eslint` (`eslint.config.*`, `.eslintrc*`), `jest` (`jest.config.*`), `knip` (`knip.json`, `knip.jsonc`, `knip.config.*`), `next` (`next.config.*`), `oxlint` (`.oxlintrc.json`, `oxlint.config.*`), `playwright` (`playwright.config.*`), `prettier` (`.prettierrc*`, `prettier.config.*`), `vite` (`vite.config.*`), `vitest` (`vitest.config.*`, `vitest.workspace.*`), and `docker` (`Dockerfile`).
+  - Commands: a script named `build`, `test`, `lint` or `typecheck` gives `"<pm> run <script>"`. Without a script, the tools give the command:
+    - lint: `oxlint`, else `eslint .`, else `biome check .`, and only when that linter's config file is in the folder. A linter that is only a dependency gives no command.
+    - test: `vitest run`, else `jest`. Playwright and Cypress are not used as the test command: end-to-end tests need browsers and running services.
+    - typecheck: `tsc --noEmit` when there is a `tsconfig.json` without `references`. Not at the repo root, where a tsconfig is often only a base for the packages below it. A tsconfig of project references gets no command: `tsc --noEmit` would check nothing there, and `tsc -b` could write files.
+    - Tools run through `pnpm exec`, `yarn`, `bunx`, or `npx --no` for npm. `npx --no` never downloads a tool that is not installed.
+- **Python**
+  - Package manager: `uv` (`uv.lock` or `[tool.uv` in `pyproject.toml`), `poetry` (`poetry.lock` or `[tool.poetry`), `pipenv` (`Pipfile`), else `pip`.
+  - Tools: `pytest` (`pytest.ini`, `conftest.py`, `[tool.pytest` in `pyproject.toml`, `[pytest]` in `tox.ini`, `[tool:pytest]` in `setup.cfg`, or `pytest` in a `requirements*.txt`), `ruff` (`ruff.toml`, `.ruff.toml` or `[tool.ruff` in `pyproject.toml`, in the folder or any folder above it, or `ruff` in a `requirements*.txt`), `mypy` (`mypy.ini`, `.mypy.ini` or `[tool.mypy`, in the folder or above, `[mypy` in `setup.cfg`, or `mypy` in a `requirements*.txt`), `alembic` (`alembic.ini`), `docker` (`Dockerfile`).
+  - Commands: test is `pytest`, lint is `ruff check .`, typecheck is `mypy .`, each only when the tool was found. They run as `python -m <tool>` with pip, and through `uv run`, `poetry run` or `pipenv run` otherwise.
+  - Name: `name` under `[project]` or `[tool.poetry]` in `pyproject.toml`, else the folder's name.
+- **Rust** (`Cargo.toml`): package manager `cargo`; commands `cargo build`, `cargo test` and `cargo clippy --all-targets -- -D warnings`, each with `--workspace` when the file has a `[workspace]` table.
+- **Go** (`go.mod`): package manager `go`; commands `go build ./...`, `go test ./...` and `go vet ./...`. The name is the last part of the module path.
+
+The graph:
+
 - **Node projects**: the root `package.json` if it has a `name`, plus workspace members. Members come from the `packages:` list of `pnpm-workspace.yaml`, or else from `workspaces` in `package.json` (an array, or an object with `packages`). A member is a folder with a `package.json` that has a `name`. `dependsOn` uses `dependencies`, `devDependencies`, `peerDependencies` and `optionalDependencies`.
 - **Rust projects**: the root `[package]` if present, plus the `[workspace] members` of the root `Cargo.toml`. `dependsOn` uses the keys of `[dependencies]`, `[dev-dependencies]` and `[build-dependencies]`, including `x.workspace = true`, `x = { path = ... }` and `[dependencies.x]` tables.
+- **Python and Go projects** have no `dependsOn` yet.
 
 ## Limits
 
 - The Nx project graph is not read yet. With `nx.json` only the tool `nx` is reported, and the graph comes from workspace files.
 - Workspace patterns: only `dir/*`, literal paths and `!negated` entries. Anything else (`**`, `{a,b}`, `a/*/b`) is skipped with a warning. Folders named `node_modules`, `target` or starting with `.` are skipped by `dir/*`.
 - There is no YAML parser. `pnpm-workspace.yaml` is read for the `packages:` list with items written as `- 'a/*'`, `- "a/*"` or `- a/*`. Flow style (`packages: [a, b]`) is not read.
-- There is no TOML parser. `Cargo.toml` is read line by line: section headers, `key = value` lines (also dotted keys) and arrays that span lines. `exclude`, `default-members` and renamed dependencies (`package = "..."`) are ignored.
-- A marker file that is not valid JSON (`package.json` of the root or a member) is reported in `warnings`, and its facts are left out.
-- Only the repo root is checked for lockfiles, `tsconfig.json` and the Python markers. Python (uv) workspaces are not part of the graph yet.
+- There is no TOML parser. `Cargo.toml` and `pyproject.toml` are read line by line: section headers, `key = value` lines (also dotted keys) and arrays that span lines. `exclude`, `default-members` and renamed dependencies (`package = "..."`) are ignored. Python tool sections are found by searching the text for `[tool.<name>`.
+- A marker file that is not valid JSON (`package.json` of the root, a member or a discovered project) is reported in `warnings`, and its facts are left out.
+- A project found in a subfolder that is itself a workspace (a `frontend/` with `workspaces`, a `backend/` with a Cargo `[workspace]`) is one project. Its members are not listed.
+- Two projects can have the same name, for example two folders both called `api`. `root` tells them apart.
+- Python commands assume `python` is on the PATH and has the tools installed, as in an activated virtual environment. On a machine with only `python3`, set the command under `verify.projects`.
+- uv workspaces are not part of the graph yet.
+- With bun, uv, poetry and pipenv the commands go through `bunx`, `uv run`, `poetry run` and `pipenv run`. Those can install what is missing or create a virtual environment. Only `npx --no` is guaranteed not to. `tsc --noEmit` writes a `.tsbuildinfo` file when the tsconfig turns on `incremental` or `composite`.
+- The search has no config: it follows `.gitignore` and the list above. A folder that should not count as a project can be turned off for `fscale verify` with `verify.projects`.

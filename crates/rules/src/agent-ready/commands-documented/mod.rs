@@ -95,6 +95,7 @@ impl BuiltinRule for CommandsDocumented {
                 range: None,
                 project: None,
                 fixable: Fixable::Agent,
+                severity: None,
             })
             .collect())
     }

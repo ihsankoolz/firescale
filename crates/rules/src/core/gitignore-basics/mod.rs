@@ -85,6 +85,8 @@ impl BuiltinRule for GitignoreBasics {
             severity: Severity::Medium,
             category: Category::Consistency,
             description: ".gitignore exists and covers the detected stack.".to_owned(),
+            // The stack comes from every project `fscale facts` finds, so the
+            // marker files count wherever they are.
             inputs: [
                 ".gitignore",
                 "package.json",
@@ -92,6 +94,29 @@ impl BuiltinRule for GitignoreBasics {
                 "pyproject.toml",
                 "requirements.txt",
                 "tsconfig.json",
+                "**/package.json",
+                "**/Cargo.toml",
+                "**/pyproject.toml",
+                "**/requirements.txt",
+                "**/tsconfig.json",
+                "**/setup.py",
+                "**/Pipfile",
+                "**/go.mod",
+                "go.mod",
+                "setup.py",
+                "Pipfile",
+                // What decides whether a folder is searched, and whether a
+                // requirements.txt in it makes a Python project.
+                "**/.gitignore",
+                "pnpm-workspace.yaml",
+                "**/*.py",
+                "**/pytest.ini",
+                "**/tox.ini",
+                "**/setup.cfg",
+                "**/ruff.toml",
+                "**/.ruff.toml",
+                "**/mypy.ini",
+                "**/alembic.ini",
             ]
             .iter()
             .map(|name| (*name).to_owned())
@@ -115,6 +140,7 @@ impl BuiltinRule for GitignoreBasics {
             range: None,
             project: None,
             fixable: Fixable::Deterministic,
+            severity: None,
         };
         let Some(current) = ctx.read(GITIGNORE)? else {
             return Ok(vec![finding(

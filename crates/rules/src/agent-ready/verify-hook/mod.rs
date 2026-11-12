@@ -47,6 +47,7 @@ fn finding(file: &str, message: String) -> Finding {
         range: None,
         project: None,
         fixable: Fixable::Manual,
+        severity: None,
     }
 }
 

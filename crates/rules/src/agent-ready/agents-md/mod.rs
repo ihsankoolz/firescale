@@ -53,6 +53,7 @@ impl BuiltinRule for AgentsMdExists {
             range: None,
             project: None,
             fixable,
+            severity: None,
         }])
     }
 }
