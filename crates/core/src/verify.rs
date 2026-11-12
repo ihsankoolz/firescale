@@ -1870,7 +1870,7 @@ mod tests {
             [
                 "frontend lint: npx --no oxlint",
                 "frontend typecheck: npx --no tsc --noEmit",
-                "frontend test: skipped (package.json has no test script, and no vitest or jest config was found)",
+                "frontend test: npm run test:run",
             ]
         );
     }
