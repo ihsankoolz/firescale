@@ -1093,17 +1093,57 @@ fn python_interpreter(
         .filter(|part| !part.is_empty() && *part != ".")
         .fold(root.to_path_buf(), |path, part| path.join(part));
     let has = |file: &str| names.iter().any(|name| name == file);
+    // A development list that does not include requirements.txt itself
+    // (`-r requirements.txt`) is installed together with it, so the app's
+    // own dependencies are there too.
+    let includes_base = |file: &str| {
+        read_text(root, &in_dir(dir, file)).is_some_and(|text| {
+            text.lines().any(|line| {
+                let line = strip_comment(line).trim();
+                let target = line
+                    .strip_prefix("--requirement=")
+                    .or_else(|| line.strip_prefix("--requirement"))
+                    .or_else(|| line.strip_prefix("-r"))
+                    .map(str::trim);
+                target == Some("requirements.txt")
+            })
+        })
+    };
     let install_from = |python: &str| {
         PYTHON_INSTALL_FILES
             .iter()
             .find(|file| has(file))
-            .map(|file| format!("{python} -m pip install -r {file}"))
+            .map(|file| {
+                if *file != "requirements.txt" && has("requirements.txt") && !includes_base(file) {
+                    format!("{python} -m pip install -r requirements.txt -r {file}")
+                } else {
+                    format!("{python} -m pip install -r {file}")
+                }
+            })
             .or_else(|| {
                 (has("pyproject.toml") || has("setup.py"))
                     .then(|| format!("{python} -m pip install -e ."))
             })
     };
 
+    let managed = match manager {
+        "uv" => Some((
+            "uv run",
+            "uv sync",
+            "a uv project: uv picks the environment",
+        )),
+        "poetry" => Some((
+            "poetry run",
+            "poetry install",
+            "a poetry project: poetry picks the environment",
+        )),
+        "pipenv" => Some((
+            "pipenv run",
+            "pipenv install --dev",
+            "a Pipfile project: pipenv picks the environment",
+        )),
+        _ => None,
+    };
     let mut broken = Vec::new();
     for venv in VENV_DIRS {
         let folder = base.join(venv);
@@ -1115,7 +1155,12 @@ fn python_interpreter(
             .fold(folder.clone(), |path, part| path.join(part));
         if interpreter.is_file() {
             let python = venv_python(venv);
-            let install = install_from(&python);
+            // A uv, poetry or pipenv project installs with its manager, also
+            // when its .venv runs the commands: uv's venvs have no pip.
+            let install = match managed {
+                Some((_, install, _)) => Some(install.to_owned()),
+                None => install_from(&python),
+            };
             return (
                 Interpreter {
                     source: "venv".to_owned(),
@@ -1137,24 +1182,6 @@ fn python_interpreter(
         )
     };
 
-    let managed = match manager {
-        "uv" => Some((
-            "uv run",
-            "uv sync",
-            "a uv project: uv picks the environment",
-        )),
-        "poetry" => Some((
-            "poetry run",
-            "poetry install",
-            "a poetry project: poetry picks the environment",
-        )),
-        "pipenv" => Some((
-            "pipenv run",
-            "pipenv install --dev",
-            "a Pipfile project: pipenv picks the environment",
-        )),
-        _ => None,
-    };
     if let Some((command, install, detail)) = managed {
         return (
             Interpreter {
@@ -1166,7 +1193,10 @@ fn python_interpreter(
         );
     }
 
-    if let Some(active) = active.filter(|path| path.is_absolute()) {
+    // cmd expands `%NAME%` even inside quotes, so on Windows a path with `%`
+    // cannot be written into a command safely; such an environment is skipped.
+    let quotable = |path: &Path| !(cfg!(windows) && path.to_string_lossy().contains(['%', '"']));
+    if let Some(active) = active.filter(|path| path.is_absolute() && quotable(path)) {
         let interpreter: PathBuf = venv_python_parts()
             .iter()
             .fold(active.to_path_buf(), |path, part| path.join(part));
@@ -2777,9 +2807,13 @@ mod tests {
         assert_eq!(interpreter.command, format!("{python} -m"));
         assert_eq!(svc.commands.test, Some(format!("{python} -m pytest")));
         assert_eq!(svc.commands.lint, Some(format!("{python} -m ruff check .")));
+        // requirements-dev.txt does not include requirements.txt, so both
+        // are installed: the app's own dependencies (pyjwt) are needed too.
         assert_eq!(
             svc.commands.install,
-            Some(format!("{python} -m pip install -r requirements-dev.txt"))
+            Some(format!(
+                "{python} -m pip install -r requirements.txt -r requirements-dev.txt"
+            ))
         );
     }
 
@@ -2859,6 +2893,10 @@ mod tests {
         let dot = format!("svc/{}", venv_file(".venv"));
         let (_f, svc) = svc_with(&[("svc/uv.lock", ""), (&dot, "")], None);
         assert_eq!(svc.interpreter.as_ref().unwrap().source, "venv");
+        // It still installs with its manager: uv's venvs have no pip.
+        assert_eq!(svc.commands.install.as_deref(), Some("uv sync"));
+        let (_f, svc) = svc_with(&[("svc/poetry.lock", ""), (&dot, "")], None);
+        assert_eq!(svc.commands.install.as_deref(), Some("poetry install"));
     }
 
     #[test]
@@ -2887,6 +2925,16 @@ mod tests {
         assert_eq!(svc.interpreter.unwrap().source, "path");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_an_active_env_whose_path_has_a_percent_sign_is_skipped() {
+        // cmd would expand %...% inside the quotes.
+        let outside = Fixture::new(&[("100%done/Scripts/python.exe", "")], Track::NoGit).unwrap();
+        let active = outside.root().join("100%done");
+        let (_f, svc) = svc_with(&[], Some(&active));
+        assert_eq!(svc.interpreter.unwrap().source, "path");
+    }
+
     #[test]
     fn with_no_virtual_environment_python_from_the_path_is_used_and_said() {
         let (_f, svc) = svc_with(&[], None);
@@ -2898,6 +2946,15 @@ mod tests {
             .starts_with("no virtual environment found"));
         // Today's commands, unchanged.
         assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+        assert_eq!(
+            svc.commands.install.as_deref(),
+            Some("python -m pip install -r requirements.txt -r requirements-dev.txt")
+        );
+        // A development list that includes requirements.txt is enough alone.
+        let (_f, svc) = svc_with(
+            &[("svc/requirements-dev.txt", "-r requirements.txt\npytest\n")],
+            None,
+        );
         assert_eq!(
             svc.commands.install.as_deref(),
             Some("python -m pip install -r requirements-dev.txt")

@@ -215,6 +215,9 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
     for project in discovered {
         // A folder can hold projects of two kinds. Its config entry is used once.
         let first_at_root = !plans.iter().any(|plan| plan.root == project.root);
+        // True when a command detected for the project (not one from the
+        // config) will run: only then does its interpreter matter.
+        let mut detected_runs = false;
         let steps: Vec<(String, Planned)> = match config.projects.get(&project.root) {
             Some(ProjectOverride::Off) => STEPS
                 .iter()
@@ -238,7 +241,11 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                         Some(_) => return None,
                         // A setting for the whole repo covers this project too.
                         None if config.steps.contains_key(*step) => return None,
-                        None => project_step(project, step),
+                        None => {
+                            let planned = project_step(project, step);
+                            detected_runs |= matches!(planned, Planned::Command(_));
+                            planned
+                        }
                     };
                     Some(((*step).to_owned(), planned))
                 })
@@ -250,7 +257,7 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                 kind: Some(project.kind.clone()),
                 steps,
                 install: project.commands.install.clone(),
-                python_from_path: from_path(project),
+                python_from_path: detected_runs && from_path(project),
             });
         }
     }
@@ -868,7 +875,12 @@ pub fn run_verify(
         .count();
     let steps_run = steps
         .iter()
-        .filter(|step| matches!(step.status, StepStatus::Passed | StepStatus::Failed))
+        .filter(|step| {
+            matches!(
+                step.status,
+                StepStatus::Passed | StepStatus::Failed | StepStatus::SetupNeeded
+            )
+        })
         .count();
     let mut on_path: Vec<&str> = Vec::new();
     if plan.python_from_path

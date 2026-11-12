@@ -1103,6 +1103,11 @@ mod test_runner_config {
             "vitest.workspace.ts",
             "jest.config.cjs",
             "app/cypress.config.ts",
+            "playwright-ct.config.ts",
+            "vitest.e2e.config.ts",
+            "jest.setup.js",
+            "vitest.setup.ts",
+            "Playwright.Config.TS",
         ] {
             assert!(is_test_path(file), "{file}");
         }

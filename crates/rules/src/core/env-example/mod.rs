@@ -36,15 +36,33 @@ const TEST_DIRS: [&str; 9] = [
     "cypress",
 ];
 
-/// Config files of test runners: `playwright.config.ts`, `vitest.config.mts`,
-/// `jest.config.js`. Matched by the start of the file name, then a dot.
-const TEST_CONFIG_PREFIXES: [&str; 5] = [
+/// Config and setup files of test runners: `playwright.config.ts`,
+/// `vitest.config.mts`, `jest.setup.js`. Matched by the start of the file
+/// name, in any letter case.
+const TEST_CONFIG_PREFIXES: [&str; 8] = [
     "playwright.config.",
+    "playwright-ct.config.",
     "vitest.config.",
     "vitest.workspace.",
+    "vitest.setup.",
     "jest.config.",
+    "jest.setup.",
     "cypress.config.",
 ];
+
+/// True for the config or setup file of a test runner: a name in
+/// `TEST_CONFIG_PREFIXES`, or a named Vitest or Playwright config such as
+/// `vitest.e2e.config.ts`.
+fn is_test_config(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    TEST_CONFIG_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+        || (["vitest.", "playwright."]
+            .iter()
+            .any(|runner| lower.starts_with(runner))
+            && lower.contains(".config."))
+}
 
 const CODE_COMMENT: &str = "# Variables read by the code. Add example values or leave empty.";
 const TEST_COMMENT: &str = "# Test-only variables: read only by test code.";
@@ -225,15 +243,13 @@ fn listed_names(text: &str) -> BTreeSet<String> {
 /// Test code is a file below a folder named in `TEST_DIRS`, a file named
 /// `conftest.py`, a Python `test_*.py` or `*_test.py`, a Go `*_test.go`, a
 /// Ruby `*_spec.rb` or `*_test.rb`, any `*.test.*` or `*.spec.*` file, and
-/// the config file of a test runner (`TEST_CONFIG_PREFIXES`).
+/// the config or setup file of a test runner (`is_test_config`).
 fn is_test_path(file: &str) -> bool {
     let mut folders: Vec<&str> = file.split('/').collect();
     let name = folders.pop().unwrap_or("");
     if folders.iter().any(|folder| TEST_DIRS.contains(folder))
         || name == "conftest.py"
-        || TEST_CONFIG_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
+        || is_test_config(name)
     {
         return true;
     }

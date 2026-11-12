@@ -44,7 +44,7 @@
       "minimum": 1
     },
     "stepsRun": {
-      "description": "Steps that did run, passing or failing.",
+      "description": "Steps that did run: passed, failed or needs setup.",
       "type": "integer",
       "minimum": 0
     },

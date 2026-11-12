@@ -33,7 +33,7 @@ Test code is:
 - Go files named `*_test.go`;
 - Ruby files named `*_spec.rb` or `*_test.rb`;
 - files named `*.test.*` or `*.spec.*`, for example `api.test.ts`;
-- the config file of a test runner: a name that starts with `playwright.config.`, `vitest.config.`, `vitest.workspace.`, `jest.config.` or `cypress.config.`.
+- the config or setup file of a test runner: a name that starts with `playwright.config.`, `playwright-ct.config.`, `vitest.config.`, `vitest.workspace.`, `vitest.setup.`, `jest.config.`, `jest.setup.` or `cypress.config.`, or a named config such as `vitest.e2e.config.ts`, in any letter case.
 
 When the root `.env.example` does not exist, the one shared finding has low severity only if every name in it is test-only.
 

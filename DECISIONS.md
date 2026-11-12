@@ -88,6 +88,9 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 - Facts snapshots: Python projects gained `install` and `interpreter`, Node projects that are not workspace members gained `install`.
 - Verify snapshots: schema version 3, and the `note:` line for services with no venv.
 - Rust tests that build a `ProjectPlan` or `VerifyPlan` by hand gained the two new fields. Rust tests that detect facts now pass "no active venv" explicitly.
+- One new facts test of my own expected `pip install -r requirements-dev.txt` for a service whose dev file does not include `requirements.txt`. The review showed that would leave `jwt` missing, the exact case you hit; it now expects `-r requirements.txt -r requirements-dev.txt`.
+
+**Independent review before the pull request** found seven issues, all fixed: a missing module among real test failures (or in a `src/` package) was called setup; a uv project with `.venv` got a pip install command (uv's venvs have no pip); the install could miss `requirements.txt`; the hook message did not say that other failures still need code fixes; a `%` in a Windows `VIRTUAL_ENV` path; `stepsRun` did not count setup steps, and the note named projects whose commands all come from the config; and a few test-runner config names (`playwright-ct.config.*`, `vitest.setup.*`, `jest.setup.*`, `vitest.e2e.config.*`, any letter case).
 
 **Known limits**
 

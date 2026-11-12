@@ -57,8 +57,11 @@ fn is_local_module(module: &str, root: &Path, dir: &Path) -> bool {
     }
     let mut current = Some(dir);
     while let Some(folder) = current {
-        if folder.join(top).is_dir() || folder.join(format!("{top}.py")).is_file() {
-            return true;
+        // The flat layout and the `src/` layout.
+        for base in [folder.to_path_buf(), folder.join("src")] {
+            if base.join(top).is_dir() || base.join(format!("{top}.py")).is_file() {
+                return true;
+            }
         }
         if folder == root {
             break;
@@ -109,6 +112,27 @@ fn shell_not_found(line: &str) -> Option<&str> {
     (!name.is_empty() && !name.contains(' ')).then_some(name)
 }
 
+/// True when the output reports failed tests: a line starting with `FAILED `
+/// (pytest's summary), or a number followed by the word `failed` (`2 failed`
+/// from pytest, `Tests  1 failed` from vitest, `Tests: 1 failed` from jest).
+/// Tests that ran and failed are a code problem, even when one of them
+/// failed on a missing module.
+fn reports_failed_tests(output: &str) -> bool {
+    output.lines().any(|line| {
+        let line = line.trim();
+        if line.starts_with("FAILED ") {
+            return true;
+        }
+        let words: Vec<&str> = line
+            .split(|c: char| c.is_whitespace() || matches!(c, ',' | '=' | '(' | ')'))
+            .filter(|word| !word.is_empty())
+            .collect();
+        words
+            .windows(2)
+            .any(|pair| pair[1] == "failed" && pair[0].chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
 /// Looks at the output of a failed step for a sign that the environment is
 /// not set up. `dir` is the folder the step ran in, `root` the repo root.
 /// Returns `None` when unsure: then the step is a normal failure.
@@ -119,6 +143,9 @@ pub fn setup_problem(
     root: &Path,
     dir: &Path,
 ) -> Option<SetupProblem> {
+    if reports_failed_tests(output) {
+        return None;
+    }
     for line in output.lines() {
         let line = line.trim();
         // Python: `ModuleNotFoundError: No module named 'jwt'`, and
@@ -259,6 +286,29 @@ mod tests {
         assert_eq!(
             problem("ModuleNotFoundError: No module named 'shared'", 2),
             None
+        );
+    }
+
+    #[test]
+    fn a_missing_module_of_a_src_layout_package_is_a_normal_failure() {
+        let fixture = Fixture::new(&[("svc/src/mypkg/__init__.py", "")], Track::NoGit).unwrap();
+        let dir = fixture.root().join("svc");
+        let out = "ModuleNotFoundError: No module named 'mypkg.sevices'";
+        assert_eq!(setup_problem(out, Some(2), fixture.root(), &dir), None);
+    }
+
+    #[test]
+    fn a_missing_module_among_failed_tests_is_a_normal_failure() {
+        // Tests ran and failed: a code problem, even if one failed on an import.
+        let pytest = "FAILED tests/test_plugins.py::test_load - ModuleNotFoundError: No module named 'myapp_plugins'\n===== 3 failed, 2 passed in 0.12s =====\n";
+        assert_eq!(problem(pytest, 1), None);
+        let vitest = "Error: Cannot find package 'zod' imported from /x/a.ts\n Tests  1 failed | 4 passed (5)\n";
+        assert_eq!(problem(vitest, 1), None);
+        // A collection error stops pytest before any test runs: setup.
+        let collection = "E   ModuleNotFoundError: No module named 'jwt'\n!!! Interrupted: 1 error during collection !!!\n===== 1 error in 0.10s =====\n";
+        assert_eq!(
+            reason(collection, 2),
+            "the Python module 'jwt' is not installed"
         );
     }
 

@@ -82,7 +82,7 @@ For each project, from the files in its own folder:
     - `Pipfile`: the keys of `[packages]` and `[dev-packages]`.
     - A name is compared without its version, extras or markers, ignoring case and treating `_` as `-`: `Ruff>=0.4` and `ruff[toml]` are `ruff`, but `ruff-lsp` is not.
   - Commands: test is `pytest`, lint is `ruff check .`, typecheck is `mypy .`, each only when the tool was found. They start with the project's interpreter (below): `.venv/bin/python -m pytest`, `uv run pytest`, `python -m pytest`.
-  - install: `<interpreter> -m pip install -r <file>` with the first of `requirements-dev.txt`, `requirements_dev.txt`, `dev-requirements.txt`, `requirements-test.txt`, `requirements_test.txt`, `test-requirements.txt`, `requirements.txt` in the folder, else `<interpreter> -m pip install -e .` for a `pyproject.toml` or `setup.py`. `uv sync`, `poetry install` or `pipenv install --dev` for those managers.
+  - install: `<interpreter> -m pip install -r <file>` with the first of `requirements-dev.txt`, `requirements_dev.txt`, `dev-requirements.txt`, `requirements-test.txt`, `requirements_test.txt`, `test-requirements.txt`, `requirements.txt` in the folder. When that is a development list without a `-r requirements.txt` line and a `requirements.txt` is there, both are installed: `-r requirements.txt -r requirements-dev.txt`. Without a requirements file, `<interpreter> -m pip install -e .` for a `pyproject.toml` or `setup.py`. A uv, poetry or Pipfile project gets `uv sync`, `poetry install` or `pipenv install --dev`, also when its `.venv` runs the commands (a venv made by uv has no pip).
   - Name: `name` under `[project]` or `[tool.poetry]` in `pyproject.toml`, else the folder's name.
 - **Rust** (`Cargo.toml`): package manager `cargo`; commands `cargo build`, `cargo test` and `cargo clippy --all-targets -- -D warnings`, each with `--workspace` when the file has a `[workspace]` table.
 - **Go** (`go.mod`): package manager `go`; commands `go build ./...`, `go test ./...` and `go vet ./...`. The name is the last part of the module path.
@@ -91,18 +91,18 @@ For each project, from the files in its own folder:
 
 Each Python project's commands run with one interpreter, chosen in this order (ADR 0022):
 
-| Order | `source`                   | When                                                                                                                                                    | Commands start with                                                      |
-| ----- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| 1     | `venv`                     | A `.venv` folder, else a `venv` folder, in the project's folder holds an interpreter: `Scripts\python.exe` on Windows, `bin/python` on macOS and Linux. | `.venv/bin/python -m` (`.venv\Scripts\python.exe -m` on Windows)         |
-| 2     | `uv`, `poetry` or `pipenv` | The project is a uv, poetry or Pipfile project (see "Package manager" above). Its manager picks the environment.                                        | `uv run`, `poetry run`, `pipenv run`                                     |
-| 3     | `active`                   | `VIRTUAL_ENV` names a folder that holds an interpreter, as it does in a shell where a virtual environment is activated.                                 | that interpreter's full path and `-m`, in double quotes if it has spaces |
-| 4     | `path`                     | None of the above: no virtual environment was found. The commands are what they were before 0.1.2, and `detail` and `fscale verify` say so.             | `python -m`                                                              |
+| Order | `source`                   | When                                                                                                                                                    | Commands start with                                               |
+| ----- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 1     | `venv`                     | A `.venv` folder, else a `venv` folder, in the project's folder holds an interpreter: `Scripts\python.exe` on Windows, `bin/python` on macOS and Linux. | `.venv/bin/python -m` (`.venv\Scripts\python.exe -m` on Windows)  |
+| 2     | `uv`, `poetry` or `pipenv` | The project is a uv, poetry or Pipfile project (see "Package manager" above). Its manager picks the environment.                                        | `uv run`, `poetry run`, `pipenv run`                              |
+| 3     | `active`                   | `VIRTUAL_ENV` names a folder that holds an interpreter, as it does in a shell where a virtual environment is activated.                                 | that interpreter's full path and `-m`, quoted when needed (below) |
+| 4     | `path`                     | None of the above: no virtual environment was found. The commands are what they were before 0.1.2, and `detail` and `fscale verify` say so.             | `python -m`                                                       |
 
 Why this order: a virtual environment in the project's own folder is the most specific, and running its interpreter directly never installs anything. uv and poetry decide for themselves which environment a project uses, and both prefer the project's own over an activated one. An activated environment belongs to the shell, not to one project, so it only fills in for projects that name none. `fscale facts` shows the choice as `interpreter: ...` under each Python project.
 
 A `.venv` with no interpreter for this platform (for example one made in WSL and used from Windows) is not used, and `detail` says so.
 
-On Windows the path in a command uses backslashes, because `cmd` cannot start a program written as `.venv/Scripts/python.exe`. This is the one place where fscale output has a backslash in a path.
+On Windows the path in a command uses backslashes, because `cmd` cannot start a program written as `.venv/Scripts/python.exe`. Commands that name an interpreter (`.venv\Scripts\python.exe`, or the full path of an active environment) are the one place where fscale output has a backslash in a path. An active environment's path is quoted when it has a space or a shell character: in double quotes, or on macOS and Linux in single quotes when it holds `$`, a backquote, `"`, `\` or `!`. On Windows an active environment whose path has `%` or `"` is skipped, because `cmd` expands `%NAME%` even inside quotes.
 
 The graph:
 

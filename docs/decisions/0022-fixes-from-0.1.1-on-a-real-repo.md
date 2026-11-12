@@ -20,7 +20,7 @@ Each Python project's commands use one interpreter, chosen in this order. The fi
 
 1. **A virtual environment in the project's folder**: `.venv`, then `venv`, if it holds an interpreter for this platform (`Scripts\python.exe` on Windows, `bin/python` elsewhere). A folder without one is passed over, and `detail` says so.
 2. **The project's own manager**: `uv run`, `poetry run` or `pipenv run`, from the same markers as before (`uv.lock` or `[tool.uv`; `poetry.lock` or `[tool.poetry`; `Pipfile`).
-3. **An active virtual environment**: the interpreter in the folder named by `VIRTUAL_ENV`, by its full path, quoted when it has a space or a shell character.
+3. **An active virtual environment**: the interpreter in the folder named by `VIRTUAL_ENV`, by its full path, quoted when it has a space or a shell character. On Windows a path with `%` is skipped, because `cmd` expands `%NAME%` even inside quotes.
 4. **`python` from the PATH**, as before. `fscale facts` says "no virtual environment found", and `fscale verify` prints a `note:` naming the projects.
 
 Why this order:
@@ -42,6 +42,8 @@ Verify needs a command to name when the environment is not set up, so `commands`
 
 - Python: `<interpreter> -m pip install -r <file>` with the first development requirements file found (`requirements-dev.txt` and five other spellings, then `requirements.txt`), else `<interpreter> -m pip install -e .`; `uv sync`, `poetry install` or `pipenv install --dev` for those managers.
 - Node: `<pm> install`, except for workspace members (the root installs them) and for a `package.json` that cannot be read.
+- A development requirements file that does not include `requirements.txt` with `-r` is installed together with it, so the app's own dependencies are there (the owner's `jwt` case).
+- A uv, poetry or Pipfile project keeps its manager's install command even when its `.venv` runs the commands: a venv made by uv has no pip.
 - None for Rust and Go, whose build tools fetch what they need.
 
 With no virtual environment, the install goes into the same `python` the steps use. Suggesting `python -m venv .venv` first would be better practice, but the command after it would name a path that differs by OS; the `note:` line suggests creating one instead.
@@ -58,13 +60,14 @@ The detection is a fixed list of messages, in `crates/core/src/setup.rs` and `do
 
 When unsure it is a normal failure:
 
-- A missing Python module whose top-level name is a folder or `.py` file of the project or of a folder above it is a normal failure: it may be a mistake in the code.
+- Output that reports failed tests (a line starting with `FAILED `, or a count such as `2 failed`) is a normal failure, even if a test failed on a missing module: the tests ran, and an agent must still fix the ones that failed for real. A pytest collection error stops pytest before any test runs, so it stays setup.
+- A missing Python module whose top-level name is a folder or `.py` file of the project (also under `src/`) or of a folder above it is a normal failure: it may be a mistake in the code.
 - A Node package given as a path is a normal failure.
 - "not found" from sh counts only with exit code 127, the shell's own code for a missing command.
 
 A missing program that an install does not bring back (`python`, `node`, `pnpm`, `uv` and the like) gets no install command; the summary says to install that program.
 
-The stop hook still blocks on a setup problem: the work is not verified. Its message starts with `SETUP NEEDED:` and tells the agent not to edit code, tests or config to get past it, and to run the setup command or tell the user. The loop guard still lets the agent go after 3 blocks.
+The stop hook still blocks on a setup problem: the work is not verified. Its message starts with `SETUP NEEDED:` and tells the agent not to edit code, tests or config to get past it, and to run the setup command or tell the user. When other steps failed in the code as well, the message says those still need code fixes. The loop guard still lets the agent go after 3 blocks.
 
 `fscale verify --json` is now **schema version 3**: the status and result `setup-needed`, the step field `fix`, and `notes`. ADR 0020 had kept version 3 for blame-aware verify; that milestone now takes version 4.
 
@@ -74,7 +77,7 @@ A Python project's tools are also read from its dependency lists: every requirem
 
 ### Test-runner config files are test code
 
-`core/env-example` treats a file whose name starts with `playwright.config.`, `vitest.config.`, `vitest.workspace.`, `jest.config.` or `cypress.config.` as test code. A variable read only there is a low-severity, test-only finding. `vite.config.*` and other build config stay app code.
+`core/env-example` treats the config and setup files of test runners as test code, in any letter case: names that start with `playwright.config.`, `playwright-ct.config.`, `vitest.config.`, `vitest.workspace.`, `vitest.setup.`, `jest.config.`, `jest.setup.` or `cypress.config.`, and named configs such as `vitest.e2e.config.ts`. A variable read only there is a low-severity, test-only finding. `vite.config.*` and other build config stay app code.
 
 ## Consequences
 

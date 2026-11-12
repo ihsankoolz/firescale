@@ -410,8 +410,23 @@ pub fn block_summary(report: &crate::verify::VerifyReport) -> String {
             fixes.join(", ")
         )
     };
+    let failed = report
+        .steps
+        .iter()
+        .filter(|step| step.status == crate::verify::StepStatus::Failed)
+        .count();
+    let also = if failed == 0 {
+        String::new()
+    } else {
+        format!(
+            " Separately, {} FAILED in the code: {} need{} a code fix as usual.",
+            if failed == 1 { "1 step" } else { "other steps" },
+            if failed == 1 { "it" } else { "they" },
+            if failed == 1 { "s" } else { "" }
+        )
+    };
     format!(
-        "SETUP NEEDED: {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}\n\n{summary}",
+        "SETUP NEEDED: {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}{also}\n\n{summary}",
         if setup.len() == 1 { "1 step" } else { "some steps" }
     )
 }
@@ -841,6 +856,49 @@ mod tests {
         let block = reply(Agent::Claude, &Decision::Block { blocks: 1 }, &summary, 3);
         assert_eq!(block.exit_code, 2);
         assert!(block.stderr.contains("Do not edit code"));
+    }
+
+    #[test]
+    fn a_block_with_setup_and_real_failures_says_the_failures_need_code_fixes() {
+        use crate::verify::{run_verify, CheckStep, Planned, ProjectPlan, VerifyPlan};
+        let fixture = Fixture::new(&[("a/x.txt", ""), ("b/x.txt", "")], Track::NoGit).unwrap();
+        let say = |text: &str| {
+            if cfg!(windows) {
+                format!("echo {text} 1>&2 & exit /b 1")
+            } else {
+                format!("echo \"{text}\" >&2; exit 1")
+            }
+        };
+        let unit = |root: &str, command: String| ProjectPlan {
+            root: root.to_owned(),
+            kind: Some("python".to_owned()),
+            steps: vec![("test".to_owned(), Planned::Command(command))],
+            install: Some("uv sync".to_owned()),
+            python_from_path: false,
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                unit("a", say("No module named jwt")),
+                unit("b", say("assert 1 == 2")),
+            ],
+            ..VerifyPlan::default()
+        };
+        let check = CheckStep {
+            ok: true,
+            detail: "no rules".to_owned(),
+            output: Vec::new(),
+            duration_ms: 0,
+            command: "fscale check".to_owned(),
+        };
+        let report = run_verify(fixture.root(), "0.0.0", check, &plan).unwrap();
+        let summary = block_summary(&report);
+        assert!(summary.starts_with("SETUP NEEDED: 1 step"), "{summary}");
+        assert!(
+            summary
+                .contains("Separately, 1 step FAILED in the code: it needs a code fix as usual."),
+            "{summary}"
+        );
     }
 
     #[test]

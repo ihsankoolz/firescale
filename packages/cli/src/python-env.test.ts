@@ -126,7 +126,8 @@ describe('the Python interpreter of each project', () => {
 
   it('uses an active VIRTUAL_ENV for a service that has no .venv of its own', async () => {
     const { repo, tools, calls, env } = await courseProject(['audit_service']);
-    const active = path.join(tools.root, 'active-env');
+    // A space in the path: the command must quote it for sh and for cmd.
+    const active = path.join(tools.root, 'active env');
     await makeVenv(active);
     const result = await runCli(['verify'], repo.root, env({ VIRTUAL_ENV: active }));
     expect(result.code).toBe(EXIT_OK);
