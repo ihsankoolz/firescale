@@ -109,6 +109,11 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
+- Tag `v0.2.0` on `main` and push the tag when you are ready to release (`RELEASING.md`).
+- Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
+- Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
+- Run 0.2.0 on the course project: `fscale doctor`, and `fscale adopt --dry-run` with `agent-ready` and `python` in `packs`, to see the agent files and the per-service checks on the real repo.
+
 - Consider turning off token publishing for the eight packages now that two workflow releases have worked (`RELEASING.md`).
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
