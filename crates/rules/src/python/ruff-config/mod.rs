@@ -1,10 +1,12 @@
 //! `python/ruff-config`: a Python project that uses ruff has its config, in
 //! its folder or a folder above.
 
-use firescale_core::model::{Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity};
+use firescale_core::facts::python_declared;
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
+};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
-use firescale_core::facts::python_declared;
 
 use super::{create, finding, targets, Target, INPUTS};
 
@@ -25,10 +27,13 @@ fn uses_ruff(ctx: &RuleContext, target: &Target) -> bool {
 fn configured(ctx: &RuleContext, target: &Target) -> bool {
     let mut parts: Vec<&str> = target.folder.split('/').filter(|p| *p != ".").collect();
     loop {
-        let dir = parts.iter().fold(ctx.root().to_path_buf(), |path, part| path.join(part));
+        let dir = parts
+            .iter()
+            .fold(ctx.root().to_path_buf(), |path, part| path.join(part));
         if dir.join("ruff.toml").is_file()
             || dir.join(".ruff.toml").is_file()
-            || std::fs::read_to_string(dir.join("pyproject.toml")).is_ok_and(|t| t.contains("[tool.ruff"))
+            || std::fs::read_to_string(dir.join("pyproject.toml"))
+                .is_ok_and(|t| t.contains("[tool.ruff"))
         {
             return true;
         }
@@ -44,7 +49,9 @@ impl BuiltinRule for RuffConfig {
             id: ID.to_owned(),
             severity: Severity::Low,
             category: Category::Consistency,
-            description: "A Python project that uses ruff has a ruff config in its folder or a folder above.".to_owned(),
+            description:
+                "A Python project that uses ruff has a ruff config in its folder or a folder above."
+                    .to_owned(),
             inputs: INPUTS.iter().map(|input| (*input).to_owned()).collect(),
             has_fix: true,
             after: vec![super::requirements::ID.to_owned()],

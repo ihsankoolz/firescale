@@ -137,9 +137,8 @@ fn has_python_code(dir: &Path) -> bool {
             !name.starts_with('.')
                 && name != "venv"
                 && name != "node_modules"
-                && std::fs::read_dir(entry.path()).is_ok_and(|inner| {
-                    inner.filter_map(std::result::Result::ok).any(|e| is_py(&e))
-                })
+                && std::fs::read_dir(entry.path())
+                    .is_ok_and(|inner| inner.filter_map(std::result::Result::ok).any(|e| is_py(&e)))
         } else {
             is_py(&entry)
         }
@@ -158,7 +157,12 @@ pub(crate) fn finding(target: &Target, file: &str, message: String, fixable: Fix
 }
 
 /// Creates a file firescale owns, or does nothing when anything is there.
-pub(crate) fn create(ctx: &RuleContext, file: &str, content: &str, result: &mut FixResult) -> Result<()> {
+pub(crate) fn create(
+    ctx: &RuleContext,
+    file: &str,
+    content: &str,
+    result: &mut FixResult,
+) -> Result<()> {
     if on_disk(ctx.root(), file).symlink_metadata().is_ok() {
         return Ok(());
     }

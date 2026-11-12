@@ -1,7 +1,9 @@
 //! `python/pytest-config`: each Python project with tests configures pytest,
 //! so `python -m pytest` finds the tests and imports the project's code.
 
-use firescale_core::model::{Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity};
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
+};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
@@ -23,9 +25,15 @@ pub const PYTEST_INI_FLAT: &str = "[pytest]\npythonpath = .\naddopts = -ra\n";
 
 fn configured(ctx: &RuleContext, target: &Target) -> bool {
     target.exists(ctx, "pytest.ini")
-        || target.read(ctx, "pyproject.toml").is_some_and(|t| t.contains("[tool.pytest"))
-        || target.read(ctx, "setup.cfg").is_some_and(|t| t.contains("[tool:pytest]"))
-        || target.read(ctx, "tox.ini").is_some_and(|t| t.contains("[pytest]"))
+        || target
+            .read(ctx, "pyproject.toml")
+            .is_some_and(|t| t.contains("[tool.pytest"))
+        || target
+            .read(ctx, "setup.cfg")
+            .is_some_and(|t| t.contains("[tool:pytest]"))
+        || target
+            .read(ctx, "tox.ini")
+            .is_some_and(|t| t.contains("[pytest]"))
 }
 
 impl BuiltinRule for PytestConfig {

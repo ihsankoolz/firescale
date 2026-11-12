@@ -1,7 +1,9 @@
 //! `python/requirements`: each Python project declares its dependencies; a
 //! new project gets `requirements.txt` and `requirements-dev.txt`.
 
-use firescale_core::model::{Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity};
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
+};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
@@ -14,7 +16,8 @@ pub const ID: &str = "python/requirements";
 
 pub struct Requirements;
 
-pub const REQUIREMENTS: &str = "# What the app needs at run time, one package per line, pinned with ==.\n";
+pub const REQUIREMENTS: &str =
+    "# What the app needs at run time, one package per line, pinned with ==.\n";
 
 /// The development list: the app's own, plus the test and lint tools.
 #[must_use]
@@ -22,17 +25,26 @@ pub fn dev_requirements() -> String {
     format!("-r requirements.txt\n{PYTEST}\n{RUFF}\n")
 }
 
-const DECLARATIONS: [&str; 5] = ["requirements.txt", "pyproject.toml", "Pipfile", "setup.py", "setup.cfg"];
+const DECLARATIONS: [&str; 5] = [
+    "requirements.txt",
+    "pyproject.toml",
+    "Pipfile",
+    "setup.py",
+    "setup.cfg",
+];
 
 fn declares_anything(ctx: &RuleContext, target: &Target) -> bool {
     DECLARATIONS.iter().any(|file| target.exists(ctx, file))
-        || std::fs::read_dir(ctx.root().join(target.folder.replace('/', std::path::MAIN_SEPARATOR_STR)))
-            .is_ok_and(|entries| {
-                entries.filter_map(std::result::Result::ok).any(|entry| {
-                    let name = entry.file_name().to_string_lossy().to_lowercase();
-                    name.starts_with("requirements") && name.ends_with(".txt")
-                })
+        || std::fs::read_dir(
+            ctx.root()
+                .join(target.folder.replace('/', std::path::MAIN_SEPARATOR_STR)),
+        )
+        .is_ok_and(|entries| {
+            entries.filter_map(std::result::Result::ok).any(|entry| {
+                let name = entry.file_name().to_string_lossy().to_lowercase();
+                name.starts_with("requirements") && name.ends_with(".txt")
             })
+        })
 }
 
 impl BuiltinRule for Requirements {
@@ -78,8 +90,18 @@ impl BuiltinRule for Requirements {
         let mut result = FixResult::default();
         for target in targets(ctx)? {
             if target.is_new() && !declares_anything(ctx, &target) {
-                create(ctx, &target.path("requirements.txt"), REQUIREMENTS, &mut result)?;
-                create(ctx, &target.path("requirements-dev.txt"), &dev_requirements(), &mut result)?;
+                create(
+                    ctx,
+                    &target.path("requirements.txt"),
+                    REQUIREMENTS,
+                    &mut result,
+                )?;
+                create(
+                    ctx,
+                    &target.path("requirements-dev.txt"),
+                    &dev_requirements(),
+                    &mut result,
+                )?;
                 result.notes.push("Make a virtual environment and install: `python -m venv .venv`, then `.venv/bin/python -m pip install -r requirements-dev.txt` (on Windows `.venv\\Scripts\\python.exe`).".to_owned());
             }
         }

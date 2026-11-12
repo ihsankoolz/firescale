@@ -1,7 +1,9 @@
 //! `python/tests`: each Python project has tests; a new one gets a small
 //! app package and a test for it.
 
-use firescale_core::model::{Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity};
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
+};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
@@ -23,13 +25,16 @@ fn has_tests(ctx: &RuleContext, target: &Target) -> bool {
     if target.exists(ctx, "tests") || target.exists(ctx, "test") {
         return true;
     }
-    std::fs::read_dir(ctx.root().join(target.folder.replace('/', std::path::MAIN_SEPARATOR_STR)))
-        .is_ok_and(|entries| {
-            entries.filter_map(std::result::Result::ok).any(|entry| {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py"))
-            })
+    std::fs::read_dir(
+        ctx.root()
+            .join(target.folder.replace('/', std::path::MAIN_SEPARATOR_STR)),
+    )
+    .is_ok_and(|entries| {
+        entries.filter_map(std::result::Result::ok).any(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.ends_with(".py") && (name.starts_with("test_") || name.ends_with("_test.py"))
         })
+    })
 }
 
 impl BuiltinRule for TestsPresent {
@@ -38,7 +43,9 @@ impl BuiltinRule for TestsPresent {
             id: ID.to_owned(),
             severity: Severity::Medium,
             category: Category::Reliability,
-            description: "Each Python project has tests; a new one gets app/ and tests/test_main.py.".to_owned(),
+            description:
+                "Each Python project has tests; a new one gets app/ and tests/test_main.py."
+                    .to_owned(),
             inputs: INPUTS.iter().map(|input| (*input).to_owned()).collect(),
             has_fix: true,
             after: Vec::new(),
@@ -72,7 +79,12 @@ impl BuiltinRule for TestsPresent {
                     create(ctx, &target.path("app/__init__.py"), APP_INIT, &mut result)?;
                     create(ctx, &target.path("app/main.py"), APP_MAIN, &mut result)?;
                 }
-                create(ctx, &target.path("tests/test_main.py"), TEST_MAIN, &mut result)?;
+                create(
+                    ctx,
+                    &target.path("tests/test_main.py"),
+                    TEST_MAIN,
+                    &mut result,
+                )?;
             }
         }
         Ok(result)

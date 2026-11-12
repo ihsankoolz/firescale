@@ -1,10 +1,12 @@
 //! `python/test-tools`: each Python project declares pytest among its
 //! dependencies, so `python -m pytest` works once they are installed.
 
-use firescale_core::model::{Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity};
+use firescale_core::facts::python_declared;
+use firescale_core::model::{
+    Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
+};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
-use firescale_core::facts::python_declared;
 
 use super::requirements::dev_requirements;
 use super::{create, finding, targets, Target, INPUTS};
@@ -74,7 +76,12 @@ impl BuiltinRule for TestTools {
         let mut result = FixResult::default();
         for target in targets(ctx)? {
             if !target.is_new() && !declares_pytest(ctx, &target) && can_create(ctx, &target) {
-                create(ctx, &target.path("requirements-dev.txt"), &dev_requirements(), &mut result)?;
+                create(
+                    ctx,
+                    &target.path("requirements-dev.txt"),
+                    &dev_requirements(),
+                    &mut result,
+                )?;
             }
         }
         Ok(result)
