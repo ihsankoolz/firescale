@@ -151,7 +151,7 @@ A custom pack is listed in the config by path (`packs: ['core', './tools/rules/p
 
 **No more hand-written generic hygiene rules will be added beyond these eight.** alint already covers that ground. If alint is installed, firescale may ingest its output and report it as diagnostics; this is optional and never a dependency.
 
-**agent-ready** (built; opt-in for `check` in an existing repo, on by default in `fscale init`): `agents-md` (AGENTS.md exists), `commands-documented`, `single-test-command`, `verify-hook`. Its fixes, which write the agent files, come with §16.
+**agent-ready** (built; opt-in for `check` in an existing repo, on by default in `fscale init`): `agents-md` (AGENTS.md with a managed block), `commands-documented`, `single-test-command`, `verify-hook`, `agent-permissions`, `agent-skills`. Their fixes write the agent files of §16 (ADR 0027).
 
 **group-project** (built, opt-in): a pull request template, a branch naming rule, a contributing guide, and a CI workflow that runs `fscale verify` (ADR 0023).
 

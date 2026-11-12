@@ -19,12 +19,14 @@ The `core` pack is on by default. Every rule is report-only (`evaluated`) until 
 
 Not on by default. Add `"agent-ready"` to `packs` in your config. It checks that a coding agent can work in the repo and prove its work (ADR 0014).
 
-| Rule                              | Checks                                                                            | Severity | `fscale fix` |
-| --------------------------------- | --------------------------------------------------------------------------------- | -------- | ------------ |
-| `agent-ready/agents-md`           | `AGENTS.md` exists at the repo root and is not blank.                             | medium   | no           |
-| `agent-ready/single-test-command` | One command runs the tests: a `test` script, Cargo, pytest config or `make test`. | medium   | no           |
-| `agent-ready/verify-hook`         | An agent stop hook runs `fscale verify` (see [hooks.md](hooks.md)).               | medium   | no           |
-| `agent-ready/commands-documented` | `AGENTS.md` mentions the detected build, test, lint and typecheck commands.       | low      | no           |
+| Rule                              | Checks                                                                                                                                  | Severity | `fscale fix` |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------ |
+| `agent-ready/agents-md`           | `AGENTS.md` has firescale's managed block of commands and the definition of done, up to date; a root `CLAUDE.md` imports it (ADR 0027). | medium   | yes          |
+| `agent-ready/agent-permissions`   | Claude Code, Codex and Cursor settings deny reading env files and keys and allow the repo's check commands (ADR 0027).                  | medium   | yes          |
+| `agent-ready/agent-skills`        | The SKILL.md of every enabled rule is in `.claude/skills/`, `.agents/skills/` and `.cursor/skills/` (ADR 0027).                         | low      | yes          |
+| `agent-ready/single-test-command` | One command runs the tests: a `test` script, Cargo, pytest config or `make test`.                                                       | medium   | no           |
+| `agent-ready/verify-hook`         | An agent stop hook runs `fscale verify` (see [hooks.md](hooks.md)).                                                                     | medium   | yes          |
+| `agent-ready/commands-documented` | `AGENTS.md` mentions the detected build, test, lint and typecheck commands.                                                             | low      | no           |
 
 ## The `group-project` pack
 

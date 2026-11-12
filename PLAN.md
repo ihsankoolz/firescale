@@ -338,7 +338,9 @@ Also done (owner's additions, ADR 0025 and 0026): local services from Compose fi
 
 ---
 
-## M13 — Born agent-ready: agent files from `init` ☐
+## M13 — Born agent-ready: agent files from `init` ☑
+
+Formats confirmed in ADR 0027 (Claude Code from its docs, Codex from its source, Cursor from its official GitHub examples; Cursor's `cli.json` permissions unconfirmed).
 
 **Build**
 
@@ -351,10 +353,10 @@ Also done (owner's additions, ADR 0025 and 0026): local services from Compose fi
 
 **Done when**
 
-- ☐ `fscale init` in an empty folder yields a repo where the whole `agent-ready` pack passes, for every agent whose format was confirmed.
-- ☐ Text outside the AGENTS.md managed block survives `fscale sync` unchanged, proven by a test.
-- ☐ Generated agent files have snapshot tests, and an existing agent settings file keeps its other settings.
-- ☐ `fscale sync --check` fails after a hand edit inside the managed block.
+- ☑ `fscale init` in an empty folder yields a repo where the whole `agent-ready` pack passes, for every agent whose format was confirmed.
+- ☑ Text outside the AGENTS.md managed block survives `fscale sync` unchanged, proven by a test.
+- ☑ Generated agent files have snapshot tests, and an existing agent settings file keeps its other settings.
+- ☑ `fscale sync --check` fails after a hand edit inside the managed block.
 
 ---
 
