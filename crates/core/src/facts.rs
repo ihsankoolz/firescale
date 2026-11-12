@@ -2337,6 +2337,11 @@ mod tests {
         assert_eq!(facts.tools, ["docker-compose", "github-actions"]);
         assert_eq!(facts.commands, Commands::default());
         assert!(facts.warnings.is_empty(), "{:?}", facts.warnings);
+        // The frontend's test script watches; its test:run sibling runs once.
+        assert_eq!(
+            facts.notes,
+            ["frontend: the test script runs `vitest`, which watches for changes; verify uses test:run (`vitest run`) instead."]
+        );
 
         let roots: Vec<_> = facts.projects.iter().map(|p| p.root.as_str()).collect();
         assert_eq!(
@@ -2386,13 +2391,14 @@ mod tests {
         assert_eq!(frontend.tools, ["knip", "oxlint", "playwright", "vite"]);
         assert_eq!(frontend.commands.build.as_deref(), Some("npm run build"));
         // No lint or typecheck script: the linter's config file and the
-        // tsconfig give the commands. Playwright alone is not a test command.
+        // tsconfig give the commands.
         assert_eq!(frontend.commands.lint.as_deref(), Some("npx --no oxlint"));
         assert_eq!(
             frontend.commands.typecheck.as_deref(),
             Some("npx --no tsc --noEmit")
         );
-        assert_eq!(frontend.commands.test, None);
+        // `"test": "vitest"` watches, so its run-once sibling is used.
+        assert_eq!(frontend.commands.test.as_deref(), Some("npm run test:run"));
 
         let json = format_facts_json(&facts);
         assert!(!json.contains('\\'), "{json}");
@@ -2402,6 +2408,11 @@ mod tests {
             text.contains(
                 "  auth_service [python] backend/auth_service\n    stack: python, pip, alembic, docker, pytest, ruff\n    test: python -m pytest\n    lint: python -m ruff check .\n"
             ),
+            "{text}"
+        );
+        assert!(text.contains("    test: npm run test:run\n"), "{text}");
+        assert!(
+            text.ends_with(&format!("Notes:\n  {}\n", facts.notes[0])),
             "{text}"
         );
     }

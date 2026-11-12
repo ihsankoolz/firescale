@@ -25,6 +25,8 @@ interface Facts {
     commands: Record<string, string>;
     dependsOn: string[];
   }[];
+  warnings: string[];
+  notes: string[];
 }
 
 async function validate(json: string): Promise<Facts> {
@@ -137,8 +139,14 @@ describe('fscale facts', () => {
           build: 'npm run build',
           lint: 'npx --no oxlint',
           typecheck: 'npx --no tsc --noEmit',
+          // "test": "vitest" watches, so its run-once sibling is used.
+          test: 'npm run test:run',
         },
       });
+      expect(facts.notes).toEqual([
+        'frontend: the test script runs `vitest`, which watches for changes; verify uses test:run (`vitest run`) instead.',
+      ]);
+      expect(facts.warnings).toEqual([]);
       // Nothing from node_modules, dist, test-results, caches or ignored folders.
       expect(facts.projects).toHaveLength(6);
     });

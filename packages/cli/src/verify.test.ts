@@ -325,7 +325,7 @@ describe('fscale verify', () => {
 });
 
 describe('fscale verify in a repo with projects in subfolders', () => {
-  /** The course project, with stand-ins for python and npx on the PATH. */
+  /** The course project, with stand-ins for python, npx and npm on the PATH. */
   async function courseProject(config?: object) {
     const files = courseProjectFiles();
     if (config) files['firescale.config.json'] = JSON.stringify(config);
@@ -344,7 +344,7 @@ describe('fscale verify in a repo with projects in subfolders', () => {
     expect(result.stderr).toBe('');
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toMatchSnapshot();
-    expect(result.stdout.startsWith('verify: PARTIAL - 9 of 19 steps ran, 10 skipped\n')).toBe(
+    expect(result.stdout.startsWith('verify: PARTIAL - 10 of 19 steps ran, 9 skipped\n')).toBe(
       true,
     );
     // What really ran, and where.
@@ -357,16 +357,17 @@ describe('fscale verify in a repo with projects in subfolders', () => {
       'python -m pytest in realtime_service',
       'npx --no oxlint in frontend',
       'npx --no tsc --noEmit in frontend',
+      'npm run test:run in frontend',
     ]);
 
     const json = await runCli(['verify', '--json'], repo.root, env());
     const report = await validate(json.stdout);
     expect(report.runner).toBe('projects');
     expect(report.result).toBe('partial');
-    expect([report.stepsRun, report.stepsTotal]).toEqual([9, 19]);
+    expect([report.stepsRun, report.stepsTotal]).toEqual([10, 19]);
     // Every step that did not run is named, in the list and in the summary.
     const skipped = report.steps.filter((step) => step.status === 'skipped');
-    expect(skipped).toHaveLength(10);
+    expect(skipped).toHaveLength(9);
     expect(report.skipped.map((skip) => `${skip.step} in ${skip.project ?? '.'}`)).toEqual(
       skipped.map((step) => `${step.name} in ${step.project ?? '.'}`),
     );

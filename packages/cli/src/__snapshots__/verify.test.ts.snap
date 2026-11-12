@@ -125,7 +125,7 @@ warning: steps were skipped because no command was found: lint in the repo root,
 `;
 
 exports[`fscale verify in a repo with projects in subfolders > runs the backend's and the frontend's steps, each in its own folder, and names every skipped step 1`] = `
-"verify: PARTIAL - 9 of 19 steps ran, 10 skipped
+"verify: PARTIAL - 10 of 19 steps ran, 9 skipped
   check      passed   8 rules, no enforced violations
   in backend/audit_service:
     lint       skipped  no linter was found (looked for ruff)
@@ -150,9 +150,9 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
   in frontend:
     lint       passed   npx --no oxlint
     typecheck  passed   npx --no tsc --noEmit
-    test       skipped  package.json has no test script, and no vitest or jest config was found
+    test       passed   npm run test:run
 
-warning: steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service, test in frontend. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.
+warning: steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.
 
 note: no virtual environment was found for backend/audit_service, backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.
 "
@@ -213,11 +213,6 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "project": "backend/realtime_service",
       "reason": "no type checker was found (looked for mypy)",
       "step": "typecheck",
-    },
-    {
-      "project": "frontend",
-      "reason": "package.json has no test script, and no vitest or jest config was found",
-      "step": "test",
     },
   ],
   "steps": [
@@ -382,19 +377,21 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "status": "passed",
     },
     {
-      "detail": "package.json has no test script, and no vitest or jest config was found",
+      "command": "npm run test:run",
+      "detail": "npm run test:run",
       "durationMs": 0,
+      "exitCode": 0,
       "kind": "node",
       "name": "test",
       "project": "frontend",
-      "status": "skipped",
+      "status": "passed",
     },
   ],
-  "stepsRun": 9,
+  "stepsRun": 10,
   "stepsTotal": 19,
   "version": "<version>",
   "warnings": [
-    "steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service, test in frontend. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.",
+    "steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.",
   ],
 }
 `;

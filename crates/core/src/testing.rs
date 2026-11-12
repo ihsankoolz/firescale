@@ -164,7 +164,7 @@ pub fn course_project_files() -> Vec<(String, String)> {
         ("backend/auth_service/ruff.toml", "line-length = 100\n"),
         (
             "frontend/package.json",
-            r#"{"name":"frontend","private":true,"scripts":{"dev":"vite","build":"vite build","test:e2e":"playwright test"},"devDependencies":{"typescript":"5.9.0"}}"#,
+            r#"{"name":"frontend","private":true,"scripts":{"dev":"vite","build":"vite build","test":"vitest","test:run":"vitest run","test:e2e":"playwright test"},"devDependencies":{"typescript":"5.9.0"}}"#,
         ),
         ("frontend/package-lock.json", "{}\n"),
         ("frontend/vite.config.ts", "export default {};\n"),

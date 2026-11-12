@@ -197,7 +197,9 @@ mod guide_text {
             "{text}"
         );
         assert!(
-            text.contains("| `frontend` | `npx --no oxlint` | `npx --no tsc --noEmit` | - |\n"),
+            text.contains(
+                "| `frontend` | `npx --no oxlint` | `npx --no tsc --noEmit` | `npm run test:run` |\n"
+            ),
             "{text}"
         );
         assert!(text.contains("python -m venv .venv"), "{text}");

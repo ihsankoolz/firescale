@@ -32,7 +32,13 @@ export function courseProjectFiles(): Record<string, string> {
     'frontend/package.json': JSON.stringify({
       name: 'frontend',
       private: true,
-      scripts: { dev: 'vite', build: 'vite build', 'test:e2e': 'playwright test' },
+      scripts: {
+        dev: 'vite',
+        build: 'vite build',
+        test: 'vitest',
+        'test:run': 'vitest run',
+        'test:e2e': 'playwright test',
+      },
       devDependencies: { typescript: '5.9.0' },
     }),
     'frontend/package-lock.json': '{}\n',
@@ -70,14 +76,14 @@ export function courseProjectFiles(): Record<string, string> {
 }
 
 /**
- * Writes stand-ins for `python` and `npx` into `dir`, so a test can run the
- * fixture's verify commands with neither tool installed. Each one appends
+ * Writes stand-ins for `python`, `npx` and `npm` into `dir`, so a test can run the
+ * fixture's verify commands with none of them installed. Each one appends
  * "<tool> <arguments> in <name of the current folder>" to the file named by
  * `SHIM_LOG`, and exits 1 when `SHIM_FAIL` is the tool's name.
  */
 export async function writeToolShims(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
-  for (const tool of ['python', 'npx']) {
+  for (const tool of ['python', 'npx', 'npm']) {
     if (process.platform === 'win32') {
       const script = [
         '@echo off',
