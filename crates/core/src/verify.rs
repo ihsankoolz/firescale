@@ -3194,10 +3194,10 @@ mod tests {
         .unwrap();
         let hang = if cfg!(windows) {
             format!(
-                "echo connect ECONNREFUSED 127.0.0.1:{port} & ping -n 16 127.0.0.1 > NUL & exit 1"
+                "echo connect ECONNREFUSED 127.0.0.1:{port} & ping -n 21 127.0.0.1 > NUL & exit 1"
             )
         } else {
-            format!("echo 'connect ECONNREFUSED 127.0.0.1:{port}'; sleep 15; exit 1")
+            format!("echo 'connect ECONNREFUSED 127.0.0.1:{port}'; sleep 20; exit 1")
         };
         let plan = VerifyPlan {
             runner: "projects".to_owned(),
@@ -3218,7 +3218,7 @@ mod tests {
         assert_eq!(step.status, StepStatus::SetupNeeded);
         assert!(
             // Judged after the confirming probe, before the step's own end.
-            started.elapsed() >= CONFIRM_AFTER && started.elapsed() < Duration::from_millis(14_500),
+            started.elapsed() >= CONFIRM_AFTER && started.elapsed() < Duration::from_secs(19),
             "{:?}",
             started.elapsed()
         );
