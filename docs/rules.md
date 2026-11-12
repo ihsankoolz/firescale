@@ -76,3 +76,16 @@ The operating system, the shell, CI services and development tools set these, so
 Exact names: `PATH`, `HOME`, `PWD`, `OLDPWD`, `USER`, `LOGNAME`, `SHELL`, `SHLVL`, `TERM`, `TERM_PROGRAM`, `COLORTERM`, `COLUMNS`, `LINES`, `DISPLAY`, `EDITOR`, `VISUAL`, `PAGER`, `LANG`, `LANGUAGE`, `TZ`, `TMPDIR`, `TEMP`, `TMP`, `SSH_AUTH_SOCK`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PROGRAMDATA`, `PROGRAMFILES`, `SYSTEMROOT`, `WINDIR`, `COMSPEC`, `PATHEXT`, `HOMEDRIVE`, `HOMEPATH`, `COMPUTERNAME`, `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `DOCKER_CERT_PATH`, `DOCKER_BUILDKIT`, `DOCKER_CONFIG`, `DOCKER_CONTEXT`, `CI`, `CONTINUOUS_INTEGRATION`, `GITLAB_CI`, `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, `DEBUG`, `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `NODE_ENV`, `NODE_OPTIONS`, `NODE_PATH`, `NODE_DEBUG`, `NODE_NO_WARNINGS`, `NODE_EXTRA_CA_CERTS`, `JEST_WORKER_ID`, `PYTHONPATH`, `PYTHONHOME`, `PYTHONUNBUFFERED`, `PYTHONDONTWRITEBYTECODE`, `PYTHONIOENCODING`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `RUST_BACKTRACE`, `GOPATH`, `GOROOT`, `JAVA_HOME`.
 
 Names that start with: `LC_*`, `XDG_*`, `npm_*`, `GITHUB_*`, `RUNNER_*`, `FSCALE_*`, `CARGO_*`, `RUSTC_*`, `RUSTUP_*`, `PYTEST_*`, `VITEST*`.
+
+## The `nextjs` pack
+
+Opt-in: add `"nextjs"` to `packs`, or `fscale init --packs core,nextjs`. Its fixes build a Next.js App Router starter and repair a project's missing pieces, never replacing a file a person wrote (ADR 0029).
+
+| Rule                  | What it checks                                                                               | Severity | Fix |
+| --------------------- | -------------------------------------------------------------------------------------------- | -------- | --- |
+| `nextjs/package-json` | `next`, `react`, `react-dom` are dependencies; `dev`, `build`, `start` (and `lint`) scripts. | high     | yes |
+| `nextjs/app-router`   | The App Router has a root layout; a new app gets `app/layout.tsx` and `app/page.tsx`.        | high     | yes |
+| `nextjs/next-config`  | A `next.config.{ts,mjs,js,cjs}` is at the root.                                              | low      | yes |
+| `nextjs/tsconfig`     | A TypeScript project has `tsconfig.json`.                                                    | medium   | yes |
+| `nextjs/eslint`       | An ESLint config with `eslint-config-next`.                                                  | medium   | yes |
+| `nextjs/gitignore`    | `.gitignore` ignores `.next/` and `next-env.d.ts`.                                           | medium   | yes |

@@ -9,6 +9,9 @@ use firescale_core::Result;
 use super::finding;
 use crate::core::gitignore_basics::is_covered;
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "nextjs/gitignore";
 
 pub struct NextGitignore;

@@ -8,6 +8,9 @@ use firescale_core::Result;
 
 use super::{any_exists, create, depends_on, finding, package_json};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "nextjs/eslint";
 
 pub struct EslintConfig;

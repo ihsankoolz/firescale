@@ -29,6 +29,8 @@ pub mod package_json;
 pub mod tsconfig;
 
 #[cfg(test)]
+mod fixtures;
+#[cfg(test)]
 mod tests;
 
 /// The packages a new project gets, with the versions create-next-app

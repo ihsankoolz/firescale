@@ -9,6 +9,9 @@ use firescale_core::Result;
 
 use super::{any_exists, create, finding};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "nextjs/app-router";
 
 pub struct AppRouter;

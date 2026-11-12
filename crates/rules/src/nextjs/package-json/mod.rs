@@ -12,6 +12,9 @@ use super::{
     create, depends_on, finding, new_package_json, package_json, package_json_with, SCRIPTS,
 };
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "nextjs/package-json";
 
 pub struct PackageJson;

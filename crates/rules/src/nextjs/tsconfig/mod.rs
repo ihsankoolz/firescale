@@ -9,6 +9,9 @@ use firescale_core::Result;
 
 use super::{create, depends_on, finding, package_json};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "nextjs/tsconfig";
 
 pub struct TsConfig;

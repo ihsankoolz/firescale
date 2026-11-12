@@ -29,21 +29,7 @@ fn fix_all(f: &Fixture) -> Vec<String> {
     changed
 }
 
-/// A Next.js app as create-next-app leaves it.
-fn set_up() -> Vec<(&'static str, String)> {
-    vec![
-        ("package.json", new_package_json()),
-        ("app/layout.tsx", app_router::LAYOUT.to_owned()),
-        ("app/page.tsx", app_router::PAGE.to_owned()),
-        ("next.config.ts", next_config::CONFIG.to_owned()),
-        ("tsconfig.json", tsconfig::TSCONFIG.to_owned()),
-        ("eslint.config.mjs", eslint::CONFIG.to_owned()),
-        (
-            ".gitignore",
-            "node_modules/\n.next/\nnext-env.d.ts\n".to_owned(),
-        ),
-    ]
-}
+use super::fixtures::set_up;
 
 fn fixture(files: &[(&str, String)]) -> Fixture {
     let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (*p, c.as_str())).collect();

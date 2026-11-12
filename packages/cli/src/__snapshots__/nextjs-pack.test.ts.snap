@@ -1,0 +1,130 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > .gitignore 1`] = `
+"# Generated files and dependencies
+# Next.js build output
+.next/
+next-env.d.ts
+# Generated files and dependencies
+node_modules/
+"
+`;
+
+exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > app/layout.tsx 1`] = `
+"import type { Metadata } from 'next';
+import type { ReactNode } from 'react';
+
+export const metadata: Metadata = {
+  title: 'Next.js app',
+  description: 'Started with firescale.',
+};
+
+export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
+}
+"
+`;
+
+exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > app/page.tsx 1`] = `
+"export default function Home() {
+  return (
+    <main>
+      <h1>Next.js app</h1>
+      <p>Edit app/page.tsx to start.</p>
+    </main>
+  );
+}
+"
+`;
+
+exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > eslint.config.mjs 1`] = `
+"import { defineConfig, globalIgnores } from 'eslint/config';
+import nextVitals from 'eslint-config-next/core-web-vitals';
+import nextTs from 'eslint-config-next/typescript';
+
+const eslintConfig = defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  globalIgnores(['.next/**', 'out/**', 'build/**', 'next-env.d.ts']),
+]);
+
+export default eslintConfig;
+"
+`;
+
+exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > next.config.ts 1`] = `
+"import type { NextConfig } from 'next';
+
+const nextConfig: NextConfig = {
+  /* config options here */
+};
+
+export default nextConfig;
+"
+`;
+
+exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > package.json 1`] = `
+"{
+  "name": "next-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.6",
+    "typescript": "^5"
+  }
+}
+"
+`;
+
+exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > tsconfig.json 1`] = `
+"{
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    "**/*.mts"
+  ],
+  "exclude": ["node_modules"]
+}
+"
+`;
