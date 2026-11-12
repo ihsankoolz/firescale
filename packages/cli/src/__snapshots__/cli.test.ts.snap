@@ -30,11 +30,15 @@ Options:
   --agent <name>   hooks: claude, codex or cursor
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
+  --jobs <n>       verify: run up to <n> projects at once (default: 1)
+  --progress       verify: print progress on stderr even when it is not a terminal
+  --no-progress    verify: print no progress, even in a terminal
   --cwd <dir>      Run as if started in <dir>
 
 Exit codes:
-  0  no enforced rule failed
-  1  an enforced rule has violations, verify failed, or sync --check found drift
-  2  bad usage, bad config, or an internal error
+  0    no enforced rule failed
+  1    an enforced rule has violations, verify failed, or sync --check found drift
+  2    bad usage, bad config, or an internal error
+  130  verify was stopped by Ctrl+C or a termination signal
 "
 `;

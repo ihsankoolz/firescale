@@ -20,7 +20,7 @@
   "properties": {
     "schemaVersion": {
       "description": "Version of this format. Changes only on a breaking change.",
-      "const": 3
+      "const": 4
     },
     "version": {
       "description": "The firescale version that produced the report.",
@@ -31,8 +31,8 @@
       "type": "boolean"
     },
     "result": {
-      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up.",
-      "enum": ["ok", "partial", "failed", "setup-needed"]
+      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up. stopped: verify was stopped by Ctrl+C or a termination signal before every step finished; the steps that finished are reported.",
+      "enum": ["ok", "partial", "failed", "setup-needed", "stopped"]
     },
     "runner": {
       "description": "How the commands of the repo root were chosen: all three from the config, Nx, Turborepo, package.json scripts, Cargo, a Python or Go project at the root, none found, or projects when the root has no commands of its own and the projects below it supply them.",
@@ -90,8 +90,8 @@
             "enum": ["go", "node", "python", "rust"]
           },
           "status": {
-            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",
-            "enum": ["passed", "failed", "setup-needed", "skipped", "not-run", "off"]
+            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",
+            "enum": ["passed", "failed", "setup-needed", "timed-out", "stopped", "skipped", "not-run", "off"]
           },
           "command": {
             "description": "The command that ran, or would have. Absent for a skipped step and for one that is off.",
@@ -110,14 +110,23 @@
             "type": "string"
           },
           "outputTail": {
-            "description": "The last lines of the output of a step that failed or needs setup, without colour codes. Absent otherwise.",
+            "description": "The last lines of the output of a step that failed, timed out or needs setup, without colour codes. Absent otherwise.",
             "type": "array",
             "items": {
               "type": "string"
             }
           },
           "fix": {
-            "description": "For a step that needs setup: the command that sets the environment up, run from the project's folder. Absent when no command is known.",
+            "description": "For a step that needs setup, or that timed out with output that shows a setup problem: the command that sets the environment up (installs dependencies, or starts services with Docker Compose), run from the project's folder. Absent when no command is known.",
+            "type": "string"
+          },
+          "timeoutMs": {
+            "description": "For a step that timed out: its time limit, in milliseconds.",
+            "type": "integer",
+            "minimum": 0
+          },
+          "timeoutKey": {
+            "description": "For a step that timed out: the config key that sets its time limit.",
             "type": "string"
           }
         }
