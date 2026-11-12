@@ -267,7 +267,7 @@ Added by the owner after running 0.1.0 on a real course project (ADR 0020). Its 
 
 ## Fixes in 0.1.2 ☑ (after running 0.1.1 on the same course project)
 
-Not a milestone. 0.1.1 was released through the Release workflow on 2026-11-12 with npm trusted publishing, and every stage passed. Running it on the course project found five problems, fixed in one pull request (ADR 0022):
+Not a milestone; 0.1.2 was released through the Release workflow on 2026-11-12. 0.1.1 was released through the Release workflow on 2026-11-12 with npm trusted publishing, and every stage passed. Running it on the course project found five problems, fixed in one pull request (ADR 0022):
 
 - ☑ Python steps run with the project's own `.venv` or `venv` (`Scripts/python.exe` on Windows, `bin/python` elsewhere), else uv, poetry or pipenv, else an active `VIRTUAL_ENV`, else `python` from the PATH, which is said. `fscale facts` shows the interpreter of each project.
 - ☑ One project's failure no longer stops the others; the headline names every failure.
