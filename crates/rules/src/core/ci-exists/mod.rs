@@ -21,7 +21,7 @@ pub const ID: &str = "core/ci-exists";
 const WORKFLOWS: &str = ".github/workflows";
 
 /// The only file the fix ever creates.
-const STARTER: &str = ".github/workflows/ci.yml";
+pub(crate) const STARTER: &str = ".github/workflows/ci.yml";
 
 /// Pinned to commit SHAs. The comment is the tag the SHA belongs to.
 const CHECKOUT: &str = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1";
@@ -50,7 +50,7 @@ const OTHER_CI: [&str; 14] = [
 
 pub struct CiExists;
 
-fn is_workflow(file: &str) -> bool {
+pub(crate) fn is_workflow(file: &str) -> bool {
     file.strip_prefix(".github/workflows/").is_some_and(|rest| {
         !rest.contains('/') && (rest.ends_with(".yml") || rest.ends_with(".yaml"))
     })
@@ -141,7 +141,7 @@ fn tracked_but_missing(ctx: &RuleContext) -> Result<Option<String>> {
 
 /// Why the starter cannot be created, as `(message, fixable)`, or `None`
 /// when it can. Asked by the check and again by the fix.
-fn starter_blocker(ctx: &RuleContext) -> Result<Option<(String, Fixable)>> {
+pub(crate) fn starter_blocker(ctx: &RuleContext) -> Result<Option<(String, Fixable)>> {
     let in_repo = ctx.git().is_repo()?;
     if in_repo {
         if let Some(missing) = tracked_but_missing(ctx)? {
@@ -181,7 +181,7 @@ fn starter_blocker(ctx: &RuleContext) -> Result<Option<(String, Fixable)>> {
 /// CI configs that count. In a git repo: tracked files that are also on disk
 /// (a tracked file deleted from the working tree is absent). Otherwise a
 /// plain listing of the places that matter.
-fn candidate_files(ctx: &RuleContext) -> Result<Vec<String>> {
+pub(crate) fn candidate_files(ctx: &RuleContext) -> Result<Vec<String>> {
     if ctx.git().is_repo()? {
         return Ok(ctx
             .git()
@@ -242,7 +242,7 @@ fn starter_workflow(install: Option<&[&str]>, has_package_manager: bool) -> Stri
 }
 
 /// Removes a `#` comment: a `#` at the start of the text or after whitespace.
-fn strip_comment(line: &str) -> &str {
+pub(crate) fn strip_comment(line: &str) -> &str {
     let mut prev_space = true;
     for (i, c) in line.char_indices() {
         if c == '#' && prev_space {
@@ -321,10 +321,38 @@ fn triggers(text: &str) -> Vec<String> {
 }
 
 /// True when the workflow's `on` key lists a pull request trigger.
-fn mentions_pull_request(text: &str) -> bool {
+pub(crate) fn mentions_pull_request(text: &str) -> bool {
     triggers(text)
         .iter()
         .any(|t| t == "pull_request" || t == "pull_request_target")
+}
+
+/// Creates the starter workflow, which runs `npx firescale verify` on pull
+/// requests. The caller has checked that nothing is in the way. Shared with
+/// `group-project/ci-verify`, so either rule's fix writes the same file.
+pub(crate) fn create_starter(ctx: &RuleContext) -> Result<FixResult> {
+    let facts = detect_facts(ctx.root())?;
+    let install = facts
+        .package_manager
+        .as_deref()
+        .and_then(|manager| ci_install_commands(manager, &facts.lockfiles));
+    let has_package_manager = facts.package_manager.is_some();
+    ctx.create_tracked(
+        STARTER,
+        &starter_workflow(install.as_deref(), has_package_manager),
+    )?;
+    let mut notes = vec![format!(
+        "Review {STARTER}: it runs `npx firescale verify`. Add anything your project needs before that step (services, secrets, other toolchains)."
+    )];
+    if install.is_none() && has_package_manager {
+        notes.push(format!(
+            "{STARTER} has no install step: firescale does not know the install command for CI with your package manager. Add it where the comment says."
+        ));
+    }
+    Ok(FixResult {
+        changed_files: vec![STARTER.to_owned()],
+        notes,
+    })
 }
 
 impl BuiltinRule for CiExists {
@@ -397,27 +425,6 @@ impl BuiltinRule for CiExists {
         if !candidate_files(ctx)?.is_empty() || starter_blocker(ctx)?.is_some() {
             return Ok(FixResult::default());
         }
-        let facts = detect_facts(ctx.root())?;
-        let install = facts
-            .package_manager
-            .as_deref()
-            .and_then(|manager| ci_install_commands(manager, &facts.lockfiles));
-        let has_package_manager = facts.package_manager.is_some();
-        ctx.create_tracked(
-            STARTER,
-            &starter_workflow(install.as_deref(), has_package_manager),
-        )?;
-        let mut notes = vec![format!(
-            "Review {STARTER}: it runs `npx firescale verify`. Add anything your project needs before that step (services, secrets, other toolchains)."
-        )];
-        if install.is_none() && has_package_manager {
-            notes.push(format!(
-                "{STARTER} has no install step: firescale does not know the install command for CI with your package manager. Add it where the comment says."
-            ));
-        }
-        Ok(FixResult {
-            changed_files: vec![STARTER.to_owned()],
-            notes,
-        })
+        create_starter(ctx)
     }
 }
