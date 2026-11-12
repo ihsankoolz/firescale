@@ -184,11 +184,11 @@ describe('stopping verify stops every process it started', () => {
   );
 
   it.runIf(WINDOWS).each([
-    ['group', "fscale's process group only"],
-    ['console', 'every process on the console, as a key press does'],
+    { mode: 'group', to: "fscale's process group only" },
+    { mode: 'console', to: 'every process on the console, as a key press does' },
   ] as const)(
-    'on Ctrl+Break sent to %s (%s), stops the whole job and prints the summary of what finished',
-    async (mode) => {
+    'on Ctrl+Break sent to $to, stops the whole job and prints the summary of what finished',
+    async ({ mode }) => {
       const scratch = await fixtures.create({ files: {}, track: 'no-git' });
       const pids = path.join(scratch.root, 'pids');
       const output = path.join(scratch.root, 'verify.out');
