@@ -4,7 +4,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-- **Milestones in flight:** M12 (#19), M13 (#20) and M14 (#21) are merged. M15 (Next.js pack) is pull request #22. M16 (Python pack) is done and goes into the pull request after #22. Then the 0.2.0 version bump.
+- **Milestones in flight:** M12 (#19), M13 (#20), M14 (#21) and M15 (#22) are merged. M16 (Python pack) is the open pull request. Then the 0.2.0 version bump, in its own pull request.
 - **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each milestone is still one pull request).
 - **Session plan, in order:** M12, M13 agent files, M14 generators, M15 Next.js pack, M16 Python pack, then a 0.2.0 version bump. Deadline 22:00 UTC (06:00 Singapore time, 13 Nov). Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 - **Done so far:** 0.1.3 release recorded. M12 (#19): doctor and the two fixes, reviewed and fixed. M13: code, tests, ADR 0027, docs and its real-repo pass done on the local branch `m13-work`; M13 is pull request #20. M14: code, tests, ADR 0028, docs and its real-repo pass are done on `m14-work`, which is based on M13; it goes onto the session branch after #20 merges.
