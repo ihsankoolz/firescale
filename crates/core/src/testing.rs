@@ -144,6 +144,11 @@ pub const COURSE_SERVICES: [&str; 5] = [
     "realtime_service",
 ];
 
+/// The services of the course-project fixture whose `main.py` imports the
+/// shared folder `backend/shared` (`from shared.db import URL`), as the
+/// services of the real project do. The other two import nothing of it.
+pub const COURSE_SHARED_USERS: [&str; 3] = ["auth_service", "ledger_service", "market_service"];
+
 /// The files of a repo shaped like a real course project: Docker Compose and
 /// docs at the root with no manifest, five Python services under `backend/`
 /// and a Vite app under `frontend/`. Used by the facts and verify tests
@@ -200,7 +205,14 @@ pub fn course_project_files() -> Vec<(String, String)> {
             ("pytest.ini", "[pytest]\ntestpaths = unit_test\n"),
             ("Dockerfile", "FROM python:3.13-slim\n"),
             ("alembic.ini", "[alembic]\nscript_location = migrations\n"),
-            ("main.py", "app = None\n"),
+            (
+                "main.py",
+                if COURSE_SHARED_USERS.contains(&service) {
+                    "from shared.db import URL\n\napp = None\n"
+                } else {
+                    "app = None\n"
+                },
+            ),
             (".env.example", "EXAMPLE_SERVICE_URL=\n"),
             ("unit_test/conftest.py", "import pytest\n"),
         ] {

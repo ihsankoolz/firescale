@@ -157,6 +157,11 @@ pub struct RepoFacts {
     /// "scripts only", because rules compare it with what a repo documents.
     #[serde(skip)]
     pub root_tool_commands: Commands,
+    /// The project graph (ADR 0032). Only `fscale facts` builds it: rules
+    /// call `detect_facts` on every check, and reading every source file
+    /// for imports there would slow each check down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::graph::Graph>,
 }
 
 // ---------------------------------------------------------------- readers
@@ -411,7 +416,7 @@ struct Detail {
     watching: Vec<WatchScript>,
 }
 
-const LOCKFILE_NAMES: [&str; 10] = [
+pub(crate) const LOCKFILE_NAMES: [&str; 10] = [
     "Cargo.lock",
     "Pipfile.lock",
     "bun.lock",
@@ -2064,6 +2069,7 @@ pub fn detect_facts_with(root: &Path, active: Option<&Path>) -> Result<RepoFacts
         warnings,
         notes,
         root_tool_commands,
+        graph: None,
     })
 }
 
@@ -2154,6 +2160,20 @@ pub fn format_facts_human(facts: &RepoFacts) -> String {
                 "    depends on: {}\n",
                 project.depends_on.join(", ")
             ));
+        }
+    }
+    if let Some(graph) = &facts.graph {
+        if graph.edges.is_empty() {
+            out.push_str("Graph: no edges between projects\n");
+        } else {
+            out.push_str(&format!(
+                "Graph ({} edges; fscale graph --explain says where each comes from):\n",
+                graph.edges.len()
+            ));
+            for line in crate::graph::edge_lines(graph, false, "  ") {
+                out.push_str(&line);
+                out.push('\n');
+            }
         }
     }
     if !facts.notes.is_empty() {

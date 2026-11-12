@@ -1,6 +1,17 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+/**
+ * The services whose `main.py` imports the shared folder `backend/shared`
+ * (`from shared.db import URL`). The same as `COURSE_SHARED_USERS` in
+ * `crates/core/src/testing.rs`.
+ */
+export const COURSE_SHARED_USERS: readonly string[] = [
+  'auth_service',
+  'ledger_service',
+  'market_service',
+];
+
 /** The Python services of the course-project fixture, under `backend/`. */
 export const COURSE_SERVICES = [
   'audit_service',
@@ -68,7 +79,9 @@ export function courseProjectFiles(): Record<string, string> {
     files[`${dir}/pytest.ini`] = '[pytest]\ntestpaths = unit_test\n';
     files[`${dir}/Dockerfile`] = 'FROM python:3.13-slim\n';
     files[`${dir}/alembic.ini`] = '[alembic]\nscript_location = migrations\n';
-    files[`${dir}/main.py`] = 'app = None\n';
+    files[`${dir}/main.py`] = COURSE_SHARED_USERS.includes(service)
+      ? 'from shared.db import URL\n\napp = None\n'
+      : 'app = None\n';
     files[`${dir}/.env.example`] = 'EXAMPLE_SERVICE_URL=\n';
     files[`${dir}/unit_test/conftest.py`] = 'import pytest\n';
   }

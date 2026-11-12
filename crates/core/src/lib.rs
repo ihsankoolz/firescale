@@ -16,6 +16,7 @@ pub mod explain;
 pub mod facts;
 pub mod fixloop;
 pub mod git;
+pub mod graph;
 pub mod hooks;
 pub mod imports;
 pub mod jsonedit;
