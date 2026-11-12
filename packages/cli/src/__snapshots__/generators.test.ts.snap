@@ -47,7 +47,7 @@ exports[`fscale add > package: writes the files (snapshot), and they add no viol
 exports[`fscale add > package: writes the files (snapshot), and they add no violation to fscale check > packages/utils/src/index.js 1`] = `
 "/** The package's first export. Replace it with the real code. */
 export function describe() {
-  return "@acme/utils: Small helpers.";
+  return '@acme/utils: Small helpers.';
 }
 "
 `;
@@ -65,13 +65,13 @@ test('describes the package', () => {
 
 exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > firescale-rules/pack.ts 1`] = `
 "import { definePack } from '@firescale/sdk';
-import noTodoFile from './rules/no-todo-file/rule.ts';
+import ruleNoTodoFile from './rules/no-todo-file/rule.ts';
 
 export const pack = definePack({
-  name: "team",
+  name: 'team',
   rules: [
     {
-      rule: noTodoFile,
+      rule: ruleNoTodoFile,
       skillFile: new URL('./rules/no-todo-file/SKILL.md', import.meta.url),
     },
   ],
@@ -82,7 +82,7 @@ export const pack = definePack({
 exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > firescale-rules/rules/no-todo-file/SKILL.md 1`] = `
 "---
 name: no-todo-file
-description: Fixes violations of the firescale rule team/no-todo-file. No TODO.md files are tracked. Use when fscale check reports team/no-todo-file.
+description: Fixes violations of the firescale rule team/no-todo-file. Use when fscale check reports team/no-todo-file.
 ---
 
 # team/no-todo-file
@@ -132,7 +132,7 @@ import rule from './rule.ts';
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
 
-describe("team/no-todo-file", () => {
+describe('team/no-todo-file', () => {
   it('passes on a repo that follows the rule', async () => {
     const repo = await fixtures.create({ files: { 'README.md': '# Example\\n' } });
     expect(await checkRule(rule, { root: repo.root })).toEqual([]);
@@ -147,12 +147,12 @@ describe("team/no-todo-file", () => {
 exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > firescale-rules/rules/no-todo-file/rule.ts 1`] = `
 "import { defineRule } from '@firescale/sdk';
 
-/** No TODO.md files are tracked. */
+// No TODO.md files are tracked.
 export default defineRule({
-  id: "team/no-todo-file",
-  severity: "low",
-  category: "maintainability",
-  description: "No TODO.md files are tracked.",
+  id: 'team/no-todo-file',
+  severity: 'low',
+  category: 'maintainability',
+  description: 'No TODO.md files are tracked.',
   // Globs of the files the check reads: the result is cached until one changes.
   inputs: ['**/*'],
   async check(ctx) {
@@ -201,17 +201,18 @@ exports[`fscale schema > prints a valid JSON Schema for package that accepts the
     "name": {
       "type": "string",
       "description": "The npm package name, for example \\"utils\\" or \\"@acme/utils\\".",
-      "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
+      "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9]([a-z0-9._-]*[a-z0-9_-])?$",
       "maxLength": 214
     },
     "folder": {
       "type": "string",
       "description": "Where to put it, relative to the repo root with forward slashes. Default: packages/<name without its scope>.",
-      "pattern": "^(?!\\\\.\\\\.?(/|$))(?!.*/\\\\.\\\\.?(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
+      "pattern": "^(?!\\\\.\\\\.?(/|$))(?!.*/\\\\.\\\\.?(/|$))(?!.*\\\\.(/|$))(?!(.*/)?(\\\\.git|node_modules)(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
     },
     "description": {
       "type": "string",
-      "description": "One sentence for package.json and the README.",
+      "description": "One sentence on one line for package.json and the README.",
+      "pattern": "^[^\\\\u0000-\\\\u001f]*$",
       "maxLength": 200,
       "default": ""
     }
@@ -235,12 +236,14 @@ exports[`fscale schema > prints a valid JSON Schema for rule that accepts the ex
     "id": {
       "type": "string",
       "description": "The rule id, <pack>/<rule>, lower case with hyphens: \\"team/no-todo-file\\".",
-      "pattern": "^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 80
     },
     "description": {
       "type": "string",
-      "description": "One sentence: what must be true in the repo.",
+      "description": "One sentence on one line: what must be true in the repo.",
+      "pattern": "^[^\\\\u0000-\\\\u001f]*\\\\S[^\\\\u0000-\\\\u001f]*$",
+      "minLength": 1,
       "maxLength": 200
     },
     "severity": {
@@ -268,7 +271,7 @@ exports[`fscale schema > prints a valid JSON Schema for rule that accepts the ex
     "packFolder": {
       "type": "string",
       "description": "The pack folder, relative to the repo root with forward slashes. Default: firescale-rules.",
-      "pattern": "^(?!\\\\.\\\\.?(/|$))(?!.*/\\\\.\\\\.?(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+      "pattern": "^(?!\\\\.\\\\.?(/|$))(?!.*/\\\\.\\\\.?(/|$))(?!.*\\\\.(/|$))(?!(.*/)?(\\\\.git|node_modules)(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
       "default": "firescale-rules"
     }
   }

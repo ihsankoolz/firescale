@@ -1,4 +1,5 @@
 // `fscale add package`: a new JavaScript package in the workspace.
+import { quote } from './custom-rule.js';
 import type { Generator, GeneratorContext } from './types.js';
 
 /** True when a workspace pattern such as `packages/*` covers `folder`. */
@@ -17,9 +18,14 @@ function covers(pattern: string, folder: string): boolean {
 function workspaces(ctx: GeneratorContext): { patterns: string[]; file: string } | null {
   const pnpm = ctx.read('pnpm-workspace.yaml');
   if (pnpm !== null) {
-    const patterns = [...pnpm.matchAll(/^\s*-\s*['"]?([^'"#\n]+?)['"]?\s*$/gm)].map((m) =>
-      (m[1] ?? '').trim(),
-    );
+    // The items of the top-level `packages:` list only.
+    const patterns: string[] = [];
+    let inside = false;
+    for (const line of pnpm.split(/\r?\n/)) {
+      if (/^\S/.test(line)) inside = /^packages\s*:/.test(line);
+      const item = inside ? /^\s+-\s*['"]?([^'"#]+?)['"]?\s*(#.*)?$/.exec(line) : null;
+      if (item?.[1]) patterns.push(item[1].trim());
+    }
     return { patterns, file: 'pnpm-workspace.yaml' };
   }
   const text = ctx.read('package.json');
@@ -48,18 +54,23 @@ export const workspacePackage: Generator = {
       name: {
         type: 'string',
         description: 'The npm package name, for example "utils" or "@acme/utils".',
-        pattern: '^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$',
+        // No trailing dot: Windows drops it from a folder name.
+        pattern: '^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9]([a-z0-9._-]*[a-z0-9_-])?$',
         maxLength: 214,
       },
       folder: {
         type: 'string',
         description:
           'Where to put it, relative to the repo root with forward slashes. Default: packages/<name without its scope>.',
-        pattern: '^(?!\\.\\.?(/|$))(?!.*/\\.\\.?(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$',
+        // Relative, no `.` or `..` segment, no segment that ends in a dot,
+        // and never inside .git or node_modules.
+        pattern:
+          '^(?!\\.\\.?(/|$))(?!.*/\\.\\.?(/|$))(?!.*\\.(/|$))(?!(.*/)?(\\.git|node_modules)(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$',
       },
       description: {
         type: 'string',
-        description: 'One sentence for package.json and the README.',
+        description: 'One sentence on one line for package.json and the README.',
+        pattern: '^[^\\u0000-\\u001f]*$',
         maxLength: 200,
         default: '',
       },
@@ -93,7 +104,7 @@ export const workspacePackage: Generator = {
         { path: `${folder}/package.json`, content: `${JSON.stringify(manifest, null, 2)}\n` },
         {
           path: `${folder}/src/index.js`,
-          content: `/** The package's first export. Replace it with the real code. */\nexport function describe() {\n  return ${JSON.stringify(`${name}: ${description || 'a new package'}`)};\n}\n`,
+          content: `/** The package's first export. Replace it with the real code. */\nexport function describe() {\n  return ${quote(`${name}: ${description || 'a new package'}`)};\n}\n`,
         },
         {
           path: `${folder}/test/index.test.js`,

@@ -669,11 +669,32 @@ fn add(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
     let mut taken = Vec::new();
     for (file, _) in &files {
         firescale_core::rule::validate_relative(file)?;
+        if file.contains('\\') {
+            return Err(Error::internal(format!(
+                "The generator returned the path \"{file}\" with a backslash. Please report this."
+            )));
+        }
         let target = file
             .split('/')
             .fold(root.to_path_buf(), |path, part| path.join(part));
         if target.symlink_metadata().is_ok() {
             taken.push(file.clone());
+            continue;
+        }
+        // A folder on the way that is a file (or a link) stops the run too.
+        let parts: Vec<&str> = file.split('/').collect();
+        let mut folder = root.to_path_buf();
+        for part in &parts[..parts.len().saturating_sub(1)] {
+            folder.push(part);
+            if folder.symlink_metadata().is_ok_and(|meta| !meta.is_dir()) {
+                let shown = folder
+                    .strip_prefix(root)
+                    .unwrap_or(&folder)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                taken.push(format!("{shown} (not a folder)"));
+                break;
+            }
         }
     }
     if !taken.is_empty() {
@@ -693,24 +714,31 @@ fn add(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             if files.len() == 1 { "" } else { "s" }
         ));
     } else {
+        let mut created: Vec<PathBuf> = Vec::new();
         for (file, content) in &files {
             let target = file
                 .split('/')
                 .fold(root.to_path_buf(), |path, part| path.join(part));
-            let failed = |error: std::io::Error| {
-                Error::user(format!(
-                    "Could not create {file} ({error}). Check the folder's permissions. Files created before it stay."
-                ))
+            let write = || -> std::io::Result<()> {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .and_then(|mut handle| handle.write_all(content.as_bytes()))
             };
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(failed)?;
+            if let Err(error) = write() {
+                // All or nothing: take back the files this run created.
+                for done in &created {
+                    let _ = std::fs::remove_file(done);
+                }
+                return Err(Error::user(format!(
+                    "Could not create {file} ({error}), so the files created before it were removed again. Check the folder's permissions and that nothing is in the way, then run fscale add again."
+                )));
             }
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&target)
-                .and_then(|mut created| created.write_all(content.as_bytes()))
-                .map_err(failed)?;
+            created.push(target);
             out.push_str(&format!("created {file}\n"));
         }
     }

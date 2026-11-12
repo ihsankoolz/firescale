@@ -124,7 +124,14 @@ describe('npm packaging', () => {
       'bin/fscale.js',
       'dist/host.js',
       'dist/index.js',
+      // Every generator module, from a subfolder of src/ (review of M14).
+      'dist/generators/index.js',
+      'dist/generators/custom-rule.js',
+      'dist/generators/workspace-package.js',
+      'dist/generators/validate.js',
+      'dist/generators/types.js',
       'schemas/check-output.schema.json',
+      'schemas/doctor-output.schema.json',
       'schemas/verify-output.schema.json',
     ]) {
       expect(await exists(path.join(extracted['firescale'] ?? '', file)), file).toBe(true);

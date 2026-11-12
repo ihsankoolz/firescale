@@ -1,10 +1,23 @@
 // `fscale add rule`: a custom TypeScript rule with its SKILL.md and test.
 import type { Generator } from './types.js';
 
+/** A string literal in single quotes, as Prettier writes it. */
+export function quote(text: string): string {
+  return `'${text.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
+/** An identifier for the rule's import: `team/1st-rule` gives `rule1stRule`. */
+export function importName(short: string): string {
+  const camel = short.replace(/-([a-z0-9])/g, (_m: string, c: string) => c.toUpperCase());
+  return `rule${camel.charAt(0).toUpperCase()}${camel.slice(1)}`;
+}
+
 function skill(id: string, short: string, description: string): string {
+  // The rule's own description goes in the body: a plain YAML value
+  // cannot hold every sentence (`: `, ` #`), and quotes are a formatter's choice.
   return `---
 name: ${short}
-description: Fixes violations of the firescale rule ${id}. ${description} Use when fscale check reports ${id}.
+description: Fixes violations of the firescale rule ${id}. Use when fscale check reports ${id}.
 ---
 
 # ${id}
@@ -60,12 +73,16 @@ export const customRule: Generator = {
       id: {
         type: 'string',
         description: 'The rule id, <pack>/<rule>, lower case with hyphens: "team/no-todo-file".',
-        pattern: '^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$',
+        // The SDK's own rule id pattern (define.ts).
+        pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$',
         maxLength: 80,
       },
       description: {
         type: 'string',
-        description: 'One sentence: what must be true in the repo.',
+        description: 'One sentence on one line: what must be true in the repo.',
+        // Something to say, and no line breaks or control characters.
+        pattern: '^[^\\u0000-\\u001f]*\\S[^\\u0000-\\u001f]*$',
+        minLength: 1,
         maxLength: 200,
       },
       severity: {
@@ -84,7 +101,10 @@ export const customRule: Generator = {
         type: 'string',
         description:
           'The pack folder, relative to the repo root with forward slashes. Default: firescale-rules.',
-        pattern: '^(?!\\.\\.?(/|$))(?!.*/\\.\\.?(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$',
+        // Relative, no `.` or `..` segment, no segment that ends in a dot,
+        // and never inside .git or node_modules.
+        pattern:
+          '^(?!\\.\\.?(/|$))(?!.*/\\.\\.?(/|$))(?!.*\\.(/|$))(?!(.*/)?(\\.git|node_modules)(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$',
         default: 'firescale-rules',
       },
     },
@@ -100,12 +120,12 @@ export const customRule: Generator = {
         path: `${ruleDir}/rule.ts`,
         content: `import { defineRule } from '@firescale/sdk';
 
-/** ${description} */
+// ${description.replace(/\*\//g, '* /')}
 export default defineRule({
-  id: ${JSON.stringify(id)},
-  severity: ${JSON.stringify(String(input['severity']))},
-  category: ${JSON.stringify(String(input['category']))},
-  description: ${JSON.stringify(description)},
+  id: ${quote(id)},
+  severity: ${quote(String(input['severity']))},
+  category: ${quote(String(input['category']))},
+  description: ${quote(description)},
   // Globs of the files the check reads: the result is cached until one changes.
   inputs: ['**/*'],
   async check(ctx) {
@@ -129,7 +149,7 @@ import rule from './rule.ts';
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
 
-describe(${JSON.stringify(id)}, () => {
+describe(${quote(id)}, () => {
   it('passes on a repo that follows the rule', async () => {
     const repo = await fixtures.create({ files: { 'README.md': '# Example\\n' } });
     expect(await checkRule(rule, { root: repo.root })).toEqual([]);
@@ -151,13 +171,13 @@ describe(${JSON.stringify(id)}, () => {
       files.push({
         path: packFile,
         content: `import { definePack } from '@firescale/sdk';
-import ${short.replace(/-([a-z0-9])/g, (_m: string, c: string) => c.toUpperCase())} from './rules/${short}/rule.ts';
+import ${importName(short)} from './rules/${short}/rule.ts';
 
 export const pack = definePack({
-  name: ${JSON.stringify(pack)},
+  name: ${quote(pack)},
   rules: [
     {
-      rule: ${short.replace(/-([a-z0-9])/g, (_m: string, c: string) => c.toUpperCase())},
+      rule: ${importName(short)},
       skillFile: new URL('./rules/${short}/SKILL.md', import.meta.url),
     },
   ],

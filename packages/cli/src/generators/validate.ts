@@ -22,7 +22,7 @@ export function validateInput(
   }
   const given = input as Record<string, unknown>;
   for (const key of Object.keys(given)) {
-    if (!(key in schema.properties)) {
+    if (!Object.hasOwn(schema.properties, key)) {
       fail(key, `is not a known field (known: ${Object.keys(schema.properties).join(', ')})`);
     }
   }
@@ -41,7 +41,15 @@ export function validateInput(
     }
     if (typeof value !== 'string') fail(key, 'must be a string');
     const text = value as string;
-    if (property.maxLength !== undefined && text.length > property.maxLength) {
+    // JSON Schema counts characters (code points), not UTF-16 units.
+    const length = [...text].length;
+    if (property.minLength !== undefined && length < property.minLength) {
+      fail(
+        key,
+        `must be at least ${String(property.minLength)} character${property.minLength === 1 ? '' : 's'}`,
+      );
+    }
+    if (property.maxLength !== undefined && length > property.maxLength) {
       fail(key, `must be at most ${String(property.maxLength)} characters`);
     }
     if (property.enum && !property.enum.includes(text)) {

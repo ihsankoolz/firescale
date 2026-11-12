@@ -128,11 +128,15 @@ const notTest = (source) => !/(\.test\.|[\\/]test-helpers\.)/.test(source);
  * deletes old output, so a long-lived checkout can hold files for deleted modules.
  */
 function builtFrom(srcDir) {
+  const distDir = path.join(path.dirname(srcDir), 'dist');
   return (source) => {
     if (!notTest(source) || source.endsWith('.map')) return false;
     const match = /^(.*?)(\.d\.ts|\.js)$/.exec(path.basename(source));
     if (!match) return true; // a folder, or a file tsc did not produce
-    return existsSync(path.join(srcDir, `${match[1]}.ts`));
+    // The same path below src/, so files in subfolders (dist/generators/)
+    // are matched with their own sources.
+    const folder = path.relative(distDir, path.dirname(source));
+    return existsSync(path.join(srcDir, folder, `${match[1]}.ts`));
   };
 }
 

@@ -19,6 +19,7 @@ export interface PropertySchema {
   pattern?: string;
   enum?: string[];
   default?: string | boolean;
+  minLength?: number;
   maxLength?: number;
 }
 

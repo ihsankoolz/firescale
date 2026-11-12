@@ -4,6 +4,7 @@ import path from 'node:path';
 import { validateSkill } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
+import { format } from 'prettier';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
 
@@ -85,6 +86,16 @@ describe('fscale add', () => {
     ],
     ['rule', { id: 'no-pack', description: 'd' }, 'input.id must match'],
     ['rule', { id: 'team/x', description: 42 }, 'input.description must be a string'],
+    // Review of M14: ids the SDK refuses, descriptions that break files,
+    // and names inherited from Object.prototype.
+    ['rule', { id: 'team/x-', description: 'd' }, 'input.id must match'],
+    ['rule', { id: 'team/a--b', description: 'd' }, 'input.id must match'],
+    ['rule', { id: 'team/x', description: '   ' }, 'input.description must match'],
+    ['rule', { id: 'team/x', description: 'two\nlines' }, 'input.description must match'],
+    ['package', { name: 'u', constructor: 1 }, 'input.constructor is not a known field'],
+    ['package', { name: 'utils.' }, 'input.name must match'],
+    ['package', { name: 'u', folder: '.git/hooks' }, 'input.folder must match'],
+    ['package', { name: 'u', folder: 'packages/node_modules/u' }, 'input.folder must match'],
   ] as const)(
     'rejects %s input %j with an error naming the field',
     async (name, input, message) => {
@@ -159,6 +170,66 @@ describe('fscale add', () => {
     expect(result.stderr).toContain(
       'would write over packages/utils/README.md, so nothing was written',
     );
+    expect(await snapshot(repo.root)).toEqual(before);
+  });
+});
+
+describe('generated files (review of M14)', () => {
+  it('are formatted as this repo formats code, so verify does not block right after an add', async () => {
+    const options = { singleQuote: true, printWidth: 100 };
+    for (const [name, input] of Object.entries(INPUTS)) {
+      const repo = await fixtures.create({ files: { 'README.md': '# x\n' } });
+      await runCli(['add', name, '--json', JSON.stringify(input)], repo.root);
+      for (const [file, text] of await snapshot(repo.root)) {
+        const parser = file.endsWith('.json')
+          ? 'json'
+          : file.endsWith('.md')
+            ? 'markdown'
+            : file.endsWith('.ts')
+              ? 'typescript'
+              : file.endsWith('.js')
+                ? 'babel'
+                : null;
+        if (parser === null || file === 'README.md') continue;
+        expect(await format(text, { ...options, parser }), `${name}: ${file}`).toBe(text);
+      }
+    }
+  });
+
+  it('turn any rule id into a valid import name, and keep a description out of code comments', async () => {
+    const repo = await fixtures.create();
+    const result = await runCli(
+      [
+        'add',
+        'rule',
+        '--json',
+        JSON.stringify({
+          id: 'team/1st-rule',
+          description: "Files under src/*/index.ts aren't: here # yes",
+        }),
+      ],
+      repo.root,
+    );
+    expect(result.code).toBe(EXIT_OK);
+    const files = await snapshot(repo.root);
+    expect(files.get('firescale-rules/pack.ts')).toContain(
+      "import rule1stRule from './rules/1st-rule/rule.ts';",
+    );
+    const rule = files.get('firescale-rules/rules/1st-rule/rule.ts') ?? '';
+    expect(rule).not.toContain('/**');
+    expect(rule).toContain("description: 'Files under src/*/index.ts aren\\'t: here # yes',");
+    const skill = files.get('firescale-rules/rules/1st-rule/SKILL.md') ?? '';
+    expect(validateSkill(skill, { ruleId: 'team/1st-rule' })).toEqual([]);
+  });
+
+  it('write nothing when a folder on the way is a file', async () => {
+    const repo = await fixtures.create({
+      files: { 'packages/utils/src': 'a file, not a folder\n' },
+    });
+    const before = await snapshot(repo.root);
+    const result = await runCli(['add', 'package', '--json', '{"name":"utils"}'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('packages/utils/src (not a folder)');
     expect(await snapshot(repo.root)).toEqual(before);
   });
 });
