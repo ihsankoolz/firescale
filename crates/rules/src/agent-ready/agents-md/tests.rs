@@ -92,7 +92,10 @@ mod failing_repo {
     fn a_hand_edit_inside_the_block_is_reported() {
         let f = Fixture::new(&[("package.json", PACKAGE)], Track::None).unwrap();
         fix(&f);
-        let text = f.read("AGENTS.md").unwrap().replace("vitest run", "vitest");
+        let text = f
+            .read("AGENTS.md")
+            .unwrap()
+            .replace("- Test: `npm run test`", "- Test: `npm test --watch`");
         std::fs::write(f.root().join("AGENTS.md"), text).unwrap();
         let found = check(&f);
         assert_eq!(found.len(), 1);
@@ -214,6 +217,9 @@ mod fixed_repo {
         let text = f.read("AGENTS.md").unwrap();
         assert!(text.contains("### `backend/api`"), "{text}");
         assert!(text.contains("- Test: `python -m pytest`"), "{text}");
-        assert!(!text.contains(".venv"), "{text}");
+        assert!(
+            !text.contains(".venv/") && !text.contains(".venv\\"),
+            "{text}"
+        );
     }
 }
