@@ -12,6 +12,10 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 ## Needs your decision (all milestones, most important first)
 
+- **(Releases) Set up the eight trusted publishers, then tag 0.1.1.** The version is 0.1.1 everywhere and nothing is tagged. `RELEASING.md` has the steps: on npmjs.com, for each of the eight packages, add a GitHub Actions trusted publisher (user `ihsankoolz`, repository `firescale`, workflow `release.yml`, `npm publish` ticked), then `git tag v0.1.1` on `main` and push the tag. A new trusted publisher expires unless a publish succeeds within 2 days, so set them up shortly before tagging.
+- **(Releases) The publish and verify stages have never run.** They cannot be tried without publishing. The scripts are tested against a stand-in registry, and a failed run can be repeated: what is already published is skipped. Expect to watch the first run.
+- **(Releases) No approval step between the tag and the publish.** Pushing the tag is the approval. A GitHub environment with a required reviewer can be added; it must then be entered in each package's trusted publisher too.
+- **(Releases) After the first automated release works, turn off token publishing** for each package on npmjs.com ("Require two-factor authentication and disallow tokens"). npm recommends it. I left it as a step in `RELEASING.md`, since it is your account.
 - **(M10) Should the agent stop hook block when verify is only partial?** Today it does not. With steps skipped for lack of a command, `fscale verify` prints `verify: PARTIAL`, exits 0, and the hook lets the agent stop with a one-line note on stderr. To make it block, set `"verify": { "failOnSkipped": true }`; then verify exits 1 and the hook blocks. I kept "do not block" as the default because a missing command is not something the agent's change broke, because the easy way past such a block is to set the steps to `false` (the weakening the tamper guard is meant to catch), and because the hook lets go after 3 blocks anyway. The cost: in a repo with nothing to run, an agent can stop with no check having run. Say if you want the hook to block by default, or want `failOnSkipped` on by default (ADR 0020).
 - **(M10) A partial verify exits 0.** That follows your earlier answer that a skipped step is not a failure. CI therefore stays green on `PARTIAL` unless `failOnSkipped` is on. The starter workflow that `fscale init` writes does not turn it on. Say if generated CI should.
 - **(M10) Projects are searched four folder levels deep, and the search has no setting.** Deeper projects are reached by naming their folder under `verify.projects`. Say if you want a config key for the depth or for extra folders to skip.
@@ -42,6 +46,43 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## Automated releases (after M10, at your request)
+
+**Built** (ADR 0021)
+
+- `.github/workflows/release.yml`: a pushed tag `v<version>` checks the version, builds the six platform tarballs, publishes the eight packages with npm trusted publishing (OIDC), and then checks on Linux, macOS and Windows that `npx firescale@<version> --version` prints the version. A run started by hand builds only and publishes nothing, as before.
+- No npm token and no secret. Only the publish job has `id-token: write`.
+- `scripts/bump-version.mjs`: sets the version in `Cargo.toml`, `Cargo.lock` and every `package.json`, or checks that they agree and match a tag.
+- `scripts/publish-npm.mjs`: publishes in order (six platform packages, `@firescale/sdk`, `firescale`) and skips any version already on the registry, so a half-finished release is completed by running the job again.
+- `scripts/verify-published.mjs`: the check after publishing, with up to 20 attempts 15 seconds apart.
+- `RELEASING.md`: your steps, including the one-time trusted publisher setup for each of the eight packages.
+- The version is 0.1.1. **No tag was pushed.**
+
+**Checked against npm's docs first** (read on 2026-11-12 from npm's documentation repository on GitHub, because docs.npmjs.com could not be reached from the build session)
+
+- Trusted publishing needs npm 11.5.1 or later and Node 22.14.0 or later. The publish job uses Node 24, which ships npm 11.19.1 today; the script checks both.
+- The job needs `id-token: write` and a GitHub-hosted runner.
+- Each package's `repository.url` must be this repository. It is.
+- A new trusted publisher entry must be used within 2 days or it expires.
+- `npm publish` must be among the entry's allowed actions.
+
+**Decisions made for you** (all ADR 0021)
+
+- **The publish job is inside `release.yml`**, not a separate workflow, because npm validates the workflow the run started from.
+- **A missing or wrong tag stops the run before any build.**
+- **The tarballs of `@firescale/sdk` and `firescale` come from the `linux-x64` build.** Every platform job builds a copy; one is published.
+- **"Already published" is decided by asking the registry for that exact version.** Any answer other than "yes" or "not found" stops the job.
+- **Node 24's own npm is used**; npm is not upgraded during a release.
+- **`actions/download-artifact` v8.0.2 was added**, pinned to a commit.
+- **Runs for the same tag never overlap, and a run in progress is never cancelled.**
+
+**Known limits**
+
+- The publish and verify stages are untested end to end until the first tag.
+- The `linux-arm64` runner and the two cross-compiled targets (`darwin-x64`, `win32-arm64`) have still never been built by the workflow, unless you started a manual run.
+- Renaming `release.yml` or moving the repository breaks publishing until the eight entries are made again.
+- A release uses six build jobs, one publish job and three verify jobs of Actions time.
 
 ## A note on milestone numbers
 
@@ -448,7 +489,7 @@ Built from what you found when running 0.1.0 on your course project. All decisio
 
 ## Publishing to npm
 
-**0.1.0 was published by you on 2026-11-12.** `npx firescale@0.1.0 init` and `npx firescale@0.1.0 adopt --dry-run` work on Windows and Linux. Step 7 below, the generated CI passing on GitHub, is still open. The steps are kept for the next release:
+**0.1.0 was published by you on 2026-11-12, by hand.** `npx firescale@0.1.0 init` and `npx firescale@0.1.0 adopt --dry-run` work on Windows and Linux. Step 7 below, the generated CI passing on GitHub, is still open. **From 0.1.1 on, releases go through the Release workflow: follow `RELEASING.md` instead.** The manual steps below are kept only as a fallback:
 
 **Once, before the first publish**
 
