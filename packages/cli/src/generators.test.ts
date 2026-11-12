@@ -246,5 +246,6 @@ describe('the fscale add skill', () => {
       expect(text).toContain('fscale add <generator> --json');
       expect(text).toContain('fscale schema <generator>');
     }
-  });
+    // sync stages about fifty files, one `git add` each: slow on Windows.
+  }, 180_000);
 });

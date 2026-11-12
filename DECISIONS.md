@@ -95,6 +95,17 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 **Found on real repos** (`add package` and `add rule` with `--dry-run` on the three repos): nothing written, as expected. On `fastapi/full-stack-fastapi-template` the root `workspaces` (`packages/*`) already covers the new package, so no note; on `vercel/commerce` and `microservices-demo`, which list no workspaces, the note says so. Nothing to fix.
 
+**Independent review before the pull request** found six real issues, all fixed with tests:
+
+- The npm package would have shipped only `dist/generators/index.js`: `scripts/pack-npm.mjs` matched built files to sources by file name only, so subfolders lost their files and the Node host could not start in a published install. It now matches by path; `pack.test.ts` lists every generator module.
+- Rule ids such as `team/1st-rule`, `team/x-` or `team/package` produced a `pack.ts` that does not load. The id now uses the SDK's own pattern, and the import is always `rule<Name>`.
+- A description with `*/` broke the rule's comment, and one with a line break broke SKILL.md's frontmatter. Descriptions are one line with something in it; the rule gets it as a quoted string and a line comment; SKILL.md's frontmatter no longer repeats it.
+- A folder on the way that was a file left half the files written. That is now checked first, and a failed write removes the files the run created.
+- `constructor` and other `Object.prototype` names passed the unknown-field check.
+- Generated code mixed quote styles, so this repo's own Prettier check (and so `fscale verify`) failed right after an add. Generated code now uses single quotes and passes Prettier with this repo's settings.
+- Also fixed: an older `firescale` package says to update it; folders cannot be inside `.git` or `node_modules` or end in a dot; `maxLength` counts characters; only the `packages:` list of `pnpm-workspace.yaml` is read.
+- Left: Windows reserved names (`con`, `nul`) as folder names are not refused.
+
 **Known limits:** two generators only; no custom generators; the validator supports what the generators use.
 
 ## M13 — Born agent-ready: agent files from `init`
