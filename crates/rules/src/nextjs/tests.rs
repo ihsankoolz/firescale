@@ -83,7 +83,9 @@ mod failing_repo {
         let f = Fixture::new(&[], Track::None).unwrap();
         let found = findings(&f);
         let ids: Vec<&str> = found.iter().map(|d| d.rule_id.as_str()).collect();
-        assert_eq!(ids.len(), 6, "{ids:?}");
+        // nextjs/eslint waits for package.json, which the first fix writes.
+        assert_eq!(ids.len(), 5, "{ids:?}");
+        assert!(!ids.contains(&eslint::ID));
         assert!(
             found.iter().all(|d| d.fixable == Fixable::Deterministic),
             "{found:?}"
@@ -182,6 +184,94 @@ mod fixed_repo {
         );
         assert!(f
             .fix(&gitignore::NextGitignore, &Options::new())
+            .unwrap()
+            .changed_files
+            .is_empty());
+    }
+}
+
+/// Regressions from the review of M15.
+mod review {
+    use super::*;
+
+    #[test]
+    fn a_workspace_root_with_the_app_in_a_subfolder_gets_nothing_written() {
+        let root = "{\n  \"name\": \"mono\",\n  \"workspaces\": [\"apps/*\"],\n  \"scripts\": {\n    \"build\": \"turbo build\"\n  },\n  \"devDependencies\": {\n    \"turbo\": \"2.0.0\",\n    \"typescript\": \"5.0.0\"\n  }\n}\n";
+        let f = Fixture::new(
+            &[
+                ("package.json", root),
+                (
+                    "apps/web/package.json",
+                    "{\"name\":\"web\",\"dependencies\":{\"next\":\"16.4.6\"}}",
+                ),
+                ("apps/web/app/layout.tsx", "x"),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        let found = findings(&f);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].rule_id, package_json::ID);
+        assert_eq!(found[0].fixable, Fixable::Manual);
+        assert!(fix_all(&f).is_empty());
+        assert_eq!(f.read("package.json").unwrap(), root);
+    }
+
+    #[test]
+    fn route_groups_with_their_own_root_layouts_pass() {
+        let mut files = set_up();
+        files.retain(|(path, _)| !path.starts_with("app/"));
+        files.push(("app/(shop)/layout.tsx", "x".to_owned()));
+        files.push(("app/(marketing)/layout.tsx", "x".to_owned()));
+        let f = fixture(&files);
+        assert_eq!(findings(&f), []);
+        assert!(fix_all(&f).is_empty());
+    }
+
+    #[test]
+    fn eslint_alone_converges_without_a_package_json() {
+        let f = Fixture::new(&[], Track::None).unwrap();
+        assert!(f
+            .check(&eslint::EslintConfig, &Options::new())
+            .unwrap()
+            .is_empty());
+        assert!(f
+            .fix(&eslint::EslintConfig, &Options::new())
+            .unwrap()
+            .changed_files
+            .is_empty());
+    }
+
+    #[test]
+    fn a_javascript_app_gets_jsx_files_and_no_typescript_rules() {
+        let package = "{\n  \"name\": \"js\",\n  \"scripts\": {\n    \"dev\": \"next dev\",\n    \"build\": \"next build\",\n    \"start\": \"next start\",\n    \"lint\": \"eslint\"\n  },\n  \"dependencies\": {\n    \"next\": \"16.4.6\",\n    \"react\": \"19.3.1\",\n    \"react-dom\": \"19.3.1\"\n  },\n  \"devDependencies\": {\n    \"eslint\": \"^9\",\n    \"eslint-config-next\": \"16.4.6\"\n  }\n}\n";
+        let f = Fixture::new(&[("package.json", package)], Track::None).unwrap();
+        let changed = fix_all(&f);
+        assert!(
+            changed.contains(&"app/layout.jsx".to_owned()),
+            "{changed:?}"
+        );
+        assert!(!changed.contains(&"tsconfig.json".to_owned()));
+        assert!(!f.read("eslint.config.mjs").unwrap().contains("typescript"));
+        assert_eq!(findings(&f), []);
+    }
+
+    #[test]
+    fn an_older_eslint_setup_is_not_given_a_flat_config_it_cannot_load() {
+        let package = "{ \"dependencies\": { \"next\": \"15.0.0\", \"react\": \"19.0.0\", \"react-dom\": \"19.0.0\" }, \"devDependencies\": { \"eslint\": \"^8\", \"eslint-config-next\": \"15.0.0\" } }\n";
+        let f = Fixture::new(
+            &[
+                ("package.json", package),
+                ("app/layout.tsx", "x"),
+                ("next.config.js", "x"),
+            ],
+            Track::None,
+        )
+        .unwrap();
+        let found: Vec<Diagnostic> = f.check(&eslint::EslintConfig, &Options::new()).unwrap();
+        assert_eq!(found[0].fixable, Fixable::Agent);
+        assert!(f
+            .fix(&eslint::EslintConfig, &Options::new())
             .unwrap()
             .changed_files
             .is_empty());

@@ -91,7 +91,15 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 **Found on real repos:** a copy of `vercel/commerce` with the pack on gets one finding, the missing ESLint setup, as an agent finding with the install command; nothing is proposed for its files. The other two repos are not Next.js apps, so the pass does not apply to them.
 
-**Known limits:** no `src/` layout for new apps (an existing one is accepted); no Tailwind; the versions are a snapshot of 2026-11-12.
+**Independent review before the pull request** found three real bugs, all fixed with regression tests (`nextjs::tests::review`):
+
+- In a workspace whose Next.js app is in a subfolder (`apps/web`), the pack would have built a second app at the root: scripts, `app/`, `next.config.ts` and a root `tsconfig.json`. The pack now applies only when the root package.json depends on `next` (or there is none yet); otherwise one manual finding says the pack checks the root.
+- An app with several root layouts in route groups (`app/(shop)/layout.tsx`, a documented pattern) was given an `app/layout.tsx` that would wrap every page in a second `<html>`. Route-group layouts count now.
+- `nextjs/eslint` reported a deterministic finding with no package.json but could not fix it, so `sync` stopped when `nextjs/package-json` was off. It now waits for package.json.
+- Also fixed: a JavaScript app gets `layout.jsx` and an ESLint config without the TypeScript rules; eslint before 9 or eslint-config-next before 16 is an agent finding, not a config that cannot load; a new package.json says `"engines": { "node": ">=20.9.0" }`; `core/gitignore-basics` no longer writes its header twice when it runs before package.json exists.
+- Left: the pack does not check a Next.js app in a subfolder (per-project checks, as the Python pack does, would be the next step).
+
+**Known limits:** no `src/` layout for new apps (an existing one is accepted); no Tailwind; the versions are a snapshot of 2026-11-12; only an app at the repo root is checked.
 
 ## M14 — Generators: `add` and `schema`
 

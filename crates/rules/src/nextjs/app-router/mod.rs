@@ -7,7 +7,7 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{any_exists, create, finding};
+use super::{any_exists, applies, create, finding, uses_typescript};
 
 #[cfg(test)]
 mod tests;
@@ -29,11 +29,28 @@ fn app_dir(ctx: &RuleContext) -> Option<&'static str> {
         .find(|dir| ctx.root().join(dir).is_dir())
 }
 
+/// True when the app folder has a root layout, or each route group has its
+/// own ("multiple root layouts", review of M15).
 fn has_layout(ctx: &RuleContext, dir: &str) -> bool {
-    EXTENSIONS
-        .iter()
-        .any(|ext| ctx.root().join(dir).join(format!("layout.{ext}")).is_file())
+    let layout_in = |folder: &std::path::Path| {
+        EXTENSIONS
+            .iter()
+            .any(|ext| folder.join(format!("layout.{ext}")).is_file())
+    };
+    let app = ctx.root().join(dir);
+    if layout_in(&app) {
+        return true;
+    }
+    std::fs::read_dir(&app).is_ok_and(|entries| {
+        entries.filter_map(std::result::Result::ok).any(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with('(') && name.ends_with(')') && layout_in(&entry.path())
+        })
+    })
 }
+
+/// The layout and page of a JavaScript app, for one with no TypeScript.
+pub const LAYOUT_JS: &str = "export const metadata = {\n  title: 'Next.js app',\n  description: 'Started with firescale.',\n};\n\nexport default function RootLayout({ children }) {\n  return (\n    <html lang=\"en\">\n      <body>{children}</body>\n    </html>\n  );\n}\n";
 
 /// True when the project uses the Pages Router instead.
 fn pages_router(ctx: &RuleContext) -> bool {
@@ -63,6 +80,9 @@ impl BuiltinRule for AppRouter {
     }
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
+        if !applies(ctx)? {
+            return Ok(Vec::new());
+        }
         match app_dir(ctx) {
             Some(dir) if !has_layout(ctx, dir) => Ok(vec![finding(
                 &format!("{dir}/layout.tsx"),
@@ -81,13 +101,23 @@ impl BuiltinRule for AppRouter {
 
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
+        if !applies(ctx)? {
+            return Ok(result);
+        }
+        // A JavaScript app gets .jsx files: a .tsx file would make
+        // `next build` set the app up for TypeScript.
+        let (ext, layout) = if uses_typescript(ctx)? {
+            ("tsx", LAYOUT)
+        } else {
+            ("jsx", LAYOUT_JS)
+        };
         match app_dir(ctx) {
             Some(dir) if !has_layout(ctx, dir) => {
-                create(ctx, &format!("{dir}/layout.tsx"), LAYOUT, &mut result)?;
+                create(ctx, &format!("{dir}/layout.{ext}"), layout, &mut result)?;
             }
             None if !pages_router(ctx) => {
-                create(ctx, "app/layout.tsx", LAYOUT, &mut result)?;
-                create(ctx, "app/page.tsx", PAGE, &mut result)?;
+                create(ctx, &format!("app/layout.{ext}"), layout, &mut result)?;
+                create(ctx, &format!("app/page.{ext}"), PAGE, &mut result)?;
             }
             _ => {}
         }

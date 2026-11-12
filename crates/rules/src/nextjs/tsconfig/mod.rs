@@ -7,7 +7,7 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{create, depends_on, finding, package_json};
+use super::{applies, create, finding, uses_typescript};
 
 #[cfg(test)]
 mod tests;
@@ -48,16 +48,6 @@ pub const TSCONFIG: &str = r#"{
 }
 "#;
 
-/// True when the project is written in TypeScript: it depends on it, or
-/// has no package.json yet (a new app is TypeScript).
-fn uses_typescript(ctx: &RuleContext) -> Result<bool> {
-    Ok(match package_json(ctx)? {
-        Ok(Some(json)) => depends_on(&json, "typescript"),
-        Ok(None) => true,
-        Err(()) => false,
-    })
-}
-
 impl BuiltinRule for TsConfig {
     fn meta(&self) -> RuleMeta {
         RuleMeta {
@@ -76,7 +66,7 @@ impl BuiltinRule for TsConfig {
     }
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
-        if ctx.root().join("tsconfig.json").exists() || !uses_typescript(ctx)? {
+        if ctx.root().join("tsconfig.json").exists() || !uses_typescript(ctx)? || !applies(ctx)? {
             return Ok(Vec::new());
         }
         Ok(vec![finding(
@@ -88,7 +78,7 @@ impl BuiltinRule for TsConfig {
 
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
-        if uses_typescript(ctx)? {
+        if uses_typescript(ctx)? && applies(ctx)? {
             create(ctx, "tsconfig.json", TSCONFIG, &mut result)?;
         }
         Ok(result)

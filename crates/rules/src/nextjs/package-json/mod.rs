@@ -74,6 +74,15 @@ impl BuiltinRule for PackageJson {
             }
         };
         let mut findings = Vec::new();
+        if !depends_on(&json, "next") {
+            // A workspace root with the app in a subfolder is not a Next.js
+            // app: nothing is written here (review of M15).
+            return Ok(vec![finding(
+                "package.json",
+                "package.json at the repo root does not depend on next. The nextjs pack checks a Next.js app at the repo root; if the app is in a subfolder (a workspace), run fscale there or turn the pack off. If this is meant to be the app, install next, react and react-dom (`npm install next react react-dom`).".to_owned(),
+                Fixable::Manual,
+            )]);
+        }
         let missing: Vec<&str> = ["next", "react", "react-dom"]
             .into_iter()
             .filter(|package| !depends_on(&json, package))
@@ -125,6 +134,9 @@ impl BuiltinRule for PackageJson {
             }
             Err(()) => return Ok(result),
         };
+        if !depends_on(&json, "next") {
+            return Ok(result);
+        }
         let scripts = missing_scripts(&json);
         if scripts.is_empty() {
             return Ok(result);

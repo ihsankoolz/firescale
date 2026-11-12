@@ -83,6 +83,41 @@ pub(crate) fn depends_on(json: &Value, package: &str) -> bool {
         .any(|field| json.get(field).and_then(|deps| deps.get(package)).is_some())
 }
 
+/// True when the pack applies to the repo root: there is no package.json
+/// yet (a new app), or it depends on `next`. A workspace root whose Next.js
+/// app lives in a subfolder is left alone (review of M15): only
+/// `nextjs/package-json` says so, as a manual finding.
+pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
+    Ok(match package_json(ctx)? {
+        Ok(None) => true,
+        Ok(Some(json)) => depends_on(&json, "next"),
+        Err(()) => false,
+    })
+}
+
+/// True when the app is written in TypeScript: it depends on it, or has no
+/// package.json yet (a new app is TypeScript).
+pub(crate) fn uses_typescript(ctx: &RuleContext) -> Result<bool> {
+    Ok(match package_json(ctx)? {
+        Ok(Some(json)) => depends_on(&json, "typescript"),
+        Ok(None) => true,
+        Err(()) => false,
+    })
+}
+
+/// The major version a dependency is declared with: `^16.1.0` gives 16.
+pub(crate) fn declared_major(json: &Value, package: &str) -> Option<u64> {
+    let spec = ["dependencies", "devDependencies"]
+        .iter()
+        .find_map(|field| json.get(field)?.get(package)?.as_str())?;
+    let digits: String = spec
+        .trim_start_matches(|c: char| !c.is_ascii_digit())
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
 /// True when the first of `names` that exists is a file, at the root.
 pub(crate) fn any_exists(ctx: &RuleContext, names: &[&str]) -> bool {
     names.iter().any(|name| ctx.root().join(name).exists())
@@ -123,6 +158,7 @@ pub fn new_package_json() -> String {
         "name": "next-app",
         "version": "0.1.0",
         "private": true,
+        "engines": { "node": ">=20.9.0" },
         "scripts": scripts,
         "dependencies": deps,
         "devDependencies": dev,

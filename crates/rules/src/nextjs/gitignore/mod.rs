@@ -45,6 +45,9 @@ impl BuiltinRule for NextGitignore {
     }
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
+        if !super::applies(ctx)? {
+            return Ok(Vec::new());
+        }
         let text = ctx.read(".gitignore")?.unwrap_or_default();
         let missing = missing(&text);
         if missing.is_empty() {
@@ -62,6 +65,9 @@ impl BuiltinRule for NextGitignore {
     }
 
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
+        if !super::applies(ctx)? {
+            return Ok(FixResult::default());
+        }
         let existing = ctx.read(".gitignore")?;
         let current = existing.clone().unwrap_or_default();
         let missing = missing(&current);

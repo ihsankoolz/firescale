@@ -6,7 +6,7 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{any_exists, create, finding};
+use super::{any_exists, applies, create, finding};
 
 #[cfg(test)]
 mod tests;
@@ -44,7 +44,7 @@ impl BuiltinRule for NextConfig {
     }
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
-        if any_exists(ctx, &NAMES) {
+        if any_exists(ctx, &NAMES) || !applies(ctx)? {
             return Ok(Vec::new());
         }
         Ok(vec![finding(
@@ -56,7 +56,7 @@ impl BuiltinRule for NextConfig {
 
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
-        if !any_exists(ctx, &NAMES) {
+        if !any_exists(ctx, &NAMES) && applies(ctx)? {
             create(ctx, "next.config.ts", CONFIG, &mut result)?;
         }
         Ok(result)
