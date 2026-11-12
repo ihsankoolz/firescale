@@ -193,3 +193,19 @@ mod fixed_repo {
             .is_empty());
     }
 }
+
+#[test]
+fn a_setting_of_another_type_is_left_for_a_person() {
+    // Review of M13: the fix loop must not be told a fix will act when it cannot.
+    let text = "{\n  \"hooks\": {\n    \"Stop\": \"none\"\n  }\n}\n";
+    let f = Fixture::new(&[(".claude/settings.json", text)], Track::None).unwrap();
+    let options = options(json!({"agents": ["claude"]}));
+    let found = check(&f, &options);
+    assert_eq!(found[0].fixable, Fixable::Manual);
+    assert!(f
+        .fix(&VerifyHook, &options)
+        .unwrap()
+        .changed_files
+        .is_empty());
+    assert_eq!(f.read(".claude/settings.json").unwrap(), text);
+}

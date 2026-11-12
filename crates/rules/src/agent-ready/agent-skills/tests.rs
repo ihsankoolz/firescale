@@ -114,3 +114,15 @@ mod fixed_repo {
         assert_eq!(f.read(file).unwrap(), good);
     }
 }
+
+#[test]
+fn a_skill_checked_out_with_crlf_is_current() {
+    // Git for Windows with core.autocrlf (review of M13).
+    let f = Fixture::new(&[("firescale.config.json", CONFIG)], Track::None).unwrap();
+    fix(&f);
+    let file = ".claude/skills/firescale-core-ci-exists/SKILL.md";
+    let crlf = f.read(file).unwrap().replace('\n', "\r\n");
+    std::fs::write(f.root().join(file), crlf).unwrap();
+    assert!(check(&f).is_empty());
+    assert!(fix(&f).is_empty());
+}

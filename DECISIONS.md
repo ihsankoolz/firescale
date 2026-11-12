@@ -108,6 +108,16 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 - `GoogleCloudPlatform/microservices-demo`: the block lists ten services, each with its commands; the Python services have only an install command (no test config), which is what facts finds.
 - `vercel/commerce`: a block with the root's scripts. Nothing wrong found in this pass.
 
+**Independent review before merging** found five real bugs, all fixed with regression tests:
+
+- The AGENTS.md block depended on the machine: a uv project read `uv run pytest` without a local `.venv` and `python -m pytest` with one, so `sync --check` flipped. Managed Python projects are now always written through their manager (`uv run`, `uv sync`), others with `python -m` (`a_uv_project_reads_the_same_with_and_without_a_local_venv`).
+- Marker lines inside a code fence (an example in CLAUDE.md) were taken for the block and replaced. Fences are skipped now (`markers_inside_a_code_fence_are_an_example_not_the_block`).
+- A CLAUDE.md that is a symbolic link to AGENTS.md made every `adopt` and `sync` stop with an error. It now counts as AGENTS.md; a link elsewhere is a manual finding (`a_claude_md_that_links_to_agents_md_is_agents_md`).
+- With Git for Windows' `core.autocrlf`, every generated skill read as out of date. Line endings are ignored when comparing (`a_skill_checked_out_with_crlf_is_current`).
+- A Python project at the root got only its install command in the block. Its own test, lint and typecheck are listed now, and allowed in Claude Code's permissions (`a_python_project_at_the_root_lists_its_own_commands`).
+- Also fixed: a settings value of another type (`"Stop": "none"`) and a CLAUDE.md that is not UTF-8 are manual findings instead of stopping the fix loop.
+- Left: `jsonedit` cannot add to an empty list written on one line (`"deny": []`), so such a file is a manual finding as a whole; the doc comment now says so.
+
 **Known limits:** a rule turned off keeps its generated skills until they are deleted by hand; skills of custom TypeScript rules are not installed; with a `firescale.config.ts`, `agent-skills` asks for a JSON config.
 
 ## M12 — `fscale doctor`, and two fixes from the 0.1.3 run

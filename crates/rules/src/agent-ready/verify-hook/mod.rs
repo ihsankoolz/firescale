@@ -2,7 +2,7 @@
 
 use firescale_core::facts::detect_facts_with;
 use firescale_core::hooks::{hook_installed, merge_hook, Agent, AGENTS};
-use firescale_core::jsonedit::{insert_merge, merged};
+use firescale_core::jsonedit::{holds, insert_merge, merged};
 use firescale_core::model::{
     Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
 };
@@ -85,7 +85,13 @@ fn with_hook(ctx: &RuleContext, agent: Agent, bin: &str) -> Result<Option<String
     else {
         return Ok(None);
     };
-    Ok(insert_merge(&text, &merged(&have, &add)))
+    let target = merged(&have, &add);
+    // A value of another type where the hook goes (`"Stop": "none"`) cannot
+    // be merged into: a person decides.
+    if !holds(&target, &add) {
+        return Ok(None);
+    }
+    Ok(insert_merge(&text, &target))
 }
 
 /// The agents the fix sets up: the `agents` option, or all of them.

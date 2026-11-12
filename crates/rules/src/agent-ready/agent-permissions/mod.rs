@@ -14,7 +14,7 @@
 //! for a person.
 
 use firescale_core::facts::detect_facts_with;
-use firescale_core::jsonedit::{insert_merge, merged};
+use firescale_core::jsonedit::{holds, insert_merge, merged};
 use firescale_core::model::{
     Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
 };
@@ -22,7 +22,7 @@ use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 use serde_json::{json, Value};
 
-use super::managed::fscale_command;
+use super::managed::{fscale_command, stable_command};
 
 #[cfg(test)]
 mod tests;
@@ -77,6 +77,27 @@ fn allowed_commands(ctx: &RuleContext) -> Result<Vec<String>> {
     {
         if !commands.contains(command) {
             commands.push(command.clone());
+        }
+    }
+    // A project of another kind at the root, such as a Python project.
+    for project in facts
+        .projects
+        .iter()
+        .filter(|project| project.root == "." && project.kind != "node")
+    {
+        for command in [
+            &project.commands.build,
+            &project.commands.lint,
+            &project.commands.typecheck,
+            &project.commands.test,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let stable = stable_command(command, Some(project), false);
+            if !commands.contains(&stable) {
+                commands.push(stable);
+            }
         }
     }
     Ok(commands)
@@ -136,6 +157,10 @@ fn json_update(
         return Ok(Err(()));
     };
     let target = merged(&have, wanted);
+    // A value of another type where the entries go cannot be merged into.
+    if !holds(&target, wanted) {
+        return Ok(Err(()));
+    }
     match insert_merge(&text, &target) {
         Some(updated) if updated == text => Ok(Ok(None)),
         Some(updated) => Ok(Ok(Some(updated))),

@@ -8,9 +8,10 @@
 //! entries carry their own trailing commas.
 //!
 //! This works when the opening `{` or `[` ends its line, which is how
-//! editors and `JSON.stringify(x, null, 2)` write files. When it does not
-//! (`"deny": []` on one line, a minified file), `insert_merge` returns
-//! `None` and the caller reports what to add by hand. Every result is parsed
+//! editors and `JSON.stringify(x, null, 2)` write objects and lists that
+//! have something in them. When it does not (an empty `"deny": []`, which
+//! `JSON.stringify` writes on one line, or a minified file), `insert_merge`
+//! returns `None` and the caller reports what to add by hand. Every result is parsed
 //! again and compared with the wanted value before it is returned.
 
 use serde_json::{Map, Value};
@@ -292,6 +293,19 @@ fn same(a: &Value, b: &Value) -> bool {
                 && b.iter().all(|item| a.iter().any(|other| same(item, other)))
         }
         _ => a == b,
+    }
+}
+
+/// True when `have` already holds everything in `wanted`: every key (with
+/// a value that holds it in turn) and every list item.
+#[must_use]
+pub fn holds(have: &Value, wanted: &Value) -> bool {
+    match (have, wanted) {
+        (Value::Object(have), Value::Object(wanted)) => wanted
+            .iter()
+            .all(|(key, value)| have.get(key).is_some_and(|got| holds(got, value))),
+        (Value::Array(have), Value::Array(wanted)) => wanted.iter().all(|item| have.contains(item)),
+        (have, wanted) => have == wanted,
     }
 }
 

@@ -2,7 +2,7 @@
 //! AGENTS.md and CLAUDE.md, the command that starts fscale in this repo, and
 //! the files each agent reads.
 
-use firescale_core::facts::{RepoFacts, UNNAMED_ROOT};
+use firescale_core::facts::{Project, RepoFacts, UNNAMED_ROOT};
 use serde_json::Value;
 
 use crate::group_project::contributing::{places, portable};
@@ -68,9 +68,16 @@ pub(crate) fn find_block(text: &str) -> Block {
     let mut begins = Vec::new();
     let mut ends = Vec::new();
     let mut offset = 0;
+    let mut fenced = false;
     for line in text.split_inclusive('\n') {
         let bare = line.trim_end_matches(['\n', '\r']);
-        if bare.starts_with(BEGIN) {
+        // Markers inside a code fence are an example, not the block.
+        let opener = bare.trim_start();
+        if opener.starts_with("```") || opener.starts_with("~~~") {
+            fenced = !fenced;
+        } else if fenced {
+            // Skipped.
+        } else if bare.starts_with(BEGIN) {
             begins.push((offset, offset + line.len()));
         } else if bare.trim_end() == END {
             ends.push((offset, offset + line.len()));
@@ -170,6 +177,42 @@ pub(crate) fn fscale_command(facts: &RepoFacts, package_json: Option<&Value>) ->
     }
 }
 
+/// A project's command as every machine writes it (review of M13): a
+/// Python project managed by uv, Poetry or Pipenv runs through its manager
+/// whether or not this machine has a `.venv`; any other Python command is
+/// `python -m ...`, never this machine's interpreter path.
+pub(crate) fn stable_command(command: &str, project: Option<&Project>, install: bool) -> String {
+    let Some(project) = project.filter(|project| project.kind == "python") else {
+        return command.to_owned();
+    };
+    let (run, sync) = match project.package_manager.as_deref() {
+        Some("uv") => ("uv run", "uv sync"),
+        Some("poetry") => ("poetry run", "poetry install"),
+        Some("pipenv") => ("pipenv run", "pipenv install --dev"),
+        _ => return portable(command, Some(project)),
+    };
+    if install {
+        return sync.to_owned();
+    }
+    // What runs after the interpreter or the manager: `pytest`, `ruff check .`.
+    let tool = project
+        .interpreter
+        .as_ref()
+        .and_then(|interpreter| command.strip_prefix(interpreter.command.as_str()))
+        .or_else(|| command.strip_prefix(run))
+        .map_or(command, str::trim_start);
+    format!("{run} {tool}")
+}
+
+/// True for a Python project whose manager keeps its own environment.
+fn managed_python(project: &Project) -> bool {
+    project.kind == "python"
+        && matches!(
+            project.package_manager.as_deref(),
+            Some("uv" | "poetry" | "pipenv")
+        )
+}
+
 fn folder_heading(folder: &str) -> String {
     if folder == "." || folder == UNNAMED_ROOT {
         "### The repo root\n".to_owned()
@@ -179,23 +222,24 @@ fn folder_heading(folder: &str) -> String {
 }
 
 /// The managed block of AGENTS.md: the commands from `fscale facts`, and
-/// the definition of done. LF line endings; the same on every machine (a
-/// Python command is written with `python -m`, never this machine's
-/// `.venv` path).
+/// the definition of done. LF line endings; the same on every machine
+/// ([`stable_command`]).
 pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
     let mut out = format!(
         "{BEGIN}: written by `fscale sync` from `fscale facts`. Edits inside this block are replaced; write your own notes outside it. -->\n\n## Commands\n\n"
     );
     let mut sections = Vec::new();
-    // The root's own scripts first, exactly as `fscale facts` names them.
+    // The root's own scripts first, exactly as `fscale facts` names them,
+    // with the root Node project's install. Other kinds at the root (a
+    // Python project) are listed as places below.
     let root = &facts.commands;
     let mut root_lines = Vec::new();
-    let root_project = facts.projects.iter().find(|p| p.root == ".");
-    if let Some(install) = root_project.and_then(|p| p.commands.install.as_ref()) {
-        root_lines.push(format!(
-            "- Install: `{}`\n",
-            portable(install, root_project)
-        ));
+    let root_node = facts
+        .projects
+        .iter()
+        .find(|p| p.root == "." && p.kind == "node");
+    if let Some(install) = root_node.and_then(|p| p.commands.install.as_ref()) {
+        root_lines.push(format!("- Install: `{install}`\n"));
     }
     for (label, command) in [
         ("Build", &root.build),
@@ -211,7 +255,9 @@ pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
         sections.push(format!("{}\n{}", folder_heading("."), root_lines.concat()));
     }
     for place in places(facts) {
-        if place.folder == "." && !root_lines.is_empty() {
+        let node_root =
+            place.folder == "." && place.project.is_none_or(|project| project.kind == "node");
+        if node_root && !root_lines.is_empty() {
             continue;
         }
         let commands = &place.commands;
@@ -224,18 +270,18 @@ pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
             ("Test", &commands.test),
         ] {
             if let Some(command) = command {
-                lines.push(format!(
-                    "- {label}: `{}`\n",
-                    portable(command, place.project)
-                ));
+                let shown = stable_command(command, place.project, label == "Install");
+                lines.push(format!("- {label}: `{shown}`\n"));
             }
         }
         if !lines.is_empty() {
-            sections.push(format!(
-                "{}\n{}",
-                folder_heading(&place.folder),
-                lines.concat()
-            ));
+            let heading = match place.project {
+                Some(project) if place.folder == "." && project.kind != "node" => {
+                    format!("### The repo root ({} project)\n", project.kind)
+                }
+                _ => folder_heading(&place.folder),
+            };
+            sections.push(format!("{heading}\n{}", lines.concat()));
         }
     }
     if sections.is_empty() {
@@ -247,7 +293,7 @@ pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
     if facts
         .projects
         .iter()
-        .any(|project| project.kind == "python")
+        .any(|project| project.kind == "python" && !managed_python(project))
     {
         out.push_str("\nFor a Python project, make a virtual environment in its folder first (`python -m venv .venv`) and activate it.\n");
     }

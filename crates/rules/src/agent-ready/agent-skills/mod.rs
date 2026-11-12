@@ -141,7 +141,8 @@ enum State {
 fn state(ctx: &RuleContext, file: &str, content: &str) -> Result<State> {
     Ok(match ctx.read(file)? {
         None => State::Fixable,
-        Some(text) if text == content => State::Current,
+        // Git may check text files out with CRLF (core.autocrlf on Windows).
+        Some(text) if text.replace("\r\n", "\n") == content => State::Current,
         Some(text) if text.lines().any(|line| line.starts_with(GENERATED)) => State::Fixable,
         Some(_) => State::Theirs,
     })

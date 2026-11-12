@@ -52,11 +52,44 @@ fn wanted_block(ctx: &RuleContext) -> Result<String> {
     Ok(agents_block(&facts, &bin))
 }
 
-/// Reads CLAUDE.md leniently: `None` when absent or unreadable.
-fn read_claude(ctx: &RuleContext) -> Option<String> {
-    std::fs::read(ctx.root().join(CLAUDE_MD))
-        .ok()
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+/// What is at the root CLAUDE.md.
+enum Claude {
+    Missing,
+    /// A symbolic link that leads to AGENTS.md: it is AGENTS.md.
+    LinkToAgents,
+    /// A link elsewhere, or bytes that are not UTF-8: left for a person.
+    Untouchable(String),
+    Text(String),
+}
+
+fn read_claude(ctx: &RuleContext) -> Claude {
+    let path = ctx.root().join(CLAUDE_MD);
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return Claude::Missing;
+    };
+    if meta.file_type().is_symlink() {
+        let target = std::fs::canonicalize(&path).ok();
+        let agents = std::fs::canonicalize(ctx.root().join(AGENTS_MD)).ok();
+        if target.is_some() && target == agents {
+            return Claude::LinkToAgents;
+        }
+        return Claude::Untouchable(
+            "CLAUDE.md is a symbolic link that does not lead to AGENTS.md, and firescale does not write through links. Make sure the file it leads to has a line `@AGENTS.md`, or replace the link with `@AGENTS.md`.".to_owned(),
+        );
+    }
+    match std::fs::read(&path).map(String::from_utf8) {
+        Ok(Ok(text)) => Claude::Text(text),
+        Ok(Err(_)) => Claude::Untouchable(
+            "CLAUDE.md is not UTF-8 text, so firescale does not edit it. Add a line `@AGENTS.md` to it by hand, so Claude Code reads AGENTS.md too.".to_owned(),
+        ),
+        Err(_) => Claude::Missing,
+    }
+}
+
+/// True when AGENTS.md exists but is not UTF-8 text.
+fn agents_not_utf8(ctx: &RuleContext) -> bool {
+    std::fs::read(ctx.root().join(AGENTS_MD))
+        .is_ok_and(|bytes| std::str::from_utf8(&bytes).is_err())
 }
 
 impl BuiltinRule for AgentsMdExists {
@@ -97,6 +130,11 @@ impl BuiltinRule for AgentsMdExists {
                 "AGENTS.md at the repo root cannot be read as a file (it may be a folder). Replace it with a text file, then run `fscale sync`.".to_owned(),
                 Fixable::Manual,
             )),
+            AgentsMd::Text(_) if agents_not_utf8(ctx) => findings.push(finding(
+                AGENTS_MD,
+                "AGENTS.md is not UTF-8 text, so firescale does not edit it. Save it as UTF-8, then run `fscale sync`.".to_owned(),
+                Fixable::Manual,
+            )),
             AgentsMd::Text(text) => match find_block(&text) {
                 Block::Broken(why) => findings.push(finding(
                     AGENTS_MD,
@@ -121,7 +159,10 @@ impl BuiltinRule for AgentsMdExists {
                 Block::At { .. } => {}
             },
         }
-        if let Some(text) = read_claude(ctx) {
+        if let Claude::Untouchable(message) = read_claude(ctx) {
+            findings.push(finding(CLAUDE_MD, message, Fixable::Manual));
+        }
+        if let Claude::Text(text) = read_claude(ctx) {
             match find_block(&text) {
                 Block::Broken(why) => findings.push(finding(
                     CLAUDE_MD,
@@ -152,7 +193,7 @@ impl BuiltinRule for AgentsMdExists {
                 result.changed_files.push(AGENTS_MD.to_owned());
                 result.notes.push("AGENTS.md lists the repo's commands. Describe the project and its conventions above the firescale block.".to_owned());
             }
-            AgentsMd::Text(text) if !block_is_current(&text, &block) => {
+            AgentsMd::Text(text) if !block_is_current(&text, &block) && !agents_not_utf8(ctx) => {
                 if let Some(updated) = with_block(&text, &block) {
                     // Keep a byte order mark the file had.
                     let raw = ctx.read(AGENTS_MD)?.unwrap_or_default();
@@ -167,7 +208,7 @@ impl BuiltinRule for AgentsMdExists {
             }
             _ => {}
         }
-        if let Some(text) = read_claude(ctx) {
+        if let Claude::Text(text) = read_claude(ctx) {
             let needs = !imports_agents_md(&text) || matches!(find_block(&text), Block::At { .. });
             if needs && !block_is_current(&text, &claude_block()) {
                 if let Some(updated) = with_block(&text, &claude_block()) {

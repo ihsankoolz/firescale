@@ -223,3 +223,120 @@ mod fixed_repo {
         );
     }
 }
+
+/// Regressions from the review of M13.
+mod review {
+    use super::*;
+
+    fn block_of(f: &Fixture) -> String {
+        fix(f);
+        f.read("AGENTS.md").unwrap()
+    }
+
+    #[test]
+    fn a_uv_project_reads_the_same_with_and_without_a_local_venv() {
+        let files: &[(&str, &str)] = &[
+            ("package.json", "{\"name\":\"web\"}"),
+            (
+                "svc/pyproject.toml",
+                "[project]\nname = \"svc\"\ndependencies = [\"pytest\", \"ruff\"]\n",
+            ),
+            ("svc/uv.lock", ""),
+            ("svc/main.py", ""),
+        ];
+        let without = Fixture::new(files, Track::None).unwrap();
+        let with = Fixture::new(files, Track::None).unwrap();
+        let python = if cfg!(windows) {
+            "svc/.venv/Scripts/python.exe"
+        } else {
+            "svc/.venv/bin/python"
+        };
+        std::fs::create_dir_all(with.root().join(python).parent().unwrap()).unwrap();
+        std::fs::write(with.root().join(python), "").unwrap();
+        let a = block_of(&without);
+        assert!(a.contains("- Test: `uv run pytest`"), "{a}");
+        assert!(a.contains("- Install: `uv sync`"), "{a}");
+        assert_eq!(block_of(&with), a);
+        assert!(check(&with).is_empty());
+    }
+
+    #[test]
+    fn a_python_project_at_the_root_lists_its_own_commands() {
+        let f = Fixture::new(
+            &[
+                (
+                    "pyproject.toml",
+                    "[project]\nname = \"app\"\ndependencies = [\"pytest\", \"ruff\", \"mypy\"]\n",
+                ),
+                ("uv.lock", ""),
+                ("app/__init__.py", ""),
+            ],
+            Track::None,
+        )
+        .unwrap();
+        let text = block_of(&f);
+        assert!(
+            text.contains("### The repo root (python project)"),
+            "{text}"
+        );
+        assert!(text.contains("- Test: `uv run pytest`"), "{text}");
+        assert!(text.contains("- Lint: `uv run ruff check .`"), "{text}");
+        assert!(
+            !text.contains("python -m venv"),
+            "uv keeps its own environment: {text}"
+        );
+    }
+
+    #[test]
+    fn markers_inside_a_code_fence_are_an_example_not_the_block() {
+        let claude = "# Notes\r\n\r\n```md\r\n<!-- BEGIN firescale: example -->\r\nkeep me\r\n<!-- END firescale -->\r\n```\r\nend\r\n";
+        let f = Fixture::new(&[(CLAUDE_MD, claude)], Track::None).unwrap();
+        fix(&f);
+        let after = f.read(CLAUDE_MD).unwrap();
+        assert!(after.starts_with(claude), "{after}");
+        assert!(
+            after.ends_with("\r\n@AGENTS.md\r\n\r\n<!-- END firescale -->\r\n"),
+            "{after:?}"
+        );
+        assert!(check(&f).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_claude_md_that_links_to_agents_md_is_agents_md() {
+        let f = Fixture::new(&[], Track::None).unwrap();
+        fix(&f);
+        std::os::unix::fs::symlink("AGENTS.md", f.root().join(CLAUDE_MD)).unwrap();
+        assert!(check(&f).is_empty());
+        assert!(fix(&f).is_empty());
+        // A link elsewhere is for a person, and never an error.
+        std::fs::remove_file(f.root().join(CLAUDE_MD)).unwrap();
+        std::fs::write(f.root().join("NOTES.md"), "# notes\n").unwrap();
+        std::os::unix::fs::symlink("NOTES.md", f.root().join(CLAUDE_MD)).unwrap();
+        let found = check(&f);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].fixable, Fixable::Manual);
+        assert!(fix(&f).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(f.root().join("NOTES.md")).unwrap(),
+            "# notes\n"
+        );
+    }
+
+    #[test]
+    fn a_claude_md_that_is_not_utf8_is_left_for_a_person() {
+        let f = Fixture::new(&[("AGENTS.md", "x")], Track::None).unwrap();
+        fix(&f);
+        std::fs::write(f.root().join(CLAUDE_MD), [0xff, 0xfe, b'h', b'i']).unwrap();
+        let found: Vec<Diagnostic> = check(&f)
+            .into_iter()
+            .filter(|d| d.file == CLAUDE_MD)
+            .collect();
+        assert_eq!(found[0].fixable, Fixable::Manual);
+        assert!(fix(&f).is_empty());
+        assert_eq!(
+            std::fs::read(f.root().join(CLAUDE_MD)).unwrap(),
+            [0xff, 0xfe, b'h', b'i']
+        );
+    }
+}
