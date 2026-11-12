@@ -8,6 +8,7 @@ pub mod core;
 #[path = "group-project/mod.rs"]
 pub mod group_project;
 pub mod nextjs;
+pub mod python;
 
 /// Every built-in pack, in the order they are listed to users.
 #[must_use]
@@ -17,6 +18,7 @@ pub fn builtin_packs() -> Vec<BuiltinPack> {
         agent_ready::pack(),
         group_project::pack(),
         nextjs::pack(),
+        python::pack(),
     ]
 }
 
