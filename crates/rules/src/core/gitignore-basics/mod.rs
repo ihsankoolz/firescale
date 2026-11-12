@@ -115,6 +115,7 @@ impl BuiltinRule for GitignoreBasics {
             range: None,
             project: None,
             fixable: Fixable::Deterministic,
+            severity: None,
         };
         let Some(current) = ctx.read(GITIGNORE)? else {
             return Ok(vec![finding(

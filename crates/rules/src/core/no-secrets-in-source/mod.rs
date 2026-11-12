@@ -342,6 +342,7 @@ impl BuiltinRule for NoSecretsInSource {
                     }),
                     project: None,
                     fixable: Fixable::Manual,
+                    severity: None,
                 });
             }
         }

@@ -275,6 +275,7 @@ impl BuiltinRule for EnvExample {
                 range: None,
                 project: None,
                 fixable: Fixable::Manual,
+                severity: None,
             }]);
         }
         let Some(example) = ctx.read(EXAMPLE)? else {
@@ -293,6 +294,7 @@ impl BuiltinRule for EnvExample {
                 range: None,
                 project: None,
                 fixable: Fixable::Deterministic,
+                severity: None,
             }]);
         };
         let listed = listed_names(&example);
@@ -310,6 +312,7 @@ impl BuiltinRule for EnvExample {
                 }),
                 project: None,
                 fixable: Fixable::Deterministic,
+                severity: None,
             })
             .collect())
     }

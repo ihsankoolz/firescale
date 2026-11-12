@@ -86,6 +86,7 @@ impl BuiltinRule for SingleTestCommand {
             range: None,
             project: None,
             fixable: Fixable::Agent,
+            severity: None,
         }])
     }
 }

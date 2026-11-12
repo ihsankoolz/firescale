@@ -306,6 +306,7 @@ fn to_diagnostic(rule_id: &str, finding: Finding) -> Result<Diagnostic> {
         fixable: finding.fixable,
         range: finding.range,
         project: finding.project,
+        severity: finding.severity,
     })
 }
 

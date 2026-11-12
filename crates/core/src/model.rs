@@ -93,6 +93,9 @@ pub struct Finding {
     pub range: Option<LineRange>,
     pub project: Option<String>,
     pub fixable: Fixable,
+    /// Set only when this finding is less or more severe than the rule's own
+    /// severity. `None` means the rule's severity.
+    pub severity: Option<Severity>,
 }
 
 /// One violation of one rule.
@@ -108,6 +111,9 @@ pub struct Diagnostic {
     pub range: Option<LineRange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// This violation's own severity, when it differs from the rule's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<Severity>,
 }
 
 /// What a rule's fix returns.

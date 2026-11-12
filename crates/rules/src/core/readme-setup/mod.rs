@@ -392,6 +392,7 @@ impl BuiltinRule for ReadmeSetup {
                 range: None,
                 project: None,
                 fixable,
+                severity: None,
             }]);
         };
         // Bytes plus a lossy decode: a README in another encoding must not abort the run.
@@ -411,6 +412,7 @@ impl BuiltinRule for ReadmeSetup {
                 range: None,
                 project: None,
                 fixable: Fixable::Agent,
+                severity: None,
             });
         };
         if !satisfied(&text, &INSTALL_HEADINGS, &INSTALL_COMMANDS) {

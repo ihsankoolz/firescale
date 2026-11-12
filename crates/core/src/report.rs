@@ -45,7 +45,8 @@ impl ReportedDiagnostic {
             range: diagnostic.range,
             project: diagnostic.project,
             status,
-            severity,
+            // A finding may carry its own severity; otherwise the rule's applies.
+            severity: diagnostic.severity.unwrap_or(severity),
         }
     }
 }
@@ -101,8 +102,14 @@ pub fn format_human(report: &CheckReport) -> String {
                 .range
                 .map_or_else(String::new, |range| format!(":{}", range.start_line));
             lines.push(format!("  {}{line}", diagnostic.file));
+            // Named only when it differs from the rule's severity in the heading.
+            let severity = if diagnostic.severity == rule.severity {
+                String::new()
+            } else {
+                format!(", {} severity", diagnostic.severity.as_str())
+            };
             lines.push(format!(
-                "    {} [{}]",
+                "    {} [{}{severity}]",
                 diagnostic.message,
                 fix_hint(diagnostic.fixable)
             ));

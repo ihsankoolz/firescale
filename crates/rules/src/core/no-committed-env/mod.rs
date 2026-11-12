@@ -169,6 +169,7 @@ impl BuiltinRule for NoCommittedEnv {
                 range: None,
                 project: None,
                 fixable: Fixable::Deterministic,
+                severity: None,
             })
             .collect())
     }
