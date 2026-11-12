@@ -1,37 +1,36 @@
 ---
 name: agents-md
-description: Fixes violations of the firescale rule agent-ready/agents-md by writing an AGENTS.md at the repo root that describes the real project. Use when fscale check reports agent-ready/agents-md.
+description: Fixes violations of the firescale rule agent-ready/agents-md by writing firescale's managed block of commands into AGENTS.md and importing AGENTS.md from CLAUDE.md. Use when fscale check reports agent-ready/agents-md.
 ---
 
 # agent-ready/agents-md
 
 ## What this rule enforces and why
 
-A file named `AGENTS.md` exists at the repo root and is not blank. A file that holds only whitespace counts as blank. A folder named `AGENTS.md` is reported too. Only the root file counts: an `AGENTS.md` in a subfolder does not replace it.
+`AGENTS.md` exists at the repo root and holds firescale's **managed block**, up to date. The block starts with a line that begins `<!-- BEGIN firescale` and ends with the line `<!-- END firescale -->`. Inside it are the repo's install, build, lint, typecheck and test commands, taken from `fscale facts` (for the root and for each project in a subfolder), and the definition of done: run `fscale verify` before saying a task is done, never weaken a test to pass it, and treat `SETUP NEEDED` as a machine that is not ready rather than a code problem.
 
-`AGENTS.md` is where coding agents look first for how to work in a repo. Without it, an agent has to guess the commands and the house rules, and guesses differ from run to run.
+When a `CLAUDE.md` exists at the root, it must import `AGENTS.md` (a line `@AGENTS.md`, outside a code fence), because Claude Code reads only `CLAUDE.md` when there is one.
+
+`AGENTS.md` is where coding agents look first for how to work in a repo. A block written from the repo's real commands keeps them from guessing, and stays right when the commands change.
+
+Everything outside the block belongs to the team and is never rewritten.
 
 ## Manual fix
 
-1. Create `AGENTS.md` at the repo root.
-2. Write what is true for this project: what it is, how to install, build, test and lint it, and the rules a contributor must follow.
-3. Keep it short. Link to longer documents instead of copying them.
+1. Run `fscale sync`. It creates `AGENTS.md` when there is none, adds the block at the end of one that has none, or writes the block again when it is out of date. In `CLAUDE.md` it adds a three-line block with `@AGENTS.md` at the end.
+2. Describe the project, its layout and its conventions in `AGENTS.md`, outside the block.
+3. If the rule reports a damaged block (two BEGIN lines, or a BEGIN line with no END line), delete the stray marker lines by hand and run `fscale sync` again.
 
 ## Agent fix instructions
 
 ### DETERMINISTIC
 
-None. The content must describe this project, so there is nothing safe to generate.
+1. Run `fscale sync`. Do not write or edit the managed block yourself: it is generated, and edits inside it are replaced.
 
 ### REPORT
 
-Read the repo before writing: the README, the package or build manifests, the CI config and `fscale facts`. Then write `AGENTS.md` with:
-
-- One or two sentences on what the project is.
-- The exact commands to install, build, test, lint and typecheck, taken from the manifests. Do not invent a command.
-- Conventions you can see in the repo, such as the commit style or folder layout.
-
-Report what you wrote and list anything you could not find, so the user can fill it in. Do not copy a template from another project.
+- If the rule reports a damaged block, report the line numbers of the marker lines and let the user remove them.
+- Report whether the text outside the block describes the project. If it is only the heading firescale wrote, offer to describe the project: what it is, its layout and its conventions, taken from the README and the code. Do not invent commands; they are in the block.
 
 ## Verify
 

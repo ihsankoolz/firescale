@@ -15,22 +15,23 @@ The hook runs `fscale verify` when the agent is about to stop and sends it back 
 
 ## Manual fix
 
-1. Run `fscale hooks install --all`, or `fscale hooks install --agent <claude|codex|cursor>` for one agent.
+1. Run `fscale sync`, or `fscale hooks install --all`, or `fscale hooks install --agent <claude|codex|cursor>` for one agent.
 2. If `fscale` is not on the `PATH` of your teammates and CI, say how to start it with `--bin`, for example `fscale hooks install --all --bin "npx firescale"`.
 3. Commit the files it wrote, so every teammate's agent gets the hook.
+
+`fscale sync` does the same: it adds the hook for every agent (or the agents in the `agents` option) with the command that starts fscale in this repo: its own `fscale` package script when it has one, else `npx firescale`. A settings file that exists keeps everything in it; the hook goes in as new lines. A file that is not valid JSON, or whose lists are written on one line, is left for you.
+
+Codex runs a project's hooks only in a trusted project, and only after you approve the hook in Codex.
 
 ## Agent fix instructions
 
 ### DETERMINISTIC
 
-None. Which command starts `fscale` differs from repo to repo, so the user chooses it.
+1. Run `fscale sync`. Do not edit the hook files by hand.
 
 ### REPORT
 
-Do not edit the hook files by hand and do not run the installer yourself: a hook changes how every agent session in this repo ends, so the user decides. Report:
-
-- Which agents have no hook, from the findings.
-- The exact command to run: `fscale hooks install --all`, or with `--agent <name>` for the agents listed in the findings.
+- If the finding is a manual one (a settings file firescale could not add to), report the file and the command `fscale hooks install --agent <name>`. A hook changes how every agent session in this repo ends, so let the user run it.
 
 ## Verify
 

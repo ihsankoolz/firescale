@@ -34,7 +34,7 @@ fn is_guide_name(lower: &str) -> bool {
 /// interpreter of this machine (a `.venv` path, an active environment) is
 /// written with plain `python -m`, which is the same command in the
 /// teammate's own activated environment.
-fn portable(command: &str, project: Option<&Project>) -> String {
+pub(crate) fn portable(command: &str, project: Option<&Project>) -> String {
     let Some(interpreter) = project.and_then(|project| project.interpreter.as_ref()) else {
         return command.to_owned();
     };
@@ -48,16 +48,16 @@ fn portable(command: &str, project: Option<&Project>) -> String {
 
 /// One place with commands: its folder (`.` for the root), its commands,
 /// and the project they belong to.
-struct Place<'a> {
-    folder: String,
-    commands: Commands,
-    project: Option<&'a Project>,
+pub(crate) struct Place<'a> {
+    pub(crate) folder: String,
+    pub(crate) commands: Commands,
+    pub(crate) project: Option<&'a Project>,
 }
 
 /// The places to list: the repo root, then each project that runs by itself
 /// (found in a subfolder, or at the root). Workspace members are covered by
 /// the root's commands.
-fn places(facts: &RepoFacts) -> Vec<Place<'_>> {
+pub(crate) fn places(facts: &RepoFacts) -> Vec<Place<'_>> {
     let mut out: Vec<Place<'_>> = Vec::new();
     let root_node = facts
         .projects

@@ -6,10 +6,15 @@ use std::io::ErrorKind;
 
 use firescale_core::rule::{BuiltinPack, RuleContext};
 
+#[path = "agent-permissions/mod.rs"]
+pub mod agent_permissions;
+#[path = "agent-skills/mod.rs"]
+pub mod agent_skills;
 #[path = "agents-md/mod.rs"]
 pub mod agents_md;
 #[path = "commands-documented/mod.rs"]
 pub mod commands_documented;
+pub(crate) mod managed;
 #[path = "single-test-command/mod.rs"]
 pub mod single_test_command;
 #[path = "verify-hook/mod.rs"]
@@ -46,6 +51,8 @@ pub fn pack() -> BuiltinPack {
         name: "agent-ready",
         rules: vec![
             Box::new(agents_md::AgentsMdExists),
+            Box::new(agent_permissions::AgentPermissions),
+            Box::new(agent_skills::AgentSkills),
             Box::new(commands_documented::CommandsDocumented),
             Box::new(single_test_command::SingleTestCommand),
             Box::new(verify_hook::VerifyHook),
