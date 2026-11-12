@@ -219,7 +219,11 @@ fn project_name(facts: &RepoFacts) -> String {
         .iter()
         .filter(|project| project.root == ".")
         .map(|project| project.name.trim())
-        .find(|name| !name.is_empty() && !name.chars().any(char::is_control))
+        .find(|name| {
+            !name.is_empty()
+                && *name != firescale_core::facts::UNNAMED_ROOT
+                && !name.chars().any(char::is_control)
+        })
         .unwrap_or("Project name")
         .to_owned()
 }

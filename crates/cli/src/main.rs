@@ -29,8 +29,8 @@ use firescale_core::sarif::format_sarif;
 use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
 use firescale_core::verify::{
-    format_verify_human, format_verify_json, plan_verify, run_verify, CheckStep, VerifyReport,
-    TAIL_LINES,
+    check_project_folders, format_verify_human, format_verify_json, plan_verify, run_verify,
+    CheckStep, VerifyReport, VerifyResult, TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -613,7 +613,8 @@ fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)
     let packs = firescale_rules::builtin_packs();
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
-    let overrides = config.verify.clone();
+    let verify_config = config.verify.clone();
+    check_project_folders(root, &verify_config)?;
     let selection = select_rules(config.rules, None)?;
     let started = Instant::now();
     let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
@@ -649,7 +650,7 @@ fn verify_report(root: &Path, args: &Args) -> Result<(VerifyReport, Vec<String>)
     let plan = plan_verify(
         root,
         &facts,
-        &overrides,
+        &verify_config,
         args.affected,
         args.base.as_deref(),
     );
@@ -750,13 +751,32 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             let max_blocks = max_blocks_from_env();
             let decision = decide(root, agent, &input, report.ok, max_blocks);
             let answer = reply(agent, &decision, &format_verify_human(&report), max_blocks);
+            let mut notes = if answer.stderr.is_empty() {
+                Vec::new()
+            } else {
+                vec![answer.stderr.trim_end().to_owned()]
+            };
+            // The agent may stop (ADR 0020), but not on the strength of a
+            // clean pass: say which steps verified nothing.
+            if report.result == VerifyResult::Partial {
+                notes.push(format!(
+                    "fscale: verify was only partial, so this is not a clean pass. {} of {} steps ran; skipped: {}. Run `fscale verify` for the details, or set verify.failOnSkipped to true to make skipped steps block.",
+                    report.steps_run,
+                    report.steps_total,
+                    report
+                        .skipped
+                        .iter()
+                        .map(|skip| match &skip.project {
+                            Some(project) => format!("{} in {project}", skip.step),
+                            None => skip.step.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
             Ok(Output {
                 stdout: answer.stdout,
-                notes: if answer.stderr.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![answer.stderr.trim_end().to_owned()]
-                },
+                notes,
                 code: answer.exit_code,
             })
         }

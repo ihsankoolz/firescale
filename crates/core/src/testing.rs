@@ -134,3 +134,88 @@ impl Fixture {
         fix_rule(rule, &self.root, options)
     }
 }
+
+/// The services of the course-project fixture, under `backend/`.
+pub const COURSE_SERVICES: [&str; 5] = [
+    "audit_service",
+    "auth_service",
+    "ledger_service",
+    "market_service",
+    "realtime_service",
+];
+
+/// The files of a repo shaped like a real course project: Docker Compose and
+/// docs at the root with no manifest, five Python services under `backend/`
+/// and a Vite app under `frontend/`. Used by the facts and verify tests
+/// (ADR 0020). Only `auth_service` has a ruff config, and the folders that
+/// discovery must skip each hold a marker file.
+#[must_use]
+pub fn course_project_files() -> Vec<(String, String)> {
+    let mut files: Vec<(String, String)> = [
+        ("docker-compose.yml", "services:\n  auth:\n    build: ./backend/auth_service\n"),
+        (".env.example", "EXAMPLE_DATABASE_URL=\n"),
+        ("README.md", "# Course project\n"),
+        ("CLAUDE.md", "# Notes for agents\n"),
+        (".github/workflows/ci.yml", "on: [pull_request]\n"),
+        (".gitignore", "generated/\n"),
+        ("backend/.coveragerc", "[run]\nbranch = True\n"),
+        ("backend/shared/__init__.py", ""),
+        ("backend/shared/db.py", "URL = None\n"),
+        ("backend/auth_service/ruff.toml", "line-length = 100\n"),
+        (
+            "frontend/package.json",
+            r#"{"name":"frontend","private":true,"scripts":{"dev":"vite","build":"vite build","test:e2e":"playwright test"},"devDependencies":{"typescript":"5.9.0"}}"#,
+        ),
+        ("frontend/package-lock.json", "{}\n"),
+        ("frontend/vite.config.ts", "export default {};\n"),
+        ("frontend/tsconfig.json", "{ \"compilerOptions\": { \"strict\": true } }\n"),
+        ("frontend/playwright.config.ts", "export default {};\n"),
+        ("frontend/.oxlintrc.json", "{}\n"),
+        ("frontend/knip.jsonc", "{}\n"),
+        ("frontend/src/main.ts", "export const app = 1;\n"),
+        ("frontend/e2e/login.spec.ts", "export {};\n"),
+        // Never searched: dependency, cache and build folders, and what
+        // .gitignore ignores.
+        ("frontend/node_modules/left-pad/package.json", r#"{"name":"left-pad"}"#),
+        ("frontend/dist/package.json", r#"{"name":"built"}"#),
+        ("node_modules/tool/package.json", r#"{"name":"tool"}"#),
+        ("dist/package.json", r#"{"name":"dist"}"#),
+        ("test-results/package.json", r#"{"name":"results"}"#),
+        ("generated/client/package.json", r#"{"name":"generated"}"#),
+        ("backend/.venv/lib/pkg/pyproject.toml", "[project]\nname = \"vendored\"\n"),
+        ("backend/__pycache__/x/setup.py", ""),
+        ("backend/.pytest_cache/x/pyproject.toml", ""),
+        ("backend/.ruff_cache/x/pyproject.toml", ""),
+    ]
+    .iter()
+    .map(|(file, content)| ((*file).to_owned(), (*content).to_owned()))
+    .collect();
+    for service in COURSE_SERVICES {
+        for (file, content) in [
+            ("requirements.txt", "fastapi==0.115.0\nsqlalchemy==2.0.36\n"),
+            (
+                "requirements-dev.txt",
+                "-r requirements.txt\npytest==8.3.3\n",
+            ),
+            ("pytest.ini", "[pytest]\ntestpaths = unit_test\n"),
+            ("Dockerfile", "FROM python:3.13-slim\n"),
+            ("alembic.ini", "[alembic]\nscript_location = migrations\n"),
+            ("main.py", "app = None\n"),
+            (".env.example", "EXAMPLE_SERVICE_URL=\n"),
+            ("unit_test/conftest.py", "import pytest\n"),
+        ] {
+            files.push((format!("backend/{service}/{file}"), content.to_owned()));
+        }
+    }
+    files
+}
+
+/// A fixture holding `course_project_files`, outside git.
+pub fn course_project() -> Result<Fixture> {
+    let files = course_project_files();
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(file, content)| (file.as_str(), content.as_str()))
+        .collect();
+    Fixture::new(&borrowed, Track::NoGit)
+}

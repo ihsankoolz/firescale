@@ -167,6 +167,7 @@ mod tests {
             root: root.to_owned(),
             kind: "node".to_owned(),
             depends_on: depends_on.iter().map(|name| (*name).to_owned()).collect(),
+            ..Project::default()
         }
     }
 

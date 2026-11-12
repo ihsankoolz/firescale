@@ -1,20 +1,22 @@
 //! `fscale verify`: conformance, then lint, typecheck and tests (SPEC §8).
 //!
 //! The output is one compact summary written for an agent to act on: what
-//! failed, the end of its output, and the command to run again.
+//! failed, the end of its output, the command to run again, and every step
+//! that did not run. A run with skipped steps is never reported as a plain
+//! pass (ADR 0020).
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use serde::Serialize;
 
 use crate::error::{Error, Result};
-use crate::facts::RepoFacts;
+use crate::facts::{source, Project, RepoFacts};
 
 /// Version of the `fscale verify --json` format.
-pub const VERIFY_SCHEMA_VERSION: u32 = 1;
+pub const VERIFY_SCHEMA_VERSION: u32 = 2;
 
 /// The steps after `check`, in the order they run.
 pub const STEPS: [&str; 3] = ["lint", "typecheck", "test"];
@@ -31,25 +33,65 @@ pub enum StepOverride {
     Skip,
 }
 
+/// A project's setting under `verify.projects` in the config.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectOverride {
+    /// Run none of this project's steps.
+    Off,
+    /// Per-step settings for this project.
+    Steps(BTreeMap<String, StepOverride>),
+}
+
+/// The `verify` section of the config.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VerifyConfig {
+    /// Settings for the whole repo, keyed by `lint`, `typecheck` or `test`.
+    /// A command here runs once, from the repo root, in place of every
+    /// project's own command for that step.
+    pub steps: BTreeMap<String, StepOverride>,
+    /// When true, a step that was skipped because no command was found makes
+    /// verify fail.
+    pub fail_on_skipped: bool,
+    /// Settings per project, keyed by the project's folder.
+    pub projects: BTreeMap<String, ProjectOverride>,
+}
+
 /// What will run for one step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Planned {
     Command(String),
-    /// Not run because no command was found, with the reason. Verify warns
-    /// about these: the repo may be missing a check it should have.
+    /// Not run because no command was found, with the reason. Verify names
+    /// these and does not report a clean pass: the repo may be missing a
+    /// check it should have.
     Skipped(String),
     /// Not run on purpose, with the reason: turned off in the config, or
-    /// covered by another step. No warning.
+    /// covered by another step. Reported as `off`, with no warning.
     NotNeeded(String),
 }
 
-/// The commands `verify` will run, and how they were chosen.
+/// The steps of one project, run in its folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifyPlan {
-    /// `config`, `nx`, `turbo`, `scripts`, `cargo` or `none`.
-    pub runner: String,
+pub struct ProjectPlan {
+    /// The project's folder: repo-relative, forward slashes.
+    pub root: String,
     pub steps: Vec<(String, Planned)>,
 }
+
+/// The commands `verify` will run, and how they were chosen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VerifyPlan {
+    /// `config`, `nx`, `turbo`, `scripts`, `cargo`, `python`, `go`,
+    /// `projects` or `none`. Describes the repo root.
+    pub runner: String,
+    /// Steps run from the repo root.
+    pub steps: Vec<(String, Planned)>,
+    /// Steps run in the folders of projects found below the root.
+    pub projects: Vec<ProjectPlan>,
+    /// From `verify.failOnSkipped`.
+    pub fail_on_skipped: bool,
+}
+
+const OFF_IN_CONFIG: &str = "turned off in your firescale config";
 
 fn exec_prefix(package_manager: Option<&str>) -> &'static str {
     match package_manager {
@@ -81,17 +123,162 @@ fn turbo_has_task(root: &Path, task: &str) -> bool {
     })
 }
 
-/// Chooses a command for each step. Order of preference: the config, Nx,
-/// Turborepo, package scripts, then Cargo for a Rust-only repo. `base` is the
-/// `--base` ref of an affected run; it is passed on to `nx affected`.
+fn command_of<'a>(commands: &'a crate::facts::Commands, step: &str) -> &'a Option<String> {
+    match step {
+        "lint" => &commands.lint,
+        "typecheck" => &commands.typecheck,
+        _ => &commands.test,
+    }
+}
+
+/// What one step of a project found by `fscale facts` will do, from the
+/// commands detected for it.
+fn project_step(project: &Project, step: &str) -> Planned {
+    if let Some(command) = command_of(&project.commands, step) {
+        return Planned::Command(command.clone());
+    }
+    match (project.kind.as_str(), step) {
+        ("rust", "typecheck") => Planned::NotNeeded("cargo clippy already type-checks".to_owned()),
+        ("go", "typecheck") => Planned::NotNeeded("go vet already type-checks".to_owned()),
+        ("python", "lint") => Planned::Skipped("no linter was found (looked for ruff)".to_owned()),
+        ("python", "typecheck") => {
+            Planned::Skipped("no type checker was found (looked for mypy)".to_owned())
+        }
+        ("python", _) => {
+            Planned::Skipped("no test runner was found (looked for pytest)".to_owned())
+        }
+        ("node", "lint") => Planned::Skipped(
+            "package.json has no lint script, and no oxlint, eslint or biome config was found"
+                .to_owned(),
+        ),
+        ("node", "typecheck") => Planned::Skipped(
+            "package.json has no typecheck script, and there is no tsconfig.json that tsc --noEmit can check"
+                .to_owned(),
+        ),
+        ("node", _) => Planned::Skipped(
+            "package.json has no test script, and no vitest or jest config was found".to_owned(),
+        ),
+        _ => Planned::Skipped(format!("no {step} command found")),
+    }
+}
+
+fn from_override(setting: &StepOverride) -> Planned {
+    match setting {
+        StepOverride::Command(command) => Planned::Command(command.clone()),
+        StepOverride::Skip => Planned::NotNeeded(OFF_IN_CONFIG.to_owned()),
+    }
+}
+
+/// The steps of the projects below the root: the ones `fscale facts`
+/// discovered, and any other folder named under `verify.projects`.
+fn plan_projects(facts: &RepoFacts, config: &VerifyConfig) -> Vec<ProjectPlan> {
+    let mut plans: Vec<ProjectPlan> = Vec::new();
+    let mut discovered: Vec<&Project> = facts
+        .projects
+        .iter()
+        .filter(|project| project.source == source::DISCOVERED)
+        .collect();
+    discovered.sort_by(|a, b| (&a.root, &a.kind).cmp(&(&b.root, &b.kind)));
+    for project in discovered {
+        // A folder can hold projects of two kinds. Its config entry is used once.
+        let first_at_root = !plans.iter().any(|plan| plan.root == project.root);
+        let steps: Vec<(String, Planned)> = match config.projects.get(&project.root) {
+            Some(ProjectOverride::Off) => STEPS
+                .iter()
+                .filter(|_| first_at_root)
+                .map(|step| {
+                    (
+                        (*step).to_owned(),
+                        Planned::NotNeeded(format!("this project is {OFF_IN_CONFIG}")),
+                    )
+                })
+                .collect(),
+            settings => STEPS
+                .iter()
+                .filter_map(|step| {
+                    let own = match settings {
+                        Some(ProjectOverride::Steps(map)) => map.get(*step),
+                        _ => None,
+                    };
+                    let planned = match own {
+                        Some(setting) if first_at_root => from_override(setting),
+                        Some(_) => return None,
+                        // A setting for the whole repo covers this project too.
+                        None if config.steps.contains_key(*step) => return None,
+                        None => project_step(project, step),
+                    };
+                    Some(((*step).to_owned(), planned))
+                })
+                .collect(),
+        };
+        if !steps.is_empty() {
+            plans.push(ProjectPlan {
+                root: project.root.clone(),
+                steps,
+            });
+        }
+    }
+    // A folder that was not discovered runs exactly the commands it is given.
+    for (folder, setting) in &config.projects {
+        if plans.iter().any(|plan| plan.root == *folder)
+            || facts
+                .projects
+                .iter()
+                .any(|project| project.source == source::DISCOVERED && project.root == *folder)
+        {
+            continue;
+        }
+        if let ProjectOverride::Steps(map) = setting {
+            let steps: Vec<(String, Planned)> = STEPS
+                .iter()
+                .filter_map(|step| {
+                    map.get(*step)
+                        .map(|setting| ((*step).to_owned(), from_override(setting)))
+                })
+                .collect();
+            if !steps.is_empty() {
+                plans.push(ProjectPlan {
+                    root: folder.clone(),
+                    steps,
+                });
+            }
+        }
+    }
+    plans.sort_by(|a, b| a.root.cmp(&b.root));
+    plans
+}
+
+/// Checks that every folder named under `verify.projects` exists.
+pub fn check_project_folders(root: &Path, config: &VerifyConfig) -> Result<()> {
+    for folder in config.projects.keys() {
+        if !project_dir(root, folder).is_dir() {
+            return Err(Error::user(format!(
+                "verify.projects names \"{folder}\", but there is no such folder. Fix the path in your firescale config; `fscale facts` lists the projects that were found."
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Chooses a command for each step.
+///
+/// At the repo root the order of preference is: the config, Nx, Turborepo,
+/// package scripts (then tool config files), Cargo, then a Python or Go
+/// project at the root. Projects that `fscale facts` discovered below the
+/// root each run their own steps in their own folder. Workspace members are
+/// covered by the root's commands.
+///
+/// `base` is the `--base` ref of an affected run; it is passed on to
+/// `nx affected`.
 #[must_use]
 pub fn plan_verify(
     root: &Path,
     facts: &RepoFacts,
-    overrides: &BTreeMap<String, StepOverride>,
+    config: &VerifyConfig,
     affected: bool,
     base: Option<&str>,
 ) -> VerifyPlan {
+    let overrides = &config.steps;
     // Passed to Nx only when it is a plain ref name, so it needs no quoting.
     let nx_base = base
         .filter(|base| {
@@ -105,7 +292,15 @@ pub fn plan_verify(
         .unwrap_or_default();
     let has_tool = |name: &str| facts.tools.iter().any(|tool| tool == name);
     let has_package_json = root.join("package.json").is_file();
-    let rust_only = !has_package_json && facts.languages.iter().any(|language| language == "rust");
+    let rust_only = !has_package_json
+        && facts.languages.iter().any(|language| language == "rust")
+        && root.join("Cargo.toml").is_file();
+    let root_project = |kind: &str| {
+        facts
+            .projects
+            .iter()
+            .find(|project| project.root == "." && project.kind == kind)
+    };
     let prefix = exec_prefix(facts.package_manager.as_deref());
 
     let detected_runner = if has_tool("nx") {
@@ -116,6 +311,10 @@ pub fn plan_verify(
         "scripts"
     } else if rust_only {
         "cargo"
+    } else if root_project("python").is_some() {
+        "python"
+    } else if root_project("go").is_some() {
+        "go"
     } else {
         "none"
     };
@@ -132,17 +331,14 @@ pub fn plan_verify(
                 if affected { " --affected" } else { "" }
             )),
             "turbo" => Planned::Skipped(format!("turbo.json has no {step} task")),
-            "scripts" => {
-                let command = match step {
-                    "lint" => &facts.commands.lint,
-                    "typecheck" => &facts.commands.typecheck,
-                    _ => &facts.commands.test,
-                };
-                command.clone().map_or_else(
+            "scripts" => command_of(&facts.commands, step)
+                .clone()
+                // No script: a linter or test runner with a config file still counts.
+                .or_else(|| command_of(&facts.root_tool_commands, step).clone())
+                .map_or_else(
                     || Planned::Skipped(format!("package.json has no {step} script")),
                     Planned::Command,
-                )
-            }
+                ),
             "cargo" => match step {
                 "lint" => Planned::Command(
                     "cargo clippy --workspace --all-targets -- -D warnings".to_owned(),
@@ -150,34 +346,44 @@ pub fn plan_verify(
                 "test" => Planned::Command("cargo test --workspace".to_owned()),
                 _ => Planned::NotNeeded("cargo clippy already type-checks".to_owned()),
             },
+            kind @ ("python" | "go") => root_project(kind).map_or_else(
+                || Planned::Skipped(format!("no {step} command found")),
+                |project| project_step(project, step),
+            ),
             _ => Planned::Skipped(format!(
                 "no {step} command found; set verify.{step} in your firescale config"
             )),
         }
     };
 
+    let projects = plan_projects(facts, config);
+    // With no commands of its own, the root only lists what the config sets
+    // for it, as long as projects below it have steps to run.
+    let root_runs = detected_runner != "none" || projects.is_empty();
     let steps: Vec<(String, Planned)> = STEPS
         .iter()
-        .map(|step| {
+        .filter_map(|step| {
             let planned = match overrides.get(*step) {
-                Some(StepOverride::Command(command)) => Planned::Command(command.clone()),
-                Some(StepOverride::Skip) => {
-                    Planned::NotNeeded("turned off in your firescale config".to_owned())
-                }
-                None => detect(step),
+                Some(setting) => from_override(setting),
+                None if root_runs => detect(step),
+                None => return None,
             };
-            ((*step).to_owned(), planned)
+            Some(((*step).to_owned(), planned))
         })
         .collect();
     let all_from_config = STEPS.iter().all(|step| overrides.contains_key(*step));
     VerifyPlan {
         runner: if all_from_config {
             "config"
-        } else {
+        } else if root_runs {
             detected_runner
+        } else {
+            "projects"
         }
         .to_owned(),
         steps,
+        projects,
+        fail_on_skipped: config.fail_on_skipped,
     }
 }
 
@@ -186,9 +392,12 @@ pub fn plan_verify(
 pub enum StepStatus {
     Passed,
     Failed,
+    /// No command was found for the step, so nothing was verified.
     Skipped,
     /// An earlier step failed, so this one did not run.
     NotRun,
+    /// Not run on purpose: turned off in the config, or covered by another step.
+    Off,
 }
 
 impl StepStatus {
@@ -198,6 +407,7 @@ impl StepStatus {
             Self::Failed => "FAILED",
             Self::Skipped => "skipped",
             Self::NotRun => "not run",
+            Self::Off => "off",
         }
     }
 }
@@ -207,18 +417,43 @@ impl StepStatus {
 pub struct StepReport {
     /// `check`, `lint`, `typecheck` or `test`.
     pub name: String,
+    /// The folder of the project the step belongs to. Absent for a step of
+    /// the repo root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub status: StepStatus,
-    /// The command that ran, or would have. Absent for a skipped step.
+    /// The command that ran, or would have. Absent for a step with no command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
-    /// One line about the outcome: a count, or why the step was skipped.
+    /// One line about the outcome: a count, or why the step did not run.
     pub detail: String,
     /// The last lines of a failed step's output, without colour codes.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub output_tail: Vec<String>,
+}
+
+/// The overall outcome of a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VerifyResult {
+    /// Every step ran and passed.
+    Ok,
+    /// Nothing failed, but at least one step was skipped for lack of a command.
+    Partial,
+    /// A step failed, or steps were skipped while `verify.failOnSkipped` is on.
+    Failed,
+}
+
+/// A step that was skipped because no command was found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkippedStep {
+    pub step: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    pub reason: String,
 }
 
 /// The `fscale verify --json` document. Described by
@@ -228,15 +463,28 @@ pub struct StepReport {
 pub struct VerifyReport {
     pub schema_version: u32,
     pub version: String,
+    /// True when the exit code is 0: the result is `ok`, or `partial`.
     pub ok: bool,
+    pub result: VerifyResult,
     pub runner: String,
+    /// Steps that should run: every step except the ones that are `off`.
+    pub steps_total: usize,
+    /// Steps that did run, passing or failing.
+    pub steps_run: usize,
+    pub fail_on_skipped: bool,
     /// Name of the first step that failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_step: Option<String>,
-    /// The command to run again after fixing the failure.
+    /// The folder of the project whose step failed. Absent for the repo root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_project: Option<String>,
+    /// The command to run again after fixing the failure, from the failed
+    /// project's folder when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rerun: Option<String>,
     pub steps: Vec<StepReport>,
+    /// Every step that was skipped because no command was found.
+    pub skipped: Vec<SkippedStep>,
     /// Things the user should know that are not failures: steps that were
     /// skipped because no command was found.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -313,18 +561,30 @@ fn shell(command: &str) -> Command {
     shell
 }
 
-/// Runs one command through the platform shell and reports how it went.
-fn run_step(root: &Path, name: &str, command: &str) -> Result<StepReport> {
+/// The folder of a project, from its repo-relative path.
+fn project_dir(root: &Path, folder: &str) -> PathBuf {
+    folder
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+/// Runs one command through the platform shell, in `dir`, and reports how it went.
+fn run_step(dir: &Path, name: &str, project: Option<&str>, command: &str) -> Result<StepReport> {
     let started = Instant::now();
     let output = shell(command)
-        .current_dir(root)
+        .current_dir(dir)
         .stdin(Stdio::null())
         .env("NO_COLOR", "1")
         .env("FORCE_COLOR", "0")
         .output()
         .map_err(|error| {
+            let key = project.map_or_else(
+                || format!("verify.{name}"),
+                |project| format!("verify.projects[\"{project}\"].{name}"),
+            );
             Error::user(format!(
-                "Could not start the {name} command `{command}` ({error}). Check the command, or set verify.{name} in your firescale config."
+                "Could not start the {name} command `{command}` ({error}). Check the command, or set {key} in your firescale config."
             ))
         })?;
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -332,6 +592,7 @@ fn run_step(root: &Path, name: &str, command: &str) -> Result<StepReport> {
     let passed = output.status.success();
     Ok(StepReport {
         name: name.to_owned(),
+        project: project.map(str::to_owned),
         status: if passed {
             StepStatus::Passed
         } else {
@@ -356,8 +617,13 @@ fn run_step(root: &Path, name: &str, command: &str) -> Result<StepReport> {
     })
 }
 
-/// Runs the plan after the check step. Stops at the first failure: the steps
-/// after it are reported as not run.
+fn plural_steps(count: usize) -> String {
+    format!("{count} step{}", if count == 1 { "" } else { "s" })
+}
+
+/// Runs the plan after the check step: the root's steps, then each project's
+/// steps in its own folder. Stops at the first failure: the steps after it
+/// are reported as not run.
 pub fn run_verify(
     root: &Path,
     version: &str,
@@ -366,6 +632,7 @@ pub fn run_verify(
 ) -> Result<VerifyReport> {
     let mut steps = vec![StepReport {
         name: "check".to_owned(),
+        project: None,
         status: if check.ok {
             StepStatus::Passed
         } else {
@@ -379,71 +646,147 @@ pub fn run_verify(
     }];
     let mut failed = !check.ok;
 
-    for (name, planned) in &plan.steps {
+    let root_steps = plan.steps.iter().map(|step| (None, step));
+    let project_steps = plan.projects.iter().flat_map(|project| {
+        project
+            .steps
+            .iter()
+            .map(|step| (Some(project.root.as_str()), step))
+    });
+    for (project, (name, planned)) in root_steps.chain(project_steps) {
+        let idle = |status: StepStatus, command: Option<&String>, detail: &str| StepReport {
+            name: name.clone(),
+            project: project.map(str::to_owned),
+            status,
+            command: command.cloned(),
+            exit_code: None,
+            duration_ms: 0,
+            detail: detail.to_owned(),
+            output_tail: Vec::new(),
+        };
         let report = match planned {
-            Planned::Skipped(reason) | Planned::NotNeeded(reason) => StepReport {
-                name: name.clone(),
-                status: StepStatus::Skipped,
-                command: None,
-                exit_code: None,
-                duration_ms: 0,
-                detail: reason.clone(),
-                output_tail: Vec::new(),
-            },
-            Planned::Command(command) if failed => StepReport {
-                name: name.clone(),
-                status: StepStatus::NotRun,
-                command: Some(command.clone()),
-                exit_code: None,
-                duration_ms: 0,
-                detail: "an earlier step failed".to_owned(),
-                output_tail: Vec::new(),
-            },
-            Planned::Command(command) => run_step(root, name, command)?,
+            Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
+            Planned::NotNeeded(reason) => idle(StepStatus::Off, None, reason),
+            Planned::Command(command) if failed => {
+                idle(StepStatus::NotRun, Some(command), "an earlier step failed")
+            }
+            Planned::Command(command) => {
+                let dir = project.map_or_else(|| root.to_path_buf(), |p| project_dir(root, p));
+                run_step(&dir, name, project, command)?
+            }
         };
         failed = failed || report.status == StepStatus::Failed;
         steps.push(report);
     }
 
-    let unchecked: Vec<&str> = plan
-        .steps
+    let skipped: Vec<SkippedStep> = steps
         .iter()
-        .filter(|(_, planned)| matches!(planned, Planned::Skipped(_)))
-        .map(|(name, _)| name.as_str())
+        .filter(|step| step.status == StepStatus::Skipped)
+        .map(|step| SkippedStep {
+            step: step.name.clone(),
+            project: step.project.clone(),
+            reason: step.detail.clone(),
+        })
         .collect();
-    let warnings = if unchecked.is_empty() {
-        Vec::new()
-    } else {
-        let example = unchecked[0];
-        vec![format!(
-            "{} skipped because no command was found: {}. Set verify.{example} in your firescale config to a command, or to false if this repo has none.",
-            if unchecked.len() == 1 { "1 step was" } else { "steps were" },
-            unchecked.join(", ")
-        )]
+    let warnings = match skipped.first() {
+        None => Vec::new(),
+        Some(first) => {
+            let names: Vec<String> = skipped
+                .iter()
+                .map(|skip| match &skip.project {
+                    Some(project) => format!("{} in {project}", skip.step),
+                    None => skip.step.clone(),
+                })
+                .collect();
+            let (key, whose) = match &first.project {
+                Some(project) => (
+                    format!("verify.projects[\"{project}\"].{}", first.step),
+                    "that project",
+                ),
+                None => (format!("verify.{}", first.step), "this repo"),
+            };
+            vec![format!(
+                "{} skipped because no command was found: {}. Set {key} in your firescale config to a command, or to false if {whose} has none.",
+                if skipped.len() == 1 { "1 step was" } else { "steps were" },
+                names.join(", ")
+            )]
+        }
     };
+    let steps_total = steps
+        .iter()
+        .filter(|step| step.status != StepStatus::Off)
+        .count();
+    let steps_run = steps
+        .iter()
+        .filter(|step| matches!(step.status, StepStatus::Passed | StepStatus::Failed))
+        .count();
     let first_failure = steps.iter().find(|step| step.status == StepStatus::Failed);
+    let result = if first_failure.is_some() || (plan.fail_on_skipped && !skipped.is_empty()) {
+        VerifyResult::Failed
+    } else if skipped.is_empty() {
+        VerifyResult::Ok
+    } else {
+        VerifyResult::Partial
+    };
     Ok(VerifyReport {
         schema_version: VERIFY_SCHEMA_VERSION,
         version: version.to_owned(),
-        ok: first_failure.is_none(),
+        ok: result != VerifyResult::Failed,
+        result,
         runner: plan.runner.clone(),
+        steps_total,
+        steps_run,
+        fail_on_skipped: plan.fail_on_skipped,
         failed_step: first_failure.map(|step| step.name.clone()),
+        failed_project: first_failure.and_then(|step| step.project.clone()),
         rerun: first_failure.and_then(|step| step.command.clone()),
         steps,
+        skipped,
         warnings,
     })
+}
+
+/// The first line of the summary. It reads as a clean pass only when every
+/// step ran and passed.
+fn headline(report: &VerifyReport) -> String {
+    if let Some(step) = &report.failed_step {
+        return match &report.failed_project {
+            Some(project) => format!("verify: FAILED at {step} in {project}"),
+            None => format!("verify: FAILED at {step}"),
+        };
+    }
+    match report.result {
+        VerifyResult::Ok => "verify: OK".to_owned(),
+        VerifyResult::Partial => format!(
+            "verify: PARTIAL - {} of {} ran, {} skipped",
+            report.steps_run,
+            plural_steps(report.steps_total),
+            report.skipped.len()
+        ),
+        VerifyResult::Failed => format!(
+            "verify: FAILED - {} of {} skipped, and verify.failOnSkipped is on",
+            report.skipped.len(),
+            plural_steps(report.steps_total)
+        ),
+    }
 }
 
 /// Renders the compact summary. No durations, so the text is stable.
 #[must_use]
 pub fn format_verify_human(report: &VerifyReport) -> String {
-    let mut out = match &report.failed_step {
-        Some(step) => format!("verify: FAILED at {step}\n"),
-        None => "verify: OK\n".to_owned(),
-    };
+    let mut out = format!("{}\n", headline(report));
+    let mut current: Option<&str> = None;
     for step in &report.steps {
+        let project = step.project.as_deref();
+        if project != current {
+            if let Some(project) = project {
+                out.push_str(&format!("  in {project}:\n"));
+            }
+            current = project;
+        }
         out.push_str(&format!(
-            "  {:<10} {:<8} {}\n",
+            "{}  {:<10} {:<8} {}\n",
+            if project.is_some() { "  " } else { "" },
             step.name,
             step.status.label(),
             step.detail
@@ -454,14 +797,20 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         .iter()
         .find(|step| step.status == StepStatus::Failed)
     {
+        let place = failure
+            .project
+            .as_ref()
+            .map_or_else(String::new, |project| format!(" in {project}"));
         if !failure.output_tail.is_empty() {
-            out.push_str(&format!("\nLast lines of {}:\n", failure.name));
+            out.push_str(&format!("\nLast lines of {}{place}:\n", failure.name));
             for line in &failure.output_tail {
                 out.push_str(&format!("  {line}\n"));
             }
         }
         if let Some(command) = &report.rerun {
-            out.push_str(&format!("\nFix the failure, then run again: {command}\n"));
+            out.push_str(&format!(
+                "\nFix the failure, then run again{place}: {command}\n"
+            ));
         }
     }
     if !report.warnings.is_empty() {
@@ -527,7 +876,7 @@ mod tests {
         let plan = plan_verify(
             fixture.root(),
             &facts(&[], Some("pnpm"), commands, &["javascript"]),
-            &BTreeMap::new(),
+            &VerifyConfig::default(),
             false,
             None,
         );
@@ -555,7 +904,7 @@ mod tests {
         let nx = plan_verify(
             fixture.root(),
             &facts(&["nx", "turbo"], Some("pnpm"), Commands::default(), &[]),
-            &BTreeMap::new(),
+            &VerifyConfig::default(),
             true,
             Some("origin/main"),
         );
@@ -568,7 +917,7 @@ mod tests {
         let odd = plan_verify(
             fixture.root(),
             &facts(&["nx"], Some("pnpm"), Commands::default(), &[]),
-            &BTreeMap::new(),
+            &VerifyConfig::default(),
             true,
             Some("main; echo hi"),
         );
@@ -577,7 +926,7 @@ mod tests {
         let turbo = plan_verify(
             fixture.root(),
             &facts(&["turbo"], None, Commands::default(), &[]),
-            &BTreeMap::new(),
+            &VerifyConfig::default(),
             false,
             None,
         );
@@ -597,17 +946,20 @@ mod tests {
         let fixture =
             Fixture::new(&[("Cargo.toml", "[package]\nname = \"x\"\n")], Track::NoGit).unwrap();
         let rust = facts(&[], None, Commands::default(), &["rust"]);
-        let plan = plan_verify(fixture.root(), &rust, &BTreeMap::new(), false, None);
+        let plan = plan_verify(fixture.root(), &rust, &VerifyConfig::default(), false, None);
         assert_eq!(plan.runner, "cargo");
         assert_eq!(commands_of(&plan)[2], "test: cargo test --workspace");
 
-        let overrides = BTreeMap::from([
-            ("lint".to_owned(), StepOverride::Skip),
-            (
-                "test".to_owned(),
-                StepOverride::Command("make test".to_owned()),
-            ),
-        ]);
+        let overrides = VerifyConfig {
+            steps: BTreeMap::from([
+                ("lint".to_owned(), StepOverride::Skip),
+                (
+                    "test".to_owned(),
+                    StepOverride::Command("make test".to_owned()),
+                ),
+            ]),
+            ..VerifyConfig::default()
+        };
         let plan = plan_verify(fixture.root(), &rust, &overrides, false, None);
         assert_eq!(
             commands_of(&plan)[0],
@@ -649,6 +1001,7 @@ mod tests {
                 ("typecheck".to_owned(), Planned::Command(fail.to_owned())),
                 ("test".to_owned(), Planned::Command("echo never".to_owned())),
             ],
+            ..VerifyPlan::default()
         };
         let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
         assert!(!report.ok);
@@ -688,6 +1041,7 @@ mod tests {
         let plan = VerifyPlan {
             runner: "config".to_owned(),
             steps: vec![("lint".to_owned(), Planned::Command("echo never".to_owned()))],
+            ..VerifyPlan::default()
         };
         let report = run_verify(fixture.root(), "0.0.0", check, &plan).unwrap();
         assert_eq!(report.failed_step.as_deref(), Some("check"));
@@ -695,8 +1049,11 @@ mod tests {
         assert_eq!(report.steps[1].status, StepStatus::NotRun);
     }
 
+    /// This test used to assert "verify: OK" for a run with a skipped step.
+    /// That was the false green reported from a real repo (ADR 0020): the
+    /// run still exits 0, but the headline now says it was only partial.
     #[test]
-    fn everything_passing_or_skipped_is_ok() {
+    fn a_skipped_step_makes_the_run_partial_not_ok() {
         let fixture = Fixture::new(&[], Track::NoGit).unwrap();
         let plan = VerifyPlan {
             runner: "none".to_owned(),
@@ -707,11 +1064,478 @@ mod tests {
                     Planned::Skipped("no test command found".to_owned()),
                 ),
             ],
+            ..VerifyPlan::default()
         };
         let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
         assert!(report.ok);
-        assert!(format_verify_human(&report).starts_with("verify: OK\n"));
+        assert_eq!(report.result, VerifyResult::Partial);
+        assert_eq!((report.steps_run, report.steps_total), (2, 3));
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with("verify: PARTIAL - 2 of 3 steps ran, 1 skipped\n"),
+            "{text}"
+        );
         assert!(report.rerun.is_none());
+        assert_eq!(
+            report.skipped,
+            [SkippedStep {
+                step: "test".to_owned(),
+                project: None,
+                reason: "no test command found".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn everything_passing_is_ok() {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let plan = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![
+                ("lint".to_owned(), Planned::Command("echo fine".to_owned())),
+                (
+                    "typecheck".to_owned(),
+                    Planned::NotNeeded("turned off in your firescale config".to_owned()),
+                ),
+                ("test".to_owned(), Planned::Command("echo fine".to_owned())),
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert!(report.ok);
+        assert_eq!(report.result, VerifyResult::Ok);
+        // A step that is off on purpose is not counted, and is not "skipped".
+        assert_eq!((report.steps_run, report.steps_total), (3, 3));
+        assert!(report.skipped.is_empty());
+        assert_eq!(report.steps[2].status, StepStatus::Off);
+        let text = format_verify_human(&report);
+        assert!(text.starts_with("verify: OK\n"), "{text}");
+        assert!(text.contains("  typecheck  off      turned off"), "{text}");
+        assert!(!text.contains("skipped"), "{text}");
+    }
+
+    /// The headline is a plain "OK" only when no step was skipped, whatever
+    /// mix of steps the run has, at the root and in projects.
+    #[test]
+    fn no_headline_says_ok_when_any_step_was_skipped() {
+        let fixture = Fixture::new(&[("svc/keep.txt", "")], Track::NoGit).unwrap();
+        let kinds = [
+            Planned::Command("echo fine".to_owned()),
+            Planned::Skipped("no command found".to_owned()),
+            Planned::NotNeeded("off".to_owned()),
+        ];
+        let mut cases = 0;
+        for lint in &kinds {
+            for typecheck in &kinds {
+                for test in &kinds {
+                    for project_test in &kinds {
+                        for fail_on_skipped in [false, true] {
+                            let plan = VerifyPlan {
+                                runner: "scripts".to_owned(),
+                                steps: vec![
+                                    ("lint".to_owned(), lint.clone()),
+                                    ("typecheck".to_owned(), typecheck.clone()),
+                                    ("test".to_owned(), test.clone()),
+                                ],
+                                projects: vec![ProjectPlan {
+                                    root: "svc".to_owned(),
+                                    steps: vec![("test".to_owned(), project_test.clone())],
+                                }],
+                                fail_on_skipped,
+                            };
+                            let report =
+                                run_verify(fixture.root(), "0.0.0", passing_check(), &plan)
+                                    .unwrap();
+                            let any_skipped = [lint, typecheck, test, project_test]
+                                .iter()
+                                .any(|planned| matches!(planned, Planned::Skipped(_)));
+                            let text = format_verify_human(&report);
+                            let first = text.lines().next().unwrap_or_default();
+                            assert_eq!(first == "verify: OK", !any_skipped, "{text}");
+                            assert_eq!(report.result == VerifyResult::Ok, !any_skipped, "{text}");
+                            if any_skipped {
+                                assert!(!first.contains("OK"), "{text}");
+                                assert!(text.contains("\nwarning: "), "{text}");
+                                assert_eq!(report.ok, !fail_on_skipped, "{text}");
+                                assert!(!report.skipped.is_empty());
+                                // Every skipped step is named in the warning.
+                                for skip in &report.skipped {
+                                    let name = match &skip.project {
+                                        Some(project) => format!("{} in {project}", skip.step),
+                                        None => skip.step.clone(),
+                                    };
+                                    assert!(report.warnings[0].contains(&name), "{text}");
+                                }
+                            } else {
+                                assert!(report.ok && report.warnings.is_empty(), "{text}");
+                            }
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 162);
+    }
+
+    #[test]
+    fn fail_on_skipped_turns_a_partial_run_into_a_failure() {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let plan = VerifyPlan {
+            runner: "scripts".to_owned(),
+            steps: vec![
+                ("lint".to_owned(), Planned::Command("echo fine".to_owned())),
+                (
+                    "typecheck".to_owned(),
+                    Planned::Skipped("package.json has no typecheck script".to_owned()),
+                ),
+                (
+                    "test".to_owned(),
+                    Planned::Skipped("package.json has no test script".to_owned()),
+                ),
+            ],
+            fail_on_skipped: true,
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert!(!report.ok);
+        assert_eq!(report.result, VerifyResult::Failed);
+        // No step failed, so there is nothing to run again.
+        assert_eq!(report.failed_step, None);
+        assert_eq!(report.rerun, None);
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with(
+                "verify: FAILED - 2 of 4 steps skipped, and verify.failOnSkipped is on\n"
+            ),
+            "{text}"
+        );
+        let json = format_verify_json(&report);
+        assert!(json.contains("\"result\": \"failed\""), "{json}");
+        assert!(json.contains("\"failOnSkipped\": true"), "{json}");
+    }
+
+    fn course_facts() -> (Fixture, RepoFacts) {
+        let fixture = crate::testing::course_project().unwrap();
+        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        (fixture, facts)
+    }
+
+    fn project_commands(plan: &VerifyPlan) -> Vec<String> {
+        plan.projects
+            .iter()
+            .flat_map(|project| {
+                project.steps.iter().map(|(name, planned)| {
+                    let what = match planned {
+                        Planned::Command(command) => command.clone(),
+                        Planned::Skipped(reason) => format!("skipped ({reason})"),
+                        Planned::NotNeeded(reason) => format!("off ({reason})"),
+                    };
+                    format!("{} {name}: {what}", project.root)
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_discovered_project_gets_its_own_steps_in_its_own_folder() {
+        let (fixture, facts) = course_facts();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        // The root has no commands of its own, so it lists no steps.
+        assert_eq!(plan.runner, "projects");
+        assert!(plan.steps.is_empty());
+        let roots: Vec<_> = plan.projects.iter().map(|p| p.root.as_str()).collect();
+        assert_eq!(
+            roots,
+            [
+                "backend/audit_service",
+                "backend/auth_service",
+                "backend/ledger_service",
+                "backend/market_service",
+                "backend/realtime_service",
+                "frontend",
+            ]
+        );
+        let commands = project_commands(&plan);
+        assert_eq!(commands.len(), 18);
+        assert_eq!(
+            &commands[..6],
+            [
+                "backend/audit_service lint: skipped (no linter was found (looked for ruff))",
+                "backend/audit_service typecheck: skipped (no type checker was found (looked for mypy))",
+                "backend/audit_service test: python -m pytest",
+                "backend/auth_service lint: python -m ruff check .",
+                "backend/auth_service typecheck: skipped (no type checker was found (looked for mypy))",
+                "backend/auth_service test: python -m pytest",
+            ]
+        );
+        assert_eq!(
+            &commands[15..],
+            [
+                "frontend lint: npx --no oxlint",
+                "frontend typecheck: npx --no tsc --noEmit",
+                "frontend test: skipped (package.json has no test script, and no vitest or jest config was found)",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_config_can_set_turn_off_and_add_project_steps() {
+        let (fixture, facts) = course_facts();
+        let steps = |pairs: &[(&str, StepOverride)]| {
+            ProjectOverride::Steps(
+                pairs
+                    .iter()
+                    .map(|(step, setting)| ((*step).to_owned(), setting.clone()))
+                    .collect(),
+            )
+        };
+        let config = VerifyConfig {
+            // For the whole repo: one command at the root, none per project.
+            steps: BTreeMap::from([("typecheck".to_owned(), StepOverride::Skip)]),
+            projects: BTreeMap::from([
+                ("backend/audit_service".to_owned(), ProjectOverride::Off),
+                (
+                    "frontend".to_owned(),
+                    steps(&[
+                        (
+                            "test".to_owned().as_str(),
+                            StepOverride::Command("npm run test:e2e".to_owned()),
+                        ),
+                        // A project's own setting wins over the repo-wide one.
+                        ("typecheck", StepOverride::Command("npx tsc -b".to_owned())),
+                    ]),
+                ),
+                // Not a discovered project: it runs exactly what it is given.
+                (
+                    "backend/shared".to_owned(),
+                    steps(&[("lint", StepOverride::Command("ruff check .".to_owned()))]),
+                ),
+            ]),
+            fail_on_skipped: true,
+        };
+        let plan = plan_verify(fixture.root(), &facts, &config, false, None);
+        assert!(plan.fail_on_skipped);
+        assert_eq!(
+            plan.steps,
+            [(
+                "typecheck".to_owned(),
+                Planned::NotNeeded("turned off in your firescale config".to_owned())
+            )]
+        );
+        let commands = project_commands(&plan);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|line| line.starts_with("backend/audit_service")
+                    || line.starts_with("backend/shared")
+                    || line.starts_with("frontend")
+                    || line.starts_with("backend/auth_service"))
+                .collect::<Vec<_>>(),
+            [
+                "backend/audit_service lint: off (this project is turned off in your firescale config)",
+                "backend/audit_service typecheck: off (this project is turned off in your firescale config)",
+                "backend/audit_service test: off (this project is turned off in your firescale config)",
+                "backend/auth_service lint: python -m ruff check .",
+                "backend/auth_service test: python -m pytest",
+                "backend/shared lint: ruff check .",
+                "frontend lint: npx --no oxlint",
+                "frontend typecheck: npx tsc -b",
+                "frontend test: npm run test:e2e",
+            ]
+        );
+        assert!(check_project_folders(fixture.root(), &config).is_ok());
+        let missing = VerifyConfig {
+            projects: BTreeMap::from([("backend/nope".to_owned(), ProjectOverride::Off)]),
+            ..VerifyConfig::default()
+        };
+        let error = check_project_folders(fixture.root(), &missing).unwrap_err();
+        assert!(error.message().contains("backend/nope"));
+        assert!(error.message().contains("fscale facts"));
+    }
+
+    #[test]
+    fn a_root_with_its_own_commands_keeps_them_and_adds_discovered_projects() {
+        let fixture = Fixture::new(
+            &[
+                ("package.json", r#"{"scripts":{"lint":"x","test":"y"}}"#),
+                ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
+                (
+                    "packages/a/package.json",
+                    r#"{"name":"a","scripts":{"test":"z"}}"#,
+                ),
+                ("services/api/pyproject.toml", "[tool.pytest.ini_options]\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        assert_eq!(plan.runner, "scripts");
+        assert_eq!(
+            commands_of(&plan),
+            [
+                "lint: npm run lint",
+                "typecheck: skipped (package.json has no typecheck script)",
+                "test: npm run test",
+            ]
+        );
+        // The workspace member is covered by the root. The Python service is not.
+        let roots: Vec<_> = plan.projects.iter().map(|p| p.root.as_str()).collect();
+        assert_eq!(roots, ["services/api"]);
+    }
+
+    #[test]
+    fn a_python_or_go_project_at_the_root_supplies_the_root_steps() {
+        let fixture = Fixture::new(
+            &[("requirements.txt", "pytest\nruff\n"), ("app.py", "")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        assert_eq!(plan.runner, "python");
+        assert_eq!(
+            commands_of(&plan),
+            [
+                "lint: python -m ruff check .",
+                "typecheck: skipped (no type checker was found (looked for mypy))",
+                "test: python -m pytest",
+            ]
+        );
+        assert!(plan.projects.is_empty());
+    }
+
+    #[test]
+    fn a_root_script_missing_falls_back_to_the_tools_config_file() {
+        let fixture = Fixture::new(
+            &[
+                ("package.json", r#"{"scripts":{"test":"y"}}"#),
+                ("pnpm-lock.yaml", ""),
+                ("eslint.config.js", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        // `commands` still lists scripts only.
+        assert_eq!(facts.commands.lint, None);
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        assert_eq!(
+            commands_of(&plan),
+            [
+                "lint: pnpm exec eslint .",
+                "typecheck: skipped (package.json has no typecheck script)",
+                "test: pnpm run test",
+            ]
+        );
+    }
+
+    #[test]
+    fn project_steps_run_in_the_projects_folder_and_a_failure_names_it() {
+        let fixture = Fixture::new(
+            &[("one/here.txt", "one\n"), ("two/deep/here.txt", "two\n")],
+            Track::NoGit,
+        )
+        .unwrap();
+        // Passes only when run in a folder that holds here.txt.
+        let show = if cfg!(windows) {
+            "type here.txt"
+        } else {
+            "cat here.txt"
+        };
+        let fail = if cfg!(windows) {
+            "type here.txt 1>&2 & exit /b 4"
+        } else {
+            "cat here.txt >&2; exit 4"
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                ProjectPlan {
+                    root: "one".to_owned(),
+                    steps: vec![
+                        ("lint".to_owned(), Planned::Command(show.to_owned())),
+                        (
+                            "typecheck".to_owned(),
+                            Planned::Skipped("no type checker was found".to_owned()),
+                        ),
+                    ],
+                },
+                ProjectPlan {
+                    root: "two/deep".to_owned(),
+                    steps: vec![
+                        ("lint".to_owned(), Planned::Command(fail.to_owned())),
+                        ("test".to_owned(), Planned::Command(show.to_owned())),
+                    ],
+                },
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        let got: Vec<_> = report
+            .steps
+            .iter()
+            .map(|step| (step.project.as_deref(), step.name.as_str(), step.status))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (None, "check", StepStatus::Passed),
+                (Some("one"), "lint", StepStatus::Passed),
+                (Some("one"), "typecheck", StepStatus::Skipped),
+                (Some("two/deep"), "lint", StepStatus::Failed),
+                (Some("two/deep"), "test", StepStatus::NotRun),
+            ]
+        );
+        assert_eq!(report.failed_project.as_deref(), Some("two/deep"));
+        assert_eq!(report.steps[3].output_tail, ["two"]);
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with("verify: FAILED at lint in two/deep\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  in one:\n    lint       passed   "),
+            "{text}"
+        );
+        assert!(
+            text.contains("\nLast lines of lint in two/deep:\n  two\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\nFix the failure, then run again in two/deep: "),
+            "{text}"
+        );
+        // A failed run still names the step that was skipped.
+        assert!(
+            text.contains("warning: 1 step was skipped because no command was found: typecheck in one. Set verify.projects[\"one\"].typecheck in your firescale config"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -733,6 +1557,7 @@ mod tests {
                     Planned::Skipped("package.json has no test script".to_owned()),
                 ),
             ],
+            ..VerifyPlan::default()
         };
         let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
         // Still not a failure.
@@ -755,6 +1580,7 @@ mod tests {
                 "test".to_owned(),
                 Planned::NotNeeded("turned off in your firescale config".to_owned()),
             )],
+            ..VerifyPlan::default()
         };
         let report = run_verify(fixture.root(), "0.0.0", passing_check(), &quiet).unwrap();
         assert!(report.warnings.is_empty());
