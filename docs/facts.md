@@ -30,8 +30,9 @@ Each project:
 | `packageManager` | The project's package manager, or `null` for a Node project that names none and has no lockfile.                                |
 | `lockfiles`      | Names of the lockfiles in the project's folder.                                                                                 |
 | `tools`          | Linters, test runners and other tools found in the project's folder.                                                            |
-| `commands`       | Commands to run **from the project's folder**: optional keys `build`, `test`, `lint`, `typecheck`.                              |
+| `commands`       | Commands to run **from the project's folder**: optional keys `install`, `build`, `test`, `lint`, `typecheck`.                   |
 | `dependsOn`      | Sorted names of other projects of the same kind in this repo that this one depends on.                                          |
+| `interpreter`    | Python projects only: `source`, `command` and `detail` of the interpreter the commands use. See "The Python interpreter" below. |
 
 ## Projects in subfolders
 
@@ -66,6 +67,7 @@ For each project, from the files in its own folder:
   - Package manager: the `packageManager` field, else a lockfile in the folder, else the root's package manager for a workspace member, else `null`.
   - Languages: javascript, plus typescript with a `tsconfig.json` or a `typescript` dependency.
   - Tools, each from a config file or a dependency: `biome` (`biome.json`), `cypress` (`cypress.config.*`), `eslint` (`eslint.config.*`, `.eslintrc*`), `jest` (`jest.config.*`), `knip` (`knip.json`, `knip.jsonc`, `knip.config.*`), `next` (`next.config.*`), `oxlint` (`.oxlintrc.json`, `oxlint.config.*`), `playwright` (`playwright.config.*`), `prettier` (`.prettierrc*`, `prettier.config.*`), `vite` (`vite.config.*`), `vitest` (`vitest.config.*`, `vitest.workspace.*`), and `docker` (`Dockerfile`).
+  - install: `<pm> install` (`npm install` when the package manager is not known). Not for a workspace member, which the root installs, nor for a `package.json` that cannot be read.
   - Commands: a script named `build`, `test`, `lint` or `typecheck` gives `"<pm> run <script>"`. Without a script, the tools give the command:
     - lint: `oxlint`, else `eslint .`, else `biome check .`, and only when that linter's config file is in the folder. A linter that is only a dependency gives no command.
     - test: `vitest run`, else `jest`. Playwright and Cypress are not used as the test command: end-to-end tests need browsers and running services.
@@ -79,10 +81,28 @@ For each project, from the files in its own folder:
     - `pyproject.toml`: the arrays `dependencies` under `[project]`, every list under `[project.optional-dependencies]`, `[dependency-groups]` (an `{include-group = …}` entry is skipped) and `[tool.pdm.dev-dependencies]`, and `dev-dependencies` under `[tool.uv]`; the keys of `[tool.poetry.dependencies]`, `[tool.poetry.dev-dependencies]` and `[tool.poetry.group.<name>.dependencies]`.
     - `Pipfile`: the keys of `[packages]` and `[dev-packages]`.
     - A name is compared without its version, extras or markers, ignoring case and treating `_` as `-`: `Ruff>=0.4` and `ruff[toml]` are `ruff`, but `ruff-lsp` is not.
-  - Commands: test is `pytest`, lint is `ruff check .`, typecheck is `mypy .`, each only when the tool was found. They run as `python -m <tool>` with pip, and through `uv run`, `poetry run` or `pipenv run` otherwise.
+  - Commands: test is `pytest`, lint is `ruff check .`, typecheck is `mypy .`, each only when the tool was found. They start with the project's interpreter (below): `.venv/bin/python -m pytest`, `uv run pytest`, `python -m pytest`.
+  - install: `<interpreter> -m pip install -r <file>` with the first of `requirements-dev.txt`, `requirements_dev.txt`, `dev-requirements.txt`, `requirements-test.txt`, `requirements_test.txt`, `test-requirements.txt`, `requirements.txt` in the folder, else `<interpreter> -m pip install -e .` for a `pyproject.toml` or `setup.py`. `uv sync`, `poetry install` or `pipenv install --dev` for those managers.
   - Name: `name` under `[project]` or `[tool.poetry]` in `pyproject.toml`, else the folder's name.
 - **Rust** (`Cargo.toml`): package manager `cargo`; commands `cargo build`, `cargo test` and `cargo clippy --all-targets -- -D warnings`, each with `--workspace` when the file has a `[workspace]` table.
 - **Go** (`go.mod`): package manager `go`; commands `go build ./...`, `go test ./...` and `go vet ./...`. The name is the last part of the module path.
+
+### The Python interpreter
+
+Each Python project's commands run with one interpreter, chosen in this order (ADR 0022):
+
+| Order | `source`                   | When                                                                                                                                                    | Commands start with                                                      |
+| ----- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 1     | `venv`                     | A `.venv` folder, else a `venv` folder, in the project's folder holds an interpreter: `Scripts\python.exe` on Windows, `bin/python` on macOS and Linux. | `.venv/bin/python -m` (`.venv\Scripts\python.exe -m` on Windows)         |
+| 2     | `uv`, `poetry` or `pipenv` | The project is a uv, poetry or Pipfile project (see "Package manager" above). Its manager picks the environment.                                        | `uv run`, `poetry run`, `pipenv run`                                     |
+| 3     | `active`                   | `VIRTUAL_ENV` names a folder that holds an interpreter, as it does in a shell where a virtual environment is activated.                                 | that interpreter's full path and `-m`, in double quotes if it has spaces |
+| 4     | `path`                     | None of the above: no virtual environment was found. The commands are what they were before 0.1.2, and `detail` and `fscale verify` say so.             | `python -m`                                                              |
+
+Why this order: a virtual environment in the project's own folder is the most specific, and running its interpreter directly never installs anything. uv and poetry decide for themselves which environment a project uses, and both prefer the project's own over an activated one. An activated environment belongs to the shell, not to one project, so it only fills in for projects that name none. `fscale facts` shows the choice as `interpreter: ...` under each Python project.
+
+A `.venv` with no interpreter for this platform (for example one made in WSL and used from Windows) is not used, and `detail` says so.
+
+On Windows the path in a command uses backslashes, because `cmd` cannot start a program written as `.venv/Scripts/python.exe`. This is the one place where fscale output has a backslash in a path.
 
 The graph:
 
@@ -99,7 +119,8 @@ The graph:
 - A marker file that is not valid JSON (`package.json` of the root, a member or a discovered project) is reported in `warnings`, and its facts are left out.
 - A project found in a subfolder that is itself a workspace (a `frontend/` with `workspaces`, a `backend/` with a Cargo `[workspace]`) is one project. Its members are not listed.
 - Two projects can have the same name, for example two folders both called `api`. `root` tells them apart.
-- Python commands assume `python` is on the PATH and has the tools installed, as in an activated virtual environment. On a machine with only `python3`, set the command under `verify.projects`.
+- With no virtual environment found, Python commands use `python` from the PATH. On a machine with only `python3`, create a `.venv` in the project's folder, or set the command under `verify.projects`.
+- `VIRTUAL_ENV` is read when `fscale` starts, so `fscale facts` and `fscale verify` describe the shell they run in.
 - uv workspaces are not part of the graph yet.
 - With bun, uv, poetry and pipenv the commands go through `bunx`, `uv run`, `poetry run` and `pipenv run`. Those can install what is missing or create a virtual environment. Only `npx --no` is guaranteed not to. `tsc --noEmit` writes a `.tsbuildinfo` file when the tsconfig turns on `incremental` or `composite`.
 - The search has no config: it follows `.gitignore` and the list above. A folder that should not count as a project can be turned off for `fscale verify` with `verify.projects`.
