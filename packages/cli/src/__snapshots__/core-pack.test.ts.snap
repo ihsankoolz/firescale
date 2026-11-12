@@ -12,11 +12,11 @@ exports[`the agent-ready pack > reports an empty repo as not agent-ready, and pa
 
 agent-ready/agent-skills  (enforced, low)
   .agents/skills/
-    6 skills of the enabled rules are missing or out of date in .agents/skills/ (Codex): firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
+    7 skills of the enabled rules are missing or out of date in .agents/skills/ (Codex): firescale-add, firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
   .claude/skills/
-    6 skills of the enabled rules are missing or out of date in .claude/skills/ (Claude Code): firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
+    7 skills of the enabled rules are missing or out of date in .claude/skills/ (Claude Code): firescale-add, firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
   .cursor/skills/
-    6 skills of the enabled rules are missing or out of date in .cursor/skills/ (Cursor): firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
+    7 skills of the enabled rules are missing or out of date in .cursor/skills/ (Cursor): firescale-add, firescale-agent-ready-agent-permissions, firescale-agent-ready-agent-skills, firescale-agent-ready-agents-md, firescale-agent-ready-commands-documented, firescale-agent-ready-single-test-command, firescale-agent-ready-verify-hook. \`fscale sync\` writes them. [deterministic fix available]
   How to fix: fscale explain agent-ready/agent-skills
 
 agent-ready/agents-md  (enforced, medium)

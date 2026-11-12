@@ -152,6 +152,7 @@ firescale
   created firescale.config.json
 
 agent-ready/agent-skills
+  created .claude/skills/firescale-add/SKILL.md (staged with git add)
   created .claude/skills/firescale-agent-ready-agent-permissions/SKILL.md (staged with git add)
   created .claude/skills/firescale-agent-ready-agent-skills/SKILL.md (staged with git add)
   created .claude/skills/firescale-agent-ready-agents-md/SKILL.md (staged with git add)
@@ -166,6 +167,7 @@ agent-ready/agent-skills
   created .claude/skills/firescale-core-readme-setup/SKILL.md (staged with git add)
   created .claude/skills/firescale-core-scripts-present/SKILL.md (staged with git add)
   created .claude/skills/firescale-core-single-lockfile/SKILL.md (staged with git add)
+  created .agents/skills/firescale-add/SKILL.md (staged with git add)
   created .agents/skills/firescale-agent-ready-agent-permissions/SKILL.md (staged with git add)
   created .agents/skills/firescale-agent-ready-agent-skills/SKILL.md (staged with git add)
   created .agents/skills/firescale-agent-ready-agents-md/SKILL.md (staged with git add)
@@ -180,6 +182,7 @@ agent-ready/agent-skills
   created .agents/skills/firescale-core-readme-setup/SKILL.md (staged with git add)
   created .agents/skills/firescale-core-scripts-present/SKILL.md (staged with git add)
   created .agents/skills/firescale-core-single-lockfile/SKILL.md (staged with git add)
+  created .cursor/skills/firescale-add/SKILL.md (staged with git add)
   created .cursor/skills/firescale-agent-ready-agent-permissions/SKILL.md (staged with git add)
   created .cursor/skills/firescale-agent-ready-agent-skills/SKILL.md (staged with git add)
   created .cursor/skills/firescale-agent-ready-agents-md/SKILL.md (staged with git add)
@@ -217,7 +220,7 @@ core/gitignore-basics
 core/readme-setup
   created README.md (staged with git add)
 
-Done: 53 changes.
+Done: 56 changes.
 
 Left for you: no violations.
 

@@ -4,10 +4,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-- **Milestone:** M13 agent files from `init` (M12 is in pull request #19, being merged).
+- **Milestone:** M14 generators, on the local branch `m14-work` (M12 merged as #19; M13 in pull request #20).
 - **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each milestone is still one pull request).
 - **Session plan, in order:** M12, M13 agent files, M14 generators, M15 Next.js pack, M16 Python pack, then a 0.2.0 version bump. Deadline 22:00 UTC (06:00 Singapore time, 13 Nov). Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
-- **Done so far:** 0.1.3 release recorded. M12 (#19): doctor and the two fixes, reviewed and fixed. M13: code, tests, ADR 0027, docs and its real-repo pass done on the local branch `m13-work`; next is its pull request after #19 merges.
+- **Done so far:** 0.1.3 release recorded. M12 (#19): doctor and the two fixes, reviewed and fixed. M13: code, tests, ADR 0027, docs and its real-repo pass done on the local branch `m13-work`; M13 is pull request #20. M14: code, tests, ADR 0028, docs and its real-repo pass are done on `m14-work`, which is based on M13; it goes onto the session branch after #20 merges.
 
 ## Where things stand
 
@@ -66,6 +66,12 @@ Notes on M12, for whoever touches doctor or verify's service watch:
 - The live view of a running step's output is `crates/core/src/activity.rs` (heartbeat counts, the last 200 lines). Verify's early stop is `service_down_while_running` in `verify.rs`; a command stopped that way ends as `Ending::GaveUp`.
 - The python stand-in answers `--version` with `Python <FSCALE_STUB_PYTHON_VERSION>` (default 3.12.4).
 - The format research for M13 (Claude Code, Codex, Cursor) was done on 2026-11-12; see ADR 0027 once M13 lands. Cursor's hook format was confirmed from Cursor's public GitHub repositories (`cursor/cookbook`, `cursor/plugins`); cursor.com itself is still blocked.
+
+Notes on M14, for whoever adds a generator:
+
+- A generator is a `Generator` in `packages/cli/src/generators/` (`types.ts`), listed in `GENERATORS` in `index.ts`. It returns files and notes and writes nothing; the binary (`add` in `crates/cli/src/main.rs`) checks the paths and writes.
+- Its schema may use only what `validate.ts` supports. The tests compile every printed schema with Ajv in strict mode.
+- Each generator needs an example input in `generators.test.ts` (`INPUTS`): it gets the dry-run, snapshot and "adds no violation" tests from there.
 
 Notes on M13, for whoever touches the agent files:
 

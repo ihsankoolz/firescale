@@ -360,7 +360,9 @@ Formats confirmed in ADR 0027 (Claude Code from its docs, Codex from its source,
 
 ---
 
-## M14 — Generators: `add` and `schema` ☐
+## M14 — Generators: `add` and `schema` ☑
+
+Built as ADR 0028 says: the generators live in `packages/cli/src/generators/` so they ship in the `firescale` package; `packages/generators` is a placeholder.
 
 **Build**
 
@@ -371,10 +373,10 @@ Formats confirmed in ADR 0027 (Claude Code from its docs, Codex from its source,
 
 **Done when**
 
-- ☐ `fscale schema <generator>` prints a valid JSON Schema, and `fscale add` rejects input that does not match it with an error naming the field.
-- ☐ `fscale add --dry-run` prints a diff and changes nothing.
-- ☐ Each generator has snapshot tests, and its output passes `fscale check`.
-- ☐ After `fscale sync`, the skill is present for each agent, proven by a test.
+- ☑ `fscale schema <generator>` prints a valid JSON Schema, and `fscale add` rejects input that does not match it with an error naming the field.
+- ☑ `fscale add --dry-run` prints a diff and changes nothing.
+- ☑ Each generator has snapshot tests, and its output passes `fscale check`.
+- ☑ After `fscale sync`, the skill is present for each agent, proven by a test.
 
 ---
 

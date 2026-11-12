@@ -22,6 +22,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M14) The generators live in `packages/cli/src/generators/`**, inside the `firescale` npm package, not in `packages/generators` as SPEC §9 lays out; that package is a placeholder pointing there. A separate package would need its own publish step (ADR 0028).
+- **(M14) Default folders:** `fscale add package` writes to `packages/<name>`, `fscale add rule` to `firescale-rules/` (the docs' `tools/rules` would give `tools/rules/rules/<rule>`).
 - **(M13) A repo with CLAUDE.md and no AGENTS.md:** `adopt` (with `agent-ready` on) and `sync` create AGENTS.md and append a three-line managed block with `@AGENTS.md` to the end of CLAUDE.md, because Claude Code reads only CLAUDE.md when it exists. Nothing else in CLAUDE.md changes, and nested CLAUDE.md files are untouched. The alternative is to leave CLAUDE.md alone and print a note, at the cost of Claude Code never seeing the commands (ADR 0027).
 - **(M13) Codex's permission profile was not run.** `.codex/config.toml` (`default_permissions = "firescale"`, extending `:workspace`, denying env files and keys) follows Codex's source and tests at `rust-v0.167.2`; developers.openai.com was blocked. Open the repo once in Codex (as a trusted project) and check it starts. A Codex config you wrote is never edited.
 - **(M13) Cursor's `.cursor/cli.json` permissions are unconfirmed** (cursor.com blocked). Cursor's hooks and skills formats were confirmed from Cursor's own GitHub examples. Allow `cursor.com` in the environment's network settings so a session can check the docs page.
@@ -78,6 +80,22 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M14 — Generators: `add` and `schema`
+
+**Built** (ADR 0028, `docs/generators.md`)
+
+1. `fscale schema` lists the generators; `fscale schema <generator>` prints its input JSON Schema (draft-07).
+2. `fscale add <generator> --json '<input>' [--dry-run]`: the input is validated against the schema in the Node host before anything is written, and a bad field is an error that names it (exit 2). `--dry-run` prints a diff per file and changes nothing. A run that would write over any file writes nothing.
+3. Two generators: `package` (a JavaScript ESM package with a `node:test` test and a README; says when the workspace list does not cover it) and `rule` (a custom TypeScript rule: `rule.ts`, a SKILL.md that passes `validateSkill`, a Vitest fixture test, and `pack.ts` when there is none).
+4. The `agent-ready` pack ships a skill, `firescale-add`, installed for Claude Code, Codex and Cursor by `agent-ready/agent-skills`. It tells agents to list, read the schema, dry-run, then `fscale add`.
+5. This repo has the new skill (dogfooding).
+
+**Decisions made for you:** ADR 0028 (code in `packages/cli`, three bridge methods, a small validator instead of Ajv at runtime, `--json` reused for the input, no edits to existing files).
+
+**Found on real repos** (`add package` and `add rule` with `--dry-run` on the three repos): nothing written, as expected. On `fastapi/full-stack-fastapi-template` the root `workspaces` (`packages/*`) already covers the new package, so no note; on `vercel/commerce` and `microservices-demo`, which list no workspaces, the note says so. Nothing to fix.
+
+**Known limits:** two generators only; no custom generators; the validator supports what the generators use.
 
 ## M13 — Born agent-ready: agent files from `init`
 

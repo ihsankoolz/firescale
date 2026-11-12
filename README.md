@@ -4,7 +4,7 @@
 
 `firescale` is a free toolkit for small teams where the rules are the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Every rule ships a **check**, an optional **deterministic fix**, and a portable **SKILL.md**, so a human, a CI job or any coding agent (Claude Code, Codex, Cursor) can find what is wrong with a repo and fix it the same way. One `fscale verify` command is the "definition of done" that all of them call. It works on any repo, with or without Nx or Turborepo, on Windows, macOS and Linux.
 
-Built today: `check`, `fix`, `verify`, `doctor`, agent hooks, three rule packs (`core`, `agent-ready`, `group-project`), and `init`, `adopt` and `sync` driven by the rules' own fixes ([docs/init.md](docs/init.md)). Planned, in [PLAN.md](PLAN.md): a referee inside `verify` (blame-aware failures and a tamper guard), a guarded agent runner with a ledger, and stack packs.
+Built today: `check`, `fix`, `verify`, `doctor`, `add` and `schema`, agent files, three rule packs (`core`, `agent-ready`, `group-project`), and `init`, `adopt` and `sync` driven by the rules' own fixes ([docs/init.md](docs/init.md)). Planned, in [PLAN.md](PLAN.md): a referee inside `verify` (blame-aware failures and a tamper guard), a guarded agent runner with a ledger, and stack packs.
 
 Install guide: [docs/install.md](docs/install.md).
 
@@ -29,9 +29,11 @@ fscale explain core/no-committed-env  # what a rule checks and how to fix it
 fscale verify                         # check, lint, typecheck, test: the definition of done
 fscale hooks install --all            # agents must pass verify before they stop
 fscale doctor                         # is this machine ready: tools, env variables, dependencies, services
+fscale schema package                 # a generator's input; `fscale schema` lists them
+fscale add package --json '{"name":"utils"}' --dry-run   # scaffold from JSON input
 ```
 
-Releases are described in [RELEASING.md](RELEASING.md). `fscale verify` is described in [docs/verify.md](docs/verify.md) the agent hooks in [docs/hooks.md](docs/hooks.md), and `fscale doctor` in [docs/doctor.md](docs/doctor.md).
+Releases are described in [RELEASING.md](RELEASING.md). `fscale verify` is described in [docs/verify.md](docs/verify.md) the agent hooks in [docs/hooks.md](docs/hooks.md), `fscale doctor` in [docs/doctor.md](docs/doctor.md), and `fscale add` in [docs/generators.md](docs/generators.md).
 
 The built-in rules are listed in [docs/rules.md](docs/rules.md). Built-in rules run with no Node process. Node is started only for a `firescale.config.ts` or custom TypeScript rules.
 
