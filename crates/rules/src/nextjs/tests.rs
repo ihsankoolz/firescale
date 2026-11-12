@@ -5,9 +5,7 @@ use firescale_core::model::{Diagnostic, Fixable};
 use firescale_core::rule::{BuiltinRule, Options};
 use firescale_core::testing::{Fixture, Track};
 
-use super::{
-    app_router, eslint, gitignore, new_package_json, next_config, pack, package_json, tsconfig,
-};
+use super::{app_router, eslint, gitignore, pack, package_json};
 
 fn rules() -> Vec<Box<dyn BuiltinRule>> {
     pack().rules
