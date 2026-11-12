@@ -3,6 +3,7 @@
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
+import { format } from 'prettier';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXIT_OK, EXIT_VIOLATIONS, runCli } from './test-helpers.js';
 
@@ -86,6 +87,26 @@ describe('fscale init in an empty folder', () => {
         ),
       ).toBe(claude);
     }
+  });
+});
+
+describe('generated Markdown', () => {
+  it('is already formatted as Prettier would, so a repo that runs Prettier never drifts', async () => {
+    const repo = await fixtures.create({ track: 'no-git' });
+    await runCli(['init'], repo.root);
+    for (const file of [
+      'AGENTS.md',
+      '.claude/skills/firescale-core-ci-exists/SKILL.md',
+      '.agents/skills/firescale-agent-ready-agents-md/SKILL.md',
+    ]) {
+      const text = await readFile(path.join(repo.root, file), 'utf8');
+      expect(await format(text, { parser: 'markdown' }), file).toBe(text);
+    }
+    const claude = await fixtures.create({ files: { 'CLAUDE.md': '# Notes\n' } });
+    await writeFile(path.join(claude.root, 'firescale.config.json'), AGENT_READY_CONFIG);
+    await runCli(['sync'], claude.root);
+    const text = await readFile(path.join(claude.root, 'CLAUDE.md'), 'utf8');
+    expect(await format(text, { parser: 'markdown' })).toBe(text);
   });
 });
 
@@ -193,7 +214,7 @@ describe('a repo shaped like the course project', () => {
         expect(withoutBlock(is.slice(was.length - 'No final newline'.length))).toBe(
           'No final newline\n',
         );
-        expect(is).toContain('\n@AGENTS.md\n<!-- END firescale -->\n');
+        expect(is).toContain('\n@AGENTS.md\n\n<!-- END firescale -->\n');
       } else if (file === '.claude/settings.json') {
         // Valid JSON with the team's entry and firescale's added as new lines.
         const json = JSON.parse(is) as { permissions: { allow: string[] } };

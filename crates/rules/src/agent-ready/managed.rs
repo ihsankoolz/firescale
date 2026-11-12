@@ -184,7 +184,7 @@ fn folder_heading(folder: &str) -> String {
 /// `.venv` path).
 pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
     let mut out = format!(
-        "{BEGIN}: written by `fscale sync` from `fscale facts`. Edits inside this block are replaced; write your own notes outside it. -->\n## Commands\n\n"
+        "{BEGIN}: written by `fscale sync` from `fscale facts`. Edits inside this block are replaced; write your own notes outside it. -->\n\n## Commands\n\n"
     );
     let mut sections = Vec::new();
     // The root's own scripts first, exactly as `fscale facts` names them.
@@ -252,7 +252,7 @@ pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
         out.push_str("\nFor a Python project, make a virtual environment in its folder first (`python -m venv .venv`) and activate it.\n");
     }
     out.push_str(&format!(
-        "\n## Definition of done\n\nBefore you say a task is done, run `{bin} verify` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.\n\n- Never skip, delete or weaken a test, a lint rule or a check to make it pass.\n- `SETUP NEEDED` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. `{bin} doctor` lists what is missing.\n- To learn how to fix a rule's finding: `{bin} explain <rule>`.\n{END}\n"
+        "\n## Definition of done\n\nBefore you say a task is done, run `{bin} verify` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.\n\n- Never skip, delete or weaken a test, a lint rule or a check to make it pass.\n- `SETUP NEEDED` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. `{bin} doctor` lists what is missing.\n- To learn how to fix a rule's finding: `{bin} explain <rule>`.\n\n{END}\n"
     ));
     out
 }
@@ -260,7 +260,7 @@ pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
 /// The managed block of CLAUDE.md: it makes Claude Code read AGENTS.md,
 /// which it skips when a CLAUDE.md exists.
 pub(crate) fn claude_block() -> String {
-    format!("{BEGIN}: lets Claude Code read AGENTS.md. Written by `fscale sync`. -->\n@AGENTS.md\n{END}\n")
+    format!("{BEGIN}: lets Claude Code read AGENTS.md. Written by `fscale sync`. -->\n\n@AGENTS.md\n\n{END}\n")
 }
 
 /// True when CLAUDE.md already imports AGENTS.md outside a code fence.

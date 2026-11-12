@@ -329,7 +329,12 @@ describe('existing work survives', () => {
         );
       }
       // The README, the workflow and the source are byte for byte the same.
-      for (const file of ['README.md', '.github/workflows/build.yml', 'package.json', 'src/index.js']) {
+      for (const file of [
+        'README.md',
+        '.github/workflows/build.yml',
+        'package.json',
+        'src/index.js',
+      ]) {
         expect(after.get(file), file).toEqual(before.get(file));
       }
       // AGENTS.md too, apart from firescale's block, added after it when
@@ -344,9 +349,9 @@ describe('existing work survives', () => {
       expect(gitignore.replaceAll('\r\n', '')).not.toContain('\n');
       // No second README or workflow was put beside the person's own.
       // (Skill folders such as firescale-core-readme-setup are not READMEs.)
-      expect([...after.keys()].filter((file) => /^readme/i.test(path.posix.basename(file)))).toEqual([
-        'README.md',
-      ]);
+      expect(
+        [...after.keys()].filter((file) => /^readme/i.test(path.posix.basename(file))),
+      ).toEqual(['README.md']);
       expect([...after.keys()].filter((file) => file.startsWith('.github/'))).toEqual([
         '.github/workflows/build.yml',
       ]);

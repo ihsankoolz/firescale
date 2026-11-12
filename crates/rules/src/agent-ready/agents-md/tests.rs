@@ -185,7 +185,7 @@ mod fixed_repo {
         let after = f.read(CLAUDE_MD).unwrap();
         assert!(after.starts_with(claude));
         assert!(
-            after.ends_with("@AGENTS.md\n<!-- END firescale -->\n"),
+            after.ends_with("\n@AGENTS.md\n\n<!-- END firescale -->\n"),
             "{after}"
         );
         assert!(check(&f).is_empty());

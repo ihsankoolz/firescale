@@ -268,7 +268,7 @@ pub fn insert_merge(text: &str, wanted: &Value) -> Option<String> {
         }
         edits.push((at, block));
     }
-    edits.sort_by(|a, b| b.0.cmp(&a.0));
+    edits.sort_by_key(|edit| std::cmp::Reverse(edit.0));
     let mut out = text.to_owned();
     for (at, block) in edits {
         out.insert_str(at, &block);

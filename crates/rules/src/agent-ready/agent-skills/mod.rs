@@ -75,7 +75,8 @@ pub fn installed_skill(source: &str, rule_id: &str) -> String {
             }
         })
         .collect();
-    format!("---\n{}\n---\n{note}{body}", front.join("\n"))
+    // A blank line after the frontmatter, so Prettier leaves the file as it is.
+    format!("---\n{}\n---\n\n{note}{body}", front.join("\n"))
 }
 
 /// Skills a pack ships besides its rules' own. None yet; generators add one
