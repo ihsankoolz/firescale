@@ -790,4 +790,66 @@ mod tests {
         assert_eq!(give_up.stdout, "{}\n");
         assert!(give_up.stderr.contains("allowed to stop"));
     }
+
+    fn report_with(output: &str) -> crate::verify::VerifyReport {
+        use crate::verify::{run_verify, CheckStep, Planned, ProjectPlan, VerifyPlan};
+        let fixture = Fixture::new(&[("svc/main.py", "")], Track::NoGit).unwrap();
+        let command = if cfg!(windows) {
+            format!("echo {output} 1>&2 & exit /b 1")
+        } else {
+            format!("echo \"{output}\" >&2; exit 1")
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![ProjectPlan {
+                root: "svc".to_owned(),
+                kind: Some("python".to_owned()),
+                steps: vec![("test".to_owned(), Planned::Command(command))],
+                install: Some("uv sync".to_owned()),
+                python_from_path: false,
+            }],
+            ..VerifyPlan::default()
+        };
+        let check = CheckStep {
+            ok: true,
+            detail: "no rules".to_owned(),
+            output: Vec::new(),
+            duration_ms: 0,
+            command: "fscale check".to_owned(),
+        };
+        run_verify(fixture.root(), "0.0.0", check, &plan).unwrap()
+    }
+
+    #[test]
+    fn a_block_for_a_setup_problem_tells_the_agent_not_to_edit_code() {
+        let report = report_with("ModuleNotFoundError: No module named 'jwt'");
+        let summary = block_summary(&report);
+        assert!(
+            summary.starts_with(
+                "SETUP NEEDED: 1 step could not run because the environment is not ready"
+            ),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("Do not edit code, tests or config to get past it."),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("Run `uv sync` in svc to set it up"),
+            "{summary}"
+        );
+        let block = reply(Agent::Claude, &Decision::Block { blocks: 1 }, &summary, 3);
+        assert_eq!(block.exit_code, 2);
+        assert!(block.stderr.contains("Do not edit code"));
+    }
+
+    #[test]
+    fn a_block_for_a_real_failure_is_the_plain_summary() {
+        let report = report_with("assert 1 == 2");
+        assert_eq!(
+            block_summary(&report),
+            crate::verify::format_verify_human(&report)
+        );
+        assert!(!block_summary(&report).contains("SETUP"));
+    }
 }

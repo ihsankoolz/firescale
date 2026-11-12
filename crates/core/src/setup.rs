@@ -31,7 +31,7 @@ const BASE_PROGRAMS: [&str; 16] = [
 
 /// The text between the first pair of `quote` characters after `start`, or
 /// the word after it when it is not quoted.
-fn name_after<'a>(text: &'a str, start: usize) -> Option<&'a str> {
+fn name_after(text: &str, start: usize) -> Option<&str> {
     let rest = text[start..].trim_start();
     let first = rest.chars().next()?;
     let name = if matches!(first, '\'' | '"' | '`') {

@@ -65,7 +65,7 @@ exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
   "rerun": "node test.js",
   "result": "failed",
   "runner": "config",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "skipped": [],
   "steps": [
     {
@@ -153,16 +153,21 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     test       skipped  package.json has no test script, and no vitest or jest config was found
 
 warning: steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service, test in frontend. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.
+
+note: no virtual environment was found for backend/audit_service, backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.
 "
 `;
 
 exports[`fscale verify in a repo with projects in subfolders > runs the backend's and the frontend's steps, each in its own folder, and names every skipped step 2`] = `
 {
   "failOnSkipped": false,
+  "notes": [
+    "no virtual environment was found for backend/audit_service, backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.",
+  ],
   "ok": true,
   "result": "partial",
   "runner": "projects",
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "skipped": [
     {
       "project": "backend/audit_service",
@@ -419,5 +424,7 @@ exports[`fscale verify in a repo with projects in subfolders > takes commands an
   in frontend:
     lint       passed   npx --no oxlint
     test       passed   npx --no playwright test
+
+note: no virtual environment was found for backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.
 "
 `;

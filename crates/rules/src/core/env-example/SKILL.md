@@ -32,7 +32,8 @@ Test code is:
 - Python files named `test_*.py` or `*_test.py`;
 - Go files named `*_test.go`;
 - Ruby files named `*_spec.rb` or `*_test.rb`;
-- files named `*.test.*` or `*.spec.*`, for example `api.test.ts`.
+- files named `*.test.*` or `*.spec.*`, for example `api.test.ts`;
+- the config file of a test runner: a name that starts with `playwright.config.`, `vitest.config.`, `vitest.workspace.`, `jest.config.` or `cypress.config.`.
 
 When the root `.env.example` does not exist, the one shared finding has low severity only if every name in it is test-only.
 

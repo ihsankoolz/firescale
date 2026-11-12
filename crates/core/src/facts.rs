@@ -1184,14 +1184,15 @@ fn python_interpreter(
         }
     }
 
-    let fresh = venv_python(".venv");
-    let install = install_from(&fresh).map(|install| format!("python -m venv .venv && {install}"));
+    // Today's behaviour: install into the same `python` the steps run with.
+    // Creating `.venv` first (`python -m venv .venv`) makes the next run use it.
+    let install = install_from("python");
     (
         Interpreter {
             source: "path".to_owned(),
             command: "python -m".to_owned(),
             detail: format!(
-                "no virtual environment found (no .venv or venv folder in the project{not_usable}, no active VIRTUAL_ENV, not a uv or poetry project), so python from the PATH"
+                "no virtual environment found, so python from the PATH: no .venv or venv folder in the project{not_usable}, no active VIRTUAL_ENV, and not a uv or poetry project"
             ),
         },
         install,
@@ -1898,7 +1899,7 @@ mod tests {
 
     fn facts(files: &[(&str, &str)]) -> RepoFacts {
         let fixture = Fixture::new(files, Track::NoGit).unwrap();
-        detect_facts(fixture.root()).unwrap()
+        detect_facts_with(fixture.root(), None).unwrap()
     }
 
     #[test]
@@ -2098,7 +2099,7 @@ mod tests {
     #[test]
     fn a_course_project_reports_its_services_and_its_frontend_as_projects() {
         let fixture = crate::testing::course_project().unwrap();
-        let facts = detect_facts(fixture.root()).unwrap();
+        let facts = detect_facts_with(fixture.root(), None).unwrap();
 
         // The repo-level summary lists what every project uses.
         assert_eq!(facts.package_manager, None);
@@ -2179,7 +2180,7 @@ mod tests {
     #[test]
     fn a_folder_without_a_marker_is_not_a_project() {
         let fixture = crate::testing::course_project().unwrap();
-        let facts = detect_facts(fixture.root()).unwrap();
+        let facts = detect_facts_with(fixture.root(), None).unwrap();
         // `backend/` has only a .coveragerc, and `backend/shared` only code.
         assert!(facts
             .projects
@@ -2669,7 +2670,7 @@ mod tests {
                 &format!("flask\n-r ../../../outside/requirements.txt\n-r {absolute}\n"),
             )
             .unwrap();
-        let facts = detect_facts(fixture.root()).unwrap();
+        let facts = detect_facts_with(fixture.root(), None).unwrap();
         assert!(facts.warnings.is_empty(), "{:?}", facts.warnings);
         let app = by_root(&facts, "app");
         assert!(app.tools.is_empty(), "{:?}", app.tools);
@@ -2715,5 +2716,218 @@ mod tests {
         assert!(app.tools.is_empty(), "{:?}", app.tools);
         assert_eq!(app.commands.lint, None);
         assert_eq!(app.commands.typecheck, None);
+    }
+
+    // ------------------------------------------- Python interpreters (ADR 0022)
+
+    /// The interpreter a venv folder holds on this platform.
+    fn venv_file(venv: &str) -> String {
+        if cfg!(windows) {
+            format!("{venv}/Scripts/python.exe")
+        } else {
+            format!("{venv}/bin/python")
+        }
+    }
+
+    /// A venv interpreter file for the other platform: never used here.
+    fn foreign_venv_file(venv: &str) -> String {
+        if cfg!(windows) {
+            format!("{venv}/bin/python")
+        } else {
+            format!("{venv}/Scripts/python.exe")
+        }
+    }
+
+    fn service(extra: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut files = vec![
+            (
+                "svc/requirements-dev.txt".to_owned(),
+                "pytest\nruff\n".to_owned(),
+            ),
+            ("svc/requirements.txt".to_owned(), "pyjwt\n".to_owned()),
+            ("svc/main.py".to_owned(), String::new()),
+        ];
+        files.extend(
+            extra
+                .iter()
+                .map(|(file, content)| ((*file).to_owned(), (*content).to_owned())),
+        );
+        files
+    }
+
+    fn svc_with(extra: &[(&str, &str)], active: Option<&Path>) -> (Fixture, Project) {
+        let files = service(extra);
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(file, content)| (file.as_str(), content.as_str()))
+            .collect();
+        let fixture = Fixture::new(&borrowed, Track::NoGit).unwrap();
+        let facts = detect_facts_with(fixture.root(), active).unwrap();
+        let project = by_root(&facts, "svc").clone();
+        (fixture, project)
+    }
+
+    #[test]
+    fn a_venv_in_the_project_folder_runs_its_steps() {
+        let file = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&file, "")], None);
+        let python = venv_python(".venv");
+        let interpreter = svc.interpreter.unwrap();
+        assert_eq!(interpreter.source, "venv");
+        assert_eq!(interpreter.command, format!("{python} -m"));
+        assert_eq!(svc.commands.test, Some(format!("{python} -m pytest")));
+        assert_eq!(svc.commands.lint, Some(format!("{python} -m ruff check .")));
+        assert_eq!(
+            svc.commands.install,
+            Some(format!("{python} -m pip install -r requirements-dev.txt"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_venv_interpreter_is_scripts_python_exe() {
+        let (_f, svc) = svc_with(&[("svc/.venv/Scripts/python.exe", "")], None);
+        assert_eq!(
+            svc.commands.test.as_deref(),
+            Some(".venv\\Scripts\\python.exe -m pytest")
+        );
+        // A venv made on Linux or macOS has no Scripts\python.exe.
+        let (_f, svc) = svc_with(&[("svc/.venv/bin/python", "")], None);
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+        assert!(svc
+            .interpreter
+            .unwrap()
+            .detail
+            .contains(".venv has no Scripts/python.exe"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn elsewhere_the_venv_interpreter_is_bin_python() {
+        let (_f, svc) = svc_with(&[("svc/.venv/bin/python", "")], None);
+        assert_eq!(
+            svc.commands.test.as_deref(),
+            Some(".venv/bin/python -m pytest")
+        );
+        // A venv made on Windows has no bin/python.
+        let (_f, svc) = svc_with(&[("svc/.venv/Scripts/python.exe", "")], None);
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+        assert!(svc
+            .interpreter
+            .unwrap()
+            .detail
+            .contains(".venv has no bin/python"));
+    }
+
+    #[test]
+    fn a_venv_folder_named_venv_counts_and_dot_venv_comes_first() {
+        let venv = format!("svc/{}", venv_file("venv"));
+        let (_f, svc) = svc_with(&[(&venv, "")], None);
+        assert_eq!(
+            svc.commands.test,
+            Some(format!("{} -m pytest", venv_python("venv")))
+        );
+        let dot = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&venv, ""), (&dot, "")], None);
+        assert_eq!(
+            svc.commands.test,
+            Some(format!("{} -m pytest", venv_python(".venv")))
+        );
+    }
+
+    #[test]
+    fn a_venv_without_an_interpreter_for_this_platform_is_not_used() {
+        let foreign = format!("svc/{}", foreign_venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&foreign, "")], None);
+        let interpreter = svc.interpreter.unwrap();
+        assert_eq!(interpreter.source, "path");
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+    }
+
+    #[test]
+    fn uv_and_poetry_projects_use_their_manager_unless_the_folder_has_a_venv() {
+        let (_f, svc) = svc_with(&[("svc/uv.lock", "")], None);
+        assert_eq!(svc.interpreter.as_ref().unwrap().source, "uv");
+        assert_eq!(svc.commands.test.as_deref(), Some("uv run pytest"));
+        assert_eq!(svc.commands.install.as_deref(), Some("uv sync"));
+        let (_f, svc) = svc_with(&[("svc/poetry.lock", "")], None);
+        assert_eq!(svc.interpreter.as_ref().unwrap().source, "poetry");
+        assert_eq!(svc.commands.test.as_deref(), Some("poetry run pytest"));
+        assert_eq!(svc.commands.install.as_deref(), Some("poetry install"));
+        // The project's own .venv wins: it is what uv made, and running it
+        // directly never installs anything.
+        let dot = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[("svc/uv.lock", ""), (&dot, "")], None);
+        assert_eq!(svc.interpreter.as_ref().unwrap().source, "venv");
+    }
+
+    #[test]
+    fn an_active_virtual_env_is_used_when_the_project_has_none_of_its_own() {
+        let outside = Fixture::new(&[(&venv_file("env"), "")], Track::NoGit).unwrap();
+        let active = outside.root().join("env");
+        let (_f, svc) = svc_with(&[], Some(&active));
+        let interpreter = svc.interpreter.unwrap();
+        assert_eq!(interpreter.source, "active");
+        let expected = shell_quote(
+            &venv_python_parts()
+                .iter()
+                .fold(active.clone(), |path, part| path.join(part))
+                .to_string_lossy(),
+        );
+        assert_eq!(svc.commands.test, Some(format!("{expected} -m pytest")));
+        // The project's own venv comes first, and so does a uv project.
+        let dot = format!("svc/{}", venv_file(".venv"));
+        let (_f, svc) = svc_with(&[(&dot, "")], Some(&active));
+        assert_eq!(svc.interpreter.unwrap().source, "venv");
+        let (_f, svc) = svc_with(&[("svc/uv.lock", "")], Some(&active));
+        assert_eq!(svc.interpreter.unwrap().source, "uv");
+        // A VIRTUAL_ENV with no interpreter in it is ignored.
+        let empty = outside.root().join("nothing-here");
+        let (_f, svc) = svc_with(&[], Some(&empty));
+        assert_eq!(svc.interpreter.unwrap().source, "path");
+    }
+
+    #[test]
+    fn with_no_virtual_environment_python_from_the_path_is_used_and_said() {
+        let (_f, svc) = svc_with(&[], None);
+        let interpreter = svc.interpreter.clone().unwrap();
+        assert_eq!(interpreter.source, "path");
+        assert_eq!(interpreter.command, "python -m");
+        assert!(interpreter
+            .detail
+            .starts_with("no virtual environment found"));
+        // Today's commands, unchanged.
+        assert_eq!(svc.commands.test.as_deref(), Some("python -m pytest"));
+        assert_eq!(
+            svc.commands.install.as_deref(),
+            Some("python -m pip install -r requirements-dev.txt")
+        );
+        let facts = RepoFacts {
+            projects: vec![svc],
+            ..RepoFacts::default()
+        };
+        let text = format_facts_human(&facts);
+        assert!(
+            text.contains("    interpreter: python (no virtual environment found"),
+            "{text}"
+        );
+        let json = format_facts_json(&facts);
+        assert!(json.contains("\"source\": \"path\""), "{json}");
+    }
+
+    #[test]
+    fn shell_quote_leaves_plain_paths_alone() {
+        assert_eq!(
+            shell_quote("/home/me/env/bin/python"),
+            "/home/me/env/bin/python"
+        );
+        assert_eq!(
+            shell_quote("/my envs/a/bin/python"),
+            "\"/my envs/a/bin/python\""
+        );
+        if !cfg!(windows) {
+            assert_eq!(shell_quote("/a/$b/python"), "'/a/$b/python'");
+            assert_eq!(shell_quote("/a/it's/python"), "\"/a/it's/python\"");
+        }
     }
 }

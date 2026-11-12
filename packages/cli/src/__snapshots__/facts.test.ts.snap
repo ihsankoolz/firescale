@@ -11,25 +11,36 @@ Projects (6):
   audit_service [python] backend/audit_service
     stack: python, pip, alembic, docker, pytest
     test: python -m pytest
+    install: python -m pip install -r requirements-dev.txt
+    interpreter: python (no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project)
   auth_service [python] backend/auth_service
     stack: python, pip, alembic, docker, pytest, ruff
     test: python -m pytest
     lint: python -m ruff check .
+    install: python -m pip install -r requirements-dev.txt
+    interpreter: python (no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project)
   frontend [node] frontend
     stack: javascript, typescript, npm, knip, oxlint, playwright, vite
     lockfiles: package-lock.json
     build: npm run build
     lint: npx --no oxlint
     typecheck: npx --no tsc --noEmit
+    install: npm install
   ledger_service [python] backend/ledger_service
     stack: python, pip, alembic, docker, pytest
     test: python -m pytest
+    install: python -m pip install -r requirements-dev.txt
+    interpreter: python (no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project)
   market_service [python] backend/market_service
     stack: python, pip, alembic, docker, pytest
     test: python -m pytest
+    install: python -m pip install -r requirements-dev.txt
+    interpreter: python (no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project)
   realtime_service [python] backend/realtime_service
     stack: python, pip, alembic, docker, pytest
     test: python -m pytest
+    install: python -m pip install -r requirements-dev.txt
+    interpreter: python (no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project)
 "
 `;
 
@@ -69,9 +80,15 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
         "pytest"
       ],
       "commands": {
+        "install": "python -m pip install -r requirements-dev.txt",
         "test": "python -m pytest"
       },
-      "dependsOn": []
+      "dependsOn": [],
+      "interpreter": {
+        "source": "path",
+        "command": "python -m",
+        "detail": "no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project"
+      }
     },
     {
       "name": "auth_service",
@@ -90,10 +107,16 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
         "ruff"
       ],
       "commands": {
+        "install": "python -m pip install -r requirements-dev.txt",
         "test": "python -m pytest",
         "lint": "python -m ruff check ."
       },
-      "dependsOn": []
+      "dependsOn": [],
+      "interpreter": {
+        "source": "path",
+        "command": "python -m",
+        "detail": "no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project"
+      }
     },
     {
       "name": "frontend",
@@ -115,6 +138,7 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
         "vite"
       ],
       "commands": {
+        "install": "npm install",
         "build": "npm run build",
         "lint": "npx --no oxlint",
         "typecheck": "npx --no tsc --noEmit"
@@ -137,9 +161,15 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
         "pytest"
       ],
       "commands": {
+        "install": "python -m pip install -r requirements-dev.txt",
         "test": "python -m pytest"
       },
-      "dependsOn": []
+      "dependsOn": [],
+      "interpreter": {
+        "source": "path",
+        "command": "python -m",
+        "detail": "no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project"
+      }
     },
     {
       "name": "market_service",
@@ -157,9 +187,15 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
         "pytest"
       ],
       "commands": {
+        "install": "python -m pip install -r requirements-dev.txt",
         "test": "python -m pytest"
       },
-      "dependsOn": []
+      "dependsOn": [],
+      "interpreter": {
+        "source": "path",
+        "command": "python -m",
+        "detail": "no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project"
+      }
     },
     {
       "name": "realtime_service",
@@ -177,9 +213,15 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
         "pytest"
       ],
       "commands": {
+        "install": "python -m pip install -r requirements-dev.txt",
         "test": "python -m pytest"
       },
-      "dependsOn": []
+      "dependsOn": [],
+      "interpreter": {
+        "source": "path",
+        "command": "python -m",
+        "detail": "no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project"
+      }
     }
   ],
   "warnings": []
@@ -205,6 +247,7 @@ Projects (3):
     stack: javascript, pnpm
     build: pnpm run build
     test: pnpm run test
+    install: pnpm install
 "
 `;
 
@@ -269,6 +312,7 @@ exports[`fscale facts > prints schema-valid JSON for a pnpm monorepo 1`] = `
       "lockfiles": [],
       "tools": [],
       "commands": {
+        "install": "pnpm install",
         "build": "pnpm run build",
         "test": "pnpm run test"
       },

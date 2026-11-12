@@ -83,6 +83,9 @@ pub struct ProjectPlan {
     /// The command that installs the project's dependencies, named when a
     /// step fails because the environment is not set up.
     pub install: Option<String>,
+    /// True for a Python project for which no virtual environment was
+    /// found, so its commands use `python` from the PATH (ADR 0022).
+    pub python_from_path: bool,
 }
 
 /// The commands `verify` will run, and how they were chosen.
@@ -99,6 +102,8 @@ pub struct VerifyPlan {
     pub fail_on_skipped: bool,
     /// The command that installs the root's dependencies, if known.
     pub install: Option<String>,
+    /// True when the root is a Python project with no virtual environment.
+    pub python_from_path: bool,
 }
 
 const OFF_IN_CONFIG: &str = "turned off in your firescale config";
@@ -172,6 +177,15 @@ fn project_step(project: &Project, step: &str) -> Planned {
     }
 }
 
+/// True for a Python project whose commands use `python` from the PATH,
+/// because no virtual environment was found for it.
+fn from_path(project: &Project) -> bool {
+    project
+        .interpreter
+        .as_ref()
+        .is_some_and(|interpreter| interpreter.source == "path")
+}
+
 fn from_override(setting: &StepOverride) -> Planned {
     match setting {
         StepOverride::Command(command) => Planned::Command(command.clone()),
@@ -236,6 +250,7 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                 kind: Some(project.kind.clone()),
                 steps,
                 install: project.commands.install.clone(),
+                python_from_path: from_path(project),
             });
         }
     }
@@ -263,6 +278,7 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                     kind: None,
                     steps,
                     install: None,
+                    python_from_path: false,
                 });
             }
         }
@@ -409,11 +425,12 @@ pub fn plan_verify(
         })
         .collect();
     let all_from_config = STEPS.iter().all(|step| overrides.contains_key(*step));
-    let install = facts
+    let covering = facts
         .projects
         .iter()
-        .find(|project| project.root == "." && project.kind == covered)
-        .and_then(|project| project.commands.install.clone());
+        .find(|project| project.root == "." && project.kind == covered);
+    let install = covering.and_then(|project| project.commands.install.clone());
+    let python_from_path = covering.is_some_and(from_path);
     VerifyPlan {
         runner: if all_from_config {
             "config"
@@ -427,6 +444,7 @@ pub fn plan_verify(
         projects,
         fail_on_skipped: config.fail_on_skipped,
         install,
+        python_from_path,
     }
 }
 
@@ -548,6 +566,10 @@ pub struct VerifyReport {
     /// skipped because no command was found.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Things worth knowing about how steps ran: Python projects that ran
+    /// with `python` from the PATH because no virtual environment was found.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// The result of the `check` step, worked out by the caller.
@@ -848,6 +870,35 @@ pub fn run_verify(
         .iter()
         .filter(|step| matches!(step.status, StepStatus::Passed | StepStatus::Failed))
         .count();
+    let mut on_path: Vec<&str> = Vec::new();
+    if plan.python_from_path
+        && plan
+            .steps
+            .iter()
+            .any(|(_, p)| matches!(p, Planned::Command(_)))
+    {
+        on_path.push(".");
+    }
+    for project in &plan.projects {
+        if project.python_from_path
+            && project
+                .steps
+                .iter()
+                .any(|(_, planned)| matches!(planned, Planned::Command(_)))
+        {
+            on_path.push(&project.root);
+        }
+    }
+    let notes = if on_path.is_empty() {
+        Vec::new()
+    } else {
+        let places: Vec<&str> = on_path.iter().map(|folder| place_name(folder)).collect();
+        vec![format!(
+            "no virtual environment was found for {}, so {} Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.",
+            places.join(", "),
+            if places.len() == 1 { "its" } else { "their" }
+        )]
+    };
     let first_failure = steps.iter().find(|step| blocks(step.status));
     let any_failed = steps.iter().any(|step| step.status == StepStatus::Failed);
     let result = if any_failed || (plan.fail_on_skipped && !skipped.is_empty()) {
@@ -874,6 +925,7 @@ pub fn run_verify(
         steps,
         skipped,
         warnings,
+        notes,
     })
 }
 
@@ -995,6 +1047,12 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         out.push('\n');
         for warning in &report.warnings {
             out.push_str(&format!("warning: {warning}\n"));
+        }
+    }
+    if !report.notes.is_empty() {
+        out.push('\n');
+        for note in &report.notes {
+            out.push_str(&format!("note: {note}\n"));
         }
     }
     out
@@ -1320,9 +1378,11 @@ mod tests {
                                     kind: Some("python".to_owned()),
                                     steps: vec![("test".to_owned(), project_test.clone())],
                                     install: None,
+                                    python_from_path: false,
                                 }],
                                 fail_on_skipped,
                                 install: None,
+                                python_from_path: false,
                             };
                             let report =
                                 run_verify(fixture.root(), "0.0.0", passing_check(), &plan)
@@ -1398,7 +1458,7 @@ mod tests {
 
     fn course_facts() -> (Fixture, RepoFacts) {
         let fixture = crate::testing::course_project().unwrap();
-        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
         (fixture, facts)
     }
 
@@ -1559,7 +1619,7 @@ mod tests {
             Track::NoGit,
         )
         .unwrap();
-        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
         let plan = plan_verify(
             fixture.root(),
             &facts,
@@ -1588,7 +1648,7 @@ mod tests {
             Track::NoGit,
         )
         .unwrap();
-        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
         let plan = plan_verify(
             fixture.root(),
             &facts,
@@ -1619,7 +1679,7 @@ mod tests {
             Track::NoGit,
         )
         .unwrap();
-        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
         // `commands` still lists scripts only.
         assert_eq!(facts.commands.lint, None);
         let plan = plan_verify(
@@ -1671,6 +1731,7 @@ mod tests {
                         ),
                     ],
                     install: None,
+                    python_from_path: false,
                 },
                 ProjectPlan {
                     root: "two/deep".to_owned(),
@@ -1680,6 +1741,7 @@ mod tests {
                         ("test".to_owned(), Planned::Command(show.to_owned())),
                     ],
                     install: None,
+                    python_from_path: false,
                 },
             ],
             ..VerifyPlan::default()
@@ -1780,7 +1842,7 @@ mod tests {
 
     fn plan_of(files: &[(&str, &str)], config: &VerifyConfig) -> (Fixture, VerifyPlan) {
         let fixture = Fixture::new(files, Track::NoGit).unwrap();
-        let facts = crate::facts::detect_facts(fixture.root()).unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
         let plan = plan_verify(fixture.root(), &facts, config, false, None);
         (fixture, plan)
     }
@@ -1961,6 +2023,7 @@ mod tests {
                     kind: Some((*kind).to_owned()),
                     steps: vec![("test".to_owned(), Planned::Command("echo fine".to_owned()))],
                     install: None,
+                    python_from_path: false,
                 })
                 .collect(),
             ..VerifyPlan::default()
@@ -1971,5 +2034,279 @@ mod tests {
         assert!(text.contains("  in app (node):\n"), "{text}");
         assert!(format_verify_json(&report).contains("\"kind\": \"go\""));
         drop(fixture);
+    }
+
+    // ------------------------------- independent projects and setup (ADR 0022)
+
+    /// A command that prints `text` on stderr and exits with `code`.
+    fn say_and_exit(text: &str, code: i32) -> String {
+        if cfg!(windows) {
+            format!("echo {text} 1>&2 & exit /b {code}")
+        } else {
+            format!("echo \"{text}\" >&2; exit {code}")
+        }
+    }
+
+    fn project(root: &str, steps: &[(&str, &str)], install: Option<&str>) -> ProjectPlan {
+        ProjectPlan {
+            root: root.to_owned(),
+            kind: Some("python".to_owned()),
+            steps: steps
+                .iter()
+                .map(|(name, command)| {
+                    ((*name).to_owned(), Planned::Command((*command).to_owned()))
+                })
+                .collect(),
+            install: install.map(str::to_owned),
+            python_from_path: false,
+        }
+    }
+
+    fn statuses(report: &VerifyReport) -> Vec<(String, StepStatus)> {
+        report
+            .steps
+            .iter()
+            .map(|step| (step_place(step), step.status))
+            .collect()
+    }
+
+    #[test]
+    fn one_projects_failure_does_not_stop_the_others() {
+        let fixture = Fixture::new(
+            &[("a/x.txt", ""), ("b/x.txt", ""), ("c/x.txt", "")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let fail = say_and_exit("boom", 1);
+        let plan = VerifyPlan {
+            runner: "scripts".to_owned(),
+            steps: vec![("lint".to_owned(), Planned::Command(fail.clone()))],
+            projects: vec![
+                project("a", &[("lint", &fail), ("test", "echo fine")], None),
+                project("b", &[("lint", "echo fine"), ("test", "echo fine")], None),
+                project("c", &[("lint", "echo fine"), ("test", &fail)], None),
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(
+            statuses(&report),
+            [
+                ("check".to_owned(), StepStatus::Passed),
+                ("lint".to_owned(), StepStatus::Failed),
+                ("lint in a".to_owned(), StepStatus::Failed),
+                // Within a project, the first failure still stops the rest.
+                ("test in a".to_owned(), StepStatus::NotRun),
+                ("lint in b".to_owned(), StepStatus::Passed),
+                ("test in b".to_owned(), StepStatus::Passed),
+                ("lint in c".to_owned(), StepStatus::Passed),
+                ("test in c".to_owned(), StepStatus::Failed),
+            ]
+        );
+        assert_eq!(report.result, VerifyResult::Failed);
+        assert_eq!(report.failed_step.as_deref(), Some("lint"));
+        assert_eq!(report.failed_project, None);
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with("verify: FAILED at lint, lint in a, test in c\n"),
+            "{text}"
+        );
+        // Each failure gets its own rerun line.
+        for line in [
+            "\nFix the failure, then run again: ",
+            "\nFix the failure, then run again in a: ",
+            "\nFix the failure, then run again in c: ",
+        ] {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+        assert!(!text.contains("again in b"), "{text}");
+    }
+
+    #[test]
+    fn a_failing_check_still_stops_every_project() {
+        let fixture = Fixture::new(&[("a/x.txt", "")], Track::NoGit).unwrap();
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![project("a", &[("test", "echo fine")], None)],
+            ..VerifyPlan::default()
+        };
+        let check = CheckStep {
+            ok: false,
+            ..passing_check()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", check, &plan).unwrap();
+        assert_eq!(report.steps[1].status, StepStatus::NotRun);
+    }
+
+    #[test]
+    fn a_missing_module_is_setup_needed_with_the_install_command() {
+        let fixture =
+            Fixture::new(&[("svc/main.py", ""), ("web/x.txt", "")], Track::NoGit).unwrap();
+        let missing = say_and_exit("E   ModuleNotFoundError: No module named 'jwt'", 2);
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                project(
+                    "svc",
+                    &[("lint", "echo fine"), ("test", &missing)],
+                    Some(".venv/bin/python -m pip install -r requirements-dev.txt"),
+                ),
+                project("web", &[("test", "echo fine")], None),
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        let test = &report.steps[2];
+        assert_eq!(test.status, StepStatus::SetupNeeded);
+        assert_eq!(
+            test.fix.as_deref(),
+            Some(".venv/bin/python -m pip install -r requirements-dev.txt")
+        );
+        assert!(
+            test.detail
+                .ends_with(": the Python module 'jwt' is not installed"),
+            "{}",
+            test.detail
+        );
+        assert_eq!(report.steps[3].status, StepStatus::Passed);
+        assert_eq!(report.result, VerifyResult::SetupNeeded);
+        assert!(!report.ok);
+        assert_eq!(report.failed_project.as_deref(), Some("svc"));
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with("verify: SETUP NEEDED for test in svc\n"),
+            "{text}"
+        );
+        assert!(text.contains("    test       SETUP    "), "{text}");
+        assert!(text.contains("Do not change code for it."), "{text}");
+        assert!(
+            text.contains("Set it up in svc: .venv/bin/python -m pip install -r requirements-dev.txt\nThen run again in svc: "),
+            "{text}"
+        );
+        assert!(!text.contains("Fix the failure"), "{text}");
+        let json = format_verify_json(&report);
+        assert!(json.contains("\"result\": \"setup-needed\""), "{json}");
+        assert!(json.contains("\"status\": \"setup-needed\""), "{json}");
+        assert!(json.contains("\"schemaVersion\": 3"), "{json}");
+    }
+
+    #[test]
+    fn a_missing_module_of_the_project_itself_is_a_normal_failure() {
+        let fixture = Fixture::new(&[("svc/app/__init__.py", "")], Track::NoGit).unwrap();
+        let missing = say_and_exit("E   ModuleNotFoundError: No module named 'app.services'", 2);
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![project("svc", &[("test", &missing)], Some("pip install"))],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.steps[1].status, StepStatus::Failed);
+        assert_eq!(report.steps[1].fix, None);
+        assert_eq!(report.result, VerifyResult::Failed);
+    }
+
+    #[test]
+    fn setup_problems_and_failures_are_named_apart() {
+        let fixture = Fixture::new(&[("a/x.txt", ""), ("b/x.txt", "")], Track::NoGit).unwrap();
+        let missing = say_and_exit("/usr/bin/python: No module named pytest", 1);
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                project("a", &[("test", &missing)], None),
+                project(
+                    "b",
+                    &[("lint", &say_and_exit("E501 line too long", 1))],
+                    None,
+                ),
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.result, VerifyResult::Failed);
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with("verify: FAILED at lint in b; SETUP NEEDED for test in a\n"),
+            "{text}"
+        );
+        // With no install command known, the summary says what to set up.
+        assert!(
+            text.contains("Set up what the line above names, or ask a person to."),
+            "{text}"
+        );
+        assert!(
+            text.contains("\nFix the failure, then run again in b: "),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn plans_carry_each_projects_install_command() {
+        let (fixture, facts) = course_facts();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        let audit = &plan.projects[0];
+        assert_eq!(audit.root, "backend/audit_service");
+        assert_eq!(
+            audit.install.as_deref(),
+            Some("python -m pip install -r requirements-dev.txt")
+        );
+        let frontend = plan.projects.last().unwrap();
+        assert_eq!(frontend.install.as_deref(), Some("npm install"));
+    }
+
+    #[test]
+    fn a_python_project_without_a_venv_is_named_in_a_note() {
+        let fixture = Fixture::new(
+            &[
+                ("a/requirements.txt", "pytest\n"),
+                ("a/main.py", ""),
+                ("b/requirements.txt", "pytest\n"),
+                ("b/main.py", ""),
+                (
+                    &format!(
+                        "b/{}",
+                        crate::facts::venv_python(".venv").replace('\\', "/")
+                    ),
+                    "",
+                ),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
+        let mut plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        assert!(plan.projects[0].python_from_path);
+        assert!(!plan.projects[1].python_from_path);
+        // Run harmless commands in place of pytest.
+        for project in &mut plan.projects {
+            for (_, planned) in &mut project.steps {
+                if let Planned::Command(command) = planned {
+                    *command = "echo fine".to_owned();
+                }
+            }
+        }
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(
+            report.notes,
+            ["no virtual environment was found for a, so its Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it."]
+        );
+        assert!(format_verify_human(&report)
+            .contains("\nnote: no virtual environment was found for a,"));
+        // Every project has its venv: no note.
+        plan.projects[0].python_from_path = false;
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert!(report.notes.is_empty());
+        assert!(!format_verify_json(&report).contains("\"notes\""));
     }
 }
