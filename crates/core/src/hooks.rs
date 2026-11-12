@@ -379,6 +379,43 @@ pub struct HookReply {
     pub exit_code: u8,
 }
 
+/// What the stop hook sends an agent with a block: the verify summary,
+/// opened by a note when a step failed because the environment is not set
+/// up. That note tells the agent not to change code for it (ADR 0022).
+#[must_use]
+pub fn block_summary(report: &crate::verify::VerifyReport) -> String {
+    let summary = crate::verify::format_verify_human(report);
+    let setup: Vec<&crate::verify::StepReport> = report
+        .steps
+        .iter()
+        .filter(|step| step.status == crate::verify::StepStatus::SetupNeeded)
+        .collect();
+    if setup.is_empty() {
+        return summary;
+    }
+    let fixes: Vec<String> = setup
+        .iter()
+        .filter_map(|step| {
+            step.fix.as_ref().map(|fix| match &step.project {
+                Some(project) if project != "." => format!("`{fix}` in {project}"),
+                _ => format!("`{fix}`"),
+            })
+        })
+        .collect();
+    let next = if fixes.is_empty() {
+        "Set up what the summary names, or tell the user it is needed.".to_owned()
+    } else {
+        format!(
+            "Run {} to set it up, or tell the user it is needed.",
+            fixes.join(", ")
+        )
+    };
+    format!(
+        "SETUP NEEDED: {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}\n\n{summary}",
+        if setup.len() == 1 { "1 step" } else { "some steps" }
+    )
+}
+
 /// Turns a decision into the output the agent expects.
 ///
 /// Claude Code and Codex: exit code 2 with the message on stderr blocks the

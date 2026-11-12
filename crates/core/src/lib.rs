@@ -22,6 +22,7 @@ pub mod rule;
 pub mod sarif;
 pub mod scratch;
 pub mod select;
+pub mod setup;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod verify;

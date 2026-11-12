@@ -14,9 +14,10 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::facts::{source, Project, RepoFacts};
+use crate::setup::setup_problem;
 
 /// Version of the `fscale verify --json` format.
-pub const VERIFY_SCHEMA_VERSION: u32 = 2;
+pub const VERIFY_SCHEMA_VERSION: u32 = 3;
 
 /// The steps after `check`, in the order they run.
 pub const STEPS: [&str; 3] = ["lint", "typecheck", "test"];
@@ -79,6 +80,9 @@ pub struct ProjectPlan {
     /// named in the config.
     pub kind: Option<String>,
     pub steps: Vec<(String, Planned)>,
+    /// The command that installs the project's dependencies, named when a
+    /// step fails because the environment is not set up.
+    pub install: Option<String>,
 }
 
 /// The commands `verify` will run, and how they were chosen.
@@ -93,6 +97,8 @@ pub struct VerifyPlan {
     pub projects: Vec<ProjectPlan>,
     /// From `verify.failOnSkipped`.
     pub fail_on_skipped: bool,
+    /// The command that installs the root's dependencies, if known.
+    pub install: Option<String>,
 }
 
 const OFF_IN_CONFIG: &str = "turned off in your firescale config";
@@ -229,6 +235,7 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                 root: project.root.clone(),
                 kind: Some(project.kind.clone()),
                 steps,
+                install: project.commands.install.clone(),
             });
         }
     }
@@ -255,6 +262,7 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                     root: folder.clone(),
                     kind: None,
                     steps,
+                    install: None,
                 });
             }
         }
@@ -401,6 +409,11 @@ pub fn plan_verify(
         })
         .collect();
     let all_from_config = STEPS.iter().all(|step| overrides.contains_key(*step));
+    let install = facts
+        .projects
+        .iter()
+        .find(|project| project.root == "." && project.kind == covered)
+        .and_then(|project| project.commands.install.clone());
     VerifyPlan {
         runner: if all_from_config {
             "config"
@@ -413,6 +426,7 @@ pub fn plan_verify(
         steps,
         projects,
         fail_on_skipped: config.fail_on_skipped,
+        install,
     }
 }
 
@@ -423,6 +437,10 @@ pub enum StepStatus {
     Failed,
     /// No command was found for the step, so nothing was verified.
     Skipped,
+    /// The command could not do its work because the environment is not
+    /// set up: a dependency is not installed, or a program is not on the
+    /// PATH. Not a problem in the code (ADR 0022).
+    SetupNeeded,
     /// An earlier step failed, so this one did not run.
     NotRun,
     /// Not run on purpose: turned off in the config, or covered by another step.
@@ -434,6 +452,7 @@ impl StepStatus {
         match self {
             Self::Passed => "passed",
             Self::Failed => "FAILED",
+            Self::SetupNeeded => "SETUP",
             Self::Skipped => "skipped",
             Self::NotRun => "not run",
             Self::Off => "off",
@@ -466,6 +485,10 @@ pub struct StepReport {
     /// The last lines of a failed step's output, without colour codes.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub output_tail: Vec<String>,
+    /// For a step whose status is `setup-needed`: the command that sets the
+    /// environment up. Absent when no command is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
 }
 
 /// The overall outcome of a run.
@@ -478,6 +501,9 @@ pub enum VerifyResult {
     Partial,
     /// A step failed, or steps were skipped while `verify.failOnSkipped` is on.
     Failed,
+    /// No step failed in the code, but at least one could not run because
+    /// the environment is not set up.
+    SetupNeeded,
 }
 
 /// A step that was skipped because no command was found.
@@ -602,18 +628,33 @@ fn project_dir(root: &Path, folder: &str) -> PathBuf {
         .fold(root.to_path_buf(), |path, part| path.join(part))
 }
 
-/// Runs one command through the platform shell, in `dir`, and reports how it went.
-fn run_step(
-    dir: &Path,
-    name: &str,
-    project: Option<&ProjectPlan>,
-    command: &str,
-) -> Result<StepReport> {
-    let kind = project.and_then(|project| project.kind.clone());
-    let project = project.map(|project| project.root.as_str());
+/// Where a step runs: the repo root, or a project.
+struct Unit<'a> {
+    root: &'a Path,
+    project: Option<&'a ProjectPlan>,
+    /// The command that installs this unit's dependencies.
+    install: Option<&'a str>,
+}
+
+/// The next step when the environment is not set up: the install command,
+/// or what to install by hand.
+fn setup_fix(problem: &crate::setup::SetupProblem, install: Option<&str>) -> Option<String> {
+    match (&problem.missing_program, install) {
+        (Some(_), _) | (None, None) => None,
+        (None, Some(install)) => Some(install.to_owned()),
+    }
+}
+
+/// Runs one command through the platform shell, in the unit's folder, and
+/// reports how it went. A failure whose output shows an environment that is
+/// not set up is reported as `setup-needed`.
+fn run_step(unit: &Unit<'_>, name: &str, command: &str) -> Result<StepReport> {
+    let kind = unit.project.and_then(|project| project.kind.clone());
+    let project = unit.project.map(|project| project.root.as_str());
+    let dir = project.map_or_else(|| unit.root.to_path_buf(), |p| project_dir(unit.root, p));
     let started = Instant::now();
     let output = shell(command)
-        .current_dir(dir)
+        .current_dir(&dir)
         .stdin(Stdio::null())
         .env("NO_COLOR", "1")
         .env("FORCE_COLOR", "0")
@@ -630,32 +671,50 @@ fn run_step(
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let code = output.status.code();
     let passed = output.status.success();
-    Ok(StepReport {
+    let mut report = StepReport {
         name: name.to_owned(),
         project: project.map(str::to_owned),
         kind,
-        status: if passed {
-            StepStatus::Passed
-        } else {
-            StepStatus::Failed
-        },
+        status: StepStatus::Passed,
         command: Some(command.to_owned()),
         exit_code: code,
         duration_ms,
-        detail: if passed {
-            command.to_owned()
-        } else {
-            match code {
-                Some(code) => format!("{command} (exit {code})"),
-                None => format!("{command} (killed by a signal)"),
+        detail: command.to_owned(),
+        output_tail: Vec::new(),
+        fix: None,
+    };
+    if passed {
+        return Ok(report);
+    }
+    report.output_tail = tail(&output.stdout, &output.stderr);
+    let exit = match code {
+        Some(code) => format!("exit {code}"),
+        None => "killed by a signal".to_owned(),
+    };
+    let text = strip_ansi(&format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ));
+    match setup_problem(&text, code, unit.root, &dir) {
+        Some(problem) => {
+            report.status = StepStatus::SetupNeeded;
+            report.detail = format!("{command} ({exit}): {}", problem.reason);
+            report.fix = setup_fix(&problem, unit.install);
+            if report.fix.is_none() {
+                if let Some(program) = &problem.missing_program {
+                    report.detail.push_str(&format!(
+                        "; install {program} and make sure it is on the PATH"
+                    ));
+                }
             }
-        },
-        output_tail: if passed {
-            Vec::new()
-        } else {
-            tail(&output.stdout, &output.stderr)
-        },
-    })
+        }
+        None => {
+            report.status = StepStatus::Failed;
+            report.detail = format!("{command} ({exit})");
+        }
+    }
+    Ok(report)
 }
 
 /// How a project's folder is written in a sentence.
@@ -671,9 +730,15 @@ fn plural_steps(count: usize) -> String {
     format!("{count} step{}", if count == 1 { "" } else { "s" })
 }
 
+/// True for a step that did not pass and blocks: failed, or needs setup.
+fn blocks(status: StepStatus) -> bool {
+    matches!(status, StepStatus::Failed | StepStatus::SetupNeeded)
+}
+
 /// Runs the plan after the check step: the root's steps, then each project's
-/// steps in its own folder. Stops at the first failure: the steps after it
-/// are reported as not run.
+/// steps in its own folder. The root and each project are independent: a
+/// failure stops the rest of its own steps, which are reported as not run,
+/// and the others still run. A failing `check` stops everything.
 pub fn run_verify(
     root: &Path,
     version: &str,
@@ -694,40 +759,52 @@ pub fn run_verify(
         duration_ms: check.duration_ms,
         detail: check.detail,
         output_tail: if check.ok { Vec::new() } else { check.output },
+        fix: None,
     }];
-    let mut failed = !check.ok;
+    let check_failed = !check.ok;
 
-    let root_steps = plan.steps.iter().map(|step| (None, step));
-    let project_steps = plan
-        .projects
-        .iter()
-        .flat_map(|project| project.steps.iter().map(move |step| (Some(project), step)));
-    for (project, (name, planned)) in root_steps.chain(project_steps) {
-        let idle = |status: StepStatus, command: Option<&String>, detail: &str| StepReport {
-            name: name.clone(),
-            project: project.map(|project| project.root.clone()),
-            kind: project.and_then(|project| project.kind.clone()),
-            status,
-            command: command.cloned(),
-            exit_code: None,
-            duration_ms: 0,
-            detail: detail.to_owned(),
-            output_tail: Vec::new(),
-        };
-        let report = match planned {
-            Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
-            Planned::NotNeeded(reason) => idle(StepStatus::Off, None, reason),
-            Planned::Command(command) if failed => {
-                idle(StepStatus::NotRun, Some(command), "an earlier step failed")
-            }
-            Planned::Command(command) => {
-                let dir =
-                    project.map_or_else(|| root.to_path_buf(), |p| project_dir(root, &p.root));
-                run_step(&dir, name, project, command)?
-            }
-        };
-        failed = failed || report.status == StepStatus::Failed;
-        steps.push(report);
+    let root_unit = Unit {
+        root,
+        project: None,
+        install: plan.install.as_deref(),
+    };
+    let project_units = plan.projects.iter().map(|project| Unit {
+        root,
+        project: Some(project),
+        install: project.install.as_deref(),
+    });
+    let units = std::iter::once((&plan.steps, root_unit)).chain(
+        plan.projects
+            .iter()
+            .map(|project| &project.steps)
+            .zip(project_units),
+    );
+    for (unit_steps, unit) in units {
+        let mut failed = check_failed;
+        for (name, planned) in unit_steps {
+            let idle = |status: StepStatus, command: Option<&String>, detail: &str| StepReport {
+                name: name.clone(),
+                project: unit.project.map(|project| project.root.clone()),
+                kind: unit.project.and_then(|project| project.kind.clone()),
+                status,
+                command: command.cloned(),
+                exit_code: None,
+                duration_ms: 0,
+                detail: detail.to_owned(),
+                output_tail: Vec::new(),
+                fix: None,
+            };
+            let report = match planned {
+                Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
+                Planned::NotNeeded(reason) => idle(StepStatus::Off, None, reason),
+                Planned::Command(command) if failed => {
+                    idle(StepStatus::NotRun, Some(command), "an earlier step failed")
+                }
+                Planned::Command(command) => run_step(&unit, name, command)?,
+            };
+            failed = failed || blocks(report.status);
+            steps.push(report);
+        }
     }
 
     let skipped: Vec<SkippedStep> = steps
@@ -771,9 +848,12 @@ pub fn run_verify(
         .iter()
         .filter(|step| matches!(step.status, StepStatus::Passed | StepStatus::Failed))
         .count();
-    let first_failure = steps.iter().find(|step| step.status == StepStatus::Failed);
-    let result = if first_failure.is_some() || (plan.fail_on_skipped && !skipped.is_empty()) {
+    let first_failure = steps.iter().find(|step| blocks(step.status));
+    let any_failed = steps.iter().any(|step| step.status == StepStatus::Failed);
+    let result = if any_failed || (plan.fail_on_skipped && !skipped.is_empty()) {
         VerifyResult::Failed
+    } else if first_failure.is_some() {
+        VerifyResult::SetupNeeded
     } else if skipped.is_empty() {
         VerifyResult::Ok
     } else {
@@ -782,7 +862,7 @@ pub fn run_verify(
     Ok(VerifyReport {
         schema_version: VERIFY_SCHEMA_VERSION,
         version: version.to_owned(),
-        ok: result != VerifyResult::Failed,
+        ok: matches!(result, VerifyResult::Ok | VerifyResult::Partial),
         result,
         runner: plan.runner.clone(),
         steps_total,
@@ -797,14 +877,36 @@ pub fn run_verify(
     })
 }
 
+/// `test in backend/auth`, or `test` for a step of the repo root.
+fn step_place(step: &StepReport) -> String {
+    match &step.project {
+        Some(project) => format!("{} in {}", step.name, place_name(project)),
+        None => step.name.clone(),
+    }
+}
+
 /// The first line of the summary. It reads as a clean pass only when every
-/// step ran and passed.
+/// step ran and passed, and it names every step that failed or needs setup.
 fn headline(report: &VerifyReport) -> String {
-    if let Some(step) = &report.failed_step {
-        return match &report.failed_project {
-            Some(project) => format!("verify: FAILED at {step} in {}", place_name(project)),
-            None => format!("verify: FAILED at {step}"),
-        };
+    let named = |status: StepStatus| -> Vec<String> {
+        report
+            .steps
+            .iter()
+            .filter(|step| step.status == status)
+            .map(step_place)
+            .collect()
+    };
+    let failed = named(StepStatus::Failed);
+    let setup = named(StepStatus::SetupNeeded);
+    if !failed.is_empty() || !setup.is_empty() {
+        let mut parts = Vec::new();
+        if !failed.is_empty() {
+            parts.push(format!("FAILED at {}", failed.join(", ")));
+        }
+        if !setup.is_empty() {
+            parts.push(format!("SETUP NEEDED for {}", setup.join(", ")));
+        }
+        return format!("verify: {}", parts.join("; "));
     }
     match report.result {
         VerifyResult::Ok => "verify: OK".to_owned(),
@@ -814,7 +916,7 @@ fn headline(report: &VerifyReport) -> String {
             plural_steps(report.steps_total),
             report.skipped.len()
         ),
-        VerifyResult::Failed => format!(
+        VerifyResult::Failed | VerifyResult::SetupNeeded => format!(
             "verify: FAILED - {} of {} skipped, and verify.failOnSkipped is on",
             report.skipped.len(),
             plural_steps(report.steps_total)
@@ -857,11 +959,7 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             step.detail
         ));
     }
-    if let Some(failure) = report
-        .steps
-        .iter()
-        .find(|step| step.status == StepStatus::Failed)
-    {
+    for failure in report.steps.iter().filter(|step| blocks(step.status)) {
         let place = failure
             .project
             .as_ref()
@@ -874,7 +972,20 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                 out.push_str(&format!("  {line}\n"));
             }
         }
-        if let Some(command) = &report.rerun {
+        let Some(command) = &failure.command else {
+            continue;
+        };
+        if failure.status == StepStatus::SetupNeeded {
+            out.push_str(&format!(
+                "\nSetup needed for {}{place}: the environment is not ready, so this is not a problem in the code. Do not change code for it.\n",
+                failure.name
+            ));
+            match &failure.fix {
+                Some(fix) => out.push_str(&format!("Set it up{place}: {fix}\n")),
+                None => out.push_str("Set up what the line above names, or ask a person to.\n"),
+            }
+            out.push_str(&format!("Then run again{place}: {command}\n"));
+        } else {
             out.push_str(&format!(
                 "\nFix the failure, then run again{place}: {command}\n"
             ));
@@ -1208,8 +1319,10 @@ mod tests {
                                     root: "svc".to_owned(),
                                     kind: Some("python".to_owned()),
                                     steps: vec![("test".to_owned(), project_test.clone())],
+                                    install: None,
                                 }],
                                 fail_on_skipped,
+                                install: None,
                             };
                             let report =
                                 run_verify(fixture.root(), "0.0.0", passing_check(), &plan)
@@ -1557,6 +1670,7 @@ mod tests {
                             Planned::Skipped("no type checker was found".to_owned()),
                         ),
                     ],
+                    install: None,
                 },
                 ProjectPlan {
                     root: "two/deep".to_owned(),
@@ -1565,6 +1679,7 @@ mod tests {
                         ("lint".to_owned(), Planned::Command(fail.to_owned())),
                         ("test".to_owned(), Planned::Command(show.to_owned())),
                     ],
+                    install: None,
                 },
             ],
             ..VerifyPlan::default()
@@ -1845,6 +1960,7 @@ mod tests {
                     root: "app".to_owned(),
                     kind: Some((*kind).to_owned()),
                     steps: vec![("test".to_owned(), Planned::Command("echo fine".to_owned()))],
+                    install: None,
                 })
                 .collect(),
             ..VerifyPlan::default()
