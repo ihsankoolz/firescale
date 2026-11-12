@@ -58,6 +58,9 @@ Usage:
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
   fscale doctor [--json]       Check this machine: tools, env variables, dependencies, services
+  fscale add <generator> --json <input> [--dry-run]
+                               Scaffold new files from JSON input (package, rule)
+  fscale schema [<generator>]  Print a generator's input JSON Schema, or list the generators
   fscale hooks install         Make an agent run verify before it may stop (--agent, --all)
   fscale --version             Print the firescale version
   fscale --help                Print this help
@@ -69,7 +72,7 @@ Options:
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>
   --no-cache       check: run every rule again, ignoring .firescale/cache
-  --dry-run        fix, adopt: print what would change as a diff, and change nothing
+  --dry-run        fix, adopt, add: print what would change as a diff, and change nothing
   --packs <list>   init: rule packs to turn on, comma-separated (default: core,agent-ready)
   --force          init: run in a folder that is not empty (nothing is overwritten)
   --check          sync: change nothing, and exit 1 when sync would change something
@@ -595,6 +598,162 @@ fn facts(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }))
 }
 
+/// `fscale schema [<generator>]` (ADR 0028).
+fn schema(root: &Path, rest: &[String]) -> Result<Output> {
+    let mut host = NodeHost::new(root);
+    match rest {
+        [] => {
+            let list = host.list_generators()?;
+            let mut out =
+                String::from("Generators (fscale schema <name> prints one's input schema):\n");
+            for generator in list.as_array().into_iter().flatten() {
+                let name = generator
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let description = generator
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                out.push_str(&format!("  {name:<10} {description}\n"));
+            }
+            Ok(Output::ok(out))
+        }
+        [name] => {
+            let schema = host.generator_schema(name)?;
+            let text = serde_json::to_string_pretty(&schema).unwrap_or_default();
+            Ok(Output::ok(format!("{text}\n")))
+        }
+        _ => Err(Error::usage(
+            "schema takes at most one generator name, for example: fscale schema package",
+        )),
+    }
+}
+
+/// `fscale add <generator> --json <input> [--dry-run]` (ADR 0028). The
+/// generator runs in Node and returns files; fscale writes them only when
+/// none of them exists yet.
+fn add(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
+    let ([name, input], true) = (rest, args.json) else {
+        return Err(Error::usage(
+            "add needs a generator and its input: fscale add <generator> --json '<input>'. Run `fscale schema` to list the generators and `fscale schema <generator>` for the input.",
+        ));
+    };
+    let input: serde_json::Value = serde_json::from_str(input).map_err(|error| {
+        Error::user(format!(
+            "The --json input is not valid JSON ({error}). Pass one JSON object, for example --json '{{\"name\": \"utils\"}}'."
+        ))
+    })?;
+    let mut host = NodeHost::new(root);
+    let output = host.run_generator(name, &input)?;
+    let files: Vec<(String, String)> = output
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|file| {
+            Some((
+                file.get("path")?.as_str()?.to_owned(),
+                file.get("content")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect();
+    let notes: Vec<String> = output
+        .get("notes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|note| note.as_str().map(str::to_owned))
+        .collect();
+    // Never overwrite: refuse before anything is written.
+    let mut taken = Vec::new();
+    for (file, _) in &files {
+        firescale_core::rule::validate_relative(file)?;
+        if file.contains('\\') {
+            return Err(Error::internal(format!(
+                "The generator returned the path \"{file}\" with a backslash. Please report this."
+            )));
+        }
+        let target = file
+            .split('/')
+            .fold(root.to_path_buf(), |path, part| path.join(part));
+        if target.symlink_metadata().is_ok() {
+            taken.push(file.clone());
+            continue;
+        }
+        // A folder on the way that is a file (or a link) stops the run too.
+        let parts: Vec<&str> = file.split('/').collect();
+        let mut folder = root.to_path_buf();
+        for part in &parts[..parts.len().saturating_sub(1)] {
+            folder.push(part);
+            if folder.symlink_metadata().is_ok_and(|meta| !meta.is_dir()) {
+                let shown = folder
+                    .strip_prefix(root)
+                    .unwrap_or(&folder)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                taken.push(format!("{shown} (not a folder)"));
+                break;
+            }
+        }
+    }
+    if !taken.is_empty() {
+        return Err(Error::user(format!(
+            "fscale add {name} would write over {}, so nothing was written. Choose another name or folder in the input, or move the existing file.",
+            taken.join(", ")
+        )));
+    }
+    let mut out = String::new();
+    if args.dry_run {
+        for (file, content) in &files {
+            out.push_str(&unified_diff(file, None, content));
+        }
+        out.push_str(&format!(
+            "\nDry run: fscale add {name} would create {} file{}. Nothing was written.\n",
+            files.len(),
+            if files.len() == 1 { "" } else { "s" }
+        ));
+    } else {
+        let mut created: Vec<PathBuf> = Vec::new();
+        for (file, content) in &files {
+            let target = file
+                .split('/')
+                .fold(root.to_path_buf(), |path, part| path.join(part));
+            let write = || -> std::io::Result<()> {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                    .and_then(|mut handle| handle.write_all(content.as_bytes()))
+            };
+            if let Err(error) = write() {
+                // All or nothing: take back the files this run created.
+                for done in &created {
+                    let _ = std::fs::remove_file(done);
+                }
+                return Err(Error::user(format!(
+                    "Could not create {file} ({error}), so the files created before it were removed again. Check the folder's permissions and that nothing is in the way, then run fscale add again."
+                )));
+            }
+            created.push(target);
+            out.push_str(&format!("created {file}\n"));
+        }
+    }
+    if !notes.is_empty() {
+        out.push_str("\nNext:\n");
+        for note in &notes {
+            out.push_str(&format!("  {note}\n"));
+        }
+    }
+    if !args.dry_run {
+        out.push_str("\nCheck the result with `fscale check`.\n");
+    }
+    Ok(Output::ok(out))
+}
+
 fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     if !extra.is_empty() {
         return Err(Error::usage(format!(
@@ -954,6 +1113,8 @@ fn run() -> Result<Output> {
         "explain" => explain(&root, rest),
         "facts" => facts(&root, &args, rest),
         "doctor" => doctor(&root, &args, rest),
+        "add" => add(&root, &args, rest),
+        "schema" => schema(&root, rest),
         "verify" => verify(&root, &args, rest),
         "hooks" => hooks(&root, &args, rest),
         _ => Err(Error::usage(format!("unknown command \"{command}\"."))),

@@ -14,6 +14,8 @@ path = "src/main.rs"
 [dependencies]
 firescale-core.workspace = true
 firescale-rules.workspace = true
+# Reads what a generator returns through the bridge (ADR 0028); already used by core.
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -13,6 +13,7 @@
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { generatorSchema, listGenerators, runGenerator } from './generators/index.js';
 import {
   checkRule,
   fixRuleWithChanges,
@@ -240,6 +241,16 @@ async function handle(request: Request): Promise<unknown> {
       return check(request.params);
     case 'fixRule':
       return fix(request.params);
+    case 'listGenerators':
+      return listGenerators();
+    case 'generatorSchema':
+      return generatorSchema(stringParam(request.params, 'name'));
+    case 'runGenerator':
+      return runGenerator(
+        stringParam(request.params, 'name'),
+        request.params['input'],
+        stringParam(request.params, 'root'),
+      );
     default:
       throw new Error(`unknown bridge method "${request.method}"`);
   }

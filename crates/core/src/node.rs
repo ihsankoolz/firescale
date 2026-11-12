@@ -30,6 +30,16 @@ struct Running {
     next_id: u64,
 }
 
+/// An older firescale npm package does not know the generator methods.
+fn older_host(error: Error) -> Error {
+    if error.to_string().contains("unknown bridge method") {
+        return Error::user(
+            "The firescale npm package in this repo is older than this fscale binary and has no generators. Update it to the same version as fscale (for example `npm install -D firescale@latest`), then run this again.",
+        );
+    }
+    error
+}
+
 /// A lazily started Node host for one repo root.
 pub struct NodeHost {
     root: PathBuf,
@@ -178,6 +188,34 @@ impl NodeHost {
             "loadConfig",
             json!({ "root": self.root.to_string_lossy(), "file": file }),
         )
+    }
+
+    /// The generators the npm package ships, with their descriptions.
+    pub fn list_generators(&mut self) -> Result<Value> {
+        self.start("list the generators", "install the firescale npm package")?;
+        self.request("listGenerators", json!({}))
+            .map_err(older_host)
+    }
+
+    /// One generator's input JSON Schema.
+    pub fn generator_schema(&mut self, name: &str) -> Result<Value> {
+        self.start(
+            "read a generator's schema",
+            "install the firescale npm package",
+        )?;
+        self.request("generatorSchema", json!({ "name": name }))
+            .map_err(older_host)
+    }
+
+    /// Validates the input and runs the generator, which writes nothing: it
+    /// returns `{ files: [{ path, content }], notes: [...] }`.
+    pub fn run_generator(&mut self, name: &str, input: &Value) -> Result<Value> {
+        self.start("run a generator", "install the firescale npm package")?;
+        self.request(
+            "runGenerator",
+            json!({ "root": self.root.to_string_lossy(), "name": name, "input": input }),
+        )
+        .map_err(older_host)
     }
 
     /// Imports custom packs and returns their rules' metadata.
