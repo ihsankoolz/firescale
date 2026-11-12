@@ -23,6 +23,7 @@ pub mod model;
 pub mod node;
 pub mod process;
 pub mod progress;
+pub mod references;
 pub mod report;
 pub mod rule;
 pub mod runs;

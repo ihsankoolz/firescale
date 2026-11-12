@@ -236,9 +236,12 @@ pub(crate) struct TomlEntry {
     pub(crate) section: String,
     pub(crate) key: String,
     pub(crate) value: String,
+    /// 1-based line where the key starts (the first line of a multi-line array).
+    pub(crate) line: usize,
 }
 
-fn bracket_balance(text: &str) -> i32 {
+/// How many more `[`/`{` than `]`/`}` `text` has, outside quotes.
+pub(crate) fn bracket_balance(text: &str) -> i32 {
     let mut quote: Option<char> = None;
     let mut balance = 0;
     for c in text.chars() {
@@ -258,8 +261,8 @@ fn bracket_balance(text: &str) -> i32 {
 pub(crate) fn parse_toml(text: &str) -> Vec<TomlEntry> {
     let mut entries = Vec::new();
     let mut section = String::new();
-    let mut lines = text.lines();
-    while let Some(raw) = lines.next() {
+    let mut lines = text.lines().enumerate();
+    while let Some((index, raw)) = lines.next() {
         let line = strip_comment(raw).trim();
         if line.is_empty() {
             continue;
@@ -277,7 +280,9 @@ pub(crate) fn parse_toml(text: &str) -> Vec<TomlEntry> {
         };
         let mut value = value.trim().to_owned();
         while bracket_balance(&value) > 0 {
-            let Some(next) = lines.next() else { break };
+            let Some((_, next)) = lines.next() else {
+                break;
+            };
             value.push(' ');
             value.push_str(strip_comment(next).trim());
         }
@@ -285,6 +290,7 @@ pub(crate) fn parse_toml(text: &str) -> Vec<TomlEntry> {
             section: section.clone(),
             key: unquote(key.trim()),
             value,
+            line: index + 1,
         });
     }
     entries
@@ -987,13 +993,19 @@ pub(crate) fn array_strings(value: &str) -> Vec<String> {
 /// The file named by a `-r <file>`, `--requirement <file>` or
 /// `--requirement=<file>` line.
 pub(crate) fn requirement_include(line: &str) -> Option<String> {
-    let rest = if let Some(rest) = line.strip_prefix("--requirement") {
+    option_value(line, "-r", "--requirement")
+}
+
+/// The value of a requirements-file option given as `<short> <value>`,
+/// `<short><value>`, `<long> <value>` or `<long>=<value>`, unquoted.
+pub(crate) fn option_value(line: &str, short: &str, long: &str) -> Option<String> {
+    let rest = if let Some(rest) = line.strip_prefix(long) {
         if !rest.starts_with(|c: char| c == '=' || c.is_whitespace()) {
             return None;
         }
         rest
     } else {
-        line.strip_prefix("-r")?
+        line.strip_prefix(short)?
     };
     let target = unquote(rest.trim_start().trim_start_matches('=').trim());
     (!target.is_empty()).then_some(target)
@@ -2363,6 +2375,13 @@ mod tests {
         let entries = parse_toml("[a]\nx = [\n \"1\", # c\n \"2\"\n]\ny = \"v # not\"\n");
         assert_eq!(quoted_strings(&entries[0].value), ["1", "2"]);
         assert_eq!(unquote(&entries[1].value), "v # not");
+    }
+
+    #[test]
+    fn toml_entries_know_the_line_they_start_on() {
+        let entries = parse_toml("# top\r\n[a]\r\nx = [\r\n \"1\",\r\n]\r\n\r\ny = 2\r\n");
+        let lines: Vec<usize> = entries.iter().map(|entry| entry.line).collect();
+        assert_eq!(lines, [3, 7]);
     }
 
     // ------------------------------------------- projects in subfolders
