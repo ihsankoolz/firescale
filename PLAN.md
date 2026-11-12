@@ -277,7 +277,7 @@ Not a milestone. 0.1.1 was released through the Release workflow on 2026-11-12 w
 
 ---
 
-## M11 — The group-project pack ☐
+## M11 — The group-project pack ☑
 
 Needs the publishing checkpoint: the CI this pack checks for runs `npx firescale verify`, which only works for a real team once 0.1.0 is on npm. If it is not published yet, say so at the top of the pull request.
 
@@ -292,10 +292,10 @@ Needs the publishing checkpoint: the CI this pack checks for runs `npx firescale
 
 **Done when**
 
-- ☐ All group-project rules pass their fixture tests, and every fix is idempotent.
-- ☐ `fscale init --packs core,group-project` in an empty folder yields a repo where the pack reports no violations.
-- ☐ The generated pull request template and contributing guide have snapshot tests.
-- ☐ A hand-written CI workflow is never rewritten, proven by a test.
+- ☑ All group-project rules pass their fixture tests, and every fix is idempotent.
+- ☑ `fscale init --packs core,group-project` in an empty folder yields a repo where the pack reports no violations.
+- ☑ The generated pull request template and contributing guide have snapshot tests.
+- ☑ A hand-written CI workflow is never rewritten, proven by a test.
 
 ---
 

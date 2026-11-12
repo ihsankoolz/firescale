@@ -8,7 +8,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **CI owed:** nothing. M6's Windows npm install test passed in a manual run on `main` on 2026-11-11.
 - **Published:** the owner published 0.1.0 to npm by hand on 2026-11-12. **0.1.1 was released on 2026-11-12 through the Release workflow with trusted publishing; every stage passed.** The second box of the publishing checkpoint (a generated repo passing its own CI on GitHub) is still open.
 - **Done in the latest session:** the 0.1.2 fixes from running 0.1.1 on the course project (ADR 0022): each Python project runs with its own `.venv` interpreter (or uv, poetry, pipenv, an active `VIRTUAL_ENV`, then `python`), projects are independent in verify, `setup-needed` is reported apart from failures, ruff and mypy come from dependency lists, and test-runner config files are test code for `core/env-example`. The version is 0.1.2 and **no tag has been pushed**. Earlier: automated releases (ADR 0021, `RELEASING.md`) and M10 (ADR 0020).
-- **Not started, in order:** M11 group-project pack, M12 `doctor`, M13 agent files from `init`, M14 generators, M15 Next.js pack, M16 Python pack, M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
+- **Done in the latest session, after 0.1.2:** M11 the group-project pack (ADR 0023).
+- **Not started, in order:** M12 `doctor`, M13 agent files from `init`, M14 generators, M15 Next.js pack, M16 Python pack, M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
 
 ## How to resume
 
@@ -34,7 +35,15 @@ Notes on 0.1.2, for whoever touches verify or Python detection next:
 - In `run_verify` the root and each project are units; `blocks()` is what stops a unit. A failed `check` stops all of them.
 - `crates/testkit/src/python_stub.rs` builds `fscale-python-stub`, which the CLI tests copy into a `.venv` as its interpreter (`PYTHON_STUB` in `test-helpers.ts`).
 
-Notes for M11 (the group-project pack) and M13 (agent files), which stand on M9:
+Notes on M11, for whoever touches the group-project pack or M12 (`doctor`, the other half of SPEC §17):
+
+- The pack is `crates/rules/src/group-project/`. `mod.rs` holds what the rules share: GitHub's three folders (`COMMUNITY_FOLDERS`), file lookup in any letter case, "counts only when tracked" (`counted`), and the fix precondition (`create_blocker`).
+- `group-project/ci-verify` reuses `core/ci-exists`'s workflow reader and its `create_starter`; both are `pub(crate)` in `crates/rules/src/core/ci-exists/mod.rs`. Change the starter there and both rules follow.
+- `group-project/branch-name` reads `GITHUB_HEAD_REF` only with a detached HEAD. Its tests call `check_with` so the test process's own environment cannot leak in.
+- `Git::current_branch` (in `crates/core/src/git.rs`) gives the branch name also before the first commit.
+- The skills test runs `fscale explain` in a scratch repo with every built-in pack on; a new pack needs nothing there.
+
+Notes for M13 (agent files), which stands on M9 like M11 did:
 
 - `init`, `adopt` and `sync` are `crates/cli/src/scaffold.rs`. They share one function, `run`, which uses `plan_fixes`, `FixPlan::run` and `render_fixes` from `crates/cli/src/main.rs`, the same pieces as `fscale fix`. A new pack needs no change there: give its rules fixes and `fscale init --packs core,<pack>` builds it.
 - A fix that creates a file must look at the disk itself before writing and write only where nothing is. `core/ci-exists` (`starter_can_be_created`) and `core/readme-setup` are the models. The check uses the same precondition, so a finding is `deterministic` only when the fix will act; otherwise the loop stops with "changed nothing".

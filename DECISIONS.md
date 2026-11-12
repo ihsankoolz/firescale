@@ -12,6 +12,8 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M11) The default branch patterns and the guide's text.** Read them once: `fscale init --packs core,group-project` in an empty folder writes both. Say if the defaults should differ for your course (for example `<name>/<topic>` branches).
+- **(M11) Should `group-project` be on in `fscale init` by default?** Today `init` turns on `core` and `agent-ready`, as SPEC §16 says.
 - **(0.1.2) Release 0.1.2 when you are ready.** The version is 0.1.2 and no tag was pushed. Tag `v0.1.2` on `main` and push it (`RELEASING.md`).
 - **(0.1.2) Should the stop hook let an agent stop when the only problem is setup?** Today it blocks, with a message that says not to edit code and to run the setup command or tell the user; the loop guard releases the agent after 3 blocks. Letting it stop at once would save those turns, but the agent can often run the install command itself (ADR 0022).
 - **(0.1.2) The order of Python interpreters.** A `.venv` or `venv` in the project, then uv, poetry or pipenv, then an active `VIRTUAL_ENV`, then `python` from the PATH. Say if an activated venv should win over the project's manager (ADR 0022).
@@ -49,6 +51,38 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M11 — The group-project pack
+
+Needed the publishing checkpoint: 0.1.0 and 0.1.1 are on npm, so the CI this pack checks for (`npx firescale verify`) works for a real team. The checkpoint's second box (a generated repo passing its own CI on GitHub) is still open. All decisions are in ADR 0023.
+
+**Built**
+
+- `group-project/pr-template`: a pull request template exists in the root, `docs/` or `.github/` (any letter case, or a `PULL_REQUEST_TEMPLATE/` folder). The fix creates `.github/pull_request_template.md`.
+- `group-project/contributing`: a contributing guide exists in the same places. The fix creates `CONTRIBUTING.md` with each project's install, lint, typecheck and test commands from `fscale facts`, the check to run, the branch patterns and what a pull request needs.
+- `group-project/ci-verify`: a GitHub Actions workflow that runs on pull requests runs `fscale verify`. With no CI at all, the fix writes the same starter workflow as `core/ci-exists` (shared code, and it runs after that rule). A hand-written workflow is never changed: the finding is for an agent, with the one step to add.
+- `group-project/branch-name`: the checked-out branch, or in a pull request run the branch in `GITHUB_HEAD_REF`, matches the `branches` patterns. No fix.
+- Each rule has a SKILL.md and fixture tests (passing, failing, fixed, fixed twice). CLI tests: `init --packs core,group-project` leaves the pack with no violations; the template and the guide (for an empty repo and for the course project) are snapshots; a hand-written workflow survives `adopt`, `sync` and `fix` byte for byte.
+- GitHub's rules for the two files and for `GITHUB_HEAD_REF` were read on 2026-11-12 from the source of GitHub's docs (docs.github.com itself was blocked from the build session).
+
+**Decisions made for you** (all ADR 0023)
+
+- **A file counts only when git tracks it.** An untracked template or guide is a manual finding with the `git add` command.
+- **Default branch patterns:** `main`, `master`, `develop`, and `feat/*`, `fix/*`, `docs/*`, `test/*`, `refactor/*`, `chore/*`, `ci/*`, `build/*`, `perf/*`, `style/*`, `release/*`, `hotfix/*`, `revert/*`.
+- **`*` in a pattern matches any text, `/` included.**
+- **The contributing rule has its own `branches` option**, with the same default, because a rule sees only its own options. Set both when you change one.
+- **The guide writes Python commands as `python -m ...`**, never with this machine's `.venv` path.
+- **`ci-verify` accepts any line that runs `firescale` or `fscale` with the word `verify`**, such as `npx firescale verify`, `pnpm fscale verify` or `npx firescale@0.1.2 verify`, in a workflow that runs on pull requests.
+- **CI that is not GitHub Actions is a manual finding** for `ci-verify` (it cannot read it), where `core/ci-exists` says nothing.
+- **Severities:** template and branch name low, guide and CI medium. All start as `evaluated`.
+- **The explain test of every skill now runs with every pack on**, in a scratch repo, rather than turning `group-project` on for this repo.
+
+**Known limits**
+
+- The guide is written once. `sync` does not update it when commands change.
+- `ci-verify` reads only GitHub Actions workflows. It does not check that the verify step comes after the install step.
+- `branch-name` judges only the branch that is checked out (or the pull request's in CI), not every branch on the remote.
+- Templates for issues are not part of the pack.
 
 ## 0.1.2 — fixes from running 0.1.1 on your course project
 
