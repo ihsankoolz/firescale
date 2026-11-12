@@ -153,7 +153,7 @@ A custom pack is listed in the config by path (`packs: ['core', './tools/rules/p
 
 **agent-ready** (built; opt-in for `check` in an existing repo, on by default in `fscale init`): `agents-md` (AGENTS.md exists), `commands-documented`, `single-test-command`, `verify-hook`. Its fixes, which write the agent files, come with §16.
 
-**group-project** (planned, opt-in): a pull request template, a branch naming rule, a contributing guide, and a CI workflow that runs `fscale verify`.
+**group-project** (built, opt-in): a pull request template, a branch naming rule, a contributing guide, and a CI workflow that runs `fscale verify` (ADR 0023).
 
 **Stack packs** (planned): `python`, `nextjs`, `supabase`, `expo`. This is where future rule effort goes. A stack pack is a set of rules whose fixes create and repair the files that stack needs, so `fscale init --packs core,<stack>` builds a working starter with no templates.
 

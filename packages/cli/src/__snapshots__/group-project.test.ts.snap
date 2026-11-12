@@ -1,0 +1,145 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale init --packs core,group-project > builds a repo where the pack reports no violations, with the template and guide pinned > CONTRIBUTING.md 1`] = `
+"# Contributing
+
+<!-- Created by firescale (group-project/contributing). It is your team's to edit. -->
+
+How we work on this repo together. Read it before your first pull request.
+
+## Set up
+
+Describe how to install the project here.
+
+## Check your work
+
+Before you push, run the same check that CI runs:
+
+\`\`\`sh
+npx firescale verify
+\`\`\`
+
+It runs the firescale rules, then lint, typecheck and tests. Fix what it reports before you ask for a review. When it says \`SETUP NEEDED\`, your machine is missing something: run the command it shows, and do not change code for it.
+
+## Branches
+
+Do not commit to the main branch directly. Make a branch for each change, with a name that matches one of these patterns (\`*\` is any text):
+
+- \`feat/*\`
+- \`fix/*\`
+- \`docs/*\`
+- \`test/*\`
+- \`refactor/*\`
+- \`chore/*\`
+- \`ci/*\`
+- \`build/*\`
+- \`perf/*\`
+- \`style/*\`
+- \`release/*\`
+- \`hotfix/*\`
+- \`revert/*\`
+
+The long-lived branches are \`main\`, \`master\`, \`develop\`.
+
+For example: \`git switch -c feat/login-page\`.
+
+## Pull requests
+
+- Keep each pull request to one change, small enough to review in one sitting.
+- Fill in the pull request template.
+- CI runs \`npx firescale verify\`. It must pass before the pull request is merged.
+- A teammate reviews and approves it before it is merged.
+"
+`;
+
+exports[`fscale init --packs core,group-project > builds a repo where the pack reports no violations, with the template and guide pinned > pull_request_template.md 1`] = `
+"<!-- Created by firescale (group-project/pr-template). It is your team's to edit. -->
+
+## What this changes
+
+<!-- One or two sentences. Link the issue it closes, for example: Closes #12 -->
+
+## How to test it
+
+<!-- The steps a reviewer can follow to see it work. -->
+
+## Checklist
+
+- [ ] \`npx firescale verify\` passes on my machine.
+- [ ] The branch is named as CONTRIBUTING.md says.
+- [ ] Tests cover the change, or I wrote above why they do not.
+- [ ] A teammate is asked to review.
+"
+`;
+
+exports[`fscale init --packs core,group-project > writes the commands of each project into the guide > CONTRIBUTING.md of the course project 1`] = `
+"# Contributing
+
+<!-- Created by firescale (group-project/contributing). It is your team's to edit. -->
+
+How we work on this repo together. Read it before your first pull request.
+
+## Set up
+
+Install the dependencies. Run each command in the folder it names:
+
+- In \`backend/audit_service\`: \`python -m pip install -r requirements-dev.txt\`
+- In \`backend/auth_service\`: \`python -m pip install -r requirements-dev.txt\`
+- In \`backend/ledger_service\`: \`python -m pip install -r requirements-dev.txt\`
+- In \`backend/market_service\`: \`python -m pip install -r requirements-dev.txt\`
+- In \`backend/realtime_service\`: \`python -m pip install -r requirements-dev.txt\`
+- In \`frontend\`: \`npm install\`
+
+For a Python project, first make a virtual environment in its folder and activate it: \`python -m venv .venv\`. \`fscale verify\` uses the \`.venv\` in a project's folder by itself.
+
+## Check your work
+
+Before you push, run the same check that CI runs:
+
+\`\`\`sh
+npx firescale verify
+\`\`\`
+
+It runs the firescale rules, then lint, typecheck and tests in every project. Fix what it reports before you ask for a review. When it says \`SETUP NEEDED\`, your machine is missing something: run the command it shows, and do not change code for it.
+
+To run one step on its own, run its command in that folder:
+
+| Folder | Lint | Typecheck | Test |
+| --- | --- | --- | --- |
+| \`backend/audit_service\` | - | - | \`python -m pytest\` |
+| \`backend/auth_service\` | \`python -m ruff check .\` | - | \`python -m pytest\` |
+| \`backend/ledger_service\` | - | - | \`python -m pytest\` |
+| \`backend/market_service\` | - | - | \`python -m pytest\` |
+| \`backend/realtime_service\` | - | - | \`python -m pytest\` |
+| \`frontend\` | \`npx --no oxlint\` | \`npx --no tsc --noEmit\` | - |
+
+## Branches
+
+Do not commit to the main branch directly. Make a branch for each change, with a name that matches one of these patterns (\`*\` is any text):
+
+- \`feat/*\`
+- \`fix/*\`
+- \`docs/*\`
+- \`test/*\`
+- \`refactor/*\`
+- \`chore/*\`
+- \`ci/*\`
+- \`build/*\`
+- \`perf/*\`
+- \`style/*\`
+- \`release/*\`
+- \`hotfix/*\`
+- \`revert/*\`
+
+The long-lived branches are \`main\`, \`master\`, \`develop\`.
+
+For example: \`git switch -c feat/login-page\`.
+
+## Pull requests
+
+- Keep each pull request to one change, small enough to review in one sitting.
+- Fill in the pull request template.
+- CI runs \`npx firescale verify\`. It must pass before the pull request is merged.
+- A teammate reviews and approves it before it is merged.
+"
+`;

@@ -121,7 +121,8 @@ mod metadata {
         assert_eq!(meta.severity, Severity::Medium);
         assert_eq!(meta.category, Category::Reliability);
         assert!(meta.has_fix);
-        assert_eq!(meta.inputs.len(), 16);
+        assert_eq!(meta.inputs.len(), 19);
+        assert!(meta.inputs.contains(&".gitignore".to_owned()));
     }
 }
 

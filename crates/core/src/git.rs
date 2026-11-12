@@ -142,6 +142,17 @@ impl Git {
         Ok(result.code == 0 && result.stdout.trim() == "true")
     }
 
+    /// The name of the checked-out branch, also before its first commit.
+    /// `None` outside a git repo and with a detached HEAD.
+    pub fn current_branch(&self) -> Result<Option<String>> {
+        if !self.is_repo()? {
+            return Ok(None);
+        }
+        let result = run_git(&self.root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+        let name = result.stdout.trim();
+        Ok((result.code == 0 && !name.is_empty()).then(|| name.to_owned()))
+    }
+
     /// Repo-relative paths in the git index, sorted. Empty outside a git repo.
     pub fn tracked_files(&self) -> Result<Vec<String>> {
         if !self.is_repo()? {

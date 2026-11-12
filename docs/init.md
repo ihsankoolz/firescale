@@ -30,6 +30,7 @@ Custom TypeScript rules are yours, and their fixes do what you wrote. Use `fscal
 mkdir my-app && cd my-app
 fscale init                    # packs: core and agent-ready
 fscale init --packs core       # choose the packs
+fscale init --packs core,group-project   # a repo for a team: template, guide, CI, branch names
 ```
 
 In an empty folder (a folder that holds nothing, or only `.git`), `init`:

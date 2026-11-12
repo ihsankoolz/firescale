@@ -26,16 +26,36 @@ Not on by default. Add `"agent-ready"` to `packs` in your config. It checks that
 | `agent-ready/verify-hook`         | An agent stop hook runs `fscale verify` (see [hooks.md](hooks.md)).               | medium   | no           |
 | `agent-ready/commands-documented` | `AGENTS.md` mentions the detected build, test, lint and typecheck commands.       | low      | no           |
 
+## The `group-project` pack
+
+Not on by default. Add `"group-project"` to `packs`, or start a repo with `fscale init --packs core,group-project`. It gives a team the files and checks that let several people work on one repo (SPEC §17, ADR 0023).
+
+| Rule                         | Checks                                                                                                                                         | Severity | `fscale fix`                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------- |
+| `group-project/pr-template`  | A pull request template exists: `pull_request_template.*` or a `PULL_REQUEST_TEMPLATE/` folder in the root, `docs/` or `.github/`.             | low      | creates `.github/pull_request_template.md`              |
+| `group-project/contributing` | A contributing guide exists: `CONTRIBUTING` or `CONTRIBUTING.*` in the root, `docs/` or `.github/`.                                            | medium   | creates `CONTRIBUTING.md` from `fscale facts`           |
+| `group-project/ci-verify`    | A GitHub Actions workflow that runs on pull requests has a `run:` step whose command is `fscale verify`.                                       | medium   | creates the starter workflow when there is no CI at all |
+| `group-project/branch-name`  | The current branch's name matches the team's patterns. In a pull request run on GitHub Actions, the pull request's branch (`GITHUB_HEAD_REF`). | low      | no                                                      |
+
+GitHub's rules were read from its documentation's source on 2026-11-12: both files may live in the root, `docs/` or `.github/`, and their names are not case sensitive. In a git repo a file only counts when git tracks it, because teammates get it through a commit.
+
+- A file a person wrote is never changed. A workflow without verify is left for an agent or a person, with the one step to add.
+- `group-project/ci-verify` runs after `core/ci-exists`: when both are on, `core/ci-exists` writes the starter workflow, and it already runs verify.
+- `group-project/branch-name` always allows the repo's own main branch (`init.defaultBranch`, `origin/HEAD`), and is never cached, since the branch is not a file. Outside git, or with a detached HEAD outside a pull request run, it reports nothing.
+- The guide's commands come from `fscale facts`. A Python command that names this machine's `.venv` is written as `python -m ...`, so it works for every teammate.
+
 ## Options
 
-| Rule                        | Option         | Meaning                                                                 |
-| --------------------------- | -------------- | ----------------------------------------------------------------------- |
-| `core/no-committed-env`     | `allow`        | Env file names that may be committed. Default `[".env.example"]`.       |
-| `core/no-secrets-in-source` | `allowFiles`   | Repo-relative files to skip.                                            |
-| `core/env-example`          | `ignore`       | Extra variable names that need not be listed.                           |
-| `core/env-example`          | `excludePaths` | Repo-relative path prefixes that are not scanned, for example fixtures. |
-| `core/scripts-present`      | `required`     | Script names to require instead of `lint`, `test`, `build`.             |
-| `agent-ready/verify-hook`   | `agents`       | Agents that must each have the hook. Default: any one of the three.     |
+| Rule                         | Option         | Meaning                                                                                                                                                                                                                       |
+| ---------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/no-committed-env`      | `allow`        | Env file names that may be committed. Default `[".env.example"]`.                                                                                                                                                             |
+| `core/no-secrets-in-source`  | `allowFiles`   | Repo-relative files to skip.                                                                                                                                                                                                  |
+| `core/env-example`           | `ignore`       | Extra variable names that need not be listed.                                                                                                                                                                                 |
+| `core/env-example`           | `excludePaths` | Repo-relative path prefixes that are not scanned, for example fixtures.                                                                                                                                                       |
+| `core/scripts-present`       | `required`     | Script names to require instead of `lint`, `test`, `build`.                                                                                                                                                                   |
+| `agent-ready/verify-hook`    | `agents`       | Agents that must each have the hook. Default: any one of the three.                                                                                                                                                           |
+| `group-project/branch-name`  | `branches`     | Branch name patterns, `*` is any text. Default: `main`, `master`, `develop`, and `feat/*`, `fix/*`, `docs/*`, `test/*`, `refactor/*`, `chore/*`, `ci/*`, `build/*`, `perf/*`, `style/*`, `release/*`, `hotfix/*`, `revert/*`. |
+| `group-project/contributing` | `branches`     | The patterns written into the guide. Set it to the same list as `branch-name`'s.                                                                                                                                              |
 
 To silence one line for the secrets rule, put `firescale:allow-secret` in a comment on that line.
 
