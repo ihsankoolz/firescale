@@ -169,9 +169,27 @@ pub fn guide(facts: &RepoFacts, branches: &[String]) -> String {
         out.extend(rows);
     }
 
-    out.push_str("\n## Branches\n\nDo not commit to `main` directly. Make a branch for each change, with a name that matches one of these patterns (`*` is any text):\n\n");
-    for pattern in branches {
-        out.push_str(&format!("- `{pattern}`\n"));
+    let (kinds, fixed): (Vec<&String>, Vec<&String>) = branches
+        .iter()
+        .partition(|pattern| pattern.contains(['*', '?', '[']));
+    out.push_str("\n## Branches\n\n");
+    if kinds.is_empty() {
+        out.push_str("Branch names must be one of these:\n\n");
+        for name in &fixed {
+            out.push_str(&format!("- `{name}`\n"));
+        }
+    } else {
+        out.push_str("Do not commit to the main branch directly. Make a branch for each change, with a name that matches one of these patterns (`*` is any text):\n\n");
+        for pattern in &kinds {
+            out.push_str(&format!("- `{pattern}`\n"));
+        }
+        if !fixed.is_empty() {
+            let names: Vec<String> = fixed.iter().map(|name| format!("`{name}`")).collect();
+            out.push_str(&format!(
+                "\nThe long-lived branches are {}.\n",
+                names.join(", ")
+            ));
+        }
     }
     if branches.iter().any(|pattern| pattern == "feat/*") {
         out.push_str("\nFor example: `git switch -c feat/login-page`.\n");

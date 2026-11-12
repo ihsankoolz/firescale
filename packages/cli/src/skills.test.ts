@@ -2,7 +2,8 @@ import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateSkill } from '@firescale/sdk';
-import { describe, expect, it } from 'vitest';
+import { fixtureSet } from '@firescale/sdk/testing';
+import { afterEach, describe, expect, it } from 'vitest';
 import { EXIT_OK, runCli } from './test-helpers.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -29,6 +30,12 @@ async function findBuiltInSkills(): Promise<BuiltInSkill[]> {
 
 const skills = await findBuiltInSkills();
 
+const fixtures = fixtureSet();
+afterEach(fixtures.cleanup);
+
+/** Every built-in pack, from the folders of the skills. */
+const PACKS = [...new Set(skills.map((skill) => skill.ruleId.split('/')[0] ?? ''))];
+
 describe('built-in rule skills', () => {
   it('finds at least one SKILL.md', () => {
     expect(skills.length).toBeGreaterThan(0);
@@ -43,7 +50,12 @@ describe('built-in rule skills', () => {
   });
 
   it.each(skills)('$ruleId is a registered rule that `fscale explain` can find', async (skill) => {
-    const result = await runCli(['explain', skill.ruleId]);
+    // `explain` knows the rules of the packs that are on, so turn every pack on.
+    const repo = await fixtures.create({
+      files: { 'firescale.config.json': JSON.stringify({ packs: PACKS }) },
+      track: 'no-git',
+    });
+    const result = await runCli(['explain', skill.ruleId], repo.root);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toContain(skill.ruleId);

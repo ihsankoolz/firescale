@@ -131,7 +131,10 @@ mod fixed_repo {
             .unwrap();
         f.fix(&Contributing, &opts).unwrap();
         let text = f.read(GUIDE).unwrap();
-        assert!(text.contains("- `main`\n- `story/*`\n"), "{text}");
+        assert!(
+            text.contains("- `story/*`\n\nThe long-lived branches are `main`.\n"),
+            "{text}"
+        );
         assert!(!text.contains("feat/"), "{text}");
     }
 
