@@ -7,11 +7,17 @@ pub mod agent_ready;
 pub mod core;
 #[path = "group-project/mod.rs"]
 pub mod group_project;
+pub mod nextjs;
 
 /// Every built-in pack, in the order they are listed to users.
 #[must_use]
 pub fn builtin_packs() -> Vec<BuiltinPack> {
-    vec![core::pack(), agent_ready::pack(), group_project::pack()]
+    vec![
+        core::pack(),
+        agent_ready::pack(),
+        group_project::pack(),
+        nextjs::pack(),
+    ]
 }
 
 #[cfg(test)]

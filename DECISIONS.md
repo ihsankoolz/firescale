@@ -22,6 +22,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M15) The `nextjs` pack pins next, react and react-dom exactly** (16.4.6, 19.3.1), as create-next-app does, and uses ranges for the rest (`typescript ^5`, `eslint ^9`). Say if you prefer ranges everywhere. A new app is named `next-app` (never the folder's name, so dry runs match).
+- **(M15) A new Next.js app still gets a `core/scripts-present` finding for a `test` script**, because Next.js ships no test runner. Say if the pack should add one (Vitest, for example).
 - **(M14) The generators live in `packages/cli/src/generators/`**, inside the `firescale` npm package, not in `packages/generators` as SPEC §9 lays out; that package is a placeholder pointing there. A separate package would need its own publish step (ADR 0028).
 - **(M14) Default folders:** `fscale add package` writes to `packages/<name>`, `fscale add rule` to `firescale-rules/` (the docs' `tools/rules` would give `tools/rules/rules/<rule>`).
 - **(M13) A repo with CLAUDE.md and no AGENTS.md:** `adopt` (with `agent-ready` on) and `sync` create AGENTS.md and append a three-line managed block with `@AGENTS.md` to the end of CLAUDE.md, because Claude Code reads only CLAUDE.md when it exists. Nothing else in CLAUDE.md changes, and nested CLAUDE.md files are untouched. The alternative is to leave CLAUDE.md alone and print a note, at the cost of Claude Code never seeing the commands (ADR 0027).
@@ -80,6 +82,24 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M15 — Stack pack: Next.js
+
+**Built** (ADR 0029): the `nextjs` pack, opt-in, with six rules whose fixes create or repair what a Next.js 16 App Router project needs: `package-json`, `app-router`, `next-config`, `tsconfig`, `eslint`, `gitignore`. Each has a SKILL.md and fixture tests (passing, failing, fixed, fixed twice). The contents follow create-next-app's `app-empty/ts` template at `v16.4.6`, read from `vercel/next.js` (nextjs.org was blocked).
+
+**Proof by hand** (2026-11-12, Linux, Node 22.23.4, npm 10.9.9): in a folder made by `fscale init --packs core,nextjs`, `npm install` (347 packages, exit 0), `NEXT_TELEMETRY_DISABLED=1 npm run build` (Next.js 16.4.6, routes `/` and `/_not-found`, exit 0) and `npm run lint` (exit 0). Afterwards `git status` shows only the new `package-lock.json`: the build changed none of the generated files. A first attempt with a `tsconfig.json` that had `jsx: preserve` was rewritten by the build; the template's exact file is used since.
+
+**Found on real repos:** a copy of `vercel/commerce` with the pack on gets one finding, the missing ESLint setup, as an agent finding with the install command; nothing is proposed for its files. The other two repos are not Next.js apps, so the pass does not apply to them.
+
+**Independent review before the pull request** found three real bugs, all fixed with regression tests (`nextjs::tests::review`):
+
+- In a workspace whose Next.js app is in a subfolder (`apps/web`), the pack would have built a second app at the root: scripts, `app/`, `next.config.ts` and a root `tsconfig.json`. The pack now applies only when the root package.json depends on `next` (or there is none yet); otherwise one manual finding says the pack checks the root.
+- An app with several root layouts in route groups (`app/(shop)/layout.tsx`, a documented pattern) was given an `app/layout.tsx` that would wrap every page in a second `<html>`. Route-group layouts count now.
+- `nextjs/eslint` reported a deterministic finding with no package.json but could not fix it, so `sync` stopped when `nextjs/package-json` was off. It now waits for package.json.
+- Also fixed: a JavaScript app gets `layout.jsx` and an ESLint config without the TypeScript rules; eslint before 9 or eslint-config-next before 16 is an agent finding, not a config that cannot load; a new package.json says `"engines": { "node": ">=20.9.0" }`; `core/gitignore-basics` no longer writes its header twice when it runs before package.json exists.
+- Left: the pack does not check a Next.js app in a subfolder (per-project checks, as the Python pack does, would be the next step).
+
+**Known limits:** no `src/` layout for new apps (an existing one is accepted); no Tailwind; the versions are a snapshot of 2026-11-12; only an app at the repo root is checked.
 
 ## M14 — Generators: `add` and `schema`
 

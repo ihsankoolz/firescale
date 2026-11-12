@@ -52,7 +52,7 @@ fn normalise(line: &str) -> String {
 }
 
 /// Covered when the LAST line matching the entry is not a negation (`!entry`).
-fn is_covered(gitignore: &str, entry: &str) -> bool {
+pub(crate) fn is_covered(gitignore: &str, entry: &str) -> bool {
     let mut covered = false;
     for line in gitignore
         .trim_start_matches('\u{feff}')
@@ -175,7 +175,13 @@ impl BuiltinRule for GitignoreBasics {
         } else {
             eol
         };
-        let mut block = vec!["# Generated files and dependencies".to_owned()];
+        // The header once: a first pass with nothing to list (no package.json
+        // yet) already wrote it.
+        let header = "# Generated files and dependencies";
+        let mut block = Vec::new();
+        if !current.lines().any(|line| line.trim() == header) {
+            block.push(header.to_owned());
+        }
         block.extend(missing.iter().map(|entry| format!("{entry}/")));
         ctx.write(
             GITIGNORE,
