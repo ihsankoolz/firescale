@@ -62,15 +62,21 @@ These parts of verify were written after running 0.1.2 on a course project with 
 
 ### Progress
 
-While verify runs, it prints a line on stderr when each step starts and when it ends, and a heartbeat line every minute for a step that is still running, with the last line that step printed:
+While verify runs, it prints a line on stderr when each step starts and when it ends, and a heartbeat line every minute for a step that is still running, saying what that step is doing:
 
 ```
 [verify] check: started: fscale check
 [verify] check: passed after 412ms
 [verify] test in backend/audit_service: started: .venv/bin/python -m pytest
-[verify] test in backend/audit_service: still running after 1m 00s; last output: E   psycopg2.OperationalError: connection to server at "localhost" (127.0.0.1), port 5432 failed: Connection refused
+[verify] test in backend/audit_service: still running after 1m 00s; tests so far: 12 passed, 0 failed, 40 errors (in tests/test_orders.py)
+[verify] test in frontend: still running after 1m 00s; last output: ✓ src/cart.test.ts (14 tests) 812ms
 [verify] test in backend/audit_service: TIMED OUT after 10m 00s (limit 10m)
 ```
+
+What the heartbeat says (ADR 0025):
+
+- **pytest and unittest** print one character per test (`.` passed, `F` failed, `E` error, `s` skipped), often with no line end until a file is done. When those markers are the latest output, the heartbeat gives a running count, `tests so far: 12 passed, 0 failed, 40 errors`, with the file pytest is in. pytest is known by `pytest` in the command or its `test session starts` header; unittest by `unittest` or `manage.py test` in the command.
+- **Anything else** gets `last output:` and the last line that contains words (two letters in a row), so a line of dots or a lone `E` is never shown.
 
 Progress is on when stderr is a terminal, and off when stderr goes to a file or a pipe (CI logs, agent hooks), so logs and hook messages stay as they were. `--progress` turns it on anyway, `--no-progress` turns it off. It never touches stdout: the summary and `--json` are the same with or without it. `fscale hooks run` prints no progress unless `--progress` is given, because an agent reads the hook's stderr. The variable `FSCALE_HEARTBEAT_MS` sets the heartbeat interval in milliseconds (`0` turns heartbeats off); it is meant for tests.
 
@@ -106,6 +112,22 @@ Every step has a time limit: **10 minutes** unless the config says otherwise. A 
 ```
 
 The most specific setting wins: the project's step (`projects.<folder>.<step>.timeout`), the project (`projects.<folder>.timeout`), the step for the whole repo (`<step>.timeout`), `timeout`, then the default. A limit is a number of seconds, or text such as `"90s"`, `"10m"`, `"1h"` or `"1h 30m"`; `false` means no limit. A step object with only a `timeout` keeps the command verify detects.
+
+### A service that is not running, seen while the step runs
+
+Setup detection (above) reads a step's output when the step ends. A test suite whose database is not running can take many minutes to end, with every test erroring, and pytest prints why only at the very end. So verify also watches a running step (ADR 0025). It is clear the step cannot succeed when:
+
+- the output so far shows a refused connection (a message from the table above) to a service on this machine that is known by its client or its usual port, or that the project's `.env.example` or Compose file names, and nothing listens on that port now; or
+- pytest or unittest has reported at least 3 tests, every one an error (no pass, no failure), and a service that the project's `.env.example` or Compose file names, in its folder or a folder above it, is not listening.
+
+verify checks the port itself, at most every 5 seconds, with a connection that it closes at once. It then prints one line at once, and by default stops the step and reports it as setup needed:
+
+```
+[verify] test in backend/audit_service: SETUP NEEDED, seen while running: PostgreSQL on localhost:5432 is not running (every test so far has errored (0 passed, 0 failed, 3 errors), and backend/audit_service/.env.example (DATABASE_URL) names it); start it with: docker compose -f ../../docker-compose.yml up -d; stopping the step (set verify.stopWhenServiceDown to false to let it run on)
+[verify] test in backend/audit_service: SETUP NEEDED after 9.4s (stopped early)
+```
+
+To let such a step run to its end instead, set `"stopWhenServiceDown": false` in `verify`. The line is still printed, and the step is still reported as setup needed if it fails. Only host, port and service name are ever shown, never a connection string or a password. `fscale doctor` checks the same services before a run (see [doctor.md](doctor.md)).
 
 ### No input, and CI=1
 
@@ -208,6 +230,7 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 | `failOnSkipped`                          | `true` makes a skipped step fail the run. Default `false`.                                                                                                                                                                            |
 | `timeout`                                | The time limit of every step, unless a more specific one is set. Default `"10m"`. See "Time limits".                                                                                                                                  |
 | `ci`                                     | `false`: do not set `CI=1` for the commands. Default `true`.                                                                                                                                                                          |
+| `stopWhenServiceDown`                    | `false`: a step whose output shows that a service it needs is not running runs on to its end. Default `true`: it is stopped as soon as that is clear. See "A service that is not running, seen while the step runs".                  |
 | `<step>` as an object                    | `{ "command": "...", "timeout": "20m" }`: a command, a time limit, or both. Without `command`, the detected command runs with that limit.                                                                                             |
 | `projects.<folder>`                      | Settings for one project, by its folder. `false` turns all its steps off. An object sets single steps to a command or to `false`, and wins over the repo-wide setting for that step. Its `timeout` is the limit of each of its steps. |
 | `projects.<folder>` for any other folder | A folder `fscale facts` did not list as discovered runs exactly the commands given for it, in that folder. Use it for a project below the search depth.                                                                               |
@@ -286,7 +309,8 @@ At most the last 30 non-empty lines of the failed command are kept, with colour 
 
 ## Limits
 
-- A step's own output is captured, not streamed. Progress lines say what runs, and the heartbeat shows the last line of output.
+- A step's own output is captured, not streamed. Progress lines say what runs, and the heartbeat shows a running count of tests (pytest, unittest) or the last line with words.
+- Watching a running step for a service that is down knows pytest and unittest markers and the refused-connection messages in the table. A suite that waits silently on a service (no markers, no messages) is only caught when it ends or times out.
 - On macOS and Linux, a process that leaves its process group (a daemon that calls `setsid`) is not stopped with its command, and if fscale is killed with `SIGKILL` its commands keep running; the next run names them. On Windows, a daemon started by a step (such as a build server) is stopped at the end of the step, because it is in the step's job. If Windows refuses to make a job (rare: a parent job that forbids it), `taskkill /T` stops a step on a timeout or Ctrl+C, but what a step leaves running after it ends is not stopped.
 - With Nx, the task names must be `lint`, `typecheck` and `test`. Use the `verify` config key for other names.
 - A Node, Rust or Go project's commands run with the tools found on the PATH. A Python project's run with its interpreter (see above).

@@ -433,6 +433,14 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                 })?;
                 verify.no_ci_variable = !ci;
             }
+            "stopWhenServiceDown" => {
+                let stop = value.as_bool().ok_or_else(|| {
+                    Error::user(format!(
+                        "{name}: verify.stopWhenServiceDown must be true or false."
+                    ))
+                })?;
+                verify.keep_running_when_service_down = !stop;
+            }
             "timeout" => verify.timeout = Some(parse_limit(name, "verify.timeout", value)?),
             "projects" => {
                 let Value::Object(projects) = value else {
@@ -521,7 +529,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                         "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
                     ),
                     None => format!(
-                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, projects."
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, projects."
                     ),
                 }));
             }
@@ -998,6 +1006,20 @@ mod tests {
     }
 
     #[test]
+    fn stopping_a_step_whose_service_is_down_is_on_unless_turned_off() {
+        let packs = builtin();
+        let plain = resolve(&json!({}), &packs).expect("valid").verify;
+        assert!(!plain.keep_running_when_service_down);
+        let off = resolve(
+            &json!({ "verify": { "stopWhenServiceDown": false } }),
+            &packs,
+        )
+        .expect("valid")
+        .verify;
+        assert!(off.keep_running_when_service_down);
+    }
+
+    #[test]
     fn verify_time_limits_are_read_at_every_level() {
         use crate::verify::{Limit, DEFAULT_TIMEOUT};
         use std::time::Duration;
@@ -1082,6 +1104,10 @@ mod tests {
             (
                 json!({ "test": {} }),
                 "verify.test must be a command (a string), false to skip the step, or an object",
+            ),
+            (
+                json!({ "stopWhenServiceDown": "no" }),
+                "verify.stopWhenServiceDown must be true or false.",
             ),
             (
                 json!({ "test": { "cmd": "x" } }),

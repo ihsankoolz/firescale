@@ -490,9 +490,21 @@ fn start_services(root: &Path, dir: &Path) -> Option<String> {
     None
 }
 
-/// A refused connection to a service on this machine: a database or cache
-/// that is not running. Connections to other hosts are not counted.
-fn service_problem(output: &str, root: &Path, dir: &Path) -> Option<SetupProblem> {
+/// A refused connection to a local service, found in output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefusedService {
+    /// The host as the message names it.
+    pub host: String,
+    /// The port, when the message names it or the client has a usual one.
+    pub port: Option<u16>,
+    /// `PostgreSQL on localhost:5432`.
+    pub described: String,
+}
+
+/// The first refused connection to a service on this machine in `output`.
+/// Connections to other hosts are not counted.
+#[must_use]
+pub fn refused_service(output: &str) -> Option<RefusedService> {
     let lines: Vec<&str> = output.lines().collect();
     let mut last_address = None;
     for (index, raw) in lines.iter().enumerate() {
@@ -528,17 +540,32 @@ fn service_problem(output: &str, root: &Path, dir: &Path) -> Option<SetupProblem
         let Some(target) = found.filter(|target| is_local_host(target.host)) else {
             continue;
         };
-        let service = describe(target);
-        return Some(SetupProblem {
-            reason: format!(
-                "could not connect to {service}; the service is probably not running, so start it"
-            ),
-            missing_program: None,
-            missing_service: Some(service),
-            start_services: start_services(root, dir),
+        return Some(RefusedService {
+            host: target.host.to_owned(),
+            port: target.port,
+            described: describe(target),
         });
     }
     None
+}
+
+/// The setup problem of a refused connection to `service`.
+#[must_use]
+pub fn service_down(described: &str, root: &Path, dir: &Path) -> SetupProblem {
+    SetupProblem {
+        reason: format!(
+            "could not connect to {described}; the service is probably not running, so start it"
+        ),
+        missing_program: None,
+        missing_service: Some(described.to_owned()),
+        start_services: start_services(root, dir),
+    }
+}
+
+/// A refused connection to a service on this machine: a database or cache
+/// that is not running. Connections to other hosts are not counted.
+fn service_problem(output: &str, root: &Path, dir: &Path) -> Option<SetupProblem> {
+    refused_service(output).map(|found| service_down(&found.described, root, dir))
 }
 
 /// Looks at the output of a failed step for a sign that the environment is

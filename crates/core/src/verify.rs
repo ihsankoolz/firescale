@@ -10,16 +10,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
+
+use crate::activity::Activity;
+use crate::services::{listening, services_for_folder, Service, PROBE_TIMEOUT};
 
 use crate::error::{Error, Result};
 use crate::facts::{source, Project, RepoFacts};
 use crate::process::{run_tree, Ending, Watch};
 use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT};
 use crate::runs::{RunRecord, RunningStep};
-use crate::setup::setup_problem;
+use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
 
 /// Version of the `fscale verify --json` format.
 pub const VERIFY_SCHEMA_VERSION: u32 = 4;
@@ -91,6 +94,10 @@ pub struct VerifyConfig {
     pub project_timeouts: BTreeMap<String, ProjectTimeouts>,
     /// `verify.ci: false`: do not set `CI=1` for the commands.
     pub no_ci_variable: bool,
+    /// `verify.stopWhenServiceDown: false`: a step whose output shows that
+    /// a local service it needs is not running keeps running to its end
+    /// (ADR 0025). By default it is stopped as soon as that is clear.
+    pub keep_running_when_service_down: bool,
 }
 
 impl VerifyConfig {
@@ -758,6 +765,105 @@ fn setup_fix(problem: &crate::setup::SetupProblem, install: Option<&str>) -> Opt
     }
 }
 
+/// How many tests must have errored, with none passed or failed, before a
+/// declared service that is down explains the run (ADR 0025).
+const ERRORS_BEFORE_PROBE: u64 = 3;
+
+/// How often a running step may probe a service.
+const PROBE_EVERY: Duration = Duration::from_secs(5);
+
+/// What a running step's output showed about the services it needs.
+#[derive(Default)]
+struct Early {
+    /// Set once it is clear the step cannot succeed.
+    problem: Option<SetupProblem>,
+    last_probe: Option<Instant>,
+    declared: Option<Vec<Service>>,
+}
+
+/// True for a refused connection whose service is known by its client or
+/// its port, or that the repo itself names, so a test that connects to a
+/// closed port on purpose is not taken for a missing service.
+fn known_service(found: &crate::setup::RefusedService, declared: &[Service]) -> bool {
+    !found.described.starts_with("a service on")
+        || found
+            .port
+            .is_some_and(|port| declared.iter().any(|service| service.port == port))
+}
+
+/// Looks at a running step's output for a local service that is not
+/// running, and probes the service to be sure (ADR 0025). Returns the
+/// service and what showed it, once it is clear the step cannot succeed:
+///
+/// - the output shows a refused connection to a known local service, and
+///   nothing listens on its port now; or
+/// - a known test runner reports only errors so far (at least
+///   [`ERRORS_BEFORE_PROBE`]), and a service that the step's
+///   `.env.example` or Compose file names is not listening.
+fn service_down_while_running(
+    activity: &Activity,
+    early: &mut Early,
+    root: &Path,
+    dir: &Path,
+) -> Option<(String, String)> {
+    if early
+        .last_probe
+        .is_some_and(|last| last.elapsed() < PROBE_EVERY)
+    {
+        return None;
+    }
+    let declared = early
+        .declared
+        .get_or_insert_with(|| services_for_folder(root, dir));
+    let tally = activity.tally();
+    let runner_failing = activity.runner().is_none() || tally.failed + tally.errors > 0;
+    if let Some(found) = refused_service(&activity.recent().join("\n")) {
+        if let Some(port) = found
+            .port
+            .filter(|_| runner_failing && known_service(&found, declared))
+        {
+            early.last_probe = Some(Instant::now());
+            if !listening(&found.host, port, PROBE_TIMEOUT) {
+                // The repo's own name for it, when it names the port.
+                let described = declared
+                    .iter()
+                    .find(|service| {
+                        service.port == port && found.described.starts_with("a service on")
+                    })
+                    .map_or(found.described, Service::describe);
+                return Some((
+                    described,
+                    "the output shows refused connections and nothing listens on that port"
+                        .to_owned(),
+                ));
+            }
+            return None;
+        }
+    }
+    if activity.runner().is_some()
+        && tally.errors >= ERRORS_BEFORE_PROBE
+        && tally.passed == 0
+        && tally.failed == 0
+        && !declared.is_empty()
+    {
+        early.last_probe = Some(Instant::now());
+        if let Some(down) = declared
+            .iter()
+            .find(|service| !listening(&service.host, service.port, PROBE_TIMEOUT))
+        {
+            return Some((
+                down.describe(),
+                format!(
+                    "every test so far has errored ({}), and {} names it",
+                    tally.describe(),
+                    down.source
+                ),
+            ));
+        }
+    }
+    None
+}
+
 /// How a run behaves, apart from what it runs (ADR 0024).
 pub struct RunOptions<'a> {
     /// Set by Ctrl+C or a termination signal: running commands are stopped
@@ -834,7 +940,8 @@ fn run_step(
     environment(&mut shell, options.config);
     let spawned = Mutex::new(None);
     let heartbeat = |elapsed: Duration, last: Option<&str>| {
-        let last = last.map_or_else(String::new, |line| format!("; last output: {line}"));
+        // `last output: ...`, or a running count of tests (ADR 0025).
+        let last = last.map_or_else(String::new, |doing| format!("; {doing}"));
         options.say(&format!(
             "{place}: still running after {}{last}",
             format_duration(elapsed)
@@ -850,11 +957,39 @@ fn run_step(
             });
         }
     };
+    let early = Mutex::new(Early::default());
+    let stop_early = !options.config.keep_running_when_service_down;
+    let on_output = |activity: &Activity| {
+        let mut early = early.lock().unwrap_or_else(PoisonError::into_inner);
+        if early.problem.is_some() {
+            return false;
+        }
+        let Some((service, evidence)) =
+            service_down_while_running(activity, &mut early, unit.root, &dir)
+        else {
+            return false;
+        };
+        let problem = service_down(&service, unit.root, &dir);
+        let then = if stop_early {
+            "stopping the step (set verify.stopWhenServiceDown to false to let it run on)"
+        } else {
+            "the step runs on because verify.stopWhenServiceDown is false"
+        };
+        let start = setup_fix(&problem, unit.install)
+            .map_or_else(String::new, |fix| format!("; start it with: {fix}"));
+        options.say(&format!(
+            "{place}: SETUP NEEDED, seen while running: {service} is not running ({evidence}){start}; {then}"
+        ));
+        early.problem = Some(problem);
+        stop_early
+    };
     let watch = Watch {
         timeout,
         stop: options.stop,
         heartbeat: options.heartbeat,
         on_heartbeat: &heartbeat,
+        command,
+        on_output: &on_output,
         on_spawn: &on_spawn,
     };
     let finished = run_tree(shell, &watch).map_err(|error| {
@@ -895,8 +1030,24 @@ fn run_step(
             String::from_utf8_lossy(&finished.stderr)
         ))
     };
+    let seen_early = early
+        .into_inner()
+        .unwrap_or_else(PoisonError::into_inner)
+        .problem;
     let code = match finished.ending {
         Ending::Exited(code) => code,
+        Ending::GaveUp => {
+            let problem =
+                seen_early.unwrap_or_else(|| service_down("a local service", unit.root, &dir));
+            report.status = StepStatus::SetupNeeded;
+            report.detail = format!("{command} (stopped early after {took}): {}", problem.reason);
+            report.output_tail = tail(&finished.stdout, &finished.stderr);
+            report.fix = setup_fix(&problem, unit.install);
+            options.say(&format!(
+                "{place}: SETUP NEEDED after {took} (stopped early)"
+            ));
+            return Ok(report);
+        }
         Ending::Stopped => {
             report.status = StepStatus::Stopped;
             report.detail = format!("{command} (stopped: verify was interrupted)");
@@ -913,7 +1064,9 @@ fn run_step(
             report.timeout_key = Some(timeout_key);
             // A step that hangs often hangs on the environment, such as a
             // database that is not running: say so when the output shows it.
-            if let Some(problem) = setup_problem(&text(), None, unit.root, &dir) {
+            if let Some(problem) =
+                setup_problem(&text(), None, unit.root, &dir).or_else(|| seen_early.clone())
+            {
                 report.detail = format!(
                     "{command} (no result within {limit}; the output shows {})",
                     problem.reason
@@ -934,7 +1087,7 @@ fn run_step(
         Some(code) => format!("exit {code}"),
         None => "killed by a signal".to_owned(),
     };
-    match setup_problem(&text(), code, unit.root, &dir) {
+    match setup_problem(&text(), code, unit.root, &dir).or(seen_early) {
         Some(problem) => {
             report.status = StepStatus::SetupNeeded;
             report.detail = format!("{command} ({exit}): {}", problem.reason);
@@ -2750,8 +2903,11 @@ mod tests {
             projects: vec![one_step("svc", hang)],
             ..VerifyPlan::default()
         };
+        // With the default, the step would be stopped early (ADR 0025); this
+        // is the time limit's own path.
         let config = VerifyConfig {
             timeout: Some(Limit::After(Duration::from_secs(1))),
+            keep_running_when_service_down: true,
             ..VerifyConfig::default()
         };
         let report = run_verify_with(
@@ -2774,6 +2930,186 @@ mod tests {
         assert!(
             text.contains("Its output shows the environment is not ready. Set it up in svc: docker compose up -d\n"),
             "{text}"
+        );
+    }
+
+    /// A port with nothing listening on it.
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    fn early_in(fixture: &Fixture, activity: &Activity) -> Option<(String, String)> {
+        let mut early = Early::default();
+        service_down_while_running(activity, &mut early, fixture.root(), fixture.root())
+    }
+
+    fn fed(command: &str, output: &str) -> Activity {
+        let mut activity = Activity::new(command);
+        activity.feed(0, output.as_bytes());
+        activity
+    }
+
+    #[test]
+    fn a_refused_connection_to_a_declared_service_that_is_down_is_seen_while_running() {
+        let port = closed_port();
+        let fixture = Fixture::new(
+            &[(
+                ".env.example",
+                &format!("DATABASE_URL=postgresql://app:pw@localhost:{port}/app\n"),
+            )],
+            Track::NoGit,
+        )
+        .unwrap();
+        let activity = fed(
+            "node test.js",
+            &format!("Error: connect ECONNREFUSED 127.0.0.1:{port}\n"),
+        );
+        let (service, evidence) = early_in(&fixture, &activity).expect("seen");
+        assert_eq!(service, format!("PostgreSQL on localhost:{port}"));
+        assert!(evidence.contains("refused connections"), "{evidence}");
+    }
+
+    #[test]
+    fn a_refused_connection_to_an_unknown_port_is_not_taken_for_a_service() {
+        // A test may connect to a closed port on purpose.
+        let port = closed_port();
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let activity = fed(
+            "node test.js",
+            &format!("Error: connect ECONNREFUSED 127.0.0.1:{port}\n"),
+        );
+        assert_eq!(early_in(&fixture, &activity), None);
+    }
+
+    #[test]
+    fn a_service_that_answers_now_is_not_down() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let fixture = Fixture::new(
+            &[(
+                ".env.example",
+                &format!("REDIS_URL=redis://127.0.0.1:{port}\n"),
+            )],
+            Track::NoGit,
+        )
+        .unwrap();
+        let activity = fed(
+            "node test.js",
+            &format!("Error: connect ECONNREFUSED 127.0.0.1:{port}\n"),
+        );
+        assert_eq!(early_in(&fixture, &activity), None);
+        let errors = fed("python -m pytest", "tests/test_a.py EEEE");
+        assert_eq!(early_in(&fixture, &errors), None);
+    }
+
+    #[test]
+    fn tests_that_all_error_with_a_declared_service_down_are_seen_while_running() {
+        let port = closed_port();
+        let fixture = Fixture::new(
+            &[(
+                ".env.example",
+                &format!(
+                    "POSTGRES_SERVER=localhost\nPOSTGRES_PORT={port}\nPOSTGRES_PASSWORD=hunter2\n"
+                ),
+            )],
+            Track::NoGit,
+        )
+        .unwrap();
+        let (service, evidence) =
+            early_in(&fixture, &fed("python -m pytest", "tests/test_a.py EEEE")).expect("seen");
+        assert_eq!(service, format!("PostgreSQL on localhost:{port}"));
+        assert_eq!(
+            evidence,
+            "every test so far has errored (0 passed, 0 failed, 4 errors), and .env.example (POSTGRES_SERVER) names it"
+        );
+        assert!(!evidence.contains("hunter2"));
+        // Too few errors, a passed test, or an unknown runner: not clear yet.
+        assert_eq!(
+            early_in(&fixture, &fed("python -m pytest", "tests/test_a.py EE")),
+            None
+        );
+        assert_eq!(
+            early_in(&fixture, &fed("python -m pytest", "tests/test_a.py .EEEE")),
+            None
+        );
+        assert_eq!(early_in(&fixture, &fed("node test.js", "EEEE")), None);
+    }
+
+    #[test]
+    fn a_step_that_cannot_reach_its_service_is_stopped_early_or_runs_on_when_told() {
+        let port = closed_port();
+        let fixture = Fixture::new(
+            &[
+                (
+                    "svc/.env.example",
+                    &format!("DATABASE_URL=postgresql://u:p@localhost:{port}/db\n"),
+                ),
+                ("svc/compose.yaml", "services: {}\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let hang = if cfg!(windows) {
+            format!(
+                "echo connect ECONNREFUSED 127.0.0.1:{port} & ping -n 4 127.0.0.1 > NUL & exit 1"
+            )
+        } else {
+            format!("echo 'connect ECONNREFUSED 127.0.0.1:{port}'; sleep 3; exit 1")
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![one_step("svc", &hang)],
+            ..VerifyPlan::default()
+        };
+        let shared = crate::progress::Shared::default();
+        let progress = Progress::new(Box::new(shared.clone()));
+        let config = VerifyConfig::default();
+        let options = RunOptions {
+            progress: Some(&progress),
+            ..RunOptions::quiet(&config)
+        };
+        let started = Instant::now();
+        let report =
+            run_verify_with(fixture.root(), "0.0.0", passing_check(), &plan, &options).unwrap();
+        let step = &report.steps[1];
+        assert_eq!(step.status, StepStatus::SetupNeeded);
+        assert!(
+            started.elapsed() < Duration::from_millis(2900),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(step.detail.contains("stopped early"), "{}", step.detail);
+        assert_eq!(step.fix.as_deref(), Some("docker compose up -d"));
+        let lines = shared.text();
+        assert!(
+            lines.contains(&format!("[verify] test in svc: SETUP NEEDED, seen while running: PostgreSQL on localhost:{port} is not running (the output shows refused connections and nothing listens on that port); start it with: docker compose up -d; stopping the step (set verify.stopWhenServiceDown to false to let it run on)\n")),
+            "{lines}"
+        );
+
+        // With the option off, the step runs to its end and says why.
+        let shared = crate::progress::Shared::default();
+        let progress = Progress::new(Box::new(shared.clone()));
+        let config = VerifyConfig {
+            keep_running_when_service_down: true,
+            ..VerifyConfig::default()
+        };
+        let options = RunOptions {
+            progress: Some(&progress),
+            ..RunOptions::quiet(&config)
+        };
+        let report =
+            run_verify_with(fixture.root(), "0.0.0", passing_check(), &plan, &options).unwrap();
+        let step = &report.steps[1];
+        assert_eq!(step.status, StepStatus::SetupNeeded);
+        assert_eq!(step.exit_code, Some(1));
+        assert!(!step.detail.contains("stopped early"), "{}", step.detail);
+        assert!(
+            shared
+                .text()
+                .contains("the step runs on because verify.stopWhenServiceDown is false"),
+            "{}",
+            shared.text()
         );
     }
 

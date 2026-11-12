@@ -207,6 +207,12 @@ export interface VerifyConfig extends VerifySteps {
   timeout?: VerifyTimeout;
   /** `false`: do not set `CI=1` for the commands. Default `true`. */
   ci?: boolean;
+  /**
+   * `false`: a step whose output shows that a local service it needs is not
+   * running runs on to its end. Default `true`: it is stopped as soon as that
+   * is clear (ADR 0025).
+   */
+  stopWhenServiceDown?: boolean;
   /** Per project, keyed by its folder: `false` turns it off, an object sets single steps. */
   projects?: Record<string, false | VerifyProjectSettings>;
 }
