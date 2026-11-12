@@ -192,3 +192,30 @@ mod negation {
         assert_eq!(f.read(".gitignore"), after);
     }
 }
+
+mod projects_in_subfolders {
+    use super::*;
+
+    const SERVICE: [(&str, &str); 2] = [
+        ("backend/api/requirements.txt", "pytest\n"),
+        ("backend/api/main.py", "app = None\n"),
+    ];
+
+    #[test]
+    fn a_python_service_in_a_subfolder_needs_the_python_entries() {
+        let mut files = SERVICE.to_vec();
+        files.push((".gitignore", "node_modules\n"));
+        let f = Fixture::new(&files, Track::All).unwrap();
+        let found = messages(&f);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].contains(".venv") && found[1].contains("__pycache__"));
+    }
+
+    #[test]
+    fn it_passes_once_they_are_listed() {
+        let mut files = SERVICE.to_vec();
+        files.push((".gitignore", "__pycache__/\n.venv/\n"));
+        let f = Fixture::new(&files, Track::All).unwrap();
+        assert!(messages(&f).is_empty());
+    }
+}

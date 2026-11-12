@@ -2,39 +2,74 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/ihsankoolz/firescale/blob/main/packages/cli/schemas/verify-output.schema.json",
   "title": "fscale verify --json output",
-  "description": "The report printed by `fscale verify --json`. Steps are listed in the order they run: check, lint, typecheck, test.",
+  "description": "The report printed by `fscale verify --json`. Steps are listed in the order they run: check, then lint, typecheck and test at the repo root, then the same three for each project found below the root.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "version", "ok", "runner", "steps"],
+  "required": [
+    "schemaVersion",
+    "version",
+    "ok",
+    "result",
+    "runner",
+    "stepsTotal",
+    "stepsRun",
+    "failOnSkipped",
+    "steps",
+    "skipped"
+  ],
   "properties": {
     "schemaVersion": {
       "description": "Version of this format. Changes only on a breaking change.",
-      "const": 1
+      "const": 2
     },
     "version": {
       "description": "The firescale version that produced the report.",
       "type": "string"
     },
     "ok": {
-      "description": "True when no step failed. Skipped steps do not count as failures.",
+      "description": "True when the exit code is 0: result is ok or partial.",
       "type": "boolean"
     },
+    "result": {
+      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on.",
+      "enum": ["ok", "partial", "failed"]
+    },
     "runner": {
-      "description": "How the lint, typecheck and test commands were chosen: all three from the config, Nx, Turborepo, package.json scripts, Cargo, or none found.",
-      "enum": ["config", "nx", "turbo", "scripts", "cargo", "none"]
+      "description": "How the commands of the repo root were chosen: all three from the config, Nx, Turborepo, package.json scripts, Cargo, a Python or Go project at the root, none found, or projects when the root has no commands of its own and the projects below it supply them.",
+      "enum": ["config", "nx", "turbo", "scripts", "cargo", "python", "go", "projects", "none"]
+    },
+    "stepsTotal": {
+      "description": "Steps that should run: every step except the ones whose status is off.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "stepsRun": {
+      "description": "Steps that did run, passing or failing.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "failOnSkipped": {
+      "description": "The verify.failOnSkipped setting of the config.",
+      "type": "boolean"
     },
     "failedStep": {
-      "description": "Name of the first step that failed. Absent when ok is true.",
+      "description": "Name of the first step that failed. Absent when no step failed.",
       "enum": ["check", "lint", "typecheck", "test"]
     },
+    "failedProject": {
+      "description": "Folder of the project whose step failed. Absent when the step belongs to the repo root.",
+      "type": "string"
+    },
     "rerun": {
-      "description": "The command to run again after fixing the failure. Absent when ok is true.",
+      "description": "The command to run again after fixing the failure, from the folder in failedProject when that is present. Absent when no step failed.",
       "type": "string"
     },
     "warnings": {
-      "description": "Things to know that are not failures: steps skipped because no command was found. Absent when there are none.",
+      "description": "One sentence that names the skipped steps and says how to give them a command. Absent when nothing was skipped.",
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "steps": {
       "type": "array",
@@ -43,28 +78,60 @@
         "additionalProperties": false,
         "required": ["name", "status", "durationMs", "detail"],
         "properties": {
-          "name": { "enum": ["check", "lint", "typecheck", "test"] },
+          "name": {
+            "enum": ["check", "lint", "typecheck", "test"]
+          },
+          "project": {
+            "description": "Folder of the project the step belongs to, where its command runs. Absent for a step of the repo root.",
+            "type": "string"
+          },
           "status": {
-            "description": "not-run means an earlier step failed, so this one was not started.",
-            "enum": ["passed", "failed", "skipped", "not-run"]
+            "description": "skipped: no command was found, so nothing was verified. not-run: an earlier step failed, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",
+            "enum": ["passed", "failed", "skipped", "not-run", "off"]
           },
           "command": {
-            "description": "The command that ran, or would have. Absent for a skipped step.",
+            "description": "The command that ran, or would have. Absent for a skipped step and for one that is off.",
             "type": "string"
           },
           "exitCode": {
             "description": "Exit code of the command. Absent when the step did not run or was killed by a signal.",
             "type": "integer"
           },
-          "durationMs": { "type": "integer", "minimum": 0 },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0
+          },
           "detail": {
-            "description": "One line about the outcome: a count, the command, or why the step was skipped.",
+            "description": "One line about the outcome: a count, the command, or why the step did not run.",
             "type": "string"
           },
           "outputTail": {
             "description": "The last lines of a failed step's output, without colour codes. Absent unless the step failed.",
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "skipped": {
+      "description": "Every step that was skipped because no command was found. Empty when result is ok.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "reason"],
+        "properties": {
+          "step": {
+            "enum": ["lint", "typecheck", "test"]
+          },
+          "project": {
+            "description": "Folder of the project. Absent for the repo root.",
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
           }
         }
       }

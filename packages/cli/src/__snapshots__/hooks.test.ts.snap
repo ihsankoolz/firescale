@@ -69,8 +69,8 @@ exports[`fscale hooks run (the stop hook) > blocks Claude Code with exit code 2 
 
 verify: FAILED at test
   check      passed   8 rules, no enforced violations
-  lint       skipped  turned off in your firescale config
-  typecheck  skipped  turned off in your firescale config
+  lint       off      turned off in your firescale config
+  typecheck  off      turned off in your firescale config
   test       FAILED   node test.js (exit 1)
 
 Last lines of test:

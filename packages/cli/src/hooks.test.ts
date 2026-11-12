@@ -220,4 +220,39 @@ describe('fscale hooks run (the stop hook)', () => {
     const flag = await runCli(['hooks', 'run', '--agent', 'claude', '--nope'], repo.root);
     expect(flag.code).toBe(1);
   });
+
+  it('lets the agent stop on a partial run, and says that it was not a clean pass', async () => {
+    // No command for lint or typecheck. The default (ADR 0020): do not block.
+    const files = {
+      'package.json': JSON.stringify({ name: 'demo', scripts: { test: 'node test.js' } }),
+      'test.js': "console.log('ok');\n",
+    };
+    const repo = await fixtures.create({ files });
+    const result = await stop(repo.root, 'claude', { session_id: 'p1', stop_hook_active: false });
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(
+      'fscale: verify was only partial, so this is not a clean pass. 2 of 4 steps ran; skipped: lint, typecheck. Run `fscale verify` for the details, or set verify.failOnSkipped to true to make skipped steps block.\n',
+    );
+    // Cursor reads JSON from stdout, so the note must stay off it.
+    const cursor = await stop(repo.root, 'cursor', { conversation_id: 'p1', loop_count: 0 });
+    expect(cursor.code).toBe(EXIT_OK);
+    expect(cursor.stdout).toBe('');
+    expect(cursor.stderr).toContain('verify was only partial');
+  });
+
+  it('blocks on a skipped step when verify.failOnSkipped is on', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'package.json': JSON.stringify({ name: 'demo', scripts: { test: 'node test.js' } }),
+        'test.js': "console.log('ok');\n",
+        'firescale.config.json': JSON.stringify({ verify: { failOnSkipped: true } }),
+      },
+    });
+    const result = await stop(repo.root, 'claude', { session_id: 'p2', stop_hook_active: false });
+    expect(result.code).toBe(EXIT_BLOCK);
+    expect(result.stderr).toContain(
+      'verify: FAILED - 2 of 4 steps skipped, and verify.failOnSkipped is on',
+    );
+  });
 });

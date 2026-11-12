@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule core/gitignore-basics by cre
 
 ## What this rule enforces and why
 
-Inside a git repo, the root `.gitignore` exists and ignores the generated folders of each detected language: `node_modules` for JavaScript and TypeScript, `target` for Rust, `__pycache__` and `.venv` for Python. Forms such as `node_modules/`, `/node_modules` and `**/node_modules/` all count.
+Inside a git repo, the root `.gitignore` exists and ignores the generated folders of each detected language: `node_modules` for JavaScript and TypeScript, `target` for Rust, `__pycache__` and `.venv` for Python. Forms such as `node_modules/`, `/node_modules` and `**/node_modules/` all count. The languages are those of the repo root and of every project `fscale facts` finds in a subfolder.
 
 Without these entries, dependencies and build output get committed by accident. That bloats the repo and slows every clone.
 

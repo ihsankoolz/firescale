@@ -85,6 +85,8 @@ impl BuiltinRule for GitignoreBasics {
             severity: Severity::Medium,
             category: Category::Consistency,
             description: ".gitignore exists and covers the detected stack.".to_owned(),
+            // The stack comes from every project `fscale facts` finds, so the
+            // marker files count wherever they are.
             inputs: [
                 ".gitignore",
                 "package.json",
@@ -92,6 +94,13 @@ impl BuiltinRule for GitignoreBasics {
                 "pyproject.toml",
                 "requirements.txt",
                 "tsconfig.json",
+                "**/package.json",
+                "**/Cargo.toml",
+                "**/pyproject.toml",
+                "**/requirements.txt",
+                "**/tsconfig.json",
+                "**/setup.py",
+                "**/Pipfile",
             ]
             .iter()
             .map(|name| (*name).to_owned())

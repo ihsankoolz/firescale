@@ -8,6 +8,7 @@
   "required": [
     "schemaVersion",
     "packageManager",
+    "packageManagers",
     "lockfiles",
     "languages",
     "tools",
@@ -18,11 +19,18 @@
   "properties": {
     "schemaVersion": {
       "description": "Version of this format. Changes only on a breaking change.",
-      "const": 1
+      "const": 2
     },
     "packageManager": {
-      "description": "The JavaScript package manager, from the packageManager field of package.json or else from a lockfile. Null when unknown.",
+      "description": "The JavaScript package manager of the repo root, from the packageManager field of the root package.json or else from a root lockfile. Null when the root has none; see packageManagers for the projects.",
       "enum": ["pnpm", "npm", "yarn", "bun", null]
+    },
+    "packageManagers": {
+      "description": "Every package manager in use: the root's and each project's.",
+      "type": "array",
+      "items": {
+        "enum": ["bun", "cargo", "go", "npm", "pip", "pipenv", "pnpm", "poetry", "uv", "yarn"]
+      }
     },
     "lockfiles": {
       "description": "Lockfiles found at the repo root.",
@@ -30,8 +38,10 @@
       "items": {
         "enum": [
           "Cargo.lock",
+          "Pipfile.lock",
           "bun.lock",
           "bun.lockb",
+          "go.sum",
           "package-lock.json",
           "pnpm-lock.yaml",
           "poetry.lock",
@@ -41,46 +51,151 @@
       }
     },
     "languages": {
-      "description": "Languages detected from marker files.",
-      "type": "array",
-      "items": { "enum": ["javascript", "python", "rust", "typescript"] }
-    },
-    "tools": {
-      "description": "Build and workspace tools detected from marker files.",
+      "description": "Languages detected from marker files, at the root and in every project.",
       "type": "array",
       "items": {
-        "enum": ["cargo-workspace", "github-actions", "nx", "pnpm-workspace", "turbo"]
+        "enum": ["go", "javascript", "python", "rust", "typescript"]
+      }
+    },
+    "tools": {
+      "description": "Build and workspace tools detected from marker files at the repo root.",
+      "type": "array",
+      "items": {
+        "enum": [
+          "cargo-workspace",
+          "docker-compose",
+          "github-actions",
+          "nx",
+          "pnpm-workspace",
+          "turbo"
+        ]
       }
     },
     "commands": {
-      "description": "Commands to run, for each of the root package.json scripts build, test, lint and typecheck that exists.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "build": { "type": "string" },
-        "test": { "type": "string" },
-        "lint": { "type": "string" },
-        "typecheck": { "type": "string" }
-      }
+        "build": {
+          "type": "string"
+        },
+        "test": {
+          "type": "string"
+        },
+        "lint": {
+          "type": "string"
+        },
+        "typecheck": {
+          "type": "string"
+        }
+      },
+      "description": "Commands to run from the repo root, for each of the root package.json scripts build, test, lint and typecheck that exists."
     },
     "projects": {
-      "description": "Projects of the simple workspace graph, sorted by name.",
+      "description": "The projects of the repo, sorted by name: the root, workspace members, and projects found in subfolders.",
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "root", "kind", "dependsOn"],
+        "required": [
+          "name",
+          "root",
+          "kind",
+          "source",
+          "languages",
+          "packageManager",
+          "lockfiles",
+          "tools",
+          "commands",
+          "dependsOn"
+        ],
         "properties": {
-          "name": { "type": "string" },
+          "name": {
+            "description": "The name from the project's manifest, or else the name of its folder. \".\" for a project at the repo root whose manifest gives no name.",
+            "type": "string"
+          },
           "root": {
             "description": "Repo-relative folder with forward slashes. \".\" is the repo root.",
             "type": "string"
           },
-          "kind": { "enum": ["node", "rust"] },
+          "kind": {
+            "enum": ["go", "node", "python", "rust"]
+          },
+          "source": {
+            "description": "How the project was found: it is the repo root, a workspace file at the root lists it, or a marker file was found in a subfolder.",
+            "enum": ["root", "workspace", "discovered"]
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "enum": ["go", "javascript", "python", "rust", "typescript"]
+            }
+          },
+          "packageManager": {
+            "description": "The project's package manager. Null when a Node project names none and has no lockfile.",
+            "enum": [
+              "bun",
+              "cargo",
+              "go",
+              "npm",
+              "pip",
+              "pipenv",
+              "pnpm",
+              "poetry",
+              "uv",
+              "yarn",
+              null
+            ]
+          },
+          "lockfiles": {
+            "description": "Names of the lockfiles in the project's folder.",
+            "type": "array",
+            "items": {
+              "enum": [
+                "Cargo.lock",
+                "Pipfile.lock",
+                "bun.lock",
+                "bun.lockb",
+                "go.sum",
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "poetry.lock",
+                "uv.lock",
+                "yarn.lock"
+              ]
+            }
+          },
+          "tools": {
+            "description": "Linters, test runners and other tools detected from config files and dependencies in the project's folder.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "commands": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "build": {
+                "type": "string"
+              },
+              "test": {
+                "type": "string"
+              },
+              "lint": {
+                "type": "string"
+              },
+              "typecheck": {
+                "type": "string"
+              }
+            },
+            "description": "Commands to run from the project's folder: package scripts first, then commands worked out from tool config files."
+          },
           "dependsOn": {
             "description": "Names of other projects of the same kind in this repo that this one depends on.",
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         }
       }
@@ -88,7 +203,9 @@
     "warnings": {
       "description": "Things that were skipped, such as a marker file that is not valid JSON.",
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     }
   }
 }
