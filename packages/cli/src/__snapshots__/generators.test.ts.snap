@@ -1,0 +1,277 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale add > package: writes the files (snapshot), and they add no violation to fscale check > output 1`] = `
+"created packages/utils/package.json
+created packages/utils/src/index.js
+created packages/utils/test/index.test.js
+created packages/utils/README.md
+
+Check the result with \`fscale check\`.
+"
+`;
+
+exports[`fscale add > package: writes the files (snapshot), and they add no violation to fscale check > packages/utils/README.md 1`] = `
+"# @acme/utils
+
+Small helpers.
+
+## Usage
+
+\`\`\`js
+import { describe } from '@acme/utils';
+\`\`\`
+
+## Test
+
+\`\`\`sh
+node --test
+\`\`\`
+"
+`;
+
+exports[`fscale add > package: writes the files (snapshot), and they add no violation to fscale check > packages/utils/package.json 1`] = `
+"{
+  "name": "@acme/utils",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Small helpers.",
+  "type": "module",
+  "exports": "./src/index.js",
+  "scripts": {
+    "test": "node --test"
+  }
+}
+"
+`;
+
+exports[`fscale add > package: writes the files (snapshot), and they add no violation to fscale check > packages/utils/src/index.js 1`] = `
+"/** The package's first export. Replace it with the real code. */
+export function describe() {
+  return "@acme/utils: Small helpers.";
+}
+"
+`;
+
+exports[`fscale add > package: writes the files (snapshot), and they add no violation to fscale check > packages/utils/test/index.test.js 1`] = `
+"import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { describe } from '../src/index.js';
+
+test('describes the package', () => {
+  assert.match(describe(), /^@acme\\/utils: /);
+});
+"
+`;
+
+exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > firescale-rules/pack.ts 1`] = `
+"import { definePack } from '@firescale/sdk';
+import noTodoFile from './rules/no-todo-file/rule.ts';
+
+export const pack = definePack({
+  name: "team",
+  rules: [
+    {
+      rule: noTodoFile,
+      skillFile: new URL('./rules/no-todo-file/SKILL.md', import.meta.url),
+    },
+  ],
+});
+"
+`;
+
+exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > firescale-rules/rules/no-todo-file/SKILL.md 1`] = `
+"---
+name: no-todo-file
+description: Fixes violations of the firescale rule team/no-todo-file. No TODO.md files are tracked. Use when fscale check reports team/no-todo-file.
+---
+
+# team/no-todo-file
+
+## What this rule enforces and why
+
+No TODO.md files are tracked.
+
+Say why it matters: what goes wrong when the rule is broken.
+
+## Manual fix
+
+1. Describe the first step a person takes to fix a finding.
+
+## Agent fix instructions
+
+Fix only the diagnostics reported for this rule. Do not change anything else.
+
+### DETERMINISTIC
+
+Steps the agent applies. Each step must be safe and have one correct outcome.
+
+1. Describe the step, or write "None." when every fix needs a person.
+
+### REPORT
+
+Items the agent only reports. It must not act on them.
+
+- Anything that needs a human decision.
+
+## Verify
+
+Run this command. It must report no violations for this rule.
+
+\`\`\`
+fscale check --rules team/no-todo-file
+\`\`\`
+"
+`;
+
+exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > firescale-rules/rules/no-todo-file/rule.test.ts 1`] = `
+"import { checkRule } from '@firescale/sdk';
+import { fixtureSet } from '@firescale/sdk/testing';
+import { afterEach, describe, expect, it } from 'vitest';
+import rule from './rule.ts';
+
+const fixtures = fixtureSet();
+afterEach(fixtures.cleanup);
+
+describe("team/no-todo-file", () => {
+  it('passes on a repo that follows the rule', async () => {
+    const repo = await fixtures.create({ files: { 'README.md': '# Example\\n' } });
+    expect(await checkRule(rule, { root: repo.root })).toEqual([]);
+  });
+
+  it.todo('reports a repo that breaks the rule');
+  it.todo('passes once the repo is fixed');
+});
+"
+`;
+
+exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > firescale-rules/rules/no-todo-file/rule.ts 1`] = `
+"import { defineRule } from '@firescale/sdk';
+
+/** No TODO.md files are tracked. */
+export default defineRule({
+  id: "team/no-todo-file",
+  severity: "low",
+  category: "maintainability",
+  description: "No TODO.md files are tracked.",
+  // Globs of the files the check reads: the result is cached until one changes.
+  inputs: ['**/*'],
+  async check(ctx) {
+    // Return one finding per problem: { file, message, fixable: 'manual' }.
+    // ctx.files.read(path), ctx.git.trackedFiles() and ctx.facts are available.
+    const tracked = await ctx.git.trackedFiles();
+    void tracked;
+    return [];
+  },
+});
+"
+`;
+
+exports[`fscale add > rule: writes the files (snapshot), and they add no violation to fscale check > output 1`] = `
+"created firescale-rules/rules/no-todo-file/rule.ts
+created firescale-rules/rules/no-todo-file/SKILL.md
+created firescale-rules/rules/no-todo-file/rule.test.ts
+created firescale-rules/pack.ts
+
+Next:
+  Turn the pack on: add "./firescale-rules/pack.ts" to "packs" in your firescale config. It needs @firescale/sdk as a dev dependency.
+  Write the check in firescale-rules/rules/no-todo-file/rule.ts, the failing and fixed cases in rule.test.ts, and the steps in SKILL.md.
+
+Check the result with \`fscale check\`.
+"
+`;
+
+exports[`fscale schema > lists the generators 1`] = `
+"Generators (fscale schema <name> prints one's input schema):
+  package    A new JavaScript package in the workspace: package.json, src/index.js, a node:test test and a README.
+  rule       A custom TypeScript rule: rule.ts with its check, SKILL.md and a fixture test, in a rule pack (created when missing).
+"
+`;
+
+exports[`fscale schema > prints a valid JSON Schema for package that accepts the example input 1`] = `
+"{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "fscale add package",
+  "description": "Input for the workspace package generator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The npm package name, for example \\"utils\\" or \\"@acme/utils\\".",
+      "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
+      "maxLength": 214
+    },
+    "folder": {
+      "type": "string",
+      "description": "Where to put it, relative to the repo root with forward slashes. Default: packages/<name without its scope>.",
+      "pattern": "^(?!\\\\.\\\\.?(/|$))(?!.*/\\\\.\\\\.?(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
+    },
+    "description": {
+      "type": "string",
+      "description": "One sentence for package.json and the README.",
+      "maxLength": 200,
+      "default": ""
+    }
+  }
+}
+"
+`;
+
+exports[`fscale schema > prints a valid JSON Schema for rule that accepts the example input 1`] = `
+"{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "fscale add rule",
+  "description": "Input for the custom rule generator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "description"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "The rule id, <pack>/<rule>, lower case with hyphens: \\"team/no-todo-file\\".",
+      "pattern": "^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$",
+      "maxLength": 80
+    },
+    "description": {
+      "type": "string",
+      "description": "One sentence: what must be true in the repo.",
+      "maxLength": 200
+    },
+    "severity": {
+      "type": "string",
+      "description": "How bad a violation is.",
+      "enum": [
+        "blocker",
+        "high",
+        "medium",
+        "low"
+      ],
+      "default": "medium"
+    },
+    "category": {
+      "type": "string",
+      "description": "What kind of problem it is.",
+      "enum": [
+        "security",
+        "reliability",
+        "consistency",
+        "maintainability"
+      ],
+      "default": "maintainability"
+    },
+    "packFolder": {
+      "type": "string",
+      "description": "The pack folder, relative to the repo root with forward slashes. Default: firescale-rules.",
+      "pattern": "^(?!\\\\.\\\\.?(/|$))(?!.*/\\\\.\\\\.?(/|$))[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$",
+      "default": "firescale-rules"
+    }
+  }
+}
+"
+`;

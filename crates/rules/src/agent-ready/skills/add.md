@@ -1,0 +1,38 @@
+---
+name: firescale-add
+description: Scaffold new packages and custom firescale rules with `fscale add` instead of writing the boilerplate by hand. Use when a task needs a new workspace package or a new firescale rule.
+---
+
+# Scaffold with fscale add
+
+## What this skill is for
+
+This repo uses firescale. When a task needs a new **workspace package** or a new **custom firescale rule**, create its files with `fscale add`, not by hand. The generator writes the files the repo's checks expect, the same way every time, and refuses to write over a file that exists.
+
+## Steps
+
+1. List the generators: `fscale schema`.
+2. Read the input of the one you need: `fscale schema <generator>`. It prints a JSON Schema: the required fields, the allowed values and the defaults.
+3. Preview, and change nothing: `fscale add <generator> --json '<input>' --dry-run`.
+4. Create the files: `fscale add <generator> --json '<input>'`.
+5. Do what the `Next:` lines say (for example, add the package to the workspace list), then fill in the real code.
+6. Run `fscale check`, then `fscale verify`.
+
+Examples:
+
+```sh
+fscale add package --json '{"name": "@acme/utils", "description": "Small helpers."}' --dry-run
+fscale add rule --json '{"id": "team/no-todo-file", "description": "No TODO.md files are tracked."}'
+```
+
+## When the input is rejected
+
+The error names the field and what it must be. Fix the input and run the same command again. Do not write the files by hand to get around it.
+
+## Verify
+
+Run this command. The new files must add no violations.
+
+```
+fscale check
+```

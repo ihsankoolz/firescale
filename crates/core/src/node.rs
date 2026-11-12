@@ -180,6 +180,31 @@ impl NodeHost {
         )
     }
 
+    /// The generators the npm package ships, with their descriptions.
+    pub fn list_generators(&mut self) -> Result<Value> {
+        self.start("list the generators", "install the firescale npm package")?;
+        self.request("listGenerators", json!({}))
+    }
+
+    /// One generator's input JSON Schema.
+    pub fn generator_schema(&mut self, name: &str) -> Result<Value> {
+        self.start(
+            "read a generator's schema",
+            "install the firescale npm package",
+        )?;
+        self.request("generatorSchema", json!({ "name": name }))
+    }
+
+    /// Validates the input and runs the generator, which writes nothing: it
+    /// returns `{ files: [{ path, content }], notes: [...] }`.
+    pub fn run_generator(&mut self, name: &str, input: &Value) -> Result<Value> {
+        self.start("run a generator", "install the firescale npm package")?;
+        self.request(
+            "runGenerator",
+            json!({ "root": self.root.to_string_lossy(), "name": name, "input": input }),
+        )
+    }
+
     /// Imports custom packs and returns their rules' metadata.
     pub fn describe_packs(&mut self, specs: &[String]) -> Result<Vec<PackDescription>> {
         self.start(

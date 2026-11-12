@@ -79,10 +79,37 @@ pub fn installed_skill(source: &str, rule_id: &str) -> String {
     format!("---\n{}\n---\n\n{note}{body}", front.join("\n"))
 }
 
-/// Skills a pack ships besides its rules' own. None yet; generators add one
-/// (M14).
-fn pack_skills(_packs: &[String]) -> Vec<Skill> {
-    Vec::new()
+/// The skill that tells agents to scaffold with `fscale add` (M14).
+pub const ADD_SKILL: &str = include_str!("../skills/add.md");
+
+/// The installed form of a skill a pack ships: the generated line after
+/// the frontmatter. LF line endings.
+#[must_use]
+pub fn installed_pack_skill(source: &str, pack: &str) -> String {
+    let source = source.replace("\r\n", "\n");
+    let note = format!(
+        "{GENERATED}the {pack} pack. `fscale sync` rewrites this file; to remove it, turn the pack off in the firescale config. -->\n"
+    );
+    match source
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+    {
+        Some((front, body)) => format!("---\n{front}\n---\n\n{note}{body}"),
+        None => format!("{note}\n{source}"),
+    }
+}
+
+/// Skills a pack ships besides its rules' own: the agent-ready pack ships
+/// the one that says to use `fscale add`.
+fn pack_skills(packs: &[String]) -> Vec<Skill> {
+    let mut skills = Vec::new();
+    if packs.iter().any(|pack| pack == "agent-ready") {
+        skills.push(Skill {
+            name: "firescale-add".to_owned(),
+            content: installed_pack_skill(ADD_SKILL, "agent-ready"),
+        });
+    }
+    skills
 }
 
 /// The skills of this repo: one per built-in rule that is not off, from the
