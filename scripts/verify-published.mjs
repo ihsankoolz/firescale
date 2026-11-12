@@ -4,7 +4,7 @@
 // available, so it tries again for a while before giving up.
 //
 // Usage: node scripts/verify-published.mjs <version or tag> [--attempts <n>] [--wait <seconds>]
-// FIRESCALE_NPX_COMMAND replaces the command that is run (used by the tests).
+// FSCALE_NPX_COMMAND replaces the command that is run (used by the tests).
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
@@ -43,7 +43,7 @@ if (!version) fail('no version given. Usage: node scripts/verify-published.mjs <
 // this checkout or an earlier install can answer instead of the registry.
 const folder = mkdtempSync(path.join(os.tmpdir(), 'firescale-verify-'));
 const cache = mkdtempSync(path.join(os.tmpdir(), 'firescale-npm-cache-'));
-const command = process.env.FIRESCALE_NPX_COMMAND ?? `npx --yes firescale@${version} --version`;
+const command = process.env.FSCALE_NPX_COMMAND ?? `npx --yes firescale@${version} --version`;
 
 let last = '';
 try {

@@ -12,7 +12,7 @@
 //
 // Usage: node scripts/publish-npm.mjs --dir <folder with the artifacts> --version <version> [--dry-run]
 //   --dry-run   look everything up and print the plan, publish nothing
-// The registry can be changed with FIRESCALE_NPM_REGISTRY (used by the tests).
+// The registry can be changed with FSCALE_NPM_REGISTRY (used by the tests).
 import { spawnSync } from 'node:child_process';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -137,7 +137,7 @@ function npm(args, options = {}) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const registry = (process.env.FIRESCALE_NPM_REGISTRY ?? 'https://registry.npmjs.org').replace(
+const registry = (process.env.FSCALE_NPM_REGISTRY ?? 'https://registry.npmjs.org').replace(
   /\/+$/,
   '',
 );

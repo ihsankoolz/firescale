@@ -199,7 +199,7 @@ describe('scripts/publish-npm.mjs', () => {
 
   const plan = (dir: string, version: string) =>
     node('publish-npm.mjs', ['--dir', dir, '--version', version, '--dry-run'], {
-      FIRESCALE_NPM_REGISTRY: registry,
+      FSCALE_NPM_REGISTRY: registry,
     });
 
   it('publishes the six platform packages, then the sdk, then firescale', async () => {
@@ -282,7 +282,7 @@ describe('scripts/verify-published.mjs', () => {
   it('passes when the command prints the version, with or without a leading v', async () => {
     for (const version of ['1.2.3', 'v1.2.3']) {
       const result = await node('verify-published.mjs', [version, '--attempts', '1'], {
-        FIRESCALE_NPX_COMMAND: 'node -e "console.log(\'1.2.3\')"',
+        FSCALE_NPX_COMMAND: 'node -e "console.log(\'1.2.3\')"',
       });
       expect(result.stderr).toBe('');
       expect(result.code).toBe(0);
@@ -292,7 +292,7 @@ describe('scripts/verify-published.mjs', () => {
 
   it('tries again, then fails with the next step', async () => {
     const wrong = await node('verify-published.mjs', ['1.2.3', '--attempts', '2', '--wait', '0'], {
-      FIRESCALE_NPX_COMMAND: 'node -e "console.log(\'1.2.2\')"',
+      FSCALE_NPX_COMMAND: 'node -e "console.log(\'1.2.2\')"',
     });
     expect(wrong.code).toBe(1);
     expect(wrong.stdout).toContain('attempt 1 of 2: not yet (it printed "1.2.2")');
@@ -303,7 +303,7 @@ describe('scripts/verify-published.mjs', () => {
       'verify-published.mjs',
       ['1.2.3', '--attempts', '1', '--wait', '0'],
       {
-        FIRESCALE_NPX_COMMAND: 'node -e "process.exit(7)"',
+        FSCALE_NPX_COMMAND: 'node -e "process.exit(7)"',
       },
     );
     expect(failing.code).toBe(1);
