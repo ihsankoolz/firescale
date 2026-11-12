@@ -384,7 +384,9 @@ Built as ADR 0028 says: the generators live in `packages/cli/src/generators/` so
 
 Done (ADR 0029): six rules, `init --packs core,nextjs` builds a starter whose `npm install`, `npm run build` and `npm run lint` succeed (run by hand on 2026-11-12, output in the pull request).
 
-## M16 — Stack pack: Python ☐
+## M16 — Stack pack: Python ☑
+
+Done (ADR 0030): six rules, per project, so a repo of services with their own requirements files, `pytest.ini` and `.venv` and no `pyproject.toml` passes as it is. `init --packs core,python` builds a starter whose pip install, pytest and ruff succeed (run by hand on 2026-11-12, output in the pull request).
 
 One milestone and one pull request per pack. Moved up from the end of the plan by the owner (ADR 0017), so that real stacks can be scaffolded before the referee is built. Every stack pack, here and in M26 and M27, has this shape.
 

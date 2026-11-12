@@ -1121,6 +1121,14 @@ fn python_dependencies(root: &Path, dir: &str, names: &[String]) -> BTreeSet<Str
     out
 }
 
+/// The packages a Python project in `dir` (repo-relative, `.` for the
+/// root) declares in its requirements files, `pyproject.toml` or `Pipfile`.
+#[must_use]
+pub fn python_declared(root: &Path, dir: &str) -> BTreeSet<String> {
+    let names = file_names(root, dir);
+    python_dependencies(root, dir, &names)
+}
+
 /// True when `dir` or a folder above it, up to the repo root, has one of
 /// `files`, or a `pyproject.toml` with a `[tool.<table>` section. Python tools
 /// look for their config in the folders above too.
