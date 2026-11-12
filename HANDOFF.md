@@ -4,10 +4,11 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-- **Milestones in flight:** M12 (#19), M13 (#20), M14 (#21) and M15 (#22) are merged. M16 (Python pack) is the open pull request. Then the 0.2.0 version bump, in its own pull request.
-- **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each milestone is still one pull request).
-- **Session plan, in order:** M12, M13 agent files, M14 generators, M15 Next.js pack, M16 Python pack, then a 0.2.0 version bump. Deadline 22:00 UTC (06:00 Singapore time, 13 Nov). Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
-- **Done so far:** 0.1.3 release recorded. M12 (#19): doctor and the two fixes, reviewed and fixed. M13: code, tests, ADR 0027, docs and its real-repo pass done on the local branch `m13-work`; M13 is pull request #20. M14: code, tests, ADR 0028, docs and its real-repo pass are done on `m14-work`, which is based on M13; it goes onto the session branch after #20 merges.
+Nothing is half-finished. The session of 2026-11-12 (17:05 to about 19:30 UTC) merged M12 (#19), M13 (#20), M14 (#21), M15 (#22) and M16 (#23), then set the version to 0.2.0 in its own pull request. **No tag has been pushed.**
+
+- **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it was restarted from `main` after each merge, so each milestone was one pull request).
+- **Next, in order:** tag `v0.2.0` when ready (`RELEASING.md`); then M17 to M19, blame-aware verify (it must take verify schema version 5).
+- Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
 
@@ -17,7 +18,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Done in the latest session:** the 0.1.2 fixes from running 0.1.1 on the course project (ADR 0022): each Python project runs with its own `.venv` interpreter (or uv, poetry, pipenv, an active `VIRTUAL_ENV`, then `python`), projects are independent in verify, `setup-needed` is reported apart from failures, ruff and mypy come from dependency lists, and test-runner config files are test code for `core/env-example`. 0.1.2 was released through the Release workflow on 2026-11-12. Earlier: automated releases (ADR 0021, `RELEASING.md`) and M10 (ADR 0020).
 - **Done in an earlier session, after 0.1.2:** M11 the group-project pack (ADR 0023).
 - **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. **0.1.3 was released on 2026-11-12** and run on the course project on Windows: progress lines, setup detection, parallel projects and Ctrl+C worked, and no process was left behind.
-- **Not started, in order:** M12 `doctor`, M13 agent files from `init`, M14 generators, M15 Next.js pack, M16 Python pack, M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
+- **Done in the session of 2026-11-12 (evening):** M12 `doctor` and the two fixes from the 0.1.3 run (ADR 0025, 0026), M13 agent files (ADR 0027), M14 generators (ADR 0028), M15 Next.js pack (ADR 0029), M16 Python pack (ADR 0030), and the 0.2.0 version.
+- **Not started, in order:** M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
 
 ## How to resume
 
@@ -106,6 +108,11 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 - After changing the help text or a SKILL.md, update the affected snapshot on purpose (`pnpm build`, then `pnpm exec vitest run -u <that test file>`), and check that no other snapshot changed.
 
 ## Left for the owner to do by hand
+
+- Tag `v0.2.0` on `main` and push the tag when you are ready to release (`RELEASING.md`).
+- Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
+- Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
+- Run 0.2.0 on the course project: `fscale doctor`, and `fscale adopt --dry-run` with `agent-ready` and `python` in `packs`, to see the agent files and the per-service checks on the real repo.
 
 - Consider turning off token publishing for the eight packages now that two workflow releases have worked (`RELEASING.md`).
 

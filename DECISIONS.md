@@ -32,7 +32,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 - **(M13) Codex's permission profile was not run.** `.codex/config.toml` (`default_permissions = "firescale"`, extending `:workspace`, denying env files and keys) follows Codex's source and tests at `rust-v0.167.2`; developers.openai.com was blocked. Open the repo once in Codex (as a trusted project) and check it starts. A Codex config you wrote is never edited.
 - **(M13) Cursor's `.cursor/cli.json` permissions are unconfirmed** (cursor.com blocked). Cursor's hooks and skills formats were confirmed from Cursor's own GitHub examples. Allow `cursor.com` in the environment's network settings so a session can check the docs page.
 - **(M13) Which env files agents may not read:** `.env`, `.env.local`, `.env.*.local`, `.env.development`, `.env.production`, `.env.staging`, `.env.test`, plus `*.pem`, `*.key` and `secrets/`. `.env.*` as a whole is not denied, because that would also block `.env.example`, which agents keep up to date. Other names (`.env.qa`) are not covered.
-- **(M13) A new repo gets 42 skill files** (14 rules, 3 agents). Say if you would rather install skills for one agent only, or only for the rules that are enforced.
+- **(M13) A new repo gets 45 skill files** (14 rules and the `fscale add` skill, for 3 agents). Say if you would rather install skills for one agent only, or only for the rules that are enforced.
 
 - **(M12) A running step is stopped early by default when a service it needs is down** (`verify.stopWhenServiceDown`, default `true`, ADR 0025). It needs two probes 10 seconds apart to find nothing listening, plus either a refused-connection message for a known service or the repo's own port (then the step is setup needed), or at least 3 errors and nothing else from pytest or unittest (then the step is failed, with the service named as the likely cause). A wrong stop takes a suite that connects to such a port on purpose and would still pass. Say if the default should be `false` (print the line, let the step run on), or if the thresholds (3 errors, 10 seconds, a probe every 5 seconds) should differ.
 - **(M12) An unreachable service is a problem in `fscale doctor`** (exit 1), not a warning: tests that need it cannot pass. If you often run doctor without wanting the database up, a warning would suit better (ADR 0026).
@@ -289,6 +289,8 @@ Left: the facts schema stays at version 2 although its new `notes` field fails a
 - Not measured: how much `--jobs` saves on the course project.
 
 ## Releases
+
+- **The version is 0.2.0 in every place it is recorded** (`node scripts/bump-version.mjs --check`), set after M16 in its own pull request. **No tag has been pushed and nothing was published:** tag `v0.2.0` on `main` yourself when ready (`RELEASING.md`). 0.2.0 holds M12 to M16: `fscale doctor`, the heartbeat counts and early stop for a service that is down, the agent files from `init`, `fscale add` and `fscale schema`, and the `nextjs` and `python` stack packs.
 
 - **0.1.3 was released on 2026-11-12** and run on your course project on Windows the same day. Progress lines, setup detection, parallel projects (`--jobs`) and Ctrl+C all worked, and no process was left behind after Ctrl+C. Two problems from that run are fixed in M12's pull request: the heartbeat showed `last output: E` (a pytest marker), and three services spent over six minutes with every test erroring because their test database was not running.
 - **0.1.2 was released on 2026-11-12 through the Release workflow**, with npm trusted publishing, like 0.1.1.
