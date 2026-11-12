@@ -162,7 +162,7 @@ Design change, see ADR 0008: `fscale` is a native Rust binary, core rules are bu
 
 ## Direction change after M7
 
-On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit for small teams, the rules become the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Everything below was rewritten then, and reordered once more by the owner (ADR 0017): the Next.js and Python stack packs moved up, and a publishing checkpoint was added after M9. On 2026-11-12 the owner added M10 from findings on a real repo, and every later milestone moved up by one (ADR 0020); the numbers below are the current ones. Milestones are sized for one session each. Themes, in order:
+On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit for small teams, the rules become the scaffold, every repo is born agent-ready, and a referee keeps agents honest. Everything below was rewritten then, and reordered once more by the owner (ADR 0017): the Next.js and Python stack packs moved up, and a publishing checkpoint was added after M9. On 2026-11-12 the owner added M10 from findings on a real repo, and every later milestone moved up by one (ADR 0020). Later the same day the owner put affected-only verify and a step cache before blame-aware verify, and faster generated CI after it (ADR 0031): the blame-aware milestones moved up by two and everything after them by three. The numbers below are the current ones. Milestones are sized for one session each. Themes, in order:
 
 | Theme                        | Milestones |
 | ---------------------------- | ---------- |
@@ -171,10 +171,12 @@ On 2026-11-11 the direction was refined (ADR 0015): firescale stays a toolkit fo
 | Group-project mode               | M11, M12   |
 | Born agent-ready                 | M13, M14   |
 | Stack packs: Next.js and Python  | M15, M16   |
-| Referee: blame-aware verify      | M17 to M19 |
-| Referee: tamper guard            | M20 to M23 |
-| Guarded agent runner, ledger     | M24, M25   |
-| Stack packs: Supabase and Expo   | M26, M27   |
+| Referee: affected verify, cache  | M17, M18   |
+| Referee: blame-aware verify      | M19 to M21 |
+| Faster generated CI              | M22        |
+| Referee: tamper guard            | M23 to M26 |
+| Guarded agent runner, ledger     | M27, M28   |
+| Stack packs: Supabase and Expo   | M29, M30   |
 
 One thing outside the milestones that they depend on:
 
@@ -388,7 +390,7 @@ Done (ADR 0029): six rules, `init --packs core,nextjs` builds a starter whose `n
 
 Done (ADR 0030): six rules, per project, so a repo of services with their own requirements files, `pytest.ini` and `.venv` and no `pyproject.toml` passes as it is. `init --packs core,python` builds a starter whose pip install, pytest and ruff succeed (run by hand on 2026-11-12, output in the pull request).
 
-One milestone and one pull request per pack. Moved up from the end of the plan by the owner (ADR 0017), so that real stacks can be scaffolded before the referee is built. Every stack pack, here and in M26 and M27, has this shape.
+One milestone and one pull request per pack. Moved up from the end of the plan by the owner (ADR 0017), so that real stacks can be scaffolded before the referee is built. Every stack pack, here and in M29 and M30, has this shape.
 
 **Build**
 
@@ -405,17 +407,66 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M17 — Blame-aware verify: the base run ☐
+## M17 — Project graph and affected verify ◐
+
+Added by the owner (ADR 0031): make verify cheap before making it fair. Decisions in ADR 0032 (the graph) and ADR 0033 (tree-sitter for imports).
+
+**Build**
+
+- Extend the graph in `fscale facts` beyond workspace files. Edge sources, most trusted first:
+  1. Local paths in manifests: requirements files (`-e ../x`, `../x`, `-r`), `pyproject.toml` path sources, `package.json` `file:`, `link:` and `workspace:`.
+  2. A Dockerfile `COPY` of a sibling folder, and Compose `build.context` and `depends_on`.
+  3. Python imports that resolve to a sibling project's top-level package, and JavaScript or TypeScript relative imports that cross a project root. A real parser, not regex. No new parser for TOML or YAML unless an ADR says why.
+- A folder that projects import or copy but that is not a project itself (for example `backend/shared`) is a shared-source node. A change there affects only the projects that use it.
+- Shared inputs: a root `.env.example`, Compose file or OpenAPI spec read by several projects is an input of each of them.
+- Stay safe when unsure. A changed file that no project owns, or a changed root lockfile, CI workflow, Compose file or firescale config, affects every project. A project with a dynamic import (`importlib`, `__import__`) gets a warning and counts as depending on every other Python project.
+- `fscale graph` prints projects and edges; `--explain` says which source gave each edge; `--json` has a schema. `fscale facts` shows the same edges.
+- `fscale verify --affected [--base <ref>]` runs lint, typecheck and test only for affected projects: the owners of changed files and everything that depends on them. Projects left out are listed as `not affected`, a state apart from skipped. The headline says how many projects ran out of how many and never reads as a plain OK for the whole repo. Verify schema 5.
+- The stop hook does not change.
+
+**Done when** (each proven by a test)
+
+- ☐ On the course-project fixture, with services importing a shared folder: a change in the shared folder affects every service that imports it; a change in one service affects only that service; a frontend change affects only the frontend; a change to the root Compose file affects everything.
+- ☐ Each edge source has a fixture, and `--explain` names the source.
+- ☐ A dynamic import gives the warning and the wide edge.
+- ☐ With no base and a clean tree, everything is affected, with a note.
+- ☐ `facts`, `graph --explain` and `verify --affected` planning (no installs, no scripts) run on the three real repos in DECISIONS.md. Small problems fixed with fixture tests; the rest logged.
+
+---
+
+## M18 — Local step-result cache and timings ☐
+
+**Build**
+
+- Cache the result of a verify step that **passed**, under `.firescale/`. A failure always runs again.
+- The key: the firescale version, the command, the hashes of the project's own files, the hashes of the projects and shared-source nodes it depends on (M17's graph), the lockfile, the versions of the tools the step runs, the OS and CPU architecture, and the values of an allowlist of environment variables. Nothing else from the environment.
+- **Never cache a step that needs a network service that is not in the repo.** A service the repo starts itself (Compose) can be part of the key.
+- Record each step's time, and show in the summary what the cache saved. `FSCALE_LOG=cache` shows hits and misses, as for `check`.
+- An ADR for the key, the allowlist, where results live and how they are cleaned up.
+
+**Done when** (each proven by a test)
+
+- ☐ A second `fscale verify` with no change runs no step again, and says so.
+- ☐ A change in a project's file, in a project or shared folder it depends on, in the lockfile, in a tool's version, or in an allowlisted variable runs that project's steps again; a change elsewhere does not.
+- ☐ A failed step is never cached.
+- ☐ A step that needs a service outside the repo is never cached.
+- ☐ No environment value outside the allowlist reaches the key or the cache folder.
+- ☐ Timings with a cold and a warm cache are recorded in `bench/RESULTS.md`.
+
+---
+
+## M19 — Blame-aware verify: the base run ☐
 
 **Build**
 
 - An ADR for blame-aware verify. It supersedes two points of ADR 0014: with a base, verify runs **every** step instead of stopping at the first failure (otherwise an old lint failure would hide a new test failure), and `--base <ref>` works without `--affected`.
 - Definitions: the **head** is the working tree, uncommitted changes included, because that is what an agent's stop hook judges. The **base** is the merge base of the head commit and `--base <ref>`, or of the default branch when `--base` is not given.
 - Run verify on the base commit in a temporary git worktree. Never touch the user's working tree or index. The worktree gets its dependencies by running the repo's install command there (from `fscale facts`, or a new `verify.install` config key).
-- Cache base results under `.firescale/` keyed by base SHA + toolchain versions + lockfile hash.
+- Cache base results under `.firescale/` with the M18 step cache: the same key, computed on the base commit's files.
 - Label at step level and for rule diagnostics: `new`, `pre-existing`, `fixed`. Only `new` makes `fscale verify` exit 1. The labels are on by default whenever there is a base commit (owner decision, ADR 0017); there is no flag to turn them on.
 - With no base that differs from the head commit and a clean tree, or outside git, verify behaves as it does today: every failure blocks.
-- The summary and `--json` carry the labels (bump the schema version; M10 took version 2, 0.1.2 took version 3 and 0.1.3 took version 4, so this is 5). Update `docs/verify.md` and `docs/affected.md`.
+- The summary and `--json` carry the labels (bump the schema version; M10 took version 2, 0.1.2 took version 3, 0.1.3 took version 4 and M17 took version 5, so this is 6). Update `docs/verify.md` and `docs/affected.md`.
+- **The base run reuses the M18 step cache** (ADR 0031). A project whose inputs are equal on the base and the head needs no base run: its result on the head is its result on the base. Only projects whose inputs differ are run in the base worktree.
 - **The base run needs a time budget** (from running 0.1.2 on the course project, where one service's tests took 13 minutes). A base run that does not finish within its budget is abandoned and verify falls back to today's behaviour for the steps it did not cover, with a note; it never makes the stop hook wait for the base. Each step of the base run keeps its own time limit (ADR 0024). The budget has a default and a config key.
 
 **Done when**
@@ -424,12 +475,13 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 - ☐ A failure introduced on the head, committed or not, is labelled `new` and exits 1; one repaired on the head is labelled `fixed`.
 - ☐ A pre-existing lint failure does not hide a new test failure: both are reported, proven by a test.
 - ☐ A second run with the same base makes no base run, proven by a test; changing the lockfile invalidates the cache.
+- ☐ A project whose inputs are equal on the base and the head gets no base run, proven by a test.
 - ☐ The user's working tree and index are byte-for-byte unchanged after a run, proven by a test.
 - ☐ On the default branch with a clean tree, a failing test still exits 1.
 
 ---
 
-## M18 — Blame-aware verify: per-test labels ☐
+## M20 — Blame-aware verify: per-test labels ☐
 
 **Build**
 
@@ -445,13 +497,13 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M19 — Blame-aware verify: reruns and the stop hook ☐
+## M21 — Blame-aware verify: reruns and the stop hook ☐
 
 **Build**
 
 - Rerun a `new` failure once before blocking. A pass on the rerun is labelled `flaky` and does not block. No flaky history is stored.
 - The stop hook (`fscale hooks run`) uses blame-aware verify, so an agent is only sent back for failures it introduced.
-- **The stop hook must be fast** (from running 0.1.2 on the course project, where a full verify took over ten minutes). It runs only the projects the change touches (the projects of the changed files, as `--affected` finds them, plus the root when root files changed), never a full run, and the base run stays within its time budget (M17). Record its latency on the course-project fixture.
+- **The stop hook must be fast** (from running 0.1.2 on the course project, where a full verify took over ten minutes). It runs only the projects the change touches (the projects of the changed files, as `--affected` finds them, plus the root when root files changed), never a full run, and the base run stays within its time budget (M19). Record its latency on the course-project fixture.
 - `cargo test` per-test labels from its stable text output, if that proves reliable; otherwise recorded as a limit.
 - p50 and p99 of blame-aware verify, with a cold and a warm base cache, in `bench/RESULTS.md`.
 
@@ -465,7 +517,24 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M20 — Tamper guard: design and the first language ☐
+## M22 — Faster generated CI and a shared cache ☐
+
+**Build**
+
+- The CI workflow that `fscale init` writes (and `core/ci-exists` and `group-project/ci-verify` accept) runs `fscale verify --affected --base <the pull request's base>` on pull requests and a full `fscale verify` on pushes to the default branch.
+- The M18 step cache is kept in the GitHub Actions cache. **It is written only by pushes to the default branch.** Pull requests and laptops read it and never write it (CVE-2025-36852, ADR 0031).
+- A restored result is used only when its whole key matches. A run never uploads what it restored.
+- Confirm the current GitHub Actions cache API and its scoping rules from GitHub's docs first, and pin what the workflow uses in tests.
+
+**Done when**
+
+- ☐ The generated workflow has a snapshot test, and a pull request job in it cannot write the shared cache, proven by a test that reads the workflow.
+- ☐ A step result restored from the shared cache is reused only on an exact key match, proven by a test.
+- ☐ A pull request in a fixture repo on GitHub runs only its affected projects and gets cache hits from the default branch. Run by hand, with the output in the pull request.
+
+---
+
+## M23 — Tamper guard: design and the first language ☐
 
 **Build**
 
@@ -483,7 +552,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M21 — Tamper guard: more languages and policy ☐
+## M24 — Tamper guard: more languages and policy ☐
 
 **Build**
 
@@ -498,7 +567,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M22 — Tamper guard: config and CI ☐
+## M25 — Tamper guard: config and CI ☐
 
 **Build**
 
@@ -515,7 +584,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M23 — Tamper guard: approvals and measured rates ☐
+## M26 — Tamper guard: approvals and measured rates ☐
 
 **Build**
 
@@ -530,7 +599,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M24 — Guarded agent runner ☐
+## M27 — Guarded agent runner ☐
 
 **Build**
 
@@ -546,7 +615,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M25 — Agent adapters and `fscale ledger` ☐ (finish and test locally)
+## M28 — Agent adapters and `fscale ledger` ☐ (finish and test locally)
 
 **Build**
 
@@ -562,9 +631,9 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M26 — Stack pack: Supabase ☐
+## M29 — Stack pack: Supabase ☐
 
-## M27 — Stack pack: Expo ☐
+## M30 — Stack pack: Expo ☐
 
 One milestone and one pull request per pack, with the same "Build" and "Done when" lists as M15 and M16.
 
@@ -577,3 +646,4 @@ One milestone and one pull request per pack, with the same "Build" and "Done whe
 - Gemini CLI: stop hook and adapter.
 - A public benchmark built from fix ledgers.
 - A thin MCP server; Nx plugins for EAS and Supabase.
+- Test-level selection: run only the tests a change can reach, below the project level (ADR 0031).
