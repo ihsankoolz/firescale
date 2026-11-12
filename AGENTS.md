@@ -38,6 +38,8 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - 50k-file benchmark: `node bench/generate-fixture.mjs <dir> --files 50000`, then `node bench/check-bench.mjs --bin target/release/fscale --fixture <dir>`
 - See cache hits and misses: `FSCALE_LOG=cache pnpm fscale check`
 - Build npm tarballs for this platform: `cargo build --release -p firescale-cli`, `pnpm -r run build`, `node scripts/pack-npm.mjs`
+- Set the version everywhere it is recorded: `node scripts/bump-version.mjs <version>`. Check it: `node scripts/bump-version.mjs --check`. Releasing is in `RELEASING.md`; never push a version tag unless the owner asks.
+- See what a release would publish, from downloaded workflow artifacts: `node scripts/publish-npm.mjs --dir <folder> --version <version> --dry-run`
 - Smoke-test an install from those tarballs: `node scripts/smoke-npm.mjs --pm npm` (also `pnpm`, `yarn`)
 - Definition of done (from M7 on): `pnpm fscale verify`. The agent hooks in `.claude/`, `.codex/` and `.cursor/` run it when you try to stop.
 - Verify latency benchmark: `cargo build --release -p firescale-cli`, then `node bench/verify-bench.mjs`

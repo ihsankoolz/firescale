@@ -7,7 +7,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M6 npm packaging, M7 `verify` and hooks, M8 the fix loop (pull request #12, with the plan update of ADR 0017 and the CI trim of ADR 0016), M9 `init`, `adopt` and `sync`.
 - **CI owed:** nothing. M6's Windows npm install test passed in a manual run on `main` on 2026-11-11.
 - **Published:** the owner published 0.1.0 to npm on 2026-11-12. `npx firescale@0.1.0 init` and `adopt --dry-run` work on Windows and Linux. The second box of the publishing checkpoint (a generated repo passing its own CI on GitHub) is still open.
-- **Done in this session:** M10 detection that works on real repos (ADR 0020): projects in subfolders in `fscale facts`, per-project steps and `PARTIAL` in `fscale verify`, and three changes to `core/env-example`.
+- **Done and merged in this session:** automated releases (ADR 0021, `RELEASING.md`): a pushed tag `v<version>` builds, publishes with npm trusted publishing and verifies. The version is 0.1.1 and **no tag has been pushed**; the owner tags after setting up the trusted publishers. Before that, M10 detection that works on real repos (pull request #14, ADR 0020): projects in subfolders in `fscale facts`, per-project steps and `PARTIAL` in `fscale verify`, and three changes to `core/env-example`.
 - **Not started, in order:** M11 group-project pack, M12 `doctor`, M13 agent files from `init`, M14 generators, M15 Next.js pack, M16 Python pack, M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
 
 ## How to resume
@@ -47,9 +47,13 @@ Notes for M11 (the group-project pack) and M13 (agent files), which stand on M9:
 - This repo's agent hooks (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`) run `pnpm --silent fscale hooks run`, which runs the whole of `fscale verify` (about 22 s) when an agent tries to stop, and sends it back up to 3 times while it fails.
 - `fscale explain` only knows rules of packs that are on. Tests that explain an `agent-ready` rule need a config that lists the pack.
 - `fscale fix --dry-run` copies the repo to the temp folder and runs the real fixes there. A test that asserts a dry run changed nothing should compare the repo's files and `git ls-files` before and after.
+- The version is recorded in `Cargo.toml`, `Cargo.lock` and five `package.json` files. Change it only with `node scripts/bump-version.mjs <version>`. Never push a `v*` tag: it publishes to npm.
+- `.github/workflows/release.yml` must keep its file name; npm's trusted publishers name it. `release.test.ts` pins that only the publish job has `id-token: write` and that the file uses no secret.
 - After changing the help text or a SKILL.md, update the affected snapshot on purpose (`pnpm build`, then `pnpm exec vitest run -u <that test file>`), and check that no other snapshot changed.
 
 ## Left for the owner to do by hand
+
+- Release 0.1.1: set up the eight trusted publishers on npmjs.com, then tag `v0.1.1` and push the tag (`RELEASING.md`).
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
 - Tick the second box of the publishing checkpoint: see a repo made by `npx firescale@0.1.0 init` pass its generated CI on GitHub (step 7 under "Publishing to npm" in `DECISIONS.md`).

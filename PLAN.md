@@ -532,7 +532,7 @@ One milestone and one pull request per pack, with the same "Build" and "Done whe
 
 ## Later (not ordered)
 
-- Publish to npm; docs site. Publishing is a manual step for the owner (see DECISIONS.md).
+- Docs site. Publishing to npm is automated from 0.1.1 on: a pushed tag `v<version>` builds, publishes with npm trusted publishing and verifies (ADR 0021, `RELEASING.md`). The tag is the owner's to push.
 - Ingest alint output when alint is installed, and report it as diagnostics.
 - Gemini CLI: stop hook and adapter.
 - A public benchmark built from fix ledgers.

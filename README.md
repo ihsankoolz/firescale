@@ -30,7 +30,7 @@ fscale verify                         # check, lint, typecheck, test: the defini
 fscale hooks install --all            # agents must pass verify before they stop
 ```
 
-`fscale verify` is described in [docs/verify.md](docs/verify.md) and the agent hooks in [docs/hooks.md](docs/hooks.md).
+Releases are described in [RELEASING.md](RELEASING.md). `fscale verify` is described in [docs/verify.md](docs/verify.md) and the agent hooks in [docs/hooks.md](docs/hooks.md).
 
 The built-in rules are listed in [docs/rules.md](docs/rules.md). Built-in rules run with no Node process. Node is started only for a `firescale.config.ts` or custom TypeScript rules.
 
