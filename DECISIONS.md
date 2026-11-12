@@ -22,6 +22,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M16) The Python starter has no type checker,** so `fscale verify` there is `PARTIAL` (typecheck skipped). Say if the starter should add mypy to `requirements-dev.txt`.
+- **(M16) The Python pack never edits a requirements file a person wrote.** A project with tests whose development list lacks pytest gets an agent finding rather than an appended line.
 - **(M15) The `nextjs` pack pins next, react and react-dom exactly** (16.4.6, 19.3.1), as create-next-app does, and uses ranges for the rest (`typescript ^5`, `eslint ^9`). Say if you prefer ranges everywhere. A new app is named `next-app` (never the folder's name, so dry runs match).
 - **(M15) A new Next.js app still gets a `core/scripts-present` finding for a `test` script**, because Next.js ships no test runner. Say if the pack should add one (Vitest, for example).
 - **(M14) The generators live in `packages/cli/src/generators/`**, inside the `firescale` npm package, not in `packages/generators` as SPEC §9 lays out; that package is a placeholder pointing there. A separate package would need its own publish step (ADR 0028).
@@ -82,6 +84,20 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M16 — Stack pack: Python
+
+**Built** (ADR 0030): the `python` pack, opt-in, with six rules that work per Python project: `requirements`, `test-tools`, `tests`, `pytest-config`, `ruff-config`, `gitignore`. Each has a SKILL.md and fixture tests; pack tests cover an empty folder, an app at the root, and two services of the course project's shape. **A repo of services, each with `requirements.txt`, `requirements-dev.txt`, `pytest.ini` and its own `.venv` and no `pyproject.toml`, passes as it is; a gap in one service is fixed in that service's folder; nothing creates or suggests a root `pyproject.toml`.**
+
+**Proof by hand** (2026-11-12, Linux, Python 3.13.18, pip 26.2.2): in a folder made by `fscale init --packs core,python`: `python3 -m venv .venv`, `.venv/bin/python -m pip install -r requirements-dev.txt`, `.venv/bin/python -m pytest` (1 passed), `.venv/bin/python -m ruff check .` (All checks passed!), all exit 0. `fscale verify` there: check, lint (`.venv/bin/python -m ruff check .`) and test (`.venv/bin/python -m pytest`) passed; typecheck skipped (no mypy), so `PARTIAL`.
+
+**Found on real repos** (copies with the pack on, `adopt --dry-run`):
+
+- _Fixed:_ `GoogleCloudPlatform/microservices-demo`'s Python services have code and no tests; the pack offered each a `pytest.ini`, a `requirements-dev.txt` and a `ruff.toml`. Those now wait until a project has tests; only the tests finding (for an agent) and `.gitignore` lines remain (`a_service_with_no_tests_is_only_told_to_add_tests`).
+- _Fixed:_ a pytest config in a folder above a project now counts, as pytest itself looks upward (`a_pytest_config_in_a_folder_above_counts`).
+- _Left (correct):_ `fastapi/full-stack-fastapi-template`'s backend has tests and no pytest config anywhere, so the pack proposes `backend/pytest.ini`. It is a uv workspace member; the new file does not change its `pyproject.toml`.
+
+**Known limits:** no type checker in the starter; uv and Poetry lockfiles are not created; the versions are a snapshot of 2026-11-12.
 
 ## M15 — Stack pack: Next.js
 

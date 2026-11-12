@@ -89,3 +89,16 @@ Opt-in: add `"nextjs"` to `packs`, or `fscale init --packs core,nextjs`. Its fix
 | `nextjs/tsconfig`     | A TypeScript project has `tsconfig.json`.                                                    | medium   | yes |
 | `nextjs/eslint`       | An ESLint config with `eslint-config-next`.                                                  | medium   | yes |
 | `nextjs/gitignore`    | `.gitignore` ignores `.next/` and `next-env.d.ts`.                                           | medium   | yes |
+
+## The `python` pack
+
+Opt-in: add `"python"` to `packs`, or `fscale init --packs core,python`. It works on each Python project `fscale facts` finds, so a repo of several services, each with its own requirements files, `pytest.ini` and `.venv`, is checked service by service; nothing in it creates or asks for a `pyproject.toml` (ADR 0030).
+
+| Rule                   | What it checks                                                                                        | Severity | Fix |
+| ---------------------- | ----------------------------------------------------------------------------------------------------- | -------- | --- |
+| `python/requirements`  | Each project declares its dependencies; a new one gets `requirements.txt` and `requirements-dev.txt`. | high     | yes |
+| `python/test-tools`    | A project with tests declares pytest.                                                                 | medium   | yes |
+| `python/tests`         | Each project has tests; a new one gets `app/` and `tests/test_main.py`.                               | medium   | yes |
+| `python/pytest-config` | A project with tests has a pytest config in its folder or above.                                      | medium   | yes |
+| `python/ruff-config`   | A project that declares ruff has a ruff config in its folder or above.                                | low      | yes |
+| `python/gitignore`     | `.gitignore` ignores `__pycache__/`, `.venv/`, `venv/`, `.pytest_cache/` and `.ruff_cache/`.          | medium   | yes |
