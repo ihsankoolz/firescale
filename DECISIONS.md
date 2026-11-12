@@ -14,10 +14,10 @@ Still not measured anywhere: verify latency on macOS and Windows. The `bench` jo
 
 Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folder outside this repo. After each milestone the freshly built binary runs `facts`, `check`, `adopt --dry-run`, `doctor` and that milestone's new commands on them. Their scripts, hooks and installs are never run, and nothing is ever opened on those repositories.
 
-| Shape | Repository | Commit |
-|---|---|---|
-| Python backend with a JavaScript frontend in subfolders | `fastapi/full-stack-fastapi-template` | `aabb90126964a164e02aff39e7c385bb0598236d` |
-| A Next.js app | `vercel/commerce` | `f7521d57d29f0eb3d23c1399cf9bb299d61fcd21` |
+| Shape                                                         | Repository                               | Commit                                     |
+| ------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------ |
+| Python backend with a JavaScript frontend in subfolders       | `fastapi/full-stack-fastapi-template`    | `aabb90126964a164e02aff39e7c385bb0598236d` |
+| A Next.js app                                                 | `vercel/commerce`                        | `f7521d57d29f0eb3d23c1399cf9bb299d61fcd21` |
 | Several Python services, each with its own `requirements.txt` | `GoogleCloudPlatform/microservices-demo` | `c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712` |
 
 ## Needs your decision (all milestones, most important first)

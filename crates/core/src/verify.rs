@@ -27,6 +27,10 @@ use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
 /// Version of the `fscale verify --json` format.
 pub const VERIFY_SCHEMA_VERSION: u32 = 4;
 
+/// The line the summary ends with when a step needs setup (ADR 0026).
+pub const DOCTOR_HINT: &str =
+    "Run `fscale doctor` to check this machine's tools, env variables, dependencies and services in one go.";
+
 /// How long a step may run when the config sets no limit (ADR 0024).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -1541,6 +1545,13 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                 "\nFix the failure, then run again{place}: {command}\n"
             ));
         }
+    }
+    if report
+        .steps
+        .iter()
+        .any(|step| step.status == StepStatus::SetupNeeded)
+    {
+        out.push_str(&format!("\n{DOCTOR_HINT}\n"));
     }
     if report.result == VerifyResult::Stopped {
         out.push_str("\nStopped: verify was interrupted (Ctrl+C or a termination signal), and every command it had started was stopped. Steps marked STOPPED or not run did not finish; run fscale verify again to check them.\n");

@@ -5,7 +5,8 @@
 //! it appends "venv-python <arguments> in <name of the current folder>" to
 //! the file named by `FSCALE_STUB_LOG`. When the current folder's name equals
 //! `FSCALE_STUB_FAIL_IN`, it prints `FSCALE_STUB_MESSAGE` on stderr and exits
-//! with code 1; otherwise it exits with code 0.
+//! with code 1; otherwise it exits with code 0. `--version` prints
+//! `Python <FSCALE_STUB_PYTHON_VERSION>` (default 3.12.4).
 
 use std::env;
 use std::fs::OpenOptions;
@@ -25,6 +26,13 @@ fn main() -> ExitCode {
             let args: Vec<String> = env::args().skip(1).collect();
             let _ = writeln!(file, "venv-python {} in {folder}", args.join(" "));
         }
+    }
+    // `python --version`, as `fscale doctor` asks it.
+    if env::args().nth(1).as_deref() == Some("--version") {
+        let version =
+            env::var("FSCALE_STUB_PYTHON_VERSION").unwrap_or_else(|_| "3.12.4".to_owned());
+        println!("Python {version}");
+        return ExitCode::SUCCESS;
     }
     if env::var("FSCALE_STUB_FAIL_IN").is_ok_and(|fail_in| fail_in == folder) {
         let message = env::var("FSCALE_STUB_MESSAGE").unwrap_or_else(|_| "failed".to_owned());

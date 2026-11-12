@@ -188,7 +188,7 @@ fn read_json(root: &Path, file: &str, warnings: &mut Vec<String>) -> Option<Valu
 }
 
 /// Removes a `#` comment that is not inside quotes.
-fn strip_comment(line: &str) -> &str {
+pub(crate) fn strip_comment(line: &str) -> &str {
     let mut quote: Option<char> = None;
     for (index, c) in line.char_indices() {
         match (quote, c) {
@@ -201,7 +201,7 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-fn unquote(value: &str) -> String {
+pub(crate) fn unquote(value: &str) -> String {
     let value = value.trim();
     for q in ['"', '\''] {
         if value.len() >= 2 && value.starts_with(q) && value.ends_with(q) {
@@ -232,10 +232,10 @@ fn quoted_strings(value: &str) -> Vec<String> {
 
 /// One `key = value` line of a TOML file with the section it is under.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TomlEntry {
-    section: String,
-    key: String,
-    value: String,
+pub(crate) struct TomlEntry {
+    pub(crate) section: String,
+    pub(crate) key: String,
+    pub(crate) value: String,
 }
 
 fn bracket_balance(text: &str) -> i32 {
@@ -255,7 +255,7 @@ fn bracket_balance(text: &str) -> i32 {
 
 /// Reads section headers and `key = value` lines. Arrays that span lines are
 /// joined. Inline tables are kept as raw text in `value`.
-fn parse_toml(text: &str) -> Vec<TomlEntry> {
+pub(crate) fn parse_toml(text: &str) -> Vec<TomlEntry> {
     let mut entries = Vec::new();
     let mut section = String::new();
     let mut lines = text.lines();
@@ -944,7 +944,7 @@ const MAX_REQUIREMENT_INCLUDES: usize = 5;
 
 /// The package name at the start of a requirement such as `Ruff[x]>=1`,
 /// lower-cased with `_` as `-`. `None` for a URL, a VCS link or a path.
-fn requirement_name(spec: &str) -> Option<String> {
+pub(crate) fn requirement_name(spec: &str) -> Option<String> {
     let spec = spec.trim();
     let name: String = spec
         .chars()
@@ -958,7 +958,7 @@ fn requirement_name(spec: &str) -> Option<String> {
 
 /// The quoted strings of an array value, leaving out inline tables such as
 /// `{include-group = "test"}`.
-fn array_strings(value: &str) -> Vec<String> {
+pub(crate) fn array_strings(value: &str) -> Vec<String> {
     let mut kept = String::new();
     let mut quote: Option<char> = None;
     let mut depth = 0usize;
@@ -986,7 +986,7 @@ fn array_strings(value: &str) -> Vec<String> {
 
 /// The file named by a `-r <file>`, `--requirement <file>` or
 /// `--requirement=<file>` line.
-fn requirement_include(line: &str) -> Option<String> {
+pub(crate) fn requirement_include(line: &str) -> Option<String> {
     let rest = if let Some(rest) = line.strip_prefix("--requirement") {
         if !rest.starts_with(|c: char| c == '=' || c.is_whitespace()) {
             return None;
@@ -1001,7 +1001,7 @@ fn requirement_include(line: &str) -> Option<String> {
 
 /// `target`, as written in the repo-relative `file`, as a repo-relative
 /// path. `None` when it is absolute or leaves the repo.
-fn resolve_include(file: &str, target: &str) -> Option<String> {
+pub(crate) fn resolve_include(file: &str, target: &str) -> Option<String> {
     let absolute = target.starts_with(['/', '\\'])
         || target.as_bytes().get(1) == Some(&b':')
         || target.contains("://");
@@ -1025,7 +1025,7 @@ fn resolve_include(file: &str, target: &str) -> Option<String> {
 /// Adds the packages of a requirements file, and of the files it includes,
 /// to `out`. Constraint files (`-c`), editable installs (`-e`), other
 /// options and links are left out.
-fn read_requirements(
+pub(crate) fn read_requirements(
     root: &Path,
     file: &str,
     depth: usize,
@@ -1403,6 +1403,26 @@ fn python_interpreter(
 }
 
 /// A Python project's folder. `active` is the value of `VIRTUAL_ENV`.
+/// True when a folder above `dir`, up to the repo root, holds a uv
+/// workspace (`[tool.uv.workspace]` in its `pyproject.toml`): its members
+/// share the workspace's `uv.lock` and environment, so uv runs them.
+fn in_uv_workspace(root: &Path, dir: &str) -> bool {
+    let parts: Vec<&str> = dir
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    (0..parts.len()).any(|depth| {
+        let folder = parts[..depth].join("/");
+        let folder = if folder.is_empty() {
+            ".".to_owned()
+        } else {
+            folder
+        };
+        read_text(root, &in_dir(&folder, "pyproject.toml"))
+            .is_some_and(|text| text.contains("[tool.uv.workspace]"))
+    })
+}
+
 fn python_detail(root: &Path, dir: &str, active: Option<&Path>) -> Detail {
     let names = file_names(root, dir);
     let has = |file: &str| names.iter().any(|name| name == file);
@@ -1412,15 +1432,16 @@ fn python_detail(root: &Path, dir: &str, active: Option<&Path>) -> Detail {
     };
     let requirements = python_dependencies(root, dir, &names);
 
-    let package_manager = if has("uv.lock") || pyproject.contains("[tool.uv") {
-        "uv"
-    } else if has("poetry.lock") || pyproject.contains("[tool.poetry") {
-        "poetry"
-    } else if has("Pipfile") {
-        "pipenv"
-    } else {
-        "pip"
-    };
+    let package_manager =
+        if has("uv.lock") || pyproject.contains("[tool.uv") || in_uv_workspace(root, dir) {
+            "uv"
+        } else if has("poetry.lock") || pyproject.contains("[tool.poetry") {
+            "poetry"
+        } else if has("Pipfile") {
+            "pipenv"
+        } else {
+            "pip"
+        };
     // The module form (`python -m pytest`) works in any environment that
     // has the tool installed.
     let (interpreter, install) = python_interpreter(root, dir, &names, package_manager, active);
@@ -1565,9 +1586,18 @@ fn node_projects(
         }
     }
     if let Some(json) = root_json {
-        if let Some(name) = json.get("name").and_then(Value::as_str) {
+        // A private app's package.json often has no name (found on
+        // vercel/commerce): it is still the root's Node project. Its name
+        // is never the folder's, so a dry run in a scratch copy sees the
+        // same facts. A nameless workspace root is only a container.
+        if let Some(name) = json
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| patterns.is_empty().then(|| UNNAMED_ROOT.to_owned()))
+        {
             out.push(Raw {
-                name: name.to_owned(),
+                name,
                 root: ".".to_owned(),
                 kind: "node",
                 source: source::ROOT,
@@ -2290,6 +2320,18 @@ mod tests {
     }
 
     #[test]
+    fn a_nameless_app_at_the_root_is_still_a_project() {
+        // Found on vercel/commerce: a private Next.js app with no "name".
+        let facts = facts(&[(
+            "package.json",
+            r#"{"private":true,"scripts":{"build":"next build"},"dependencies":{"next":"15"}}"#,
+        )]);
+        assert_eq!(facts.projects.len(), 1);
+        assert_eq!(facts.projects[0].root, ".");
+        assert_eq!(facts.projects[0].kind, "node");
+    }
+
+    #[test]
     fn human_output_lists_projects() {
         let facts = facts(&[
             ("package.json", r#"{"workspaces":["p/*"]}"#),
@@ -2323,6 +2365,39 @@ mod tests {
             .iter()
             .find(|project| project.root == root)
             .unwrap_or_else(|| panic!("no project at {root}: {:?}", facts.projects))
+    }
+
+    #[test]
+    fn a_member_of_a_uv_workspace_runs_with_uv() {
+        // Found on fastapi/full-stack-fastapi-template: uv.lock and the
+        // workspace are at the root, the backend is a member.
+        let fixture = Fixture::new(
+            &[
+                (
+                    "pyproject.toml",
+                    "[tool.uv.workspace]\nmembers = [\"backend\"]\n",
+                ),
+                ("uv.lock", ""),
+                (
+                    "backend/pyproject.toml",
+                    "[project]\nname = \"app\"\ndependencies = [\"pytest\"]\n",
+                ),
+                ("backend/app/main.py", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = detect_facts_with(fixture.root(), None).unwrap();
+        let backend = facts
+            .projects
+            .iter()
+            .find(|project| project.root == "backend")
+            .expect("backend");
+        assert_eq!(backend.package_manager.as_deref(), Some("uv"));
+        assert_eq!(
+            backend.interpreter.as_ref().map(|i| i.source.as_str()),
+            Some("uv")
+        );
     }
 
     #[test]

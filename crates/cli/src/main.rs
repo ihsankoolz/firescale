@@ -13,6 +13,7 @@ use firescale_core::affected::{changed_files, narrow_report, Changed};
 use firescale_core::check::run_check;
 use firescale_core::config::{find_root, load_config, ConfiguredRule, RuleSource};
 use firescale_core::diff::unified_diff;
+use firescale_core::doctor::{format_doctor_human, format_doctor_json, run_doctor, ThisMachine};
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
 use firescale_core::fixloop::{
@@ -56,13 +57,14 @@ Usage:
   fscale verify [options]      Check, then lint, typecheck and test: the definition of done
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
+  fscale doctor [--json]       Check this machine: tools, env variables, dependencies, services
   fscale hooks install         Make an agent run verify before it may stop (--agent, --all)
   fscale --version             Print the firescale version
   fscale --help                Print this help
 
 Options:
   --rules <glob>   check, fix: only matching rules, e.g. \"core/*\" (comma-separated)
-  --json           check, verify, facts: print JSON (see docs/)
+  --json           check, verify, facts, doctor: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>
@@ -81,7 +83,8 @@ Options:
 
 Exit codes:
   0    no enforced rule failed
-  1    an enforced rule has violations, verify failed, or sync --check found drift
+  1    an enforced rule has violations, verify failed, sync --check found drift,
+       or doctor found a problem
   2    bad usage, bad config, or an internal error
   130  verify was stopped by Ctrl+C or a termination signal
 ";
@@ -592,6 +595,27 @@ fn facts(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }))
 }
 
+fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
+    if !extra.is_empty() {
+        return Err(Error::usage(format!(
+            "doctor takes no arguments, got \"{}\".",
+            extra.join(" ")
+        )));
+    }
+    let facts = detect_facts(root)?;
+    let report = run_doctor(root, &facts, &ThisMachine);
+    let text = if args.json {
+        format_doctor_json(&report)
+    } else {
+        format_doctor_human(&report)
+    };
+    Ok(Output {
+        stdout: text,
+        notes: Vec::new(),
+        code: u8::from(!report.ok),
+    })
+}
+
 /// What the summary shows when the check step fails: the violations of
 /// enforced rules only, capped like any other step's output.
 fn enforced_violation_lines(report: &CheckReport) -> Vec<String> {
@@ -929,6 +953,7 @@ fn run() -> Result<Output> {
         "fix" => fix(&root, &args, rest),
         "explain" => explain(&root, rest),
         "facts" => facts(&root, &args, rest),
+        "doctor" => doctor(&root, &args, rest),
         "verify" => verify(&root, &args, rest),
         "hooks" => hooks(&root, &args, rest),
         _ => Err(Error::usage(format!("unknown command \"{command}\"."))),

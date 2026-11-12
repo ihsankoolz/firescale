@@ -123,7 +123,7 @@ fn service_for(word: &str) -> Option<(&'static str, u16)> {
     if word.starts_with("pgadmin") {
         return None;
     }
-    let known: [(&str, &str, u16); 9] = [
+    let known: [(&str, &str, u16); 17] = [
         ("postgres", "PostgreSQL", 5432),
         ("pg", "PostgreSQL", 5432),
         ("redis", "Redis", 6379),
@@ -133,6 +133,14 @@ fn service_for(word: &str) -> Option<(&'static str, u16)> {
         ("mongo", "MongoDB", 27017),
         ("amqp", "RabbitMQ", 5672),
         ("rabbit", "RabbitMQ", 5672),
+        ("elasticsearch", "Elasticsearch", 9200),
+        ("opensearch", "OpenSearch", 9200),
+        ("memcached", "Memcached", 11211),
+        ("minio", "MinIO", 9000),
+        ("kafka", "Kafka", 9092),
+        ("nats", "NATS", 4222),
+        ("mssql", "SQL Server", 1433),
+        ("sqlserver", "SQL Server", 1433),
     ];
     known
         .iter()
@@ -571,6 +579,11 @@ pub fn services_for_folder(root: &Path, dir: &Path) -> Vec<Service> {
 
 /// The services named in the given folders (absolute, inside `root`). A
 /// Compose service and an env URL on the same port are one service.
+///
+/// A Compose service counts only when it is a known database, cache, queue
+/// or search service, or an `.env.example` names its port: the app's own
+/// containers (a backend, a proxy, an admin page) are not something the
+/// tests need running.
 #[must_use]
 pub fn services_in(root: &Path, folders: &[PathBuf]) -> Vec<Service> {
     let mut compose = Vec::new();
@@ -583,6 +596,10 @@ pub fn services_in(root: &Path, folders: &[PathBuf]) -> Vec<Service> {
             env.extend(from_env_example(&text, &join(&rel, ENV_EXAMPLE)));
         }
     }
+    let env_ports: Vec<u16> = env.iter().map(|service| service.port).collect();
+    compose.retain(|service| {
+        !service.name.starts_with("the Compose service ") || env_ports.contains(&service.port)
+    });
     let mut all = Vec::new();
     for service in compose.into_iter().chain(env) {
         merge(&mut all, service);

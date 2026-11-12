@@ -1,0 +1,100 @@
+# fscale doctor
+
+`fscale doctor` checks whether **this machine** is ready to work on the repo: the tools it declares, the env variables its `.env.example` files name, the installed dependencies of each project, and the local services it expects. It looks at the machine, not at the code; `fscale check` and `fscale verify` look at the code (SPEC §17, ADR 0026).
+
+```bash
+fscale doctor
+fscale doctor --json
+```
+
+It exits **0** when nothing is wrong (warnings are allowed) and **1** when something is. Every problem comes with a `next:` line, the command or step that fixes it:
+
+```
+Tools
+  ok       node: node 22.11.0 matches >=22.0.0 (package.json (engines.node))
+  PROBLEM  pnpm: pnpm is not installed, or not on the PATH; package.json (packageManager) asks for pnpm@9.12.0.
+           next: npm install -g pnpm@9.12.0
+
+Environment variables
+  PROBLEM  backend/.env.example: 2 of 6 variables are not set in the environment or backend/.env: JWT_SECRET, SMTP_HOST.
+           next: add JWT_SECRET, SMTP_HOST to backend/.env (see backend/.env.example for what each one is)
+
+Dependencies
+  ok       backend/.venv: virtual environment with Python 3.12.4
+  PROBLEM  backend packages: 1 of 14 packages in backend/requirements-dev.txt are not installed: pytest-asyncio.
+           next: in backend: .venv/bin/python -m pip install -r requirements-dev.txt
+  ok       frontend node_modules: all 31 packages in frontend/package.json are installed
+
+Services
+  PROBLEM  PostgreSQL on localhost:5432: not reachable: nothing listens on port 5432 (docker-compose.yml (service db)).
+           next: docker compose up -d db
+
+doctor: 3 problems - run the `next:` commands above, then `fscale doctor` again.
+```
+
+Doctor changes nothing. The only programs it runs are version commands (`node --version`, `pnpm --version`, the project's Python with `--version`, `go version`, `rustup toolchain list`), and it opens a TCP connection to each service's port, which it closes at once.
+
+## What it checks
+
+### Tools
+
+| Declared in                                                                                 | Checked against                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engines.node` in a `package.json`, `.nvmrc`, `.node-version`                               | `node --version`. npm ranges are read: `>=22`, `^20 \|\| ^22`, `>=18 <21`, `22.x`, `~1.2`, `14 - 16`. A bare `22` matches any `22.*.*`.                                                                                                                                 |
+| `packageManager` (`pnpm@9.12.0`)                                                            | `<manager> --version`. A different major version is a problem; the same major with another minor or patch is a warning. A manager in use but not declared is only checked to be installed.                                                                              |
+| `rust-toolchain.toml` (`[toolchain] channel`) or `rust-toolchain`                           | `rustup toolchain list`, run outside the repo so rustup never reads the file and never downloads a toolchain. Without rustup, `rustc --version`.                                                                                                                        |
+| `.python-version` (in the project's folder or above), `requires-python` in `pyproject.toml` | The project's Python: its `.venv` (or `venv`), else `python3` (`python` on Windows) from the PATH. Python specifiers are read: `>=3.10,<4`, `~=3.11`. For uv, Poetry and Pipenv projects with no environment yet, the version is left to the manager, which fetches it. |
+| `go` in `go.mod`                                                                            | `go version`: at least that version.                                                                                                                                                                                                                                    |
+
+A tool that is missing is a problem with the page or command that installs it.
+
+### Environment variables
+
+For each `.env.example` at the root and in each project's folder, every name it lists must be set (to something) in the environment, or be present in `.env` or `.env.local` beside it. **Only names are read from those files; values are dropped as each line is read, and never printed.** The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
+
+### Dependencies
+
+- **Node projects:** every package in `dependencies` and `devDependencies` (except `workspace:`, `file:` and `link:` ones) has a folder in `node_modules`, here or in a folder above, as Node itself looks them up. When all are there, the lockfile must not be newer than the file the package manager writes on each install (`node_modules/.package-lock.json` for npm, `.modules.yaml` for pnpm, `.yarn-integrity` or `.yarn-state.yml` for Yarn, `.bun-tag` for Bun); if it is, the lockfile changed since the last install. The fix is the project's install command from `fscale facts`.
+- **Python projects:**
+  - A virtual environment, `.venv` or `venv`, in the project's folder (for a uv workspace member, at the workspace root). No environment is a problem, with the commands that make one and install into it. An environment whose interpreter does not run (made on another machine, or with a Python that is gone) is a problem too. For Poetry and Pipenv, which may keep it elsewhere, a missing one is a warning.
+  - Every package in the requirements files that the project's install command names (and the files they include with `-r`), else every `requirements*.txt` in its folder, else `[project] dependencies` in `pyproject.toml`, is installed in that environment (read from its `.dist-info` folders), and a version pinned with `==` matches (`2.31` and `2.31.0` are the same). Requirements with an environment marker (`; python_version < "3.11"`) are not checked.
+  - Repos with several services, each with its own `requirements.txt`, `requirements-dev.txt` and `.venv`, are checked service by service.
+- **Rust and Go:** not checked; Cargo and Go fetch dependencies when they build.
+
+### Services
+
+Local services the repo expects, read by the same code as verify's "service not running" check (`docs/verify.md`):
+
+- **Compose files** (`compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml`, each with its `.override` file) at the root and in each project's folder: each service that publishes a port on this machine and is a known database, cache, queue or search service (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, RabbitMQ, Elasticsearch, OpenSearch, Memcached, MinIO, Kafka, NATS, SQL Server), by its image or its name. The app's own containers (a backend, a proxy, an admin page) are left out unless an `.env.example` names their port. The fix is `docker compose up -d <service>` (with `-f <folder>/<file>` when the file is not at the root).
+- **`.env.example` files:** URLs with a service scheme (`postgresql://`, `postgres+asyncpg://`, `mysql://`, `redis://`, `mongodb://`, `amqp://`...) and pairs such as `REDIS_HOST=localhost` with `REDIS_PORT=6379` (also `_SERVER` and `_HOSTNAME`). Only hosts on this machine count: `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`. Without a Compose file, the fix names a `docker run` command for the service, with `<password>` for you to fill in.
+
+Each one is **reachable** or **not reachable**. Only the service name, the host and the port are shown. User names, passwords, database names and connection strings are never kept, so they cannot be printed; a test proves it.
+
+## JSON
+
+`fscale doctor --json` prints the same checks. The schema is [`packages/cli/schemas/doctor-output.schema.json`](../packages/cli/schemas/doctor-output.schema.json).
+
+| Field              | Meaning                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------ |
+| `schemaVersion`    | Always `1`. Changes only on a breaking change.                                             |
+| `ok`               | `true` when no check is a problem. The exit code is 0 when true.                           |
+| `problems`         | How many checks are problems.                                                              |
+| `warnings`         | How many checks are warnings.                                                              |
+| `checks`           | Every check, in the order tools, env, dependencies, services.                              |
+| `checks[].section` | `tools`, `env`, `dependencies` or `services`.                                              |
+| `checks[].project` | The project's folder, as `fscale facts` prints it. Absent for checks about the whole repo. |
+| `checks[].subject` | What was checked: `node`, `backend/.env.example`, `PostgreSQL on localhost:5432`.          |
+| `checks[].status`  | `ok`, `problem` or `warning`.                                                              |
+| `checks[].detail`  | One sentence on what was found.                                                            |
+| `checks[].fix`     | The command or step that fixes a problem or warning.                                       |
+
+## With verify
+
+When a `fscale verify` step ends as **setup needed**, the summary ends with one line: ``Run `fscale doctor` to check this machine's tools, env variables, dependencies and services in one go.``
+
+## Limits
+
+- Version checks know the declarations in the table. `engines` for package managers, `volta`, `.tool-versions` (asdf, mise) and `.sdkmanrc` are not read.
+- "Matching the lockfile" for Node is a file-time comparison, not a full comparison of versions. For uv and Poetry projects the packages are read from `pyproject.toml`'s `[project] dependencies`, not from `uv.lock` or `poetry.lock`.
+- Compose files are read with a small line reader, not a YAML parser: `services:`, `image:` and `ports:` in the short and long forms. Anchors, `extends` and `include` are not followed.
+- A service on another host (a cloud database) is not checked.
