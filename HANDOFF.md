@@ -7,7 +7,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Milestone:** M12 `fscale doctor`, with two fixes from the 0.1.3 run first (the heartbeat's `last output: E`, and a running step whose tests cannot reach their database). Started 2026-11-12 17:05 UTC.
 - **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each milestone is still one pull request).
 - **Session plan, in order:** M12, M13 agent files, M14 generators, M15 Next.js pack, M16 Python pack, then a 0.2.0 version bump. Deadline 22:00 UTC (06:00 Singapore time, 13 Nov). Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
-- **Done so far:** 0.1.3 release recorded.
+- **Done so far:** 0.1.3 release recorded. M12 code, tests, docs, ADRs 0025 and 0026, and its real-repo pass are done and committed; next is its pull request, review and CI.
 
 ## Where things stand
 
@@ -58,6 +58,14 @@ Notes on M11, for whoever touches the group-project pack or M12 (`doctor`, the o
 - `group-project/branch-name` reads `GITHUB_HEAD_REF` only with a detached HEAD. Its tests call `check_with` so the test process's own environment cannot leak in.
 - `Git::current_branch` (in `crates/core/src/git.rs`) gives the branch name also before the first commit.
 - The skills test runs `fscale explain` in a scratch repo with every built-in pack on; a new pack needs nothing there.
+
+Notes on M12, for whoever touches doctor or verify's service watch:
+
+- Doctor is `crates/core/src/doctor.rs`; everything it asks the machine goes through the `Machine` trait (`ThisMachine` in production), so Rust tests can fake it. The CLI tests (`packages/cli/src/doctor.test.ts`) put version stand-ins on a PATH they control.
+- Services come from `crates/core/src/services.rs` (Compose and `.env.example`), shared with verify. Never add a field that keeps a URL, a user or a password there; a test checks the `Debug` text.
+- The live view of a running step's output is `crates/core/src/activity.rs` (heartbeat counts, the last 200 lines). Verify's early stop is `service_down_while_running` in `verify.rs`; a command stopped that way ends as `Ending::GaveUp`.
+- The python stand-in answers `--version` with `Python <FSCALE_STUB_PYTHON_VERSION>` (default 3.12.4).
+- The format research for M13 (Claude Code, Codex, Cursor) was done on 2026-11-12; see ADR 0027 once M13 lands. Cursor's hook format was confirmed from Cursor's public GitHub repositories (`cursor/cookbook`, `cursor/plugins`); cursor.com itself is still blocked.
 
 Notes for M13 (agent files), which stands on M9 like M11 did:
 

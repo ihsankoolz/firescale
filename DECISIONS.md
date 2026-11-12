@@ -22,6 +22,12 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M12) A running step is stopped early by default when a service it needs is down** (`verify.stopWhenServiceDown`, default `true`, ADR 0025). It needs a probe to find nothing listening, plus either a refused-connection message for a known service or the repo's own port, or at least 3 errors and nothing else from pytest or unittest. A wrong stop takes a suite that connects to such a port on purpose and would still pass. Say if the default should be `false` (print the line, let the step run on), or if the thresholds (3 errors, a probe every 5 seconds) should differ.
+- **(M12) An unreachable service is a problem in `fscale doctor`** (exit 1), not a warning: tests that need it cannot pass. If you often run doctor without wanting the database up, a warning would suit better (ADR 0026).
+- **(M12) Doctor's `packageManager` rule:** a different major version is a problem, the same major version with another minor or patch is a warning. Say if any difference should be a problem.
+- **(M12) Doctor reads only `.env` and `.env.local` beside each `.env.example`** for names (never values). `.env.development`, `.env.test` and the like are not counted.
+- **(M12) A nameless root `package.json` (no `"name"`) is now the root's Node project**, as on `vercel/commerce`, unless it lists workspaces. Its name in facts is `.`. This adds it to `fscale facts` and to the checks that read projects.
+
 - **(0.1.3) The default time limit is 10 minutes a step.** Your 13-minute pytest run would now stop at 10 minutes as `TIMED OUT`. A suite that is slow on purpose needs `"test": { "timeout": "30m" }` (or per project). Say if the default should be longer, or off (ADR 0024).
 - **(0.1.3) A refused connection to a local service is setup needed even when tests also failed.** A test whose fixture starts the app on, say, port 3000, and the app crashes on a code bug, would read as "start the service". Limiting that exception to the known database ports would avoid it.
 - **(0.1.3) Progress is off when stderr is not a terminal.** CI logs therefore show nothing until the end, as before. `--progress` in the generated workflow would change that; I left the workflow as it is.
@@ -66,6 +72,32 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M12 — `fscale doctor`, and two fixes from the 0.1.3 run
+
+The publishing checkpoint this milestone needs is met: 0.1.0 to 0.1.3 are on npm, so a teammate can run `npx firescale doctor`. Its second box (a generated repo passing its own CI on GitHub) is still open.
+
+**Built**
+
+1. **Fix: the heartbeat's running count** (ADR 0025). For pytest and unittest, when their markers are the latest output, the heartbeat says `tests so far: 12 passed, 0 failed, 40 errors (in tests/test_orders.py)`; otherwise `last output:` and the last line with words. A lone `E` or a row of dots is never shown.
+2. **Fix: a service that is down, seen while a step runs** (ADR 0025). Every 500 ms, new output is read for the documented refused-connection messages, and pytest and unittest counts are kept. When the output names a known local service, or every test so far has errored while a service the step's `.env.example` or Compose file names is down, a probe confirms nothing listens, and one progress line says so at once with the start command. By default the step is then stopped and reported as setup needed (`verify.stopWhenServiceDown: false` lets it run on).
+3. **`fscale doctor [--json]`** (ADR 0026, `docs/doctor.md`): tools (`engines.node`, `.nvmrc`, `.node-version`, `packageManager`, `rust-toolchain.toml`, `.python-version`, `requires-python`, `go.mod`), env variables (names in each `.env.example`, set in the environment or in `.env`/`.env.local` beside it; values never kept), dependencies per project (Node packages through `node_modules` and the lockfile's time against the install marker; for Python the virtual environment, its interpreter, and every package of the requirements files or `[project] dependencies`, with `==` pins), and local services from Compose files and `.env.example` (reachable or not, with `docker compose up -d <service>`; only host, port and service name). Every problem has a `next:` command; exit 1 on a problem. JSON schema version 1.
+4. **Verify's hint**: when a step needs setup, the summary ends with one line telling the reader to run `fscale doctor`.
+5. **Shared service reader** `crates/core/src/services.rs`, used by verify and doctor.
+
+**Decisions made for you:** ADR 0025 (counts, the two conditions, the probe, stop by default) and ADR 0026 (doctor's sections, version rules, what counts as a local service, names only for env files). The "this repo exits 0" test runs `fscale doctor` on the repo with the real tools, so it also proves the claim on each CI runner.
+
+**Found on real repos** (pass on 2026-11-12, binary from this branch, read-only)
+
+- _Fixed:_ `fastapi/full-stack-fastapi-template`'s backend is a member of a root uv workspace (`[tool.uv.workspace]`, `uv.lock` at the root). Facts called it a pip project using `python` from the PATH, so verify would have run `python -m pytest` outside its environment. It is now a uv project (`uv run pytest`); the doctor looks for the workspace's `.venv` at the root. Test: `a_member_of_a_uv_workspace_runs_with_uv`.
+- _Fixed:_ the same repo's Compose override publishes ports for the proxy, backend, adminer, mailpit and playwright containers; doctor listed all of them as services to start. Only known database, cache, queue and search services count now, unless an `.env.example` names the port. Test: the service filter in `services.rs` and doctor's real-repo output.
+- _Fixed:_ `vercel/commerce` has a root `package.json` with no `"name"`, so facts listed no project and doctor checked neither Node nor `node_modules`. A nameless root that is not a workspace root is now a project. Test: `a_nameless_app_at_the_root_is_still_a_project`.
+- _Fixed:_ doctor printed one Node line per `package.json` with the same range; same ranges are now one line. Also "all 1 packages" wording.
+- _Left (by design):_ `adopt --dry-run` on the FastAPI template untracks its committed `.env` and `frontend/.env` (the files stay on disk). The template commits development defaults on purpose; `core/no-committed-env` treats every tracked env file the same. Its "To review" note says so.
+- _Left:_ on `GoogleCloudPlatform/microservices-demo`, `core/env-example` proposes one root `.env.example` listing the variables of all eleven services (27 names), because no service has its own example file. A per-service example would fit that repo better; this is the rule's "nearest example" design (M5).
+- _Left:_ doctor reports each Python service of `microservices-demo` without a `.venv` as a problem. Those services are meant to be built in Docker; doctor checks a machine for local work, so the report is right for that use.
+
+**Known limits:** in `docs/doctor.md` and `docs/verify.md`: no `volta`/`.tool-versions`; Node "matches the lockfile" is a file-time comparison; the Compose reader is a line reader; a suite that waits on a service in silence is only caught when it ends or times out.
 
 ## 0.1.3 — verify on slow, real projects
 
