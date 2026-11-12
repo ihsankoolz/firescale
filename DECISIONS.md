@@ -10,6 +10,16 @@ History: GitHub Actions stopped starting jobs on 2026-11-11 (the account's month
 
 Still not measured anywhere: verify latency on macOS and Windows. The `bench` job runs the 50k-file check benchmark, not `bench/verify-bench.mjs`.
 
+## Real repos used for testing
+
+Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folder outside this repo. After each milestone the freshly built binary runs `facts`, `check`, `adopt --dry-run`, `doctor` and that milestone's new commands on them. Their scripts, hooks and installs are never run, and nothing is ever opened on those repositories.
+
+| Shape | Repository | Commit |
+|---|---|---|
+| Python backend with a JavaScript frontend in subfolders | `fastapi/full-stack-fastapi-template` | `aabb90126964a164e02aff39e7c385bb0598236d` |
+| A Next.js app | `vercel/commerce` | `f7521d57d29f0eb3d23c1399cf9bb299d61fcd21` |
+| Several Python services, each with its own `requirements.txt` | `GoogleCloudPlatform/microservices-demo` | `c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712` |
+
 ## Needs your decision (all milestones, most important first)
 
 - **(0.1.3) The default time limit is 10 minutes a step.** Your 13-minute pytest run would now stop at 10 minutes as `TIMED OUT`. A suite that is slow on purpose needs `"test": { "timeout": "30m" }` (or per project). Say if the default should be longer, or off (ADR 0024).
@@ -116,6 +126,7 @@ Left: the facts schema stays at version 2 although its new `notes` field fails a
 
 ## Releases
 
+- **0.1.3 was released on 2026-11-12** and run on your course project on Windows the same day. Progress lines, setup detection, parallel projects (`--jobs`) and Ctrl+C all worked, and no process was left behind after Ctrl+C. Two problems from that run are fixed in M12's pull request: the heartbeat showed `last output: E` (a pytest marker), and three services spent over six minutes with every test erroring because their test database was not running.
 - **0.1.2 was released on 2026-11-12 through the Release workflow**, with npm trusted publishing, like 0.1.1.
 
 ## M11 — The group-project pack
