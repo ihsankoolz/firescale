@@ -34,6 +34,10 @@ mod passing_repo {
             "      - run: npx --yes firescale@0.1.2 verify",
             "      - run: |\n          npm ci\n          npx firescale verify",
             "      - run: ./node_modules/.bin/fscale verify",
+            "      - run: npm ci && npx firescale verify",
+            "      - run: CI=1 npx --yes firescale --cwd app verify",
+            "      - name: Check\n        run: \"npx firescale verify\"",
+            "      - run: >\n          npx firescale\n          verify",
         ] {
             let text = format!("on:\n  pull_request:\njobs:\n  a:\n    steps:\n{run}\n");
             assert!(verifies_pull_requests(&text), "{run}");
@@ -64,6 +68,12 @@ mod failing_repo {
             // another command
             "on: [pull_request]\njobs:\n  a:\n    steps:\n      - run: npx firescale check\n",
             "on: [pull_request]\njobs:\n  a:\n    steps:\n      - run: npm run verify\n",
+            // only in a step's name, an echo, or a later command
+            "on: [pull_request]\njobs:\n  a:\n    steps:\n      - name: Run fscale verify\n        run: npm test\n",
+            "on: [pull_request]\njobs:\n  a:\n    steps:\n      - run: echo \"run npx firescale verify locally\"\n",
+            "on: [pull_request]\njobs:\n  a:\n    steps:\n      - run: npx fscale check && echo verify\n",
+            // a block that ended before the line
+            "on: [pull_request]\njobs:\n  a:\n    steps:\n      - run: |\n          npm ci\n    env:\n      X: npx firescale verify\n",
         ] {
             assert!(!verifies_pull_requests(text), "{text}");
         }

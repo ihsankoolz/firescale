@@ -88,13 +88,19 @@ pub(crate) fn any_case(name: &str) -> String {
         .collect()
 }
 
+/// What decides whether a fix may create a file, besides the file itself:
+/// `.gitignore` files (a rule there keeps the file out of git) and a plain
+/// file named `.github` or `docs` where the folder should be.
+pub(crate) const BLOCKER_INPUTS: [&str; 4] = [".gitignore", "**/.gitignore", ".github", "docs"];
+
 /// Cache inputs: `name*` and everything below `name*`, in any letter case,
-/// in each community folder.
+/// in each community folder, and `BLOCKER_INPUTS`.
 pub(crate) fn community_inputs(name: &str) -> Vec<String> {
     let glob = format!("{}*", any_case(name));
     COMMUNITY_FOLDERS
         .iter()
         .flat_map(|dir| [in_folder(dir, &glob), in_folder(dir, &format!("{glob}/**"))])
+        .chain(BLOCKER_INPUTS.iter().map(|input| (*input).to_owned()))
         .collect()
 }
 
@@ -141,6 +147,22 @@ pub(crate) fn community_files(root: &Path, matches: impl Fn(&str) -> bool) -> Ve
         .collect()
 }
 
+/// The finding for a file of this kind that is on disk but not tracked.
+pub(crate) fn untracked_finding(ctx: &RuleContext, file: &str) -> Result<String> {
+    Ok(if ctx.git().is_ignored(file)? {
+        format!("\"{file}\" exists but a .gitignore rule ignores it, so teammates do not get it. Remove that rule, then run `git add {file}` and commit it.")
+    } else {
+        format!("\"{file}\" exists but is not tracked by git, so teammates do not get it. Run `git add {file}` and commit it.")
+    })
+}
+
+/// True for a repo-relative path directly in a community folder whose name
+/// `matches` (given in lower case).
+pub(crate) fn in_community_folder(path: &str, matches: impl Fn(&str) -> bool) -> bool {
+    let (dir, name) = path.rsplit_once('/').unwrap_or((".", path));
+    COMMUNITY_FOLDERS.contains(&dir) && matches(&name.to_lowercase())
+}
+
 /// Which of `found` count: in a git repo, the ones git tracks, because a
 /// file only reaches teammates through a commit. Outside git, all of them.
 pub(crate) fn counted(ctx: &RuleContext, found: &[String]) -> Result<Vec<String>> {
@@ -163,8 +185,26 @@ pub(crate) fn create_blocker(
     ctx: &RuleContext,
     file: &str,
     what: &str,
+    is_candidate: &dyn Fn(&str) -> bool,
 ) -> Result<Option<(String, Fixable)>> {
     let root = ctx.root();
+    // A tracked file of this kind that is missing from disk, under any name
+    // or letter case: creating ours beside it would leave two names that
+    // differ only in case, which breaks checkouts on Windows and macOS.
+    if ctx.git().is_repo()? {
+        if let Some(missing) = ctx
+            .git()
+            .tracked_files()?
+            .into_iter()
+            .filter(|tracked| is_candidate(tracked))
+            .find(|tracked| on_disk(root, tracked).symlink_metadata().is_err())
+        {
+            return Ok(Some((
+                format!("{missing} is tracked by git but missing from disk. Restore it with `git restore {missing}`, or commit its deletion."),
+                Fixable::Manual,
+            )));
+        }
+    }
     let mut folder = String::new();
     for part in file
         .split('/')

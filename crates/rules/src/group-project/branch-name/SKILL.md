@@ -9,6 +9,8 @@ description: Reports when the current git branch's name does not match the team'
 
 The name of the checked-out git branch matches one of the patterns in the rule's `branches` option. In a pull request run on GitHub Actions, where the checkout has no branch, the pull request's branch from `GITHUB_HEAD_REF` is checked instead. Outside a git repo, or with a detached HEAD and no pull request, there is nothing to check.
 
+The repo's own main branch is always allowed: the branch `git init` names new repos after (`init.defaultBranch`), and the remote's default branch (`origin/HEAD`). So a repo that starts on `trunk` passes.
+
 The default patterns are `main`, `master`, `develop`, and `feat/*`, `fix/*`, `docs/*`, `test/*`, `refactor/*`, `chore/*`, `ci/*`, `build/*`, `perf/*`, `style/*`, `release/*`, `hotfix/*`, `revert/*`. `*` matches any text.
 
 Branch names that say what kind of change they hold make a team's list of branches and pull requests readable at a glance.
@@ -28,6 +30,7 @@ None. Renaming a branch changes what the user and their teammates see, so it is 
 ### REPORT
 
 - Report the current name, the patterns, and a suggested new name with the `git branch -m` command. Do not rename the branch yourself.
+- In a pull request run, the branch is the pull request's. Renaming it in CI does nothing: the work must be pushed to a branch with a matching name, or a pattern added to `branches`.
 
 ## Options
 

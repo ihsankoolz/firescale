@@ -7,8 +7,8 @@ use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
 use super::{
-    community_files, community_inputs, counted, create_blocker, entries, in_folder, on_disk,
-    COMMUNITY_FOLDERS,
+    community_files, community_inputs, counted, create_blocker, entries, in_community_folder,
+    in_folder, on_disk, untracked_finding, COMMUNITY_FOLDERS,
 };
 
 #[cfg(test)]
@@ -49,6 +49,18 @@ fn is_template_name(lower: &str) -> bool {
             .is_some_and(|extension| !extension.is_empty() && !extension.contains('.'))
 }
 
+/// True for a repo-relative path GitHub reads as a template: a template
+/// file in a community folder, or a file in a `PULL_REQUEST_TEMPLATE`
+/// folder there.
+fn is_template_path(path: &str) -> bool {
+    if in_community_folder(path, is_template_name) {
+        return true;
+    }
+    path.rsplit_once('/').is_some_and(|(folder, _)| {
+        in_community_folder(folder, |name| name == "pull_request_template")
+    })
+}
+
 /// Templates on disk: a single template in a community folder, or any file
 /// in a `PULL_REQUEST_TEMPLATE` folder there (several templates, chosen with
 /// the `template` query parameter).
@@ -84,14 +96,14 @@ fn problem(ctx: &RuleContext) -> Result<Option<(String, String, Fixable)>> {
     }
     if let Some(untracked) = found.first() {
         return Ok(Some((
-            format!(
-                "\"{untracked}\" exists but is not tracked by git, so teammates do not get it. Run `git add {untracked}` and commit it."
-            ),
+            untracked_finding(ctx, untracked)?,
             untracked.clone(),
             Fixable::Manual,
         )));
     }
-    if let Some((message, fixable)) = create_blocker(ctx, TEMPLATE, "pull request template")? {
+    if let Some((message, fixable)) =
+        create_blocker(ctx, TEMPLATE, "pull request template", &is_template_path)?
+    {
         return Ok(Some((message, TEMPLATE.to_owned(), fixable)));
     }
     Ok(Some((

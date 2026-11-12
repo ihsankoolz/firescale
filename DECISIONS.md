@@ -76,11 +76,16 @@ Needed the publishing checkpoint: 0.1.0 and 0.1.1 are on npm, so the CI this pac
 - **CI that is not GitHub Actions is a manual finding** for `ci-verify` (it cannot read it), where `core/ci-exists` says nothing.
 - **Severities:** template and branch name low, guide and CI medium. All start as `evaluated`.
 - **The explain test of every skill now runs with every pack on**, in a scratch repo, rather than turning `group-project` on for this repo.
+- **The repo's own main branch always passes `branch-name`** (`init.defaultBranch`, `origin/HEAD`).
+- **`ci-verify` reads only `run:` steps**, and the command must be firescale's verify, not a mention of it.
+
+**Independent review before the pull request** found seven issues. Fixed: a deleted tracked template or guide in another letter case could get a second file beside it; `init` on a machine with `init.defaultBranch = trunk` failed its own branch rule (the test now isolates git config); `.gitignore` was not a cache input of the rules it can block (nor of `core/ci-exists`, which now has it too); a step's name or an `echo` that mentioned `fscale verify` passed `ci-verify`; a pull request's branch got `git branch -m` advice; an untracked file that `.gitignore` ignores got a `git add` that fails. Left: `npm run verify` is not followed into package scripts (documented), and the starter workflow still says it was created by `core/ci-exists` when `ci-verify` wrote it.
 
 **Known limits**
 
 - The guide is written once. `sync` does not update it when commands change.
-- `ci-verify` reads only GitHub Actions workflows. It does not check that the verify step comes after the install step.
+- `ci-verify` reads only GitHub Actions workflows. It does not check that the verify step comes after the install step, and it does not follow `npm run verify` into package scripts.
+- Bot branches such as `dependabot/...` fail `branch-name` unless a pattern is added. It is report-only unless you enforce it.
 - `branch-name` judges only the branch that is checked out (or the pull request's in CI), not every branch on the remote.
 - Templates for issues are not part of the pack.
 

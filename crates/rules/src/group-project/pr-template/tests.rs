@@ -103,6 +103,50 @@ mod failing_repo {
     }
 
     #[test]
+    fn a_tracked_template_missing_from_disk_blocks_a_second_name_in_another_case() {
+        for tracked in [
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            "docs/pull_request_template.txt",
+            ".github/PULL_REQUEST_TEMPLATE/feature.md",
+        ] {
+            let f = Fixture::new(&[(tracked, "x\n")], Track::All).unwrap();
+            std::fs::remove_file(f.root().join(tracked)).unwrap();
+            let found = check(&f);
+            assert_eq!(found[0].fixable, Fixable::Manual, "{tracked}");
+            assert!(
+                found[0].message.contains("git restore"),
+                "{}",
+                found[0].message
+            );
+            assert!(f
+                .fix(&PrTemplate, &Options::new())
+                .unwrap()
+                .changed_files
+                .is_empty());
+            assert_eq!(f.tracked().unwrap(), [tracked]);
+        }
+    }
+
+    #[test]
+    fn an_untracked_template_that_gitignore_ignores_says_so() {
+        let f = Fixture::new(
+            &[
+                (".gitignore", "pull_request_template.md\n"),
+                ("pull_request_template.md", "x\n"),
+            ],
+            Track::Only(&[".gitignore"]),
+        )
+        .unwrap();
+        let found = check(&f);
+        assert_eq!(found[0].fixable, Fixable::Manual);
+        assert!(
+            found[0].message.contains("a .gitignore rule ignores it"),
+            "{}",
+            found[0].message
+        );
+    }
+
+    #[test]
     fn a_file_named_github_blocks_the_fix() {
         let f = Fixture::new(&[(".github", "not a folder\n")], Track::All).unwrap();
         let found = check(&f);

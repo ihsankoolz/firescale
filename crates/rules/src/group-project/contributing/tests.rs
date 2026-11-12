@@ -72,6 +72,20 @@ mod failing_repo {
     }
 
     #[test]
+    fn a_tracked_guide_missing_from_disk_blocks_a_second_name_in_another_case() {
+        let f = Fixture::new(&[("contributing.md", "x\n")], Track::All).unwrap();
+        std::fs::remove_file(f.root().join("contributing.md")).unwrap();
+        let found = check(&f);
+        assert_eq!(found[0].fixable, Fixable::Manual);
+        assert!(f
+            .fix(&Contributing, &Options::new())
+            .unwrap()
+            .changed_files
+            .is_empty());
+        assert_eq!(f.tracked().unwrap(), ["contributing.md"]);
+    }
+
+    #[test]
     fn a_bad_branches_option_is_a_user_error() {
         let f = Fixture::new(&[("CONTRIBUTING.md", "x\n")], Track::All).unwrap();
         let opts = json!({ "branches": [] }).as_object().cloned().unwrap();

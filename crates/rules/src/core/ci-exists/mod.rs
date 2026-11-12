@@ -362,9 +362,12 @@ impl BuiltinRule for CiExists {
             severity: Severity::Medium,
             category: Category::Reliability,
             description: "A CI workflow exists and runs on pull requests.".to_owned(),
+            // `.gitignore` and a plain file named `.github` decide whether the
+            // starter can be created, so they are inputs too.
             inputs: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
                 .iter()
                 .chain(OTHER_CI.iter())
+                .chain([".gitignore", "**/.gitignore", ".github"].iter())
                 .map(|s| (*s).to_owned())
                 .collect(),
             has_fix: true,

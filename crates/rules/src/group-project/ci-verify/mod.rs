@@ -18,28 +18,115 @@ pub const ID: &str = "group-project/ci-verify";
 
 pub struct CiVerify;
 
-/// True when a line runs firescale's verify: a word that names the
-/// command (`firescale`, `fscale`, `firescale@0.1.2`, a path ending in one
-/// of them) followed later on the line by the word `verify`.
-fn runs_verify(line: &str) -> bool {
-    let words: Vec<&str> = strip_comment(line)
-        .split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '&' | '|' | '('))
-        .filter(|word| !word.is_empty())
-        .collect();
-    words.iter().enumerate().any(|(index, word)| {
-        let name = word.rsplit(['/', '\\']).next().unwrap_or(word);
+/// Words that only start another program: `npx`, `pnpm exec`, `yarn dlx`.
+const RUNNERS: [&str; 10] = [
+    "npx", "pnpm", "yarn", "bunx", "bun", "npm", "exec", "dlx", "x", "run",
+];
+
+/// True when one shell command (no `&&`, `;` or `|` in it) starts firescale's
+/// verify: optional variable assignments and a runner, then `firescale` or
+/// `fscale` (also `firescale@0.1.2` or a path ending in one), then, after
+/// any options, the word `verify`.
+fn command_runs_verify(command: &str) -> bool {
+    let mut words = command.split_whitespace().peekable();
+    // FOO=1 npx ...
+    while words
+        .peek()
+        .is_some_and(|word| word.contains('=') && !word.starts_with('-'))
+    {
+        words.next();
+    }
+    let mut named = false;
+    for word in words.by_ref() {
+        if word.starts_with('-') || RUNNERS.contains(&word) {
+            continue;
+        }
+        let name = word.trim_matches(['"', '\'']);
+        let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
         let name = name.split('@').next().unwrap_or(name);
-        matches!(
+        named = matches!(
             name,
             "firescale" | "fscale" | "fscale.exe" | "firescale.cmd" | "fscale.cmd"
-        ) && words[index + 1..].contains(&"verify")
-    })
+        );
+        break;
+    }
+    if !named {
+        return false;
+    }
+    let mut takes_value = false;
+    for word in words {
+        if takes_value {
+            takes_value = false;
+            continue;
+        }
+        if word == "--cwd" {
+            takes_value = true;
+            continue;
+        }
+        if word.starts_with('-') {
+            continue;
+        }
+        return word == "verify";
+    }
+    false
 }
 
-/// True when the workflow file runs on pull requests and has a step that
-/// runs `fscale verify`.
+/// True when a line of shell runs firescale's verify in one of its commands.
+fn runs_verify(line: &str) -> bool {
+    strip_comment(line)
+        .split([';', '&', '|'])
+        .any(command_runs_verify)
+}
+
+/// The shell lines of the `run:` steps of a workflow: the value of a
+/// one-line `run:`, and every line of a `run: |` or `run: >` block.
+fn run_lines(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        index += 1;
+        let trimmed = line.trim_start();
+        let entry = trimmed.strip_prefix("- ").unwrap_or(trimmed).trim_start();
+        let Some(value) = entry.strip_prefix("run:") else {
+            continue;
+        };
+        let value = value.trim();
+        if value.starts_with('|') || value.starts_with('>') {
+            let key_indent = line.len() - entry.len();
+            let mut block = Vec::new();
+            while index < lines.len() {
+                let next = lines[index];
+                let indent = next.len() - next.trim_start().len();
+                if !next.trim().is_empty() && indent <= key_indent {
+                    break;
+                }
+                block.push(next.trim().to_owned());
+                index += 1;
+            }
+            // `>` folds the block's lines into one; `|` keeps them apart.
+            if value.starts_with('>') {
+                out.push(block.join(" "));
+            } else {
+                out.extend(block);
+            }
+        } else {
+            let unquoted = value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(value);
+            out.push(unquoted.to_owned());
+        }
+    }
+    out
+}
+
+/// True when the workflow file runs on pull requests and one of its `run:`
+/// steps runs `fscale verify`.
 pub(crate) fn verifies_pull_requests(text: &str) -> bool {
-    mentions_pull_request(text) && text.lines().any(runs_verify)
+    mentions_pull_request(text) && run_lines(text).iter().any(|line| runs_verify(line))
 }
 
 /// What is wrong, as `(message, file, fixable)`, or `None` when CI runs

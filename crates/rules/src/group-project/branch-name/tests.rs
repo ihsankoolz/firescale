@@ -86,7 +86,34 @@ mod passing_repo {
         assert!(findings(&f, &Options::new(), None).is_empty());
         // In a pull request run, the pull request's branch is checked.
         assert!(findings(&f, &Options::new(), Some("feat/x")).is_empty());
-        assert_eq!(findings(&f, &Options::new(), Some("my-stuff")).len(), 1);
+        let pr = findings(&f, &Options::new(), Some("my-stuff"));
+        assert_eq!(pr.len(), 1);
+        // A pull request's branch cannot be renamed from CI: other advice.
+        assert!(
+            pr[0].contains("open the pull request from that one"),
+            "{}",
+            pr[0]
+        );
+        assert!(!pr[0].contains("git branch -m"), "{}", pr[0]);
+    }
+
+    #[test]
+    fn the_repos_own_default_branch_is_always_allowed() {
+        // git init made a "mainline" repo here.
+        let f = on_branch("mainline");
+        assert_eq!(findings(&f, &Options::new(), None).len(), 1);
+        let set = ["config", "init.defaultBranch", "mainline"];
+        assert_eq!(run_git(f.root(), &set).unwrap().code, 0);
+        assert!(findings(&f, &Options::new(), None).is_empty());
+        // The remote's default branch.
+        let f = on_branch("stable");
+        let args = [
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/stable",
+        ];
+        assert_eq!(run_git(f.root(), &args).unwrap().code, 0);
+        assert!(findings(&f, &Options::new(), None).is_empty());
     }
 
     #[test]

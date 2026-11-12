@@ -7,7 +7,9 @@ description: Fixes violations of the firescale rule group-project/ci-verify by m
 
 ## What this rule enforces and why
 
-A GitHub Actions workflow that runs on pull requests has a step that runs firescale's verify: a line such as `npx firescale verify`, `pnpm fscale verify` or `npx firescale@0.1.2 verify`. The workflow is a tracked `.yml` or `.yaml` file in `.github/workflows/`, and its `on:` key lists `pull_request` or `pull_request_target`. A comment does not count.
+A GitHub Actions workflow that runs on pull requests has a `run:` step that runs firescale's verify, such as `npx firescale verify`, `pnpm fscale verify`, `npx --yes firescale@0.1.2 verify` or `npm ci && npx firescale verify`. The workflow is a tracked `.yml` or `.yaml` file in `.github/workflows/`, and its `on:` key lists `pull_request` or `pull_request_target`. Only `run:` steps count (one line, or a `|` or `>` block), and the command itself must be firescale's verify: a step's name, a comment, an `echo` or a later command that merely mentions the words does not count.
+
+A package script that runs verify (`npm run verify` with `"verify": "fscale verify"`) is not recognised. Call `npx firescale verify` in the workflow directly, or turn this rule off.
 
 Then every pull request is checked by the same command a teammate runs on their machine, and "it passes for me" means the same thing for everyone.
 

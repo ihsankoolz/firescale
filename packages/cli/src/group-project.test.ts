@@ -34,6 +34,15 @@ async function diagnostics(root: string, env: Record<string, string> = {}): Prom
 const groupProject = (found: Diagnostic[]): Diagnostic[] =>
   found.filter((d) => d.ruleId.startsWith('group-project/'));
 
+/**
+ * An environment where git reads only a config of the test's own, so the
+ * developer's or runner's `init.defaultBranch` cannot change the result.
+ */
+async function gitConfig(content: string): Promise<Record<string, string>> {
+  const home = await fixtures.create({ files: { gitconfig: content }, track: 'no-git' });
+  return { GIT_CONFIG_GLOBAL: path.join(home.root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
+}
+
 /** Puts a repo on `branch` (before or after its first commit). */
 async function onBranch(root: string, branch: string): Promise<void> {
   await run('git', ['symbolic-ref', 'HEAD', `refs/heads/${branch}`], { cwd: root });
@@ -42,15 +51,18 @@ async function onBranch(root: string, branch: string): Promise<void> {
 describe('fscale init --packs core,group-project', () => {
   it('builds a repo where the pack reports no violations, with the template and guide pinned', async () => {
     const repo = await fixtures.create({ track: 'no-git' });
-    const result = await runCli(['init', '--packs', 'core,group-project'], repo.root);
+    const isolated = await gitConfig('');
+    const result = await runCli(['init', '--packs', 'core,group-project'], repo.root, isolated);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(EXIT_OK);
     expect(await repo.read('firescale.config.json')).toBe(
       '{\n  "packs": ["core", "group-project"]\n}\n',
     );
     // A pull request run on GitHub must not change the answer for a new repo.
-    expect(groupProject(await diagnostics(repo.root, { GITHUB_HEAD_REF: 'my-stuff' }))).toEqual([]);
-    expect(groupProject(await diagnostics(repo.root))).toEqual([]);
+    expect(
+      groupProject(await diagnostics(repo.root, { ...isolated, GITHUB_HEAD_REF: 'my-stuff' })),
+    ).toEqual([]);
+    expect(groupProject(await diagnostics(repo.root, isolated))).toEqual([]);
 
     const template = await repo.read('.github/pull_request_template.md');
     const guide = await repo.read('CONTRIBUTING.md');
@@ -67,8 +79,21 @@ describe('fscale init --packs core,group-project', () => {
     );
 
     // sync finds nothing to do.
-    const check = await runCli(['sync', '--check'], repo.root);
+    const check = await runCli(['sync', '--check'], repo.root, isolated);
     expect(check.code).toBe(EXIT_OK);
+  });
+
+  it('accepts the branch git gives a new repo, whatever init.defaultBranch says', async () => {
+    const repo = await fixtures.create({ track: 'no-git' });
+    const trunk = await gitConfig('[init]\n\tdefaultBranch = trunk\n');
+    const result = await runCli(['init', '--packs', 'core,group-project'], repo.root, trunk);
+    expect(result.code).toBe(EXIT_OK);
+    const { stdout } = await run('git', ['symbolic-ref', '--short', 'HEAD'], {
+      cwd: repo.root,
+      env: { ...process.env, ...trunk },
+    });
+    expect(stdout.trim()).toBe('trunk');
+    expect(groupProject(await diagnostics(repo.root, trunk))).toEqual([]);
   });
 
   it('writes the commands of each project into the guide', async () => {

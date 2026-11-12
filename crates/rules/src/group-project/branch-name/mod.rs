@@ -1,6 +1,7 @@
 //! `group-project/branch-name`: the current branch's name matches the team's
 //! patterns.
 
+use firescale_core::git::run_git;
 use firescale_core::model::{Category, Finding, Fixable, RuleMeta, Severity};
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::{Error, Result};
@@ -37,19 +38,46 @@ fn matcher(patterns: &[String]) -> Result<GlobSet> {
     })
 }
 
-/// The branch to judge: the checked-out branch, else (detached HEAD, as in
-/// CI) the pull request's branch from `head_ref`. `None` outside git, or
-/// when neither says.
-fn branch(ctx: &RuleContext, head_ref: Option<String>) -> Result<Option<String>> {
+/// The branch to judge, and whether it came from a pull request run: the
+/// checked-out branch, else (detached HEAD, as in CI) the pull request's
+/// branch from `head_ref`. `None` outside git, or when neither says.
+fn branch(ctx: &RuleContext, head_ref: Option<String>) -> Result<Option<(String, bool)>> {
     if !ctx.git().is_repo()? {
         return Ok(None);
     }
     if let Some(name) = ctx.git().current_branch()? {
-        return Ok(Some(name));
+        return Ok(Some((name, false)));
     }
     Ok(head_ref
         .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty()))
+        .filter(|name| !name.is_empty())
+        .map(|name| (name, true)))
+}
+
+/// The repo's own main branch names, which are always allowed: the branch
+/// `git init` gives a new repo here (`init.defaultBranch`), and the remote's
+/// default branch (`origin/HEAD`). A repo started on `trunk` must not fail.
+fn default_branches(ctx: &RuleContext) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let configured = run_git(ctx.root(), &["config", "--get", "init.defaultBranch"])?;
+    if configured.code == 0 {
+        out.push(configured.stdout.trim().to_owned());
+    }
+    let remote = run_git(
+        ctx.root(),
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )?;
+    if remote.code == 0 {
+        let name = remote.stdout.trim();
+        out.push(name.strip_prefix("origin/").unwrap_or(name).to_owned());
+    }
+    out.retain(|name| !name.is_empty());
+    Ok(out)
 }
 
 /// The check, with the pull request branch given rather than read from the
@@ -57,27 +85,41 @@ fn branch(ctx: &RuleContext, head_ref: Option<String>) -> Result<Option<String>>
 pub(crate) fn check_with(ctx: &RuleContext, head_ref: Option<String>) -> Result<Vec<Finding>> {
     let patterns = branch_patterns(ctx.options(), ID)?;
     let set = matcher(&patterns)?;
-    let Some(name) = branch(ctx, head_ref)? else {
+    let Some((name, from_pull_request)) = branch(ctx, head_ref)? else {
         return Ok(Vec::new());
     };
-    if set.is_match(&name) {
+    if set.is_match(&name) || default_branches(ctx)?.contains(&name) {
         return Ok(Vec::new());
     }
     let shown: Vec<String> = patterns.iter().map(|p| format!("`{p}`")).collect();
-    let example = patterns
+    let suggestion = patterns
         .iter()
         .find(|pattern| pattern.ends_with("/*"))
         .map(|pattern| {
             let tail = name.rsplit('/').next().unwrap_or(&name);
-            format!(
-                " For example: `git branch -m {}{tail}`.",
-                pattern.trim_end_matches('*')
-            )
-        })
-        .unwrap_or_default();
+            format!("{}{tail}", pattern.trim_end_matches('*'))
+        });
+    let next = if from_pull_request {
+        // In CI the branch is the pull request's: renaming it here does nothing.
+        format!(
+            "Push the work to a branch with a matching name{} and open the pull request from that one, or add a pattern for it to the rule's `branches` option.",
+            suggestion
+                .as_ref()
+                .map(|s| format!(" (for example `{s}`)"))
+                .unwrap_or_default()
+        )
+    } else {
+        format!(
+            "Rename it with `git branch -m <new-name>` before you push.{}",
+            suggestion
+                .as_ref()
+                .map(|s| format!(" For example: `git branch -m {s}`."))
+                .unwrap_or_default()
+        )
+    };
     Ok(vec![Finding {
         message: format!(
-            "The branch \"{name}\" does not match the team's branch names: {}. Rename it with `git branch -m <new-name>` before you push.{example}",
+            "The branch \"{name}\" does not match the team's branch names: {}. {next}",
             shown.join(", ")
         ),
         file: ".git/HEAD".to_owned(),

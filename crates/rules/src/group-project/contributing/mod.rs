@@ -7,7 +7,10 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{branch_patterns, community_files, community_inputs, counted, create_blocker};
+use super::{
+    branch_patterns, community_files, community_inputs, counted, create_blocker,
+    in_community_folder, untracked_finding,
+};
 
 #[cfg(test)]
 mod tests;
@@ -206,14 +209,16 @@ fn problem(ctx: &RuleContext) -> Result<Option<(String, String, Fixable)>> {
     }
     if let Some(untracked) = found.first() {
         return Ok(Some((
-            format!(
-                "\"{untracked}\" exists but is not tracked by git, so teammates do not get it. Run `git add {untracked}` and commit it."
-            ),
+            untracked_finding(ctx, untracked)?,
             untracked.clone(),
             Fixable::Manual,
         )));
     }
-    if let Some((message, fixable)) = create_blocker(ctx, GUIDE, "contributing guide")? {
+    if let Some((message, fixable)) =
+        create_blocker(ctx, GUIDE, "contributing guide", &|path: &str| {
+            in_community_folder(path, is_guide_name)
+        })?
+    {
         return Ok(Some((message, GUIDE.to_owned(), fixable)));
     }
     Ok(Some((

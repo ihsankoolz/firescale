@@ -34,14 +34,14 @@ Not on by default. Add `"group-project"` to `packs`, or start a repo with `fscal
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------- |
 | `group-project/pr-template`  | A pull request template exists: `pull_request_template.*` or a `PULL_REQUEST_TEMPLATE/` folder in the root, `docs/` or `.github/`.             | low      | creates `.github/pull_request_template.md`              |
 | `group-project/contributing` | A contributing guide exists: `CONTRIBUTING` or `CONTRIBUTING.*` in the root, `docs/` or `.github/`.                                            | medium   | creates `CONTRIBUTING.md` from `fscale facts`           |
-| `group-project/ci-verify`    | A GitHub Actions workflow that runs on pull requests runs `fscale verify`.                                                                     | medium   | creates the starter workflow when there is no CI at all |
+| `group-project/ci-verify`    | A GitHub Actions workflow that runs on pull requests has a `run:` step whose command is `fscale verify`.                                       | medium   | creates the starter workflow when there is no CI at all |
 | `group-project/branch-name`  | The current branch's name matches the team's patterns. In a pull request run on GitHub Actions, the pull request's branch (`GITHUB_HEAD_REF`). | low      | no                                                      |
 
 GitHub's rules were read from its documentation's source on 2026-11-12: both files may live in the root, `docs/` or `.github/`, and their names are not case sensitive. In a git repo a file only counts when git tracks it, because teammates get it through a commit.
 
 - A file a person wrote is never changed. A workflow without verify is left for an agent or a person, with the one step to add.
 - `group-project/ci-verify` runs after `core/ci-exists`: when both are on, `core/ci-exists` writes the starter workflow, and it already runs verify.
-- `group-project/branch-name` is never cached, since the branch is not a file. Outside git, or with a detached HEAD outside a pull request run, it reports nothing.
+- `group-project/branch-name` always allows the repo's own main branch (`init.defaultBranch`, `origin/HEAD`), and is never cached, since the branch is not a file. Outside git, or with a detached HEAD outside a pull request run, it reports nothing.
 - The guide's commands come from `fscale facts`. A Python command that names this machine's `.venv` is written as `python -m ...`, so it works for every teammate.
 
 ## Options
