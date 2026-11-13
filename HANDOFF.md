@@ -4,10 +4,13 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**0.3.0 is ready to tag.** `main` holds version 0.3.0 (set with `node scripts/bump-version.mjs 0.3.0`; `--check` passes). No tag has been pushed: push `v0.3.0` on `main` when you want it published (`RELEASING.md`). `v0.2.1` was never tagged; 0.3.0 includes everything since 0.2.0.
+**0.3.0 is ready to tag, and should be tagged after M22 merges.** `main` holds version 0.3.0 (pull request #32 merged the base run fixes and the version). No tag has been pushed. Tag `v0.3.0` on `main` once M22 is merged, so the published 0.3.0 has `--shared-cache`, which the workflow `fscale init` now writes calls (`RELEASING.md`). `v0.2.1` was never tagged; 0.3.0 includes everything since 0.2.0.
 
 - **Branch:** `claude/vibrant-ramanujan-1ymxis` (the cloud session may push only to this branch; it is restarted from `main` after each merge).
-- **Done in this session (2026-11-13, afternoon):** two fixes to the base run and the version 0.3.0 (ADR 0040), then M22.
+- **Done in this session (2026-11-13, afternoon):** the base run fixes and 0.3.0 (#32, ADR 0040), then M22 (ADR 0041).
+- **M22's last box is open:** a pull request in a fixture repo on GitHub, run by hand, needs a firescale with `--shared-cache` on npm. After `v0.3.0` is published: make a repo with `npx firescale@0.3.0 init`, push it to GitHub, let `main` run once, open a pull request that touches one project, and check that only that project ran and its unchanged steps say `passed from the shared cache of CI`.
+- **Next:** M23 (tamper guard). Not started.
+- `docs.github.com` was added to the Default cloud environment's allowed hosts (approved by you), to read GitHub's docs.
 - The `v0.2.0` tag exists and 0.2.0 is on npm.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
@@ -22,7 +25,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Done in the session of 2026-11-12 (evening):** M12 `doctor` and the two fixes from the 0.1.3 run (ADR 0025, 0026), M13 agent files (ADR 0027), M14 generators (ADR 0028), M15 Next.js pack (ADR 0029), M16 Python pack (ADR 0030), and the 0.2.0 version.
 - **Done in the session of 2026-11-12/13:** the plan update (ADR 0031) and M17, the project graph and affected verify (ADR 0032, ADR 0033).
 - **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036); M19 to M21, blame-aware verify (ADR 0037 to 0039, verify schema 6).
-- **Not started, in order:** M22 faster generated CI and a shared cache, M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
+- **Done in the session of 2026-11-13 (afternoon):** the base run fixes and 0.3.0 (ADR 0040), M22 (ADR 0041).
+- **Not started, in order:** M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
 
 ## How to resume
 
@@ -30,6 +34,13 @@ Current state of the project, so a new session can resume cold. Updated in every
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on M22, for whoever touches CI or the shared cache (ADR 0041):
+
+- The workflow is `crates/rules/src/core/ci-exists/workflow.rs`: `workflow(&Setup)` writes it, `firescale_wrote` tells an untouched one (its digest line, or a byte-for-byte 0.1-0.3 starter via `legacy`). Never let `sync` replace anything else. Keep the pull request job free of any save step; `shared-cache.test.ts` reads the generated YAML.
+- Records are `crates/core/src/sharedcache.rs`: `CiRun::from_env` (GitHub's variables and the event payload's `repository.default_branch`), `SharedCache::lookup` (exact key, `passed`, 30 days, writer is the default branch), `write` and `prune` (default-branch pushes only). `StepCache::with_ci` adds the workflow digest to every key; `hit` never reads the local cache in a writing run.
+- Tests set GitHub's variables explicitly; this repo's own CI also has them, so a test that must not see them removes them (`GITHUB_ACTIONS: undefined`).
+- Every `git diff` runs against a private copy of the index (`git.rs`, `IndexCopy`): git rewrites the index during `diff` otherwise.
 
 Notes on 0.3.0, for whoever touches the base run (ADR 0040):
 
@@ -156,7 +167,8 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Tag `v0.3.0` on `main` and push the tag when you are ready to release (`RELEASING.md`). `v0.2.0` is tagged and 0.2.0 is on npm; `v0.2.1` was never tagged.
+- Tag `v0.3.0` on `main` after M22 is merged, and push the tag when you are ready to release (`RELEASING.md`). `v0.2.0` is tagged and 0.2.0 is on npm; `v0.2.1` was never tagged.
+- After 0.3.0 is on npm: M22's manual check (see "In progress").
 - Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
 - Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
 - Run 0.2.0 on the course project: `fscale doctor`, and `fscale adopt --dry-run` with `agent-ready` and `python` in `packs`, to see the agent files and the per-service checks on the real repo.
