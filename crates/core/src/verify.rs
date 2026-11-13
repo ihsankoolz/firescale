@@ -267,9 +267,13 @@ pub fn limit_to_affected(
             .collect();
         let hit = covered.iter().find_map(|project| {
             let id = project_id(&project.kind, &project.root);
-            affected
-                .reason(&id)
-                .map(|reason| format!("{}: {reason}", graph.display(&id)))
+            affected.reason(&id).map(|reason| {
+                if project.root == "." {
+                    reason
+                } else {
+                    format!("{}: {reason}", graph.display(&id))
+                }
+            })
         });
         let (runs, reason) = if let Some(reason) = &affected.everything {
             (true, reason.clone())

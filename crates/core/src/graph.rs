@@ -1615,7 +1615,9 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
                 .filter(|node| node.node_type == NodeType::Shared && inside(file, &node.path))
                 .map(|node| node.id.clone()),
         );
-        if holders.is_empty() {
+        if deepest.is_none() {
+            // The repo root's project holds every file no other project
+            // does, shared ones included.
             holders.extend(
                 projects
                     .iter()
@@ -2294,6 +2296,38 @@ mod tests {
         }
         assert!(edge(&graph, "plugins", "web").is_none());
         assert_eq!(affected_projects(&graph, &["b/main.py"]), ["b", "plugins"]);
+    }
+
+    #[test]
+    fn a_root_file_that_a_project_copies_affects_that_project_and_the_root_project() {
+        let mut files = py_service(
+            "backend",
+            &[("Dockerfile", "FROM python:3.13\nCOPY package.json /app/\n")],
+        );
+        files.push((
+            "package.json".to_owned(),
+            r#"{"name":"root","scripts":{"test":"node t.js"}}"#.to_owned(),
+        ));
+        files.push((
+            "web/package.json".to_owned(),
+            r#"{"name":"web"}"#.to_owned(),
+        ));
+        files.push((
+            "compose.yaml".to_owned(),
+            "services:\n  api:\n    build:\n      context: .\n      dockerfile: backend/Dockerfile\n".to_owned(),
+        ));
+        let fixture = owned(&files);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, "backend", "package.json")),
+            [Source::Dockerfile]
+        );
+        assert_eq!(
+            affected_projects(&graph, &["package.json"]),
+            [".", "backend"]
+        );
+        // Another root file affects the root's project only.
+        assert_eq!(affected_projects(&graph, &["README.md"]), ["."]);
     }
 
     // --------------------------------------------------------- output
