@@ -1652,7 +1652,10 @@ fn run_step(
         .filter(|(_, kind)| *kind == EarlyKind::Refused)
         .map(|(problem, _)| problem);
     let tally = final_tally(command, &finished.stdout, &finished.stderr);
-    report.tests = tally.map(TestCounts::from);
+    // Left out when the runner counted nothing (no markers in the output).
+    report.tests = tally
+        .filter(|tally| !tally.is_empty())
+        .map(TestCounts::from);
     // After an early stop or a timeout, pytest's own summary never came:
     // one more short run with --maxfail=1 shows the first error (ADR 0035).
     // The user's command runs as written; this is a separate run.
