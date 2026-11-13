@@ -15,6 +15,7 @@ M19 and M20 label failures; M21 makes the labels usable inside an agent's stop h
 - With per-test results: if every new test passes the second time and what still fails is the base's own failure (the output evidence of ADR 0037 holds for the second run's output), the step is `flaky`. Otherwise it stays `new`.
 - **No flaky history is kept.** Nothing about a flaky result is written: not in `.firescale/`, not in the step cache (the second run's pass is never stored), not in the base store. The rerun is all there is (SPEC §8, §12).
 - A step that timed out is not run again: a second timeout would double the wait.
+- **A step whose files changed while verify ran is not run again**: when a file its cache key covers (ADR 0036; the whole repo for a step that is not cached) differs from when verify started, a first run that wrote a fixture or a generated file could make a second run pass for that reason, not by chance. It stays `new`, with a note.
 - `flaky` does not block; a run whose only failures are `pre-existing` or `flaky` has the result `pre-existing` and exit code 0, and the headline names both.
 
 ### The stop hook

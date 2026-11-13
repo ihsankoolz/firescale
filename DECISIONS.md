@@ -114,7 +114,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 **Built** (ADR 0039, `docs/verify.md` "The stop hook"):
 
-1. A `new` failure runs once more before it blocks; a pass the second time is `flaky` and does not block (with per-test results: every new test passed, and what still fails is the base's own failure by the output evidence). Nothing about it is written: no history, no cache entry.
+1. A `new` failure runs once more before it blocks, unless files it reads changed while verify ran (its first run may have written them); a pass the second time is `flaky` and does not block (with per-test results: every new test passed, and what still fails is the base's own failure by the output evidence). Nothing about it is written: no history, no cache entry.
 2. The stop hook runs only the projects the change reaches, measured from the base commit (so an agent's commits on its branch count), through M17's graph, shared-source nodes included; it runs the base only for failures, within the budget. An agent may stop when every failure is `pre-existing` or `flaky`.
 3. `cargo test` per-test labels from its text output: `<crate>::<test path>`.
 4. Latency in `bench/RESULTS.md` (`bench/blame-bench.mjs`).

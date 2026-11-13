@@ -124,6 +124,27 @@ describe('reruns', () => {
     }
   });
 
+  it('keeps a new failure new when its first run wrote files it reads', async () => {
+    // On the head, the first run writes generated.cfg into the repo and
+    // fails; a second run would pass because of that file, not by chance.
+    const writesItsInput = [
+      "const fs = require('fs');",
+      "if (process.cwd().includes('firescale-base-')) process.exit(0);",
+      "if (!fs.existsSync('generated.cfg')) { fs.writeFileSync('generated.cfg', 'x'); process.exit(1); }",
+      'process.exit(0);',
+      '',
+    ].join('\n');
+    const { root, write } = await repoWith(writesItsInput);
+    await write('state.cfg', 'a change\n');
+    const result = await runCli(['verify', '--json'], root);
+    const json = JSON.parse(result.stdout) as Report & { notes?: string[] };
+    expect(step(json, 'test').label).toBe('new');
+    expect(json.notes?.join('\n')).toContain(
+      'test: not run again to check for flakiness, because files it reads changed while verify ran',
+    );
+    expect(result.code).toBe(1);
+  });
+
   it('keeps a failure that fails again new', async () => {
     const { root, write } = await repoWith(STATE_TEST);
     await write('state.cfg', 'fail\n');

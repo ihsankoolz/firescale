@@ -1329,6 +1329,22 @@ fn rerun_new_failures(report: &mut VerifyReport, run: &BaseRun<'_>, say: &dyn Fn
         };
         let project = plan_of(run.plan, step);
         let name = step.name.clone();
+        // A first run that changed the step's own files (a fixture it
+        // wrote, a generated file) would make a second run pass for that
+        // reason: then it stays new.
+        let folder = step.project.clone();
+        let dir = folder_of(run.root, folder.as_deref());
+        if run
+            .cache
+            .changed_during_run(folder.as_deref(), step.kind.as_deref(), &dir)
+        {
+            let note = format!(
+                "{}: not run again to check for flakiness, because files it reads changed while verify ran",
+                place(step)
+            );
+            report.notes.push(note);
+            continue;
+        }
         say(&format!(
             "{}: a new failure; running it once more before it blocks",
             place(step)
