@@ -277,6 +277,43 @@ describe('blame-aware verify', () => {
   });
 });
 
+describe("the base worktree's dependencies", () => {
+  it("links the head's node_modules in, and links nothing when verify.baseInstall is set", async () => {
+    const { root, write } = await blameRepo('ok', 'fail');
+    await write('.gitignore', '.firescale/\nnode_modules/\n');
+    const probe = [
+      "const fs = require('fs');",
+      "if (process.cwd().includes('firescale-base-')) {",
+      "  fs.appendFileSync(process.argv[2], 'base ' + (fs.existsSync('node_modules/marker.txt') ? 'linked' : 'none') + '\\n');",
+      '}',
+      'process.exit(1);',
+      '',
+    ].join('\n');
+    await write('probe.js', probe);
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    const log = path.join(root, '..', `${path.basename(root)}-probe.log`);
+    config.verify.test = `node probe.js ${JSON.stringify(log)}`;
+    await write('firescale.config.json', JSON.stringify(config));
+    await commitAll(root, 'probe');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(path.join(root, 'node_modules'), { recursive: true });
+    await write('node_modules/marker.txt', 'installed\n');
+    await write('lint.txt', 'ok, changed\n');
+    await runCli(['verify'], root);
+    config.verify.baseInstall = 'node -e 0';
+    await write('firescale.config.json', JSON.stringify(config));
+    await runCli(['verify'], root);
+    expect((await readFile(log, 'utf8')).split(/\r?\n/).filter(Boolean)).toEqual([
+      'base linked',
+      'base none',
+    ]);
+    // The head's node_modules is untouched.
+    expect(await readFile(path.join(root, 'node_modules', 'marker.txt'), 'utf8')).toBe(
+      'installed\n',
+    );
+  });
+});
+
 describe('blame-aware verify on the course project', () => {
   it('runs on the base only the projects whose inputs differ', async () => {
     const repo: FixtureRepo = await fixtures.create({ files: courseProjectFiles() });

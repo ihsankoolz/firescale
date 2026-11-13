@@ -571,11 +571,10 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
 
     // What the base worktree gets: part of the key of a kept base result,
     // so a result from a worktree set up otherwise is never reused.
-    let environment = format!(
-        "links={}\0install={}",
-        dependency_folders(run.root).join(","),
-        run.options.config.base_install.as_deref().unwrap_or("-")
-    );
+    let environment = match &run.options.config.base_install {
+        Some(install) => format!("install={install}"),
+        None => format!("links={}", dependency_folders(run.root).join(",")),
+    };
 
     // 1. What each step's base result is, where it is known without a run.
     let mut to_run: Vec<Pending> = Vec::new();
@@ -771,7 +770,14 @@ fn run_in_worktree(
     let deadline = budget.map(|limit| started + limit);
     // The head's installed dependencies, linked in: no network, no install
     // into a shared interpreter (ADR 0037).
-    for folder in dependency_folders(run.root) {
+    // With verify.baseInstall the install provides them, and nothing is
+    // linked: an install must never write through a link into the head.
+    let links = if run.options.config.base_install.is_some() {
+        Vec::new()
+    } else {
+        dependency_folders(run.root)
+    };
+    for folder in links {
         worktree.link(
             &folder_of(run.root, Some(&folder)),
             &folder_of(&worktree.root, Some(&folder)),
@@ -918,7 +924,14 @@ fn run_in_worktree(
                 deadline,
             )?;
             summary.ran += 1;
+            let refused_link = ran
+                .output_tail
+                .iter()
+                .any(|line| line.contains("ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH"));
             let status = match ran.status {
+                // pnpm refuses a linked node_modules for recursive runs: that
+                // says nothing about the code.
+                StepStatus::Failed if refused_link => BaseStatus::SetupNeeded,
                 StepStatus::Passed => BaseStatus::Passed,
                 StepStatus::Failed => BaseStatus::Failed,
                 StepStatus::TimedOut
@@ -952,8 +965,13 @@ fn run_in_worktree(
             BaseOutcome {
                 status,
                 source: BaseSource::Ran,
-                note: (status == BaseStatus::SetupNeeded)
-                    .then(|| format!("the base run of it needed setup ({})", ran.detail)),
+                note: (status == BaseStatus::SetupNeeded).then(|| {
+                    if refused_link {
+                        "pnpm refused the head's node_modules linked into the base worktree; set verify.baseInstall to an install such as `pnpm install --frozen-lockfile --offline`".to_owned()
+                    } else {
+                        format!("the base run of it needed setup ({})", ran.detail)
+                    }
+                }),
             }
         };
         report.steps[pending.index].base = Some(outcome);
