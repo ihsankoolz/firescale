@@ -30,6 +30,15 @@ Measured on 2026-11-13 on the build machine (Linux x64, 4 cores).
 - 59 cases must give at least one finding (74 findings in all); 54 must give none. On these fixtures: 0 missed, 0 false positives, 0 of 54 not-a-finding cases with any finding. Again: fixture counts, not a rate.
 - New in M24: pytest and unittest (deleted tests, `skip`, `skipif`, `xfail`, `unittest.skip`, a body replaced by `pass` or `return`, a skipped parametrize row, removed assertions, `assert True`, `self.assertTrue(True)`), Rust (`#[ignore]`, `cfg_attr(…, ignore)`, an emptied body, removed `assert_eq!`, `assert!(true)`, tests in `mod tests` and in `tests/`), the misses ADR 0042 admitted in every language (`if (false)`, an early `return`, an assertion that cannot fail, each with a not-a-finding case), and lint suppressions (`eslint-disable`, `@ts-ignore`, `# noqa`, `# type: ignore`, `#[allow]`, `#![allow]`, with moved, renamed-to-stricter and prose-only not-a-finding cases).
 
+### A smoke check on real history (not a rate either)
+
+The debug build ran `fscale verify --json --base <parent>` on each of the last 120 non-merge commits of `fastapi/full-stack-fastapi-template` up to `aabb901` (a pytest backend, listed in DECISIONS.md) and the last 100 of this repo (Rust and TypeScript tests), with no-op stand-ins for `uv`, `bun`, `npm`, `cargo` and the like first on the PATH so none of their tooling ran.
+
+- fastapi: 4 commits touched test files; no findings. Two pytest files deleted with the modules they test (`f8dd304`) were excused as "deleted with its subject".
+- this repo: 4 findings in 3 commits, each true: three `#[allow(clippy::too_many_arguments)]` added (`5460f2d`, `60ab2c7`) and one `expect(…).not.toContain(…)` removed in a refactor of a test helper (`470533e`), an honest edit a person should still see.
+
+Two repositories, written by careful people, are not a sample: this says the guard is not noisy on them, nothing more.
+
 ### Binary size and build time
 
 | Release build of `fscale`                      | Before M24 (`7e13ee3`) | After M24                           |
