@@ -485,7 +485,9 @@ Decisions in ADR 0037. The worktree gets its dependencies by linking the head's 
 
 ---
 
-## M20 — Blame-aware verify: per-test labels ☐
+## M20 — Blame-aware verify: per-test labels ☑
+
+Decisions in ADR 0038. Vitest and Jest results come from their default reporters' failure lines, not their JSON reporters, which need flags on the user's command.
 
 **Build**
 
@@ -495,9 +497,9 @@ Decisions in ADR 0037. The worktree gets its dependencies by linking the head's 
 
 **Done when**
 
-- ☐ With two failing tests, one old and one new, only the new one is labelled `new` and named in the summary, for both runners.
-- ☐ A runner without per-test support falls back to step-level labels, with a note, proven by a test.
-- ☐ A renamed test file does not turn old failures into `new` ones silently: the behaviour is defined in the ADR and tested.
+- ☑ With two failing tests, one old and one new, only the new one is labelled `new` and named in the summary, for both runners.
+- ☑ A runner without per-test support falls back to step-level labels, with a note, proven by a test.
+- ☑ A renamed test file does not turn old failures into `new` ones silently: the behaviour is defined in the ADR and tested.
 
 ---
 
