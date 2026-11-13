@@ -32,7 +32,7 @@
       "type": "boolean"
     },
     "result": {
-      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up. stopped: verify was stopped by Ctrl+C or a termination signal before every step finished; the steps that finished are reported. pre-existing: nothing failed that the change introduced; every failure also fails on the base commit (ADR 0037); exit code 0.",
+      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up. stopped: verify was stopped by Ctrl+C or a termination signal before every step finished; the steps that finished are reported. pre-existing: nothing failed that the change introduced; every failure also fails on the base commit the same way, or is flaky (ADR 0037, 0039); exit code 0.",
       "enum": ["ok", "partial", "failed", "setup-needed", "stopped", "pre-existing"]
     },
     "runner": {

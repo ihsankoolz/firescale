@@ -979,9 +979,11 @@ fn verify_report(
     // files changed since the base commit (or, with no base, since the last
     // commit), and what depends on them (ADR 0039).
     let mut hook_args = args.clone();
+    // With no base there is nothing to measure committed work against, so
+    // the hook runs everything, as a full verify does.
     if mode == VerifyMode::Hook {
-        hook_args.affected = true;
         if let BaseChoice::Compare(base) = &base {
+            hook_args.affected = true;
             hook_args.base = Some(base.commit.clone());
         }
     }
@@ -1006,11 +1008,14 @@ fn verify_report(
     let verify_config = config.verify.clone();
     check_project_folders(root, &verify_config)?;
     let selection = select_rules(config.rules, None)?;
-    let check_command = if args.affected {
-        "fscale check --affected"
-    } else {
-        "fscale check"
+    // The command that repeats the check: with --base when the run used
+    // one, so it reports what this run reported.
+    let check_command = match (&args.affected, &args.base) {
+        (true, Some(base)) => format!("fscale check --affected --base {base}"),
+        (true, None) => "fscale check --affected".to_owned(),
+        (false, _) => "fscale check".to_owned(),
     };
+    let check_command = check_command.as_str();
     say(&format!("check: started: {check_command}"));
     let started = Instant::now();
     let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
@@ -1287,7 +1292,24 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             };
             // The agent may stop (ADR 0020), but not on the strength of a
             // clean pass: say which steps verified nothing.
-            if report.result == VerifyResult::Partial {
+            // The agent may stop, but a person reading the log should see
+            // what passed only the second time (ADR 0039).
+            let flaky: Vec<String> = report
+                .steps
+                .iter()
+                .filter(|step| step.label == Some(firescale_core::blame::Label::Flaky))
+                .map(|step| match &step.project {
+                    Some(project) => format!("{} in {project}", step.name),
+                    None => step.name.clone(),
+                })
+                .collect();
+            if report.ok && !flaky.is_empty() {
+                notes.push(format!(
+                    "fscale: flaky, so the agent is not held back: {} failed, then passed when run again. Nothing about it is kept.",
+                    flaky.join(", ")
+                ));
+            }
+            if report.ok && !report.skipped.is_empty() {
                 notes.push(format!(
                     "fscale: verify was only partial, so this is not a clean pass. {} of {} steps ran{}; skipped: {}. Run `fscale verify` for the details, or set verify.failOnSkipped to true to make skipped steps block.",
                     report.steps_run - report.cache.as_ref().map_or(0, |cache| cache.hits),

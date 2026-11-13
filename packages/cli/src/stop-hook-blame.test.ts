@@ -4,7 +4,7 @@ import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
-import { baseCalls, commitAll, EXIT_OK, runCli, stepCalls } from './test-helpers.js';
+import { BIN, baseCalls, commitAll, EXIT_OK, runCli, stepCalls } from './test-helpers.js';
 
 // Blame-aware verify: reruns and the stop hook (M21, ADR 0039).
 
@@ -200,5 +200,105 @@ describe('the stop hook', () => {
     const result = await hook(repo.root, shimEnv(tools.root, log, 'python'));
     expect(result.code).toBe(EXIT_OK);
     expect(await baseCalls(log)).toEqual(['python -m pytest in audit_service']);
+  });
+});
+
+describe('the stop hook does not let a broken change through (review of M21)', () => {
+  it('never runs the check again: a new violation in a committed change blocks', async () => {
+    const { root } = await repoWith(STATE_TEST, {
+      'README.md': '# app\n\n## Install\n\nnpm install\n\n## Run\n\nnpm start\n',
+    });
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.rules = { 'core/readme-setup': 'enforced' };
+    await writeFile(path.join(root, 'firescale.config.json'), JSON.stringify(config));
+    await commitAll(root, 'enforce readme-setup');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    // The agent commits the README's removal and leaves an untracked file.
+    expect((await runGit(root, ['rm', '--quiet', 'README.md'])).code).toBe(0);
+    await commitAll(root, 'remove the readme');
+    await writeFile(path.join(root, 'scratch.cfg'), 'x\n');
+    // With fscale itself on the PATH, as an installed hook has it.
+    const env = {
+      PATH: `${path.dirname(BIN)}${path.delimiter}${process.env['PATH'] ?? process.env['Path'] ?? ''}`,
+    };
+    const result = await hook(root, env);
+    expect(result.code).toBe(EXIT_BLOCK);
+    expect(result.stderr).toContain('FAILED at check (new)');
+    expect(result.stderr).toMatch(/fscale check --affected --base [0-9a-f]{40}/);
+  });
+
+  it('runs everything when there is no base, so committed work on main is judged', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: { lint: false, typecheck: false, test: 'node test.js' },
+        }),
+        '.gitignore': '.firescale/\n',
+        'test.js': 'process.exit(0);\n',
+      },
+      track: 'no-git',
+    });
+    expect((await runGit(repo.root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+    await commitAll(repo.root, 'base');
+    await writeFile(path.join(repo.root, 'test.js'), 'process.exit(1);\n');
+    await commitAll(repo.root, 'a broken commit on main, no upstream');
+    await writeFile(path.join(repo.root, 'README.md'), '# notes\n');
+    const result = await hook(repo.root);
+    expect(result.code).toBe(EXIT_BLOCK);
+    expect(result.stderr).toContain('verify: FAILED at test');
+  });
+
+  it('keeps a new failing test new when the second run does not show it passing', async () => {
+    const outside = await fixtures.create({ files: {}, track: 'no-git' });
+    const marker = path.join(outside.root, 'ran-once');
+    // Vitest-format output: on the base only "adds" fails. On the head
+    // "divides" fails too; the second run is cut short and reports neither
+    // a pass for it nor more passes.
+    const cutShort = [
+      "const fs = require('fs');",
+      "const base = process.cwd().includes('firescale-base-');",
+      `const second = !base && fs.existsSync(${JSON.stringify(marker)});`,
+      `if (!base && !second) fs.writeFileSync(${JSON.stringify(marker)}, 'x');`,
+      "const failing = base || second ? ['adds'] : ['adds', 'divides'];",
+      'const passed = second ? 0 : 3 - failing.length;',
+      "console.log('⎯⎯⎯ Failed Tests ' + failing.length + ' ⎯⎯⎯');",
+      "for (const name of failing) console.log(' FAIL  src/math.test.ts > math > ' + name);",
+      "console.log('      Tests  ' + failing.length + ' failed | ' + passed + ' passed');",
+      'process.exit(1);',
+      '',
+    ].join('\n');
+    const { root, write } = await repoWith(cutShort);
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.test = 'node vitest.js';
+    await write('firescale.config.json', JSON.stringify(config));
+    await write('vitest.js', cutShort);
+    await commitAll(root, 'vitest stand-in');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    await write('state.cfg', 'a change\n');
+    const json = JSON.parse((await runCli(['verify', '--json'], root)).stdout) as Report;
+    expect(step(json, 'test').label).toBe('new');
+    expect(json.ok).toBe(false);
+  });
+
+  it('never calls a run that stopped at its first failure pre-existing', async () => {
+    const failing = [
+      "console.log('FAILED tests/test_a.py::test_old - assert False');",
+      'process.exit(1);',
+      '',
+    ].join('\n');
+    const { root, write } = await repoWith(failing);
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.test = 'node pytest.js -x';
+    await write('firescale.config.json', JSON.stringify(config));
+    await write('pytest.js', failing);
+    await commitAll(root, 'stops at the first failure');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    await write('state.cfg', 'a change\n');
+    const result = await runCli(['verify', '--json'], root);
+    const json = JSON.parse(result.stdout) as Report & { notes?: string[] };
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(json.notes?.join('\n')).toContain('it stopped at its first failure');
+    expect(result.code).toBe(1);
   });
 });

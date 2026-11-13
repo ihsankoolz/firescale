@@ -958,6 +958,9 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         let failed = matches!(step.status, StepStatus::Failed | StepStatus::TimedOut);
         let signature = step.signature.clone();
         let timed_out = step.status == StepStatus::TimedOut;
+        let fail_fast = signature
+            .iter()
+            .any(|line| line == crate::verify::FAIL_FAST);
         let place_text = place(step);
         let prefix = step
             .project
@@ -996,6 +999,13 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
                 Some(format!(
                     "it timed out on the head but failed on the base commit {short}, which is not the same failure"
                 )),
+            ),
+            (true, BaseStatus::Failed) if fail_fast => (
+                None,
+                Some(
+                    "it stopped at its first failure, so a new failure after it cannot be ruled out (run it with cargo test --no-fail-fast, or without -x, --maxfail or --bail, to compare it)"
+                        .to_owned(),
+                ),
             ),
             (true, BaseStatus::Failed) => match &per_test {
                 // The base's tests did not run at all: its environment
@@ -1084,7 +1094,9 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             summary.over_budget = true;
         }
     }
-    rerun_new_failures(report, run, &say);
+    // The base run's own time, before any rerun of the head.
+    summary.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    rerun_new_failures(report, run, deadline, &say);
     let notes: Vec<String> = report
         .steps
         .iter()
@@ -1097,7 +1109,6 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         })
         .collect();
     report.notes.extend(notes);
-    summary.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     report.base = Some(summary);
     let stopped = report.result == crate::verify::VerifyResult::Stopped
         || run.options.stop.load(Ordering::SeqCst);
@@ -1315,12 +1326,29 @@ fn run_in_worktree(
 /// output evidence of ADR 0037); its new tests are labelled `flaky`.
 /// Nothing about a flaky result is written anywhere: no history is kept,
 /// and the second run's pass is not stored in the step cache.
-fn rerun_new_failures(report: &mut VerifyReport, run: &BaseRun<'_>, say: &dyn Fn(&str)) {
+fn rerun_new_failures(
+    report: &mut VerifyReport,
+    run: &BaseRun<'_>,
+    deadline: Option<Instant>,
+    say: &dyn Fn(&str),
+) {
     for index in 0..report.steps.len() {
-        if report.steps[index].label != Some(Label::New)
+        // The check is deterministic: its result on the head is final.
+        if report.steps[index].name == "check"
+            || report.steps[index].label != Some(Label::New)
             || report.steps[index].status != StepStatus::Failed
             || run.options.stop.load(Ordering::SeqCst)
         {
+            continue;
+        }
+        // The rerun shares the base run's budget; with none left, a new
+        // failure blocks without one.
+        if past(deadline) {
+            let note = format!(
+                "{}: not run again to check for flakiness, because the time budget (verify.baseBudget) ran out",
+                place(&report.steps[index])
+            );
+            report.notes.push(note);
             continue;
         }
         let step = &report.steps[index];
@@ -1349,7 +1377,8 @@ fn rerun_new_failures(report: &mut VerifyReport, run: &BaseRun<'_>, say: &dyn Fn
             "{}: a new failure; running it once more before it blocks",
             place(step)
         ));
-        let Ok(again) = crate::verify::run_again(run.root, project, &name, &command, run.options)
+        let Ok(again) =
+            crate::verify::run_again(run.root, project, &name, &command, run.options, deadline)
         else {
             continue;
         };
@@ -1364,20 +1393,45 @@ fn rerun_new_failures(report: &mut VerifyReport, run: &BaseRun<'_>, say: &dyn Fn
             say(&format!("{}: passed the second time: flaky", place(step)));
             continue;
         }
-        let (Some(results), Some(base)) = (&again.test_results, step.base.as_ref()) else {
+        // With per-test results: only on positive evidence that each new
+        // test passed. The rerun must have finished as a plain failure with
+        // the runner's counts, passed as many more tests as there are new
+        // ones, and failed only tests that already failed on the base.
+        let (Some(results), Some(head), Some(base)) =
+            (&again.test_results, &step.test_results, step.base.as_ref())
+        else {
             continue;
         };
+        if again.status != StepStatus::Failed
+            || again
+                .signature
+                .iter()
+                .any(|line| line == crate::verify::FAIL_FAST)
+        {
+            continue;
+        }
         let new_tests: Vec<String> = step
             .failed_tests
             .iter()
             .filter(|test| test.label == Some(Label::New))
             .map(|test| test.id.clone())
             .collect();
-        if new_tests.is_empty() || new_tests.iter().any(|id| results.failed.contains(id)) {
+        let old_tests: BTreeSet<&str> = step
+            .failed_tests
+            .iter()
+            .filter(|test| test.label == Some(Label::PreExisting))
+            .map(|test| test.id.as_str())
+            .collect();
+        let only_old = results
+            .failed
+            .iter()
+            .all(|id| old_tests.contains(id.as_str()));
+        let more_passed = results.passed >= head.passed + new_tests.len() as u64;
+        if new_tests.is_empty() || !only_old || !more_passed {
             continue;
         }
-        // Every new test passed the second time; what still fails must be
-        // the base's own failure, by the output evidence, to let it pass.
+        // What still fails must be the base's own failure, by the output
+        // evidence, to let it pass.
         if base.status == BaseStatus::Failed && signature_within(&again.signature, &base.signature)
         {
             step.label = Some(Label::Flaky);

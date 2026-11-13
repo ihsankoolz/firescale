@@ -24,6 +24,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 - **(M21) The stop hook judges only failures on the base**: a passing step never runs there in the hook, so `fixed` labels appear only in a full `fscale verify` (ADR 0039).
 - **(M21) A timed-out step is not run again** before it blocks: a second timeout would double the wait.
+- **(M21) A run that stops at its first failure is never `pre-existing`**: `cargo test` without `--no-fail-fast`, pytest `-x`, Jest `--bail`. This repo's own `pnpm test` runs `cargo test --workspace`, so a failing Rust test there always blocks. Say if verify should add `--no-fail-fast` itself (it does not edit commands today).
 
 - **(M20) Vitest and Jest results come from their default reporters' text**, not their JSON reporters (ADR 0038): the JSON reporters need flags on your command, which verify does not edit. A custom reporter gives no per-test results, and the step is compared as a whole.
 - **(M20) Per-test results can make a failure `new`, never `pre-existing` on their own**: the output evidence of M19 still has to hold. So an old failure in a renamed test file, whose output names the new path, blocks with a note instead of passing.
@@ -118,6 +119,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 2. The stop hook runs only the projects the change reaches, measured from the base commit (so an agent's commits on its branch count), through M17's graph, shared-source nodes included; it runs the base only for failures, within the budget. An agent may stop when every failure is `pre-existing` or `flaky`.
 3. `cargo test` per-test labels from its text output: `<crate>::<test path>`.
 4. Latency in `bench/RESULTS.md` (`bench/blame-bench.mjs`).
+
+**Independent review before the pull request** reproduced three ways an agent could stop with broken work, all fixed with tests: a new `check` violation was run again without `--base` and read as `flaky` (the check is never run again now, and its rerun command names the base); with no base the hook ran only uncommitted changes, so committed work on a local `main` was never judged (it runs everything then); a cut-short second run counted as evidence that new tests passed (now: a plain failure with more passes and only old failures). Also fixed: a first run that writes its own inputs (no rerun then), cargo's crate lines on stderr and doc tests' line numbers, fail-fast runs (`cargo test` without `--no-fail-fast`, `-x`, `--bail`: never `pre-existing`), the rerun's time budget, and the hook's note on flaky steps.
 
 **Proof** (`stop-hook-blame.test.ts`, `pertest::tests`): a test that fails on its first run only is `flaky` and does not block; nothing about it is written under `.firescale/`, and its second pass is not cached; a failure that fails again stays `new`; the stop hook lets an agent stop on a pre-existing failure and blocks on a new one; on the course project a change in one service runs that service's steps only, and only its failing step runs on the base; the `cargo test` reader.
 
