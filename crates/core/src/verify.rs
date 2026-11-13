@@ -256,13 +256,20 @@ pub fn limit_to_affected(
 ) {
     let anything = !affected.is_empty();
     let mut units = Vec::new();
-    if !plan.steps.is_empty() {
+    if plan
+        .steps
+        .iter()
+        .any(|(_, planned)| !matches!(planned, Planned::NotNeeded(_)))
+    {
         let covered: Vec<&Project> = facts
             .projects
             .iter()
+            // Workspace members of every kind: a Cargo workspace beside a
+            // package.json root has no plan of its own, so the root's
+            // commands are what run it.
             .filter(|project| {
-                project.kind == plan.covered
-                    && (project.root == "." || project.source == source::WORKSPACE)
+                project.source == source::WORKSPACE
+                    || (project.root == "." && project.kind == plan.covered)
             })
             .collect();
         let hit = covered.iter().find_map(|project| {
@@ -304,6 +311,14 @@ pub fn limit_to_affected(
         });
     }
     for project in &plan.projects {
+        // A project whose steps are all turned off is not counted.
+        if project
+            .steps
+            .iter()
+            .all(|(_, planned)| matches!(planned, Planned::NotNeeded(_)))
+        {
+            continue;
+        }
         let (runs, reason) = match &project.kind {
             Some(kind) => {
                 let id = project_id(kind, &project.root);
@@ -3889,6 +3904,33 @@ mod tests {
         #[test]
         fn a_change_to_the_root_compose_file_runs_everything() {
             assert_eq!(running(&["docker-compose.yml"]).len(), 6);
+        }
+
+        #[test]
+        fn a_cargo_member_under_a_package_json_root_runs_the_root_s_steps() {
+            let fixture = Fixture::new(
+                &[
+                    (
+                        "package.json",
+                        r#"{"name":"mono","scripts":{"test":"cargo test"}}"#,
+                    ),
+                    ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
+                    ("packages/ui/package.json", r#"{"name":"ui"}"#),
+                    ("Cargo.toml", "[workspace]\nmembers = [\"crates/a\"]\n"),
+                    ("crates/a/Cargo.toml", "[package]\nname = \"a\"\n"),
+                    ("crates/a/src/lib.rs", ""),
+                ],
+                Track::NoGit,
+            )
+            .unwrap();
+            let facts = detect_facts_with(fixture.root(), None).unwrap();
+            let graph = build_graph(fixture.root(), &facts);
+            let mut plan =
+                plan_verify(fixture.root(), &facts, &VerifyConfig::default(), true, None);
+            let changed = Changed::Files(["crates/a/src/lib.rs".to_owned()].into_iter().collect());
+            limit_to_affected(&mut plan, &facts, &graph, &affected(&graph, &changed), None);
+            let root = &plan.affected.as_ref().unwrap().units[0];
+            assert!(root.project.is_none() && root.affected, "{root:?}");
         }
 
         fn two_projects(first_runs: bool) -> VerifyPlan {

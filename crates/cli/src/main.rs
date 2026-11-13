@@ -11,7 +11,9 @@ use std::time::Instant;
 
 use firescale_core::affected::{changed_files, narrow_report, Changed};
 use firescale_core::check::run_check;
-use firescale_core::config::{find_root, load_config, ConfiguredRule, RuleSource};
+use firescale_core::config::{
+    find_root, load_config, load_verify_config, ConfiguredRule, RuleSource,
+};
 use firescale_core::diff::unified_diff;
 use firescale_core::doctor::{format_doctor_human, format_doctor_json, run_doctor, ThisMachine};
 use firescale_core::explain::{explain_rule, find_rule};
@@ -898,12 +900,10 @@ fn verify_plan(
 /// `fscale verify --dry-run`: prints the plan and runs nothing, not even the
 /// check. No scripts, no installs.
 fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
-    let packs = firescale_rules::builtin_packs();
-    let mut host = NodeHost::new(root);
-    let config = load_config(root, &packs, &mut host)?;
-    check_project_folders(root, &config.verify)?;
+    let verify_config = load_verify_config(root)?;
+    check_project_folders(root, &verify_config)?;
     let facts = detect_facts(root)?;
-    let plan = verify_plan(root, args, &facts, &config.verify, None)?;
+    let plan = verify_plan(root, args, &facts, &verify_config, None)?;
     let check_command = if args.affected {
         "fscale check --affected"
     } else {

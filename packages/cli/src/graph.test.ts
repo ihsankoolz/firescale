@@ -251,4 +251,17 @@ describe('fscale verify --affected', () => {
     const json = await runCli(['verify', '--dry-run', '--json'], repo.root, env);
     expect(json.code).toBe(EXIT_USAGE);
   });
+
+  it('never runs code from the repo in a dry run, so a .ts config is refused', async () => {
+    const files = courseProjectFiles();
+    files['firescale.config.ts'] =
+      "import { writeFileSync } from 'node:fs';\nwriteFileSync('ran.txt', 'x');\nexport default {};\n";
+    const repo = await fixtures.create({ files, track: 'no-git' });
+    const result = await runCli(['verify', '--affected', '--dry-run'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('verify --dry-run never runs code from the repo');
+    expect(await readFile(path.join(repo.root, 'ran.txt'), 'utf8').catch(() => 'absent')).toBe(
+      'absent',
+    );
+  });
 });

@@ -45,9 +45,15 @@ Only relative specifiers (`./x`, `../x`) count; a bare package name is a depende
 
 ## What a change affects
 
-`fscale verify --affected` marks as affected the projects and shared nodes that hold a changed file, then every node with an edge to an affected one, until nothing changes. A file in a shared folder affects that folder; a file in the repo root's project (when there is one) affects that project.
+`fscale verify --affected` marks as affected the projects and shared nodes that hold a changed file, then every node with an edge to an affected one, until nothing changes. A file in a shared folder affects that folder; a file in a folder of the repo root's project (when there is one) affects that project.
 
-When unsure, more is affected, never less: a changed file that no project and no shared node holds, a root lockfile, a CI file, a Compose file anywhere, or the firescale config affects **every** project.
+When unsure, more is affected, never less. These affect **every** project:
+
+- a root lockfile, a CI file, a Compose file anywhere, or the firescale config;
+- a file that no project and no narrow shared node holds. A shared node is **wide** when a project's folder is inside it (a Docker build context of `.`, say): it says that one project uses everything there, not that nobody else reads a file in it, so it does not count as an owner;
+- with a repo root project, a file directly in the repo root folder that no shared node holds: settings that projects below read (`ruff.toml`, `tsconfig.base.json`, `.prettierrc`) live there.
+
+An imported file gives the narrowest shared folder that holds no project: `../backend/shared/x.ts` from `frontend` gives `backend/shared`, not `backend`.
 
 ## Output
 
@@ -74,6 +80,7 @@ Edges (10), "a -> b" means a change in b affects a:
 - Files are found with the same skips as `fscale facts` (`.gitignore`, dot folders, dependency, build and fixture folders); files over 1 MiB and `*.min.js` are not read.
 - TypeScript path aliases (`paths` in `tsconfig.json`) and Python import paths set at run time (`sys.path`, `PYTHONPATH`) are not read. An alias to a sibling folder gives no edge.
 - uv workspace dependencies (`{ workspace = true }`) and Go `replace` directives are not read; Go projects get edges only from Docker and Compose.
+- Paths are compared as written. On a file system that ignores case (Windows, macOS), a `COPY Backend/Shared` of `backend/shared` is not matched to changes there.
 - Compose `volumes`, `env_file` and `extends` are not read. A Compose file is read line by line, as in `fscale doctor`.
 - A Dockerfile that no Compose file builds and whose copied paths do not exist anywhere gets its own folder as its build context.
 - `fscale check --affected` does not use this graph (see [affected.md](affected.md)).

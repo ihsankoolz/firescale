@@ -45,6 +45,19 @@ On the course project a full `fscale verify` runs five Python services and a fro
 
 `fscale graph` prints projects, shared nodes and edges; `--explain` adds every piece of evidence; `--json` follows `graph-output.schema.json` (schema version 1). `fscale facts` shows the same edges, under `Graph` and as `graph` in JSON. The facts schema stays at version 2: the field is new and optional, the policy of ADR 0022.
 
+### After the review
+
+An independent review before the pull request found five ways a change could run too little, and two smaller gaps. All are fixed, each with a test (`graph::tests` "regressions from the M17 review", `verify::tests::affected_runs`, `graph.test.ts`):
+
+- The root's own steps cover **workspace members of every kind**: a Cargo workspace beside a `package.json` root (this repo's layout) has no plan of its own, so a change in `crates/` must run the root's steps.
+- The repo root's project now gets edges from its own Python imports of other projects.
+- A file that only the root's project would hold waits until no new shared folder appears, so a shared folder's own imports stay the folder's.
+- **Wide shared nodes** (a node that holds a project's folder, such as a Docker build context of `.`) no longer count as the owner of the files in them. An imported file gives the narrowest folder that holds no project.
+- A shared folder with only subpackages (`shared/db/__init__.py`) counts as Python.
+- `verify --dry-run` read the config through Node, which runs a `firescale.config.ts`. It now reads only the JSON `verify` settings and refuses a `.ts` config.
+- With a root project, a file directly in the repo root folder affects every project (it may be a setting projects below read). A file in a subfolder of the root's project affects that project.
+- A Python file in a Node project's folder is that project's code; a dynamic import also reaches shared `.py` files; a project whose steps are all off is not counted in "N of M projects".
+
 ## Consequences
 
 - On the course project a change in one service runs one of six projects; a change in `backend/shared` runs the three services that import it.

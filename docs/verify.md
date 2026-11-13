@@ -271,7 +271,7 @@ Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
 
 ### Dry run
 
-`fscale verify --dry-run` prints the plan and runs nothing: not the check, not a script, not an install. With `--affected` it says which projects would run and why. It is the safe way to see what verify would do in a repo you do not trust. It has no `--json` form.
+`fscale verify --dry-run` prints the plan and runs nothing: not the check, not a script, not an install, not Node. It reads only the `verify` settings of `firescale.config.json`; a `firescale.config.ts` is code, so a dry run refuses it (exit 2). With `--affected` it says which projects would run and why. It has no `--json` form.
 
 On Windows the command line is handed to `cmd` exactly as written, so `cmd` quoting works (`node -e "..."`, `"C:\Program Files\tool\tool.exe" arg`).
 

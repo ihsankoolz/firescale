@@ -455,13 +455,35 @@ impl<'a> Builder<'a> {
         // the folder below the deepest folder the two sides share.
         let is_import = matches!(source, Source::PythonImport | Source::JsImport);
         let path = if is_import && !is_dir(self.root, target) {
-            reach(&importer.root, target)
+            self.narrow(reach(&importer.root, target), target)
         } else {
             target.to_owned()
         };
         let is_folder = is_dir(self.root, &path);
         self.shared.entry(path.clone()).or_insert(is_folder);
         vec![shared_id(&path)]
+    }
+
+    /// `path`, an ancestor of `target`, moved down toward `target` until it
+    /// holds no project: `backend/shared`, not `backend`, for a frontend
+    /// importing `../backend/shared/x.ts`, so the shared node does not
+    /// swallow the files around the projects in `backend/`.
+    fn narrow(&self, path: String, target: &str) -> String {
+        let mut path = path;
+        let wanted = parts(target);
+        while path != target
+            && self
+                .projects
+                .iter()
+                .any(|project| project.root != "." && inside(&project.root, &path))
+        {
+            let depth = parts(&path).len();
+            if depth >= wanted.len() {
+                break;
+            }
+            path = wanted[..=depth].join("/");
+        }
+        path
     }
 
     fn add(
@@ -832,12 +854,15 @@ impl<'a> Builder<'a> {
     /// The node whose code a source file is: the deepest project holding it
     /// when that project is of `kind`, else the deepest shared folder holding
     /// it, else the repo root's project of `kind`.
-    fn importer_for(&self, file: &str, kind: &str) -> Option<Importer> {
+    fn importer_for(&self, file: &str, kind: &str, root_fallback: bool) -> Option<Importer> {
         let owners = self.owners(file);
         if !owners.is_empty() {
+            // A Python script in a Node project's folder is still that
+            // project's code.
             return owners
                 .iter()
                 .find(|project| project.kind == kind)
+                .or_else(|| owners.first())
                 .map(|project| self.importer_of(project));
         }
         let folder = self
@@ -860,9 +885,14 @@ impl<'a> Builder<'a> {
                 is_root_project: false,
             });
         }
-        self.root_projects()
-            .into_iter()
+        if !root_fallback {
+            return None;
+        }
+        let roots = self.root_projects();
+        roots
+            .iter()
             .find(|project| project.kind == kind)
+            .or_else(|| roots.first())
             .map(|project| self.importer_of(project))
     }
 
@@ -935,6 +965,11 @@ impl<'a> Builder<'a> {
         let parsed = parse_all(self.root, sources);
         let mut done = vec![false; parsed.len()];
         let mut dynamic: BTreeMap<String, Vec<(String, usize, String)>> = BTreeMap::new();
+        // Files that only the repo root's project would hold wait until no
+        // more shared folders appear: such a file may turn out to be part of
+        // a shared folder another file imports, and then its imports are the
+        // folder's. The last round lets the root's project take the rest.
+        let mut root_fallback = false;
         loop {
             let shared_before = self.shared.len();
             for (index, (file, result)) in parsed.iter().enumerate() {
@@ -945,7 +980,7 @@ impl<'a> Builder<'a> {
                     Parsed::Python(_) => "python",
                     Parsed::Js(_) => "node",
                 };
-                let Some(importer) = self.importer_for(file, kind) else {
+                let Some(importer) = self.importer_for(file, kind, root_fallback) else {
                     continue;
                 };
                 done[index] = true;
@@ -957,7 +992,10 @@ impl<'a> Builder<'a> {
                 }
             }
             if self.shared.len() == shared_before {
-                break;
+                if root_fallback {
+                    break;
+                }
+                root_fallback = true;
             }
         }
         self.dynamic_imports(&dynamic, sources);
@@ -974,10 +1012,11 @@ impl<'a> Builder<'a> {
             .shared
             .iter()
             .filter(|(path, is_folder)| {
-                **is_folder
-                    && sources
-                        .iter()
-                        .any(|source| source.python && inside(&source.path, path))
+                (!**is_folder && path.ends_with(".py"))
+                    || **is_folder
+                        && sources
+                            .iter()
+                            .any(|source| source.python && inside(&source.path, path))
             })
             .map(|(path, _)| shared_id(path))
             .collect();
@@ -1266,14 +1305,14 @@ fn python_targets(
         folder = parent(&folder).to_owned();
     }
     own.push(join(&importer.root, "src"));
-    if own
+    if let Some(start) = own
         .iter()
-        .any(|folder| python_module_at(root, folder, first).is_some())
+        .find_map(|folder| python_module_at(root, folder, first))
     {
-        return Vec::new();
-    }
-    if importer.is_root_project {
-        return Vec::new();
+        // Found from the importer's own folders: its own code, unless the
+        // path leads into another project (the repo root's project importing
+        // `services.auth.client`). The caller tells the two apart.
+        return vec![deepest(root, start, &rest[1..])];
     }
     // A folder above the importer's own: `backend/` holding `shared/` for
     // services that run with `backend/` on the import path.
@@ -1302,16 +1341,26 @@ fn python_targets(
         .collect()
 }
 
-/// True when a folder has a `.py` file directly in it.
+/// True when a folder has a `.py` file in it or in a subfolder, three levels
+/// down: `shared/` holding only the package `shared/db/` is Python too.
 fn folder_has_python(root: &Path, dir: &str) -> bool {
-    fs::read_dir(abs(root, dir)).is_ok_and(|entries| {
+    fn search(path: &Path, depth: usize) -> bool {
+        let Ok(entries) = fs::read_dir(path) else {
+            return false;
+        };
         entries.filter_map(Result::ok).any(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.ends_with(".py"))
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".py") {
+                return true;
+            }
+            depth > 0
+                && !name.starts_with('.')
+                && entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && search(&entry.path(), depth - 1)
         })
-    })
+    }
+    search(&abs(root, dir), 3)
 }
 
 // ------------------------------------------------------------- the walk
@@ -1608,26 +1657,44 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
                 .collect(),
             None => Vec::new(),
         };
-        holders.extend(
-            graph
-                .nodes
+        // A shared node that holds a project's folder (a Docker build
+        // context of `.`, say) is "wide": it says that one project uses
+        // everything there, not that nobody else does. Only a narrow shared
+        // node tells who reads a file that no project owns.
+        let mut narrow = false;
+        for node in graph
+            .nodes
+            .iter()
+            .filter(|node| node.node_type == NodeType::Shared && inside(file, &node.path))
+        {
+            narrow |= !projects
                 .iter()
-                .filter(|node| node.node_type == NodeType::Shared && inside(file, &node.path))
-                .map(|node| node.id.clone()),
-        );
+                .any(|project| project.path != "." && inside(&project.path, &node.path));
+            holders.push(node.id.clone());
+        }
+        let roots: Vec<String> = projects
+            .iter()
+            .filter(|node| node.path == ".")
+            .map(|node| node.id.clone())
+            .collect();
+        if deepest.is_none() && !narrow {
+            if roots.is_empty() {
+                result.everything = Some(format!("{file} belongs to no project"));
+                return result;
+            }
+            if !file.contains('/') {
+                // Settings that projects below may read (ruff.toml,
+                // tsconfig.base.json, .prettierrc) live at the repo root.
+                result.everything = Some(format!(
+                    "{file} is at the repo root, where settings every project may read are kept"
+                ));
+                return result;
+            }
+        }
         if deepest.is_none() {
             // The repo root's project holds every file no other project
             // does, shared ones included.
-            holders.extend(
-                projects
-                    .iter()
-                    .filter(|node| node.path == ".")
-                    .map(|node| node.id.clone()),
-            );
-        }
-        if holders.is_empty() {
-            result.everything = Some(format!("{file} belongs to no project"));
-            return result;
+            holders.extend(roots);
         }
         for holder in holders {
             direct.entry(holder).or_default().push(file);
@@ -2326,8 +2393,169 @@ mod tests {
             affected_projects(&graph, &["package.json"]),
             [".", "backend"]
         );
-        // Another root file affects the root's project only.
-        assert_eq!(affected_projects(&graph, &["README.md"]), ["."]);
+        // Another file at the root may be a setting every project reads:
+        // everything. One in a folder of the root's project is the root's.
+        assert!(affected(&graph, &changed(&["README.md"]))
+            .everything
+            .is_some());
+        assert_eq!(affected_projects(&graph, &["scripts/x.js"]), ["."]);
+    }
+
+    // ------------------------------- regressions from the M17 review
+
+    #[test]
+    fn the_root_project_s_imports_of_another_project_are_edges() {
+        let fixture = fixture(&[
+            ("pyproject.toml", "[project]\nname = \"app\"\n"),
+            ("app/main.py", "from services.auth.authlib import client\n"),
+            (
+                "services/auth/pyproject.toml",
+                "[project]\nname = \"auth\"\n",
+            ),
+            ("services/auth/authlib/__init__.py", ""),
+            ("services/auth/authlib/client.py", ""),
+        ]);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, ".", "services/auth")),
+            [Source::PythonImport]
+        );
+        assert_eq!(
+            affected_projects(&graph, &["services/auth/authlib/client.py"]),
+            [".", "services/auth"]
+        );
+    }
+
+    #[test]
+    fn a_shared_folder_keeps_its_own_imports_when_there_is_a_root_project() {
+        for with_root in [false, true] {
+            let mut files = vec![
+                ("libs/common/db.py", "from billing import client\n"),
+                ("services/auth/requirements.txt", "x\n"),
+                ("services/auth/main.py", "import libs.common.db\n"),
+                ("services/billing/requirements.txt", "x\n"),
+                ("services/billing/main.py", ""),
+                ("services/billing/billing/__init__.py", ""),
+                ("services/billing/billing/client.py", ""),
+            ];
+            if with_root {
+                files.push(("pyproject.toml", "[project]\nname = \"root\"\n"));
+            }
+            let fixture = fixture(&files);
+            let graph = graph_of(&fixture);
+            assert!(
+                edge(&graph, "libs", "services/billing").is_some(),
+                "root: {with_root}"
+            );
+            let hit = affected_projects(&graph, &["services/billing/billing/client.py"]);
+            assert!(
+                hit.contains(&"services/auth".to_owned()),
+                "root: {with_root}: {hit:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wide_shared_node_does_not_hide_files_no_project_owns() {
+        let mut files = py_service(
+            "backend/auth",
+            &[("Dockerfile", "FROM python:3.13\nCOPY . .\n")],
+        );
+        files.extend(py_service("backend/ledger", &[]));
+        files.push((
+            "web/package.json".to_owned(),
+            r#"{"name":"web"}"#.to_owned(),
+        ));
+        files.push(("ruff.toml".to_owned(), "line-length = 100\n".to_owned()));
+        files.push(("backend/conftest.py".to_owned(), String::new()));
+        files.push((
+            "compose.yaml".to_owned(),
+            "services:\n  auth:\n    build:\n      context: .\n      dockerfile: backend/auth/Dockerfile\n".to_owned(),
+        ));
+        let fixture = owned(&files);
+        let graph = graph_of(&fixture);
+        assert!(graph.node("shared:.").is_some());
+        for file in ["ruff.toml", "backend/conftest.py"] {
+            assert!(
+                affected(&graph, &changed(&[file])).everything.is_some(),
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_import_into_a_folder_of_projects_makes_a_narrow_shared_node() {
+        let mut files = py_service("backend/auth", &[]);
+        files.push((
+            "backend/shared/x.ts".to_owned(),
+            "export const x = 1;\n".to_owned(),
+        ));
+        files.push(("backend/notes.txt".to_owned(), "x\n".to_owned()));
+        files.push((
+            "frontend/package.json".to_owned(),
+            r#"{"name":"frontend"}"#.to_owned(),
+        ));
+        files.push((
+            "frontend/src/a.ts".to_owned(),
+            "import { x } from '../../backend/shared/x';\n".to_owned(),
+        ));
+        let fixture = owned(&files);
+        let graph = graph_of(&fixture);
+        assert!(edge(&graph, "frontend", "backend/shared").is_some());
+        assert!(graph.node("shared:backend").is_none());
+        // A file beside the projects in backend/ still belongs to nobody.
+        assert!(affected(&graph, &changed(&["backend/notes.txt"]))
+            .everything
+            .is_some());
+    }
+
+    #[test]
+    fn a_shared_namespace_folder_with_only_subpackages_is_found() {
+        let mut files = py_service("backend/auth", &[("main.py", "from shared import db\n")]);
+        files.push((
+            "backend/shared/db/__init__.py".to_owned(),
+            "URL = 1\n".to_owned(),
+        ));
+        let fixture = owned(&files);
+        let graph = graph_of(&fixture);
+        assert!(edge(&graph, "backend/auth", "backend/shared").is_some());
+        assert_eq!(
+            affected_projects(&graph, &["backend/shared/db/__init__.py"]),
+            ["backend/auth"]
+        );
+    }
+
+    #[test]
+    fn a_python_file_in_a_node_project_is_read_as_that_project_s_code() {
+        let fixture = fixture(&[
+            ("web/package.json", r#"{"name":"web"}"#),
+            ("web/scripts/gen.py", "from tools.codegen import run\n"),
+            ("tools/codegen.py", "def run(): pass\n"),
+        ]);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, "web", "tools")),
+            [Source::PythonImport]
+        );
+    }
+
+    #[test]
+    fn a_dynamic_import_also_depends_on_shared_python_files() {
+        let mut files = py_service(
+            "backend/plugins",
+            &[(
+                "main.py",
+                "import common\nimport importlib\nimportlib.import_module(n)\n",
+            )],
+        );
+        files.extend(py_service("backend/api", &[("main.py", "import common\n")]));
+        files.push(("backend/common.py".to_owned(), "X = 1\n".to_owned()));
+        let fixture = owned(&files);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, "backend/plugins", "backend/common.py")),
+            [Source::PythonImport, Source::DynamicImport]
+        );
     }
 
     // --------------------------------------------------------- output
