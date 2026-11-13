@@ -1562,6 +1562,57 @@ pub fn cannot_affect_builds(file: &str) -> bool {
         && name != "cmakelists.txt"
 }
 
+/// Images. Not `svg`: it is text that bundlers turn into code and tests
+/// render.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "bmp", "webp", "avif", "ico", "tif", "tiff", "heic", "heif", "psd",
+];
+
+/// PDFs, word-processor and slide documents. Not spreadsheets or `csv`
+/// (data that code reads), and not `key` (also a TLS key).
+const DOCUMENT_EXTENSIONS: &[&str] = &["pdf", "doc", "docx", "odt", "rtf", "ppt", "pptx", "odp"];
+
+/// Archives that bundle many files. Not a bare `gz`, `bz2` or `xz`: those
+/// compress one file, which is often data a program loads (`seed.sql.gz`).
+const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "tar", "tgz", "7z", "rar"];
+
+/// A tar file, compressed: an archive although its last extension is not.
+const COMPRESSED_TAR_SUFFIXES: &[&str] = &[".tar.gz", ".tar.bz2", ".tar.xz"];
+
+/// Video and audio.
+const MEDIA_EXTENSIONS: &[&str] = &[
+    "mp4", "mov", "avi", "mkv", "webm", "mp3", "wav", "m4a", "flac", "ogg",
+];
+
+/// True for a file that is plainly not code or config, by its extension in
+/// any letter case: an image, a PDF or another document, an archive, a
+/// video or an audio file. When no project holds it, not even the repo
+/// root's, and no narrow shared node does, a change to it affects no
+/// project (ADR 0034). Unlike [`cannot_affect_builds`], the repo root's
+/// project still holds such a file: its tests may read a fixture image.
+#[must_use]
+pub fn is_document_or_media(file: &str) -> bool {
+    let name = file_name(file).to_ascii_lowercase();
+    if COMPRESSED_TAR_SUFFIXES
+        .iter()
+        .any(|suffix| name.len() > suffix.len() && name.ends_with(suffix))
+    {
+        return true;
+    }
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    !stem.is_empty()
+        && [
+            IMAGE_EXTENSIONS,
+            DOCUMENT_EXTENSIONS,
+            ARCHIVE_EXTENSIONS,
+            MEDIA_EXTENSIONS,
+        ]
+        .iter()
+        .any(|list| list.contains(&extension))
+}
+
 /// Why a changed file affects every project, if it does: a root lockfile, a
 /// CI workflow, a Compose file or the firescale config.
 #[must_use]
@@ -1604,7 +1655,8 @@ pub struct Affected {
     /// How many files changed.
     pub changed_files: usize,
     /// Changed files that no project owns and that cannot affect a build or
-    /// a test ([`cannot_affect_builds`]): they affect no project.
+    /// a test ([`cannot_affect_builds`], and [`is_document_or_media`] when
+    /// there is no root project): they affect no project.
     pub inert_files: Vec<String>,
 }
 
@@ -1642,7 +1694,8 @@ fn changed_reason(files: &[&String]) -> String {
 /// The nodes a set of changed files affects: the projects and shared nodes
 /// that hold a changed file, and every node that depends on one of those,
 /// directly or not. A changed file that no node holds, or one that
-/// [`widening_reason`] names, affects everything.
+/// [`widening_reason`] names, affects everything, unless it cannot change a
+/// build or a test ([`cannot_affect_builds`], [`is_document_or_media`]).
 #[must_use]
 pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
     let files = match changed {
@@ -1710,12 +1763,21 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
             .filter(|node| node.path == ".")
             .map(|node| node.id.clone())
             .collect();
-        if deepest.is_none() && !narrow && cannot_affect_builds(file) {
+        let unowned = deepest.is_none() && !narrow;
+        if unowned && cannot_affect_builds(file) {
             // README.md, LICENSE, docs/: nothing to run for it.
             result.inert_files.push(file.clone());
             continue;
         }
-        if deepest.is_none() && !narrow {
+        let media = is_document_or_media(file);
+        if unowned && media && roots.is_empty() {
+            // image.png, report.pdf, submission.zip: nothing to run for it.
+            // With a root project it is that project's, like any other file
+            // below the repo root (its tests may read a fixture image).
+            result.inert_files.push(file.clone());
+            continue;
+        }
+        if unowned && !media {
             if roots.is_empty() {
                 result.everything = Some(format!("{file} belongs to no project"));
                 return result;
@@ -2074,6 +2136,119 @@ mod tests {
             affected_projects(&graph, &["frontend/README.md"]),
             ["frontend"]
         );
+    }
+
+    #[test]
+    fn an_unowned_root_image_affects_no_project_but_an_unowned_root_script_affects_all() {
+        let fixture = course_project().unwrap();
+        let graph = graph_of(&fixture);
+        for file in [
+            "image.png",
+            "Screenshot 2026-11-13 at 10.12.04.PNG",
+            "photo.JPeG",
+            "favicon.ico",
+            "assets/diagram.webp",
+            "backend/architecture.jpg",
+            "report.pdf",
+            "slides.pptx",
+            "essay.docx",
+            "submission.zip",
+            "backup.tar.gz",
+            "release.TGZ",
+            "demo.mp4",
+            "voice-note.m4a",
+        ] {
+            let set = affected(&graph, &changed(&[file]));
+            assert!(set.is_empty(), "{file}: {set:?}");
+            assert_eq!(set.inert_files, [file]);
+        }
+        // Code, config, and files code may read or compile: everything.
+        for file in [
+            "deploy.sh",
+            "setup.py",
+            "Makefile",
+            "foo.js",
+            "logo.svg",
+            "data.csv",
+            "grades.xlsx",
+            "seed.sql.gz",
+            "server.key",
+            "fonts/inter.woff2",
+            ".png",
+            "png",
+            "image.png.sh",
+        ] {
+            assert!(
+                affected(&graph, &changed(&[file])).everything.is_some(),
+                "{file}"
+            );
+        }
+        // An image in a project's folder is that project's: a test may read
+        // it. One in a shared folder reaches the folder's users.
+        assert_eq!(
+            affected_projects(&graph, &["frontend/public/logo.png"]),
+            ["frontend"]
+        );
+        assert_eq!(
+            affected_projects(&graph, &["backend/audit_service/tests/scan.png"]),
+            services(&["audit_service"])
+        );
+        assert_eq!(
+            affected_projects(&graph, &["backend/shared/logo.png"]),
+            services(&COURSE_SHARED_USERS)
+        );
+        // Together with a real change, the image adds nothing; together with
+        // an unowned script, everything still runs.
+        assert_eq!(
+            affected_projects(&graph, &["image.png", "frontend/src/main.ts"]),
+            ["frontend"]
+        );
+        let set = affected(&graph, &changed(&["image.png", "deploy.sh"]));
+        assert!(set.everything.is_some());
+    }
+
+    #[test]
+    fn an_image_a_project_imports_or_a_root_project_holds_is_not_inert() {
+        // An image outside every project that a project imports is a shared
+        // node of that project.
+        let fixture = fixture(&[
+            ("web/package.json", r#"{"name":"web"}"#),
+            (
+                "web/src/main.ts",
+                "import logo from '../../assets/logo.png';\nexport { logo };\n",
+            ),
+            ("assets/logo.png", "png"),
+            ("assets/other.png", "png"),
+            ("api/requirements.txt", "fastapi\n"),
+            ("api/main.py", "app = None\n"),
+        ]);
+        let graph = graph_of(&fixture);
+        assert_eq!(sources(edge(&graph, "web", "assets")), [Source::JsImport]);
+        assert_eq!(affected_projects(&graph, &["assets/logo.png"]), ["web"]);
+        assert!(affected(&graph, &changed(&["assets/logo.png"]))
+            .inert_files
+            .is_empty());
+        // With a root project, every file below the root is the root
+        // project's: an image runs that project, and only that one.
+        let fixture = owned(&[
+            (
+                "package.json".to_owned(),
+                r#"{"name":"root","scripts":{"test":"node t.js"}}"#.to_owned(),
+            ),
+            (
+                "web/package.json".to_owned(),
+                r#"{"name":"web"}"#.to_owned(),
+            ),
+        ]);
+        let graph = graph_of(&fixture);
+        for file in ["image.png", "test/fixtures/scan.png"] {
+            let set = affected(&graph, &changed(&[file]));
+            assert!(set.everything.is_none(), "{file}");
+            assert!(set.inert_files.is_empty(), "{file}");
+            assert_eq!(affected_projects(&graph, &[file]), ["."], "{file}");
+        }
+        // A README stays inert there (ADR 0034).
+        assert!(affected(&graph, &changed(&["README.md"])).is_empty());
     }
 
     #[test]

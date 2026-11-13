@@ -944,7 +944,7 @@ fn verify_plan(
             )
         };
         notes.push(format!(
-            "{files} {verb} to no project and cannot change a build or a test (Markdown, text, a licence or docs/), so {run} nothing; the check still covers {them}."
+            "{files} {verb} to no project and cannot change a build or a test (Markdown, text, a licence, docs/, or an image, PDF, archive or media file), so {run} nothing; the check still covers {them}."
         ));
     }
     limit_to_affected(&mut plan, facts, &graph, &set, base);

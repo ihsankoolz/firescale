@@ -243,6 +243,53 @@ describe('fscale verify --affected', () => {
     expect(report.affected?.projectsRun).toBe(6);
   });
 
+  it('An untracked root image runs no project; an unowned root script runs all.', async () => {
+    const { repo, calls, env } = await courseProject();
+    // Untracked, as a screenshot dropped into the repo is.
+    await repo.write('image.png', 'not really a png\n');
+    const image = await runCli(['verify', '--affected'], repo.root, env);
+    expect(image.code).toBe(EXIT_OK);
+    expect(image.stdout.split('\n')[0]).toBe(
+      'verify: OK (affected only) - 0 of 6 projects ran, 6 not affected',
+    );
+    expect(image.stdout).toContain(
+      'note: 1 changed file (image.png) belongs to no project and cannot change a build or a test',
+    );
+    expect(await calls()).toEqual([]);
+
+    // The same with a base: committed work on a branch plus the image.
+    await repo.write('backend/audit_service/main.py', 'app = 1\n');
+    await commitAll(repo, 'audit change');
+    await repo.write('Screenshot.PNG', 'not really a png either\n');
+    const json = await runCli(
+      ['verify', '--affected', '--base', 'HEAD~1', '--json'],
+      repo.root,
+      env,
+    );
+    const report = (await validate(VERIFY_SCHEMA, json.stdout)) as AffectedReport;
+    expect(report.affected?.everything).toBe(false);
+    expect(report.affected?.projectsRun).toBe(1);
+    expect(report.affected?.projects.filter((p) => p.affected).map((p) => p.project)).toEqual([
+      'backend/audit_service',
+    ]);
+    expect(await calls()).toEqual(['python -m pytest in audit_service']);
+
+    // An image in a project's folder is that project's.
+    await repo.write('frontend/public/logo.png', 'not really a png\n');
+    const owned = await runCli(['verify', '--affected', '--json'], repo.root, env);
+    const ownedReport = (await validate(VERIFY_SCHEMA, owned.stdout)) as AffectedReport;
+    expect(ownedReport.affected?.projects.filter((p) => p.affected).map((p) => p.project)).toEqual([
+      'frontend',
+    ]);
+
+    await repo.write('deploy.sh', 'echo deploy\n');
+    const script = await runCli(['verify', '--affected', '--json'], repo.root, env);
+    const scriptReport = (await validate(VERIFY_SCHEMA, script.stdout)) as AffectedReport;
+    expect(scriptReport.affected?.everything).toBe(true);
+    expect(scriptReport.affected?.reason).toBe('deploy.sh belongs to no project');
+    expect(scriptReport.affected?.projectsRun).toBe(6);
+  });
+
   it('runs everything, with a note, when there is no base and the tree is clean', async () => {
     const { repo, env } = await courseProject();
     const result = await runCli(['verify', '--affected'], repo.root, env);

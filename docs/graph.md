@@ -49,6 +49,18 @@ Only relative specifiers (`./x`, `../x`) count; a bare package name is a depende
 
 A changed file that no project and no narrow shared node holds, and that cannot change a build or a test, affects **no** project (ADR 0034): Markdown (`.md`, `.markdown`), text files (`.txt`, except names with `requirements` or `constraints`, and `CMakeLists.txt`), a licence (`LICENSE*`, `LICENCE*`) and anything under the root `docs/` folder. `check` still runs.
 
+Files that are plainly not code or config affect **no** project too, when no project holds them, not even a repo root project, and no narrow shared node does. They are matched by extension, in any letter case:
+
+| Kind      | Extensions                                                                                      |
+| --------- | ----------------------------------------------------------------------------------------------- |
+| Images    | `png`, `jpg`, `jpeg`, `gif`, `bmp`, `webp`, `avif`, `ico`, `tif`, `tiff`, `heic`, `heif`, `psd` |
+| Documents | `pdf`, `doc`, `docx`, `odt`, `rtf`, `ppt`, `pptx`, `odp`                                        |
+| Archives  | `zip`, `tar`, `tgz`, `7z`, `rar`, and `.tar.gz`, `.tar.bz2`, `.tar.xz`                          |
+| Video     | `mp4`, `mov`, `avi`, `mkv`, `webm`                                                              |
+| Audio     | `mp3`, `wav`, `m4a`, `flac`, `ogg`                                                              |
+
+So an untracked `image.png` or `report.pdf` at the root runs nothing, while `frontend/public/logo.png` runs the frontend (a test may read it) and an image a project imports (`../../assets/logo.png`) is a shared node of that project. With a repo root project such a file is the root project's, as every other file below the root is: it runs that project, not every project. Left out on purpose: `svg` (text that bundlers compile and tests render), spreadsheets and `csv` (data that code reads), fonts (CSS loads them), `key` (also a TLS key) and a bare `.gz`, `.bz2` or `.xz`, which compresses one file that is often data (`seed.sql.gz`).
+
 When unsure, more is affected, never less. These affect **every** project:
 
 - a root lockfile, a CI file, a Compose file anywhere, or the firescale config;
