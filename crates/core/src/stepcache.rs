@@ -32,7 +32,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::doctor::{Machine, ThisMachine};
 use crate::git::run_git;
-use crate::graph::{project_id, Graph, NodeType, Source};
+use crate::graph::{
+    cannot_affect_builds, is_document_or_media, project_id, Graph, NodeType, Source,
+};
 use crate::services::services_in;
 use crate::walk::{walk_entries, EntryKind};
 
@@ -477,9 +479,16 @@ fn owners(graph: Option<&Graph>) -> Vec<String> {
 
 /// True when the scope's key holds `path`.
 fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
-    scope.folders.iter().any(|folder| inside(path, folder))
-        || scope.above.contains(parent(path))
-        || (scope.unowned && !owned.iter().any(|folder| inside(path, folder)))
+    if scope.folders.iter().any(|folder| inside(path, folder)) {
+        return true;
+    }
+    let unowned = !owned.iter().any(|folder| inside(path, folder));
+    // A file no project owns that cannot change a build or a test affects
+    // no project (ADR 0034, ADR 0043), so it is in no project's key either.
+    if unowned && (cannot_affect_builds(path) || is_document_or_media(path)) {
+        return false;
+    }
+    scope.above.contains(parent(path)) || (scope.unowned && unowned)
 }
 
 /// The digest of the files a scope covers, or why it cannot be made.

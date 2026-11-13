@@ -169,6 +169,16 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     typecheck  passed   npx --no tsc --noEmit
     test       passed   npm run test:run
 
+Not cached: test in backend/audit_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: lint in backend/auth_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: test in backend/auth_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: test in backend/ledger_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: test in backend/market_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: test in backend/realtime_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: lint in frontend passed, but the next run cannot reuse it: the version of npx could not be read.
+Not cached: typecheck in frontend passed, but the next run cannot reuse it: the version of npx could not be read.
+Not cached: test in frontend passed, but the next run cannot reuse it: the version of npm could not be read.
+
 warning: steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service, typecheck in backend/auth_service, lint in backend/ledger_service, typecheck in backend/ledger_service, lint in backend/market_service, typecheck in backend/market_service, lint in backend/realtime_service, typecheck in backend/realtime_service. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.
 
 note: no virtual environment was found for backend/audit_service, backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.
@@ -279,6 +289,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "python",
       "name": "test",
+      "notCached": "the version of python could not be read",
       "project": "backend/audit_service",
       "status": "passed",
     },
@@ -289,6 +300,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "python",
       "name": "lint",
+      "notCached": "the version of python could not be read",
       "project": "backend/auth_service",
       "status": "passed",
     },
@@ -307,6 +319,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "python",
       "name": "test",
+      "notCached": "the version of python could not be read",
       "project": "backend/auth_service",
       "status": "passed",
     },
@@ -333,6 +346,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "python",
       "name": "test",
+      "notCached": "the version of python could not be read",
       "project": "backend/ledger_service",
       "status": "passed",
     },
@@ -359,6 +373,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "python",
       "name": "test",
+      "notCached": "the version of python could not be read",
       "project": "backend/market_service",
       "status": "passed",
     },
@@ -385,6 +400,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "python",
       "name": "test",
+      "notCached": "the version of python could not be read",
       "project": "backend/realtime_service",
       "status": "passed",
     },
@@ -395,6 +411,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "node",
       "name": "lint",
+      "notCached": "the version of npx could not be read",
       "project": "frontend",
       "status": "passed",
     },
@@ -405,6 +422,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "node",
       "name": "typecheck",
+      "notCached": "the version of npx could not be read",
       "project": "frontend",
       "status": "passed",
     },
@@ -415,6 +433,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
       "exitCode": 0,
       "kind": "node",
       "name": "test",
+      "notCached": "the version of npm could not be read",
       "project": "frontend",
       "status": "passed",
     },
@@ -453,6 +472,15 @@ exports[`fscale verify in a repo with projects in subfolders > takes commands an
   in frontend:
     lint       passed   npx --no oxlint
     test       passed   npx --no playwright test
+
+Not cached: test in backend/auth_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: lint in backend/ledger_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: test in backend/ledger_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: test in backend/market_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: test in backend/realtime_service passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: lint in backend/shared passed, but the next run cannot reuse it: the version of python could not be read.
+Not cached: lint in frontend passed, but the next run cannot reuse it: the version of npx could not be read.
+Not cached: test in frontend passed, but the next run cannot reuse it: the version of npx could not be read.
 
 note: no virtual environment was found for backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.
 "

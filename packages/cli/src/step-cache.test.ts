@@ -348,6 +348,13 @@ describe('the step cache on the course project', () => {
     await run({ SHIM_VERSION: '2.0.0', PYTHONPATH: 'somewhere' });
     expect(projectsIn(await calls())).toEqual(everything);
 
+    // A screenshot or a README no project owns is in no project's key
+    // (ADR 0034, ADR 0043): nothing runs.
+    await reset();
+    await repo.write('image.png', 'not really a png\n');
+    await repo.write('README.md', '# Course project\n\nMore words.\n');
+    await run({ SHIM_VERSION: '2.0.0', PYTHONPATH: 'somewhere' });
+    expect(await calls()).toEqual([]);
     // A file directly in the repo root, where settings live, runs everything.
     await reset();
     await repo.write('ruff.toml', 'line-length = 90\n');
