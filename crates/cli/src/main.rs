@@ -1056,7 +1056,6 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
     let mut verify = run_verify_with(root, version(), check, &plan, &options)?;
     match &base {
         BaseChoice::Compare(base) if verify.result != VerifyResult::Stopped => {
-            let changed = changed_since(root, base)?;
             let base_check = |worktree: &Path| -> Result<Vec<String>> {
                 let mut host = NodeHost::new(worktree);
                 let config = load_config(worktree, &packs, &mut host)?;
@@ -1064,20 +1063,36 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
                 let outcome = run_check(worktree, &selection.rules, version(), &mut host, false)?;
                 Ok(violation_ids(&outcome.report))
             };
-            compare(
-                &mut verify,
-                &BaseRun {
-                    root,
-                    base,
-                    changed: changed.as_ref(),
-                    cache: &cache,
-                    plan: &plan,
-                    options: &options,
-                    check: &base_check,
-                    head_violations: &head_violations,
-                    judge_passes: true,
-                },
-            )?;
+            // A base that cannot be compared never fails the run: every
+            // failure then blocks, as without a base.
+            match changed_since(root, base) {
+                Ok(changed) => compare(
+                    &mut verify,
+                    &BaseRun {
+                        root,
+                        base,
+                        changed: changed.as_ref(),
+                        cache: &cache,
+                        plan: &plan,
+                        options: &options,
+                        check: &base_check,
+                        head_violations: &head_violations,
+                        judge_passes: true,
+                        shortcuts: !args.no_cache,
+                    },
+                ),
+                Err(error) => {
+                    verify.base = Some(BaseReport {
+                        compared: false,
+                        reason: Some(format!(
+                            "the files that changed since {} could not be listed ({})",
+                            base.short(),
+                            error.message()
+                        )),
+                        ..BaseReport::default()
+                    });
+                }
+            }
         }
         BaseChoice::Compare(_) => {}
         BaseChoice::Nothing(reason) => {

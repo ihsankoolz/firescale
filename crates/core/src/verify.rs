@@ -833,6 +833,11 @@ pub struct StepReport {
     /// With a base to compare with: how the step did on the base commit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<crate::blame::BaseOutcome>,
+    /// The failure's signature: one short hash per normalised line of its
+    /// output (ADR 0037). A failure is `pre-existing` only when its
+    /// signature on the head is contained in the base's. Not in JSON.
+    #[serde(skip)]
+    pub signature: Vec<String>,
 }
 
 /// Where a step's pass from the cache came from.
@@ -1892,6 +1897,7 @@ fn run_step(
         cache: None,
         label: None,
         base: None,
+        signature: Vec::new(),
     };
     let text = || {
         strip_ansi(&format!(
@@ -1900,6 +1906,9 @@ fn run_step(
             String::from_utf8_lossy(&finished.stderr)
         ))
     };
+    if !matches!(finished.ending, Ending::Exited(Some(0))) {
+        report.signature = failure_signature(&text(), unit.root);
+    }
     let early_seen = early
         .into_inner()
         .unwrap_or_else(PoisonError::into_inner)
@@ -2180,6 +2189,7 @@ fn run_unit(
                 cache: None,
                 label: None,
                 base: None,
+                signature: Vec::new(),
             })
             .collect());
     }
@@ -2204,6 +2214,7 @@ fn run_unit(
             cache: None,
             label: None,
             base: None,
+            signature: Vec::new(),
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2220,6 +2231,62 @@ fn run_unit(
         steps.push(report);
     }
     Ok(steps)
+}
+
+/// The most lines of output a signature keeps.
+const SIGNATURE_LINES: usize = 5000;
+
+/// A failure's signature (ADR 0037): one short hash per non-empty line of
+/// its output, with the run's root folder written as `<root>` (the head and
+/// the base worktree are different folders), digits folded to `#` (counts,
+/// times and line numbers change from run to run) and spaces squeezed.
+/// Only hashes are kept, never the text.
+#[must_use]
+pub fn failure_signature(output: &str, root: &Path) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
+    let shown = root.to_string_lossy().into_owned();
+    roots.push(shown.clone());
+    roots.push(shown.replace('\\', "/"));
+    if let Ok(real) = root.canonicalize() {
+        roots.push(real.to_string_lossy().into_owned());
+    }
+    roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
+    roots.dedup();
+    let mut lines = Vec::new();
+    for line in output.lines().take(SIGNATURE_LINES) {
+        let mut line = line.trim().to_owned();
+        if line.is_empty() {
+            continue;
+        }
+        for root in &roots {
+            if !root.is_empty() {
+                line = line.replace(root.as_str(), "<root>");
+            }
+        }
+        let folded: String = line
+            .chars()
+            .map(|c| if c.is_ascii_digit() { '#' } else { c })
+            .collect();
+        let squeezed = folded.split_whitespace().collect::<Vec<_>>().join(" ");
+        lines.push(blake3::hash(squeezed.as_bytes()).to_hex()[..16].to_owned());
+    }
+    lines
+}
+
+/// True when every line of `head` is in `base`, as often (a multiset).
+#[must_use]
+pub fn signature_within(head: &[String], base: &[String]) -> bool {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for line in base {
+        *counts.entry(line.as_str()).or_default() += 1;
+    }
+    head.iter().all(|line| match counts.get_mut(line.as_str()) {
+        Some(count) if *count > 0 => {
+            *count -= 1;
+            true
+        }
+        _ => false,
+    })
 }
 
 /// Runs one step of the base run in the base commit's worktree at `root`:
@@ -2309,6 +2376,7 @@ fn cached_or_run(
             }),
             label: None,
             base: None,
+            signature: Vec::new(),
         });
     }
     let ran_at = now_secs();
@@ -2391,6 +2459,7 @@ pub fn run_verify_with(
         cache: None,
         label: None,
         base: None,
+        signature: Vec::new(),
     }];
     let check_failed = !check.ok && !options.every_step;
 
@@ -2975,8 +3044,14 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             });
         match failure.label {
             Some(crate::blame::Label::PreExisting) => {
+                let how = match failure.base.as_ref().map(|base| base.source) {
+                    Some(crate::blame::BaseSource::SameInputs) => {
+                        " (no file it reads differs from the base, so it was not run there again)"
+                    }
+                    _ => ", with the same output",
+                };
                 out.push_str(&format!(
-                    "\nPre-existing: {}{place} fails on the base commit {base_short} too, so it does not block this change.\n",
+                    "\nPre-existing: {}{place} fails on the base commit {base_short} too{how}, so it does not block this change.\n",
                     failure.name
                 ));
                 continue;
@@ -3084,7 +3159,7 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             let mut how = Vec::new();
             if base.same_inputs > 0 {
                 how.push(format!(
-                    "{} with the same inputs as on the head",
+                    "{} with the same inputs as on the head (not run there)",
                     plural_steps(base.same_inputs)
                 ));
             }

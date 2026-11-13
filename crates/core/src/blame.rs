@@ -17,7 +17,7 @@
 //!   ran over the budget or did not run gives no label: the failure blocks,
 //!   as it would without a base.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -27,12 +27,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::affected::{changed_files, Changed};
 use crate::error::{Error, Result};
-use crate::git::run_git;
+use crate::git::{run_git, run_git_env};
 use crate::progress::{format_duration, format_limit};
 use crate::stepcache::{now_secs, StepCache};
 use crate::verify::{
-    run_base_step, settle, Limit, ProjectPlan, RunOptions, StepReport, StepStatus, VerifyPlan,
-    VerifyReport, DEFAULT_BASE_BUDGET,
+    run_base_step, settle, signature_within, Limit, ProjectPlan, RunOptions, StepReport,
+    StepStatus, VerifyPlan, VerifyReport, DEFAULT_BASE_BUDGET,
 };
 
 /// How a failure compares with the base commit.
@@ -98,6 +98,20 @@ pub struct BaseOutcome {
     /// it would without a base.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The base failure's signature, compared with the head's.
+    #[serde(skip)]
+    pub signature: Vec<String>,
+}
+
+impl BaseOutcome {
+    fn new(status: BaseStatus, source: BaseSource, note: Option<String>) -> Self {
+        Self {
+            status,
+            source,
+            note,
+            signature: Vec::new(),
+        }
+    }
 }
 
 /// The `base` object of `fscale verify --json`.
@@ -193,7 +207,12 @@ fn default_branch(root: &Path) -> Option<String> {
 
 /// Finds the base: the merge base of `HEAD` and `given`, or of the default
 /// branch. There is none outside git, before the first commit, with no
-/// default branch, or when the base is `HEAD` and the tree is clean.
+/// default branch, and when the base is `HEAD` and the tree is clean.
+///
+/// On the default branch itself the base is its upstream (`origin/main`),
+/// never the branch: a commit made there in this session would otherwise
+/// become the base and hide its own failures. With no upstream there is no
+/// base, unless `--base` names one.
 ///
 /// # Errors
 ///
@@ -206,14 +225,30 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
     };
     let reference = match given {
         Some(given) => given.to_owned(),
-        None => match default_branch(root) {
-            Some(branch) => branch,
-            None => {
+        None => {
+            let Some(branch) = default_branch(root) else {
                 return Ok(BaseChoice::Nothing(
                     "no default branch was found (origin/HEAD, main or master); pass --base <ref> to compare with one".to_owned(),
-                ))
+                ));
+            };
+            let local = branch.strip_prefix("origin/").unwrap_or(&branch).to_owned();
+            let current = git_line(root, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+            if current.as_deref() == Some(local.as_str()) {
+                match git_line(
+                    root,
+                    &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+                ) {
+                    Some(upstream) => upstream,
+                    None => {
+                        return Ok(BaseChoice::Nothing(format!(
+                            "this is the default branch {local} with no upstream, so commits made here cannot be told from the base; pass --base <ref> to compare with one"
+                        )))
+                    }
+                }
+            } else {
+                branch
             }
-        },
+        }
     };
     let Some(commit) = git_line(root, &["merge-base", "HEAD", &reference]) else {
         if given.is_some() {
@@ -222,9 +257,10 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
             )));
         }
         return Ok(BaseChoice::Nothing(format!(
-            "HEAD and {reference} have no commit in common"
+            "HEAD and {reference} have no commit in common (a shallow clone?)"
         )));
     };
+    // firescale's own folder is not a change.
     let dirty = run_git(
         root,
         &[
@@ -233,6 +269,7 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
             "--untracked-files=normal",
             "--",
             ".",
+            ":(exclude).firescale",
         ],
     )
     .map(|out| out.code != 0 || !out.stdout.trim().is_empty())
@@ -246,7 +283,8 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
     Ok(BaseChoice::Compare(BaseCommit { reference, commit }))
 }
 
-/// The files that differ between the base commit and the working tree.
+/// The files that differ between the base commit and the working tree,
+/// firescale's own folder left out.
 ///
 /// # Errors
 ///
@@ -254,13 +292,57 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
 pub fn changed_since(root: &Path, base: &BaseCommit) -> Result<Option<BTreeSet<String>>> {
     Ok(match changed_files(root, Some(&base.commit))? {
         Changed::Everything => None,
-        Changed::Files(files) => Some(files),
+        Changed::Files(files) => Some(
+            files
+                .into_iter()
+                .filter(|path| !path.starts_with(".firescale/"))
+                .collect(),
+        ),
     })
+}
+
+/// The renames git sees between the base commit and the working tree:
+/// old path to new path, repo-relative.
+#[must_use]
+pub fn renames_since(root: &Path, base: &BaseCommit) -> BTreeMap<String, String> {
+    let Ok(out) = run_git(
+        root,
+        &[
+            "-c",
+            "core.quotepath=off",
+            "diff",
+            "-M",
+            "--name-status",
+            "--relative",
+            "-z",
+            &base.commit,
+        ],
+    ) else {
+        return BTreeMap::new();
+    };
+    let parts: Vec<&str> = out.stdout.split('\0').collect();
+    let mut renames = BTreeMap::new();
+    let mut index = 0;
+    while index < parts.len() {
+        let status = parts[index];
+        if status.starts_with('R') && index + 2 < parts.len() {
+            renames.insert(
+                parts[index + 1].replace('\\', "/"),
+                parts[index + 2].replace('\\', "/"),
+            );
+            index += 3;
+        } else if status.starts_with('C') && index + 2 < parts.len() {
+            index += 3;
+        } else {
+            index += 2;
+        }
+    }
+    renames
 }
 
 // ------------------------------------------------------------ the store
 
-const STORE_FORMAT: u32 = 2;
+const STORE_FORMAT: u32 = 3;
 
 /// A base result kept for a later run with the same base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,22 +353,26 @@ struct StoredBase {
     status: BaseStatus,
     ran_at: u64,
     duration_ms: u64,
+    /// The failure's signature (hashes of its normalised output lines).
+    #[serde(default)]
+    signature: Vec<String>,
 }
 
 fn store_dir(root: &Path) -> PathBuf {
     root.join(".firescale").join("base")
 }
 
-fn lookup(root: &Path, key: &str) -> Option<BaseStatus> {
+fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>)> {
     let text = fs::read_to_string(store_dir(root).join(format!("{key}.json"))).ok()?;
     let stored: StoredBase = serde_json::from_str(&text).ok()?;
     let fresh = now_secs().saturating_sub(stored.ran_at) <= crate::stepcache::MAX_AGE.as_secs();
-    (stored.format == STORE_FORMAT && stored.key == key && fresh).then_some(stored.status)
+    (stored.format == STORE_FORMAT && stored.key == key && fresh)
+        .then_some((stored.status, stored.signature))
 }
 
 /// Keeps a base result. Only passed and failed are kept: the others say
 /// nothing about the code.
-fn keep(root: &Path, key: &str, status: BaseStatus, duration_ms: u64) {
+fn keep(root: &Path, key: &str, status: BaseStatus, duration_ms: u64, signature: &[String]) {
     if !matches!(status, BaseStatus::Passed | BaseStatus::Failed) {
         return;
     }
@@ -294,12 +380,14 @@ fn keep(root: &Path, key: &str, status: BaseStatus, duration_ms: u64) {
     if fs::create_dir_all(&dir).is_err() {
         return;
     }
+    crate::stepcache::ignore_firescale_folder(root);
     let stored = StoredBase {
         format: STORE_FORMAT,
         key: key.to_owned(),
         status,
         ran_at: now_secs(),
         duration_ms,
+        signature: signature.to_vec(),
     };
     let Ok(text) = serde_json::to_string_pretty(&stored) else {
         return;
@@ -338,10 +426,19 @@ impl Worktree {
             .map_or(0, |since| since.subsec_nanos());
         let top =
             std::env::temp_dir().join(format!("firescale-base-{}-{nanos}", std::process::id()));
+        sweep(root);
         let path = top.to_string_lossy().into_owned();
-        let out = run_git(
+        // The repo's own hooks (post-checkout) never run, and Git LFS does
+        // not download anything: the base run stays within its budget.
+        let no_hooks = std::env::temp_dir().join("firescale-no-hooks");
+        let _ = fs::create_dir_all(&no_hooks);
+        let hooks = format!("core.hooksPath={}", no_hooks.to_string_lossy());
+        let out = run_git_env(
             root,
-            &["worktree", "add", "--detach", "--quiet", &path, commit],
+            &[
+                "-c", &hooks, "worktree", "add", "--detach", "--quiet", &path, commit,
+            ],
+            &[("GIT_LFS_SKIP_SMUDGE", "1")],
         )
         .map_err(|error| error.message().to_owned())?;
         if out.code != 0 {
@@ -394,6 +491,72 @@ impl Drop for Worktree {
             let _ = run_git(&self.repo, &["worktree", "prune"]);
         }
     }
+}
+
+/// Removes base worktrees that an earlier run left behind (killed before it
+/// could clean up): those whose folder is gone, and those older than six
+/// hours, which no run of today's budget can still be using.
+fn sweep(root: &Path) {
+    let _ = run_git(root, &["worktree", "prune"]);
+    let Some(list) = git_line(root, &["worktree", "list", "--porcelain"]) else {
+        return;
+    };
+    for line in list.lines() {
+        let Some(path) = line.strip_prefix("worktree ") else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        let ours = path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("firescale-base-"));
+        let old = fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(6 * 3600));
+        if ours && old {
+            unlink_dependency_links(&path);
+            let _ = run_git(
+                root,
+                &["worktree", "remove", "--force", &path.to_string_lossy()],
+            );
+        }
+    }
+}
+
+/// Removes, inside a left-behind worktree, the links it holds to the
+/// head's dependency folders, before anything deletes it.
+fn unlink_dependency_links(top: &Path) {
+    for entry in ignore::WalkBuilder::new(top)
+        .hidden(false)
+        .git_ignore(false)
+        .follow_links(false)
+        .max_depth(Some(6))
+        .build()
+        .filter_map(std::result::Result::ok)
+    {
+        let name = entry.file_name().to_string_lossy();
+        if DEPENDENCY_FOLDERS.contains(&name.as_ref()) && is_link(entry.path()) {
+            unlink_dir(entry.path());
+        }
+    }
+}
+
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| {
+        meta.file_type().is_symlink() || {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                // FILE_ATTRIBUTE_REPARSE_POINT: a junction.
+                meta.file_attributes() & 0x400 != 0
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        }
+    })
 }
 
 /// Removes a folder without following the links to the head's
@@ -478,8 +641,66 @@ fn dependency_folders(root: &Path) -> Vec<String> {
                     .any(|part| DEPENDENCY_FOLDERS.contains(part))
         })
         .collect();
+    found.retain(|folder| !links_into_repo(root, &folder_of(root, Some(folder))));
     found.sort();
     found
+}
+
+/// True when a dependency folder holds a link into the repo: a workspace
+/// package in `node_modules`, or an editable install in a virtual
+/// environment. Linked into the base worktree it would make the base run
+/// the head's code, so it is never linked (ADR 0037).
+fn links_into_repo(root: &Path, folder: &Path) -> bool {
+    let Ok(real_root) = root.canonicalize() else {
+        return true;
+    };
+    let points_in =
+        |path: &Path| fs::canonicalize(path).is_ok_and(|target| target.starts_with(&real_root));
+    let name = folder
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
+    if name.as_deref() == Some("node_modules") {
+        let Ok(entries) = fs::read_dir(folder) else {
+            return false;
+        };
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let path = entry.path();
+            let scoped = entry.file_name().to_string_lossy().starts_with('@');
+            if scoped && !is_link(&path) {
+                if let Ok(inner) = fs::read_dir(&path) {
+                    for package in inner.filter_map(std::result::Result::ok) {
+                        if is_link(&package.path()) && points_in(&package.path()) {
+                            return true;
+                        }
+                    }
+                }
+            } else if is_link(&path) && points_in(&path) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // A virtual environment: an editable install leaves a `.pth` or an
+    // `.egg-link` naming a folder of the repo.
+    let shown = real_root.to_string_lossy().into_owned();
+    let plain = root.to_string_lossy().into_owned();
+    ignore::WalkBuilder::new(folder)
+        .hidden(false)
+        .git_ignore(false)
+        .follow_links(false)
+        .max_depth(Some(5))
+        .build()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            name.ends_with(".pth") || name.ends_with(".egg-link")
+        })
+        .any(|entry| {
+            fs::read_to_string(entry.path()).is_ok_and(|text| {
+                let text = text.replace('\\', "/");
+                text.contains(&shown.replace('\\', "/")) || text.contains(&plain.replace('\\', "/"))
+            })
+        })
 }
 
 fn folder_of(root: &Path, folder: Option<&str>) -> PathBuf {
@@ -512,6 +733,9 @@ pub struct BaseRun<'a> {
     /// labelled `fixed` unless their base result is already known (the
     /// stop hook, which only needs to judge failures).
     pub judge_passes: bool,
+    /// False with `--no-cache`: no step counts as having the same inputs,
+    /// and no kept base result is used; base results are still kept.
+    pub shortcuts: bool,
 }
 
 struct Pending {
@@ -544,18 +768,23 @@ fn plan_of<'a>(plan: &'a VerifyPlan, step: &StepReport) -> Option<&'a ProjectPla
 }
 
 /// Compares the head's report with the base commit and labels its steps,
-/// then settles the result again: only `new` failures block.
+/// then settles the result again: only `new` failures, and failures the
+/// base cannot judge, block.
 ///
-/// # Errors
-///
-/// Only when a base step cannot be started at all.
-pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
+/// A failure is `pre-existing` only with evidence: it fails on the base
+/// too, and every line of its output on the head (normalised, see
+/// [`crate::verify::failure_signature`]) is in the base's. A base that
+/// fails another way (a missing module, a broken environment, one error
+/// fewer) never hides a head failure. Nothing here can fail the run: a
+/// base step that cannot run is "not judged", and its failure blocks.
+pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     let started = Instant::now();
     let budget = match run.options.config.base_budget {
         Some(Limit::Off) => None,
         Some(Limit::After(limit)) => Some(limit),
         None => Some(DEFAULT_BASE_BUDGET),
     };
+    let deadline = budget.map(|limit| started + limit);
     let mut summary = BaseReport {
         compared: true,
         reference: Some(run.base.reference.clone()),
@@ -568,12 +797,16 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
             progress.line(&format!("base: {text}"));
         }
     };
-
     // What the base worktree gets: part of the key of a kept base result,
     // so a result from a worktree set up otherwise is never reused.
+    let links = if run.options.config.base_install.is_some() {
+        Vec::new()
+    } else {
+        dependency_folders(run.root)
+    };
     let environment = match &run.options.config.base_install {
         Some(install) => format!("install={install}"),
-        None => format!("links={}", dependency_folders(run.root).join(",")),
+        None => format!("links={}", links.join(",")),
     };
 
     // 1. What each step's base result is, where it is known without a run.
@@ -592,15 +825,15 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
         let folder = step.project.as_deref();
         let kind = step.kind.as_deref();
         let dir = folder_of(run.root, folder);
-        let same = run
-            .changed
-            .and_then(|changed| run.cache.same_on_base(folder, kind, &dir, changed));
-        if same == Some(true) {
-            report.steps[index].base = Some(BaseOutcome {
-                status: head,
-                source: BaseSource::SameInputs,
-                note: None,
+        let same = run.shortcuts
+            && run.changed.is_some_and(|changed| {
+                run.cache
+                    .same_on_base(folder, kind, &step.name, &command, &dir, changed)
             });
+        if same {
+            let mut outcome = BaseOutcome::new(head, BaseSource::SameInputs, None);
+            outcome.signature.clone_from(&step.signature);
+            report.steps[index].base = Some(outcome);
             summary.same_inputs += 1;
             continue;
         }
@@ -616,12 +849,15 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
                 &environment,
             )
             .ok();
-        if let Some(status) = key.as_deref().and_then(|key| lookup(run.root, key)) {
-            report.steps[index].base = Some(BaseOutcome {
-                status,
-                source: BaseSource::Cache,
-                note: None,
-            });
+        let kept = if run.shortcuts {
+            key.as_deref().and_then(|key| lookup(run.root, key))
+        } else {
+            None
+        };
+        if let Some((status, signature)) = kept {
+            let mut outcome = BaseOutcome::new(status, BaseSource::Cache, None);
+            outcome.signature = signature;
+            report.steps[index].base = Some(outcome);
             summary.from_cache += 1;
             continue;
         }
@@ -641,7 +877,6 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
         .steps
         .first()
         .is_some_and(|step| step.name == "check" && step.status == StepStatus::Failed);
-
     if !failing_left && !check_failed {
         to_run.clear();
     }
@@ -665,59 +900,82 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
                     run.base.short()
                 ));
                 for pending in &to_run {
-                    report.steps[pending.index].base = Some(BaseOutcome {
-                        status: BaseStatus::SetupNeeded,
-                        source: BaseSource::Ran,
-                        note: Some(format!("the base worktree could not be made ({problem})")),
-                    });
+                    report.steps[pending.index].base = Some(BaseOutcome::new(
+                        BaseStatus::SetupNeeded,
+                        BaseSource::Ran,
+                        Some(format!("the base worktree could not be made ({problem})")),
+                    ));
                 }
             }
-            Ok(worktree) => {
-                run_in_worktree(
-                    report,
-                    run,
-                    &worktree,
-                    &to_run,
-                    budget,
-                    started,
-                    &mut summary,
-                    &say,
-                )?;
-            }
+            Ok(worktree) => run_in_worktree(
+                report,
+                run,
+                &worktree,
+                &to_run,
+                &links,
+                deadline,
+                &mut summary,
+                &say,
+            ),
         }
     }
 
-    // 3. Labels.
+    // 3. Labels, by evidence.
     let short = run.base.short().to_owned();
     let budget_text = budget.map_or_else(|| "no limit".to_owned(), format_limit);
     for step in &mut report.steps {
+        if step.name == "check" {
+            continue;
+        }
+        let failed = matches!(step.status, StepStatus::Failed | StepStatus::TimedOut);
+        let signature = step.signature.clone();
+        let timed_out = step.status == StepStatus::TimedOut;
         let Some(outcome) = step.base.as_mut() else {
             continue;
         };
-        let failed = matches!(step.status, StepStatus::Failed | StepStatus::TimedOut);
-        step.label = match (failed, outcome.status) {
-            (true, BaseStatus::Passed) => Some(Label::New),
-            (true, BaseStatus::Failed) => Some(Label::PreExisting),
-            (false, BaseStatus::Failed) => Some(Label::Fixed),
-            _ => None,
-        };
-        if failed && step.label.is_none() {
-            let why = match outcome.status {
-                BaseStatus::SetupNeeded => format!("the base run of it on {short} needed setup"),
-                BaseStatus::TimedOut => format!("it timed out on the base commit {short} too"),
-                BaseStatus::OverBudget => format!(
-                    "the base run ran out of its time budget ({budget_text}, verify.baseBudget) before it finished"
-                ),
-                BaseStatus::Stopped => "verify was stopped during the base run".to_owned(),
-                BaseStatus::Passed | BaseStatus::Failed => String::new(),
-            };
-            if outcome.note.is_none() {
-                outcome.note = Some(format!(
-                    "{why}, so this failure blocks as it would without a base"
-                ));
-            } else if let Some(note) = outcome.note.as_mut() {
-                note.push_str(", so this failure blocks as it would without a base");
+        let (label, why) = match (failed, outcome.status) {
+            (true, BaseStatus::Passed) => (Some(Label::New), None),
+            (true, BaseStatus::Failed) if timed_out => (
+                None,
+                Some(format!(
+                    "it timed out on the head but failed on the base commit {short}, which is not the same failure"
+                )),
+            ),
+            (true, BaseStatus::Failed) if signature_within(&signature, &outcome.signature) => {
+                (Some(Label::PreExisting), None)
             }
+            (true, BaseStatus::Failed) => (
+                None,
+                Some(format!(
+                    "it fails on the base commit {short} too, but not in the same way (its output on the head has lines the base's has not)"
+                )),
+            ),
+            (false, BaseStatus::Failed) => (Some(Label::Fixed), None),
+            (true, BaseStatus::SetupNeeded) => (
+                None,
+                Some(outcome.note.clone().unwrap_or_else(|| {
+                    format!("the base run of it on {short} needed setup")
+                })),
+            ),
+            (true, BaseStatus::TimedOut) => {
+                (None, Some(format!("it timed out on the base commit {short} too")))
+            }
+            (true, BaseStatus::OverBudget) => (
+                None,
+                Some(format!(
+                    "the base run ran out of its time budget ({budget_text}, verify.baseBudget) before it finished"
+                )),
+            ),
+            (true, BaseStatus::Stopped) => {
+                (None, Some("verify was stopped during the base run".to_owned()))
+            }
+            (false, _) => (None, None),
+        };
+        step.label = label;
+        if let Some(why) = why {
+            outcome.note = Some(format!(
+                "{why}, so this failure blocks as it would without a base"
+            ));
         }
     }
     // Failing steps that got no base result at all (the budget ran out
@@ -727,33 +985,33 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
             && matches!(step.status, StepStatus::Failed | StepStatus::TimedOut)
             && step.base.is_none()
         {
-            step.base = Some(BaseOutcome {
-                status: BaseStatus::OverBudget,
-                source: BaseSource::Ran,
-                note: Some(format!(
+            step.base = Some(BaseOutcome::new(
+                BaseStatus::OverBudget,
+                BaseSource::Ran,
+                Some(format!(
                     "the base run ran out of its time budget ({budget_text}, verify.baseBudget) before it reached this step, so this failure blocks as it would without a base"
                 )),
-            });
+            ));
             summary.over_budget = true;
         }
     }
     let notes: Vec<String> = report
         .steps
         .iter()
+        .filter(|step| matches!(step.status, StepStatus::Failed | StepStatus::TimedOut))
         .filter_map(|step| {
             step.base
                 .as_ref()
                 .and_then(|outcome| outcome.note.as_ref())
-                .filter(|_| matches!(step.status, StepStatus::Failed | StepStatus::TimedOut))
                 .map(|note| format!("{}: {note}.", place(step)))
         })
         .collect();
     report.notes.extend(notes);
     summary.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     report.base = Some(summary);
-    let stopped = report.result == crate::verify::VerifyResult::Stopped;
+    let stopped = report.result == crate::verify::VerifyResult::Stopped
+        || run.options.stop.load(Ordering::SeqCst);
     settle(report, stopped);
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -762,28 +1020,26 @@ fn run_in_worktree(
     run: &BaseRun<'_>,
     worktree: &Worktree,
     to_run: &[Pending],
-    budget: Option<Duration>,
-    started: Instant,
+    links: &[String],
+    deadline: Option<Instant>,
     summary: &mut BaseReport,
     say: &dyn Fn(&str),
-) -> Result<()> {
-    let deadline = budget.map(|limit| started + limit);
+) {
     // The head's installed dependencies, linked in: no network, no install
-    // into a shared interpreter (ADR 0037).
-    // With verify.baseInstall the install provides them, and nothing is
-    // linked: an install must never write through a link into the head.
-    let links = if run.options.config.base_install.is_some() {
-        Vec::new()
-    } else {
-        dependency_folders(run.root)
-    };
+    // into a shared interpreter (ADR 0037). A link that cannot be made
+    // means the base cannot be judged.
+    let mut not_judged: Option<String> = None;
     for folder in links {
-        worktree.link(
-            &folder_of(run.root, Some(&folder)),
-            &folder_of(&worktree.root, Some(&folder)),
+        let made = worktree.link(
+            &folder_of(run.root, Some(folder)),
+            &folder_of(&worktree.root, Some(folder)),
         );
+        if !made && not_judged.is_none() {
+            not_judged = Some(format!(
+                "the head's {folder} could not be linked into the base worktree"
+            ));
+        }
     }
-    let mut install_failed: Option<String> = None;
     // The head's dependencies stand in for the base's only when they are
     // the same: a changed lockfile or requirements list means the base
     // cannot be judged without an install.
@@ -800,9 +1056,9 @@ fn run_in_worktree(
                 .collect()
         })
         .unwrap_or_default();
-    if run.options.config.base_install.is_none() {
+    if run.options.config.base_install.is_none() && not_judged.is_none() {
         if let Some(first) = changed_dependencies.first() {
-            install_failed = Some(format!(
+            not_judged = Some(format!(
                 "{first} changed, so the head's installed dependencies do not stand for the base's; set verify.baseInstall to a command that installs them in the base worktree"
             ));
         }
@@ -812,22 +1068,30 @@ fn run_in_worktree(
         .config
         .base_install
         .as_ref()
-        .filter(|_| install_failed.is_none())
+        .filter(|_| not_judged.is_none())
     {
         say(&format!("installing: {install}"));
-        let installed = run_base_step(
+        match run_base_step(
             &worktree.root,
             None,
             "install",
             install,
             run.options,
             deadline,
-        )?;
-        if installed.status != StepStatus::Passed {
-            install_failed = Some(format!(
-                "verify.baseInstall (`{install}`) did not succeed in the base worktree: {}",
-                installed.detail
-            ));
+        ) {
+            Ok(installed) if installed.status == StepStatus::Passed => {}
+            Ok(installed) => {
+                not_judged = Some(format!(
+                    "verify.baseInstall (`{install}`) did not succeed in the base worktree: {}",
+                    installed.detail
+                ));
+            }
+            Err(error) => {
+                not_judged = Some(format!(
+                    "verify.baseInstall (`{install}`) could not run in the base worktree: {}",
+                    error.message()
+                ));
+            }
         }
     }
 
@@ -836,147 +1100,172 @@ fn run_in_worktree(
         .steps
         .first()
         .is_some_and(|step| step.name == "check" && step.status == StepStatus::Failed);
-    if check_failed {
+    if check_failed && not_judged.is_none() && !past(deadline) {
         match (run.check)(&worktree.root) {
-            Ok(base_ids) => {
-                let base_ids: BTreeSet<&String> = base_ids.iter().collect();
-                let new: Vec<&String> = run
-                    .head_violations
-                    .iter()
-                    .filter(|id| !base_ids.contains(id))
-                    .collect();
-                let step = &mut report.steps[0];
-                step.base = Some(BaseOutcome {
-                    status: BaseStatus::Failed,
-                    source: BaseSource::Ran,
-                    note: None,
-                });
-                step.label = Some(if new.is_empty() && !run.head_violations.is_empty() {
-                    Label::PreExisting
-                } else {
-                    Label::New
-                });
-                step.output_tail = step
-                    .output_tail
-                    .iter()
-                    .map(|line| {
-                        let found = run.head_violations.iter().find(|id| {
-                            let mut parts = id.split(ID_SEPARATOR);
-                            let (Some(rule), Some(file), Some(message)) =
-                                (parts.next(), parts.next(), parts.next())
-                            else {
-                                return false;
-                            };
-                            line.starts_with(rule) && line.contains(file) && line.ends_with(message)
-                        });
-                        match found {
-                            Some(id) if base_ids.contains(id) => format!("[pre-existing] {line}"),
-                            Some(_) => format!("[new] {line}"),
-                            None => line.clone(),
-                        }
-                    })
-                    .collect();
-            }
+            Ok(base_ids) => label_check(report, run, &base_ids),
             Err(error) => {
-                report.steps[0].base = Some(BaseOutcome {
-                    status: BaseStatus::SetupNeeded,
-                    source: BaseSource::Ran,
-                    note: Some(format!(
+                report.steps[0].base = Some(BaseOutcome::new(
+                    BaseStatus::SetupNeeded,
+                    BaseSource::Ran,
+                    Some(format!(
                         "the check could not run on the base commit ({})",
                         error.message()
                     )),
-                });
+                ));
             }
         }
     }
 
     for pending in to_run {
         let step = &report.steps[pending.index];
-        let outcome = if let Some(problem) = &install_failed {
-            BaseOutcome {
-                status: BaseStatus::SetupNeeded,
-                source: BaseSource::Ran,
-                note: Some(problem.clone()),
-            }
+        let outcome = if let Some(problem) = &not_judged {
+            BaseOutcome::new(
+                BaseStatus::SetupNeeded,
+                BaseSource::Ran,
+                Some(problem.clone()),
+            )
         } else if run.options.stop.load(Ordering::SeqCst) {
-            BaseOutcome {
-                status: BaseStatus::Stopped,
-                source: BaseSource::Ran,
-                note: None,
-            }
-        } else if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            BaseOutcome::new(BaseStatus::Stopped, BaseSource::Ran, None)
+        } else if past(deadline) {
             summary.over_budget = true;
-            BaseOutcome {
-                status: BaseStatus::OverBudget,
-                source: BaseSource::Ran,
-                note: None,
-            }
+            BaseOutcome::new(BaseStatus::OverBudget, BaseSource::Ran, None)
         } else {
             let command = step.command.clone().unwrap_or_default();
             let project = plan_of(run.plan, step);
+            let dir = folder_of(&worktree.root, step.project.as_deref());
             say(&format!("{}: started: {command}", place(step)));
-            let ran = run_base_step(
-                &worktree.root,
-                project,
-                &step.name,
-                &command,
-                run.options,
-                deadline,
-            )?;
-            summary.ran += 1;
-            let refused_link = ran
-                .output_tail
-                .iter()
-                .any(|line| line.contains("ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH"));
-            let status = match ran.status {
-                // pnpm refuses a linked node_modules for recursive runs: that
-                // says nothing about the code.
-                StepStatus::Failed if refused_link => BaseStatus::SetupNeeded,
-                StepStatus::Passed => BaseStatus::Passed,
-                StepStatus::Failed => BaseStatus::Failed,
-                StepStatus::TimedOut
-                    if deadline.is_some_and(|deadline| {
-                        Instant::now() + Duration::from_millis(50) >= deadline
-                    }) =>
-                {
-                    summary.over_budget = true;
-                    BaseStatus::OverBudget
-                }
-                StepStatus::TimedOut => BaseStatus::TimedOut,
-                StepStatus::Stopped => BaseStatus::Stopped,
-                _ => BaseStatus::SetupNeeded,
+            let ran = if dir.is_dir() {
+                run_base_step(
+                    &worktree.root,
+                    project,
+                    &step.name,
+                    &command,
+                    run.options,
+                    deadline,
+                )
+                .map_err(|error| error.message().to_owned())
+            } else {
+                Err("its folder does not exist on the base commit".to_owned())
             };
-            say(&format!(
-                "{}: {} on the base after {}",
-                place(step),
-                match status {
-                    BaseStatus::Passed => "passed",
-                    BaseStatus::Failed => "FAILED",
-                    BaseStatus::SetupNeeded => "SETUP NEEDED",
-                    BaseStatus::TimedOut => "TIMED OUT",
-                    BaseStatus::OverBudget => "OVER BUDGET",
-                    BaseStatus::Stopped => "STOPPED",
-                },
-                format_duration(Duration::from_millis(ran.duration_ms))
-            ));
-            if let Some(key) = &pending.key {
-                keep(run.root, key, status, ran.duration_ms);
-            }
-            BaseOutcome {
-                status,
-                source: BaseSource::Ran,
-                note: (status == BaseStatus::SetupNeeded).then(|| {
-                    if refused_link {
-                        "pnpm refused the head's node_modules linked into the base worktree; set verify.baseInstall to an install such as `pnpm install --frozen-lockfile --offline`".to_owned()
-                    } else {
-                        format!("the base run of it needed setup ({})", ran.detail)
+            match ran {
+                Err(problem) => BaseOutcome::new(
+                    BaseStatus::SetupNeeded,
+                    BaseSource::Ran,
+                    Some(format!("it could not run on the base commit ({problem})")),
+                ),
+                Ok(ran) => {
+                    summary.ran += 1;
+                    let refused_link = ran
+                        .output_tail
+                        .iter()
+                        .any(|line| line.contains("ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH"));
+                    let status = match ran.status {
+                        StepStatus::Passed => BaseStatus::Passed,
+                        // pnpm refuses a linked node_modules for recursive
+                        // runs: that says nothing about the code.
+                        StepStatus::Failed if refused_link => BaseStatus::SetupNeeded,
+                        StepStatus::Failed => BaseStatus::Failed,
+                        StepStatus::TimedOut
+                            if deadline.is_some_and(|deadline| {
+                                Instant::now() + Duration::from_millis(50) >= deadline
+                            }) =>
+                        {
+                            summary.over_budget = true;
+                            BaseStatus::OverBudget
+                        }
+                        StepStatus::TimedOut => BaseStatus::TimedOut,
+                        StepStatus::Stopped => BaseStatus::Stopped,
+                        _ => BaseStatus::SetupNeeded,
+                    };
+                    say(&format!(
+                        "{}: {} on the base after {}",
+                        place(step),
+                        match status {
+                            BaseStatus::Passed => "passed",
+                            BaseStatus::Failed => "FAILED",
+                            BaseStatus::SetupNeeded => "SETUP NEEDED",
+                            BaseStatus::TimedOut => "TIMED OUT",
+                            BaseStatus::OverBudget => "OVER BUDGET",
+                            BaseStatus::Stopped => "STOPPED",
+                        },
+                        format_duration(Duration::from_millis(ran.duration_ms))
+                    ));
+                    if let Some(key) = &pending.key {
+                        keep(run.root, key, status, ran.duration_ms, &ran.signature);
                     }
-                }),
+                    let note = (status == BaseStatus::SetupNeeded).then(|| {
+                        if refused_link {
+                            "pnpm refused the head's node_modules linked into the base worktree; set verify.baseInstall to an install such as `pnpm install --frozen-lockfile --offline`".to_owned()
+                        } else {
+                            format!("the base run of it needed setup ({})", ran.detail)
+                        }
+                    });
+                    let mut outcome = BaseOutcome::new(status, BaseSource::Ran, note);
+                    outcome.signature = ran.signature;
+                    outcome
+                }
             }
         };
         report.steps[pending.index].base = Some(outcome);
     }
-    Ok(())
+}
+
+fn past(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
+}
+
+/// Labels the check from the base's violations: `pre-existing` only when
+/// every violation of the head is on the base too, as often.
+fn label_check(report: &mut VerifyReport, run: &BaseRun<'_>, base_ids: &[String]) {
+    let mut left: BTreeMap<&str, usize> = BTreeMap::new();
+    for id in base_ids {
+        *left.entry(id.as_str()).or_default() += 1;
+    }
+    let mut new_ids: Vec<&String> = Vec::new();
+    for id in run.head_violations {
+        match left.get_mut(id.as_str()) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => new_ids.push(id),
+        }
+    }
+    let base_set: BTreeSet<&String> = base_ids.iter().collect();
+    let step = &mut report.steps[0];
+    step.base = Some(BaseOutcome::new(
+        if base_ids.is_empty() {
+            BaseStatus::Passed
+        } else {
+            BaseStatus::Failed
+        },
+        BaseSource::Ran,
+        None,
+    ));
+    step.label = Some(if new_ids.is_empty() && !run.head_violations.is_empty() {
+        Label::PreExisting
+    } else {
+        Label::New
+    });
+    step.output_tail = step
+        .output_tail
+        .iter()
+        .map(|line| {
+            let found = run.head_violations.iter().find(|id| {
+                let mut parts = id.split(ID_SEPARATOR);
+                let (Some(rule), Some(file), Some(message)) =
+                    (parts.next(), parts.next(), parts.next())
+                else {
+                    return false;
+                };
+                line.starts_with(rule) && line.contains(file) && line.ends_with(message)
+            });
+            match found {
+                Some(id) if base_set.contains(id) && !new_ids.contains(&id) => {
+                    format!("[pre-existing] {line}")
+                }
+                Some(_) => format!("[new] {line}"),
+                None => line.clone(),
+            }
+        })
+        .collect();
 }
 
 /// The separator between the parts of a violation's identity.
@@ -1037,19 +1326,30 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_default_branch_has_nothing_to_compare_and_a_change_does() {
+    fn the_base_of_a_branch_is_its_merge_base_and_main_alone_has_none() {
         let fixture = committed();
+        // On main with no upstream: no base, clean or not, since a commit
+        // made here could not be told from the base.
         let BaseChoice::Nothing(reason) = choose_base(fixture.root(), None).unwrap() else {
-            panic!("a clean main has no base");
+            panic!("main with no upstream has no base");
+        };
+        assert!(reason.contains("no upstream"), "{reason}");
+        let base = git_line(fixture.root(), &["rev-parse", "HEAD"]).unwrap();
+        // A branch: with no change there is nothing to compare.
+        git(fixture.root(), &["checkout", "--quiet", "-b", "feature"]);
+        let BaseChoice::Nothing(reason) = choose_base(fixture.root(), None).unwrap() else {
+            panic!("a clean branch at main has nothing to compare");
         };
         assert!(reason.contains("nothing to compare"), "{reason}");
+        // An uncommitted change, then a commit: the base is the merge base.
         fs::write(fixture.root().join("a.txt"), "two\n").unwrap();
-        let BaseChoice::Compare(base) = choose_base(fixture.root(), None).unwrap() else {
+        let BaseChoice::Compare(dirty) = choose_base(fixture.root(), None).unwrap() else {
             panic!("an uncommitted change has a base");
         };
-        assert_eq!(base.reference, "main");
-        // A branch with a commit compares with the merge base.
-        git(fixture.root(), &["checkout", "--quiet", "-b", "feature"]);
+        assert_eq!(
+            (dirty.reference.as_str(), dirty.commit.as_str()),
+            ("main", base.as_str())
+        );
         git(
             fixture.root(),
             &["commit", "--quiet", "--no-verify", "-am", "change"],
@@ -1057,7 +1357,22 @@ mod tests {
         let BaseChoice::Compare(on_branch) = choose_base(fixture.root(), None).unwrap() else {
             panic!("a branch has a base");
         };
-        assert_eq!(on_branch.commit, base.commit);
+        assert_eq!(on_branch.commit, base);
+        // firescale's own folder is not a change.
+        git(fixture.root(), &["checkout", "--quiet", "main"]);
+        git(fixture.root(), &["checkout", "--quiet", "-b", "other"]);
+        fs::create_dir_all(fixture.root().join(".firescale/steps")).unwrap();
+        fs::write(fixture.root().join(".firescale/steps/x.json"), "{}").unwrap();
+        assert!(matches!(
+            choose_base(fixture.root(), None).unwrap(),
+            BaseChoice::Nothing(_)
+        ));
+        // An explicit --base is used on main too, and a bad one is an error.
+        git(fixture.root(), &["checkout", "--quiet", "main"]);
+        assert!(matches!(
+            choose_base(fixture.root(), Some(&base)).unwrap(),
+            BaseChoice::Nothing(_)
+        ));
         assert!(choose_base(fixture.root(), Some("no-such-ref")).is_err());
     }
 
@@ -1097,5 +1412,32 @@ mod tests {
             violation_id("core/x", "a.txt", "bad"),
             violation_id("core/x", "b.txt", "bad")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_node_modules_with_a_workspace_link_is_never_linked() {
+        let fixture = committed();
+        let root = fixture.root();
+        fs::create_dir_all(root.join("packages/lib")).unwrap();
+        fs::create_dir_all(root.join("node_modules/@scope")).unwrap();
+        fs::create_dir_all(root.join("node_modules/left-pad")).unwrap();
+        fs::write(root.join(".gitignore"), "node_modules/\n").unwrap();
+        assert!(!links_into_repo(root, &root.join("node_modules")));
+        std::os::unix::fs::symlink("../../packages/lib", root.join("node_modules/@scope/lib"))
+            .unwrap();
+        assert!(links_into_repo(root, &root.join("node_modules")));
+        assert!(dependency_folders(root).is_empty());
+        // An editable install in a virtual environment.
+        let site = root.join(".venv/lib/python3.12/site-packages");
+        fs::create_dir_all(&site).unwrap();
+        fs::write(root.join(".gitignore"), "node_modules/\n.venv/\n").unwrap();
+        assert!(!links_into_repo(root, &root.join(".venv")));
+        fs::write(
+            site.join("__editable__.app-0.1.pth"),
+            format!("{}\n", root.join("src").to_string_lossy()),
+        )
+        .unwrap();
+        assert!(links_into_repo(root, &root.join(".venv")));
     }
 }

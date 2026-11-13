@@ -95,6 +95,8 @@ async function blameRepo(lint: 'ok' | 'fail', test: 'ok' | 'fail') {
   const init = await runGit(root, ['init', '--quiet', '--initial-branch=main']);
   expect(init.code).toBe(0);
   await commitAll(root, 'base');
+  // The change is made on a branch; the base is its merge base with main.
+  expect((await runGit(root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
   const runs = async (): Promise<string[]> =>
     (await readFile(log, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
   const write = (file: string, content: string) => writeFile(path.join(root, file), content);
@@ -143,8 +145,7 @@ describe('blame-aware verify', () => {
       /Fixed by this change \(it fails on the base commit [0-9a-f]{7}\): test/,
     );
 
-    // Committed on a branch: the base is the merge base with main.
-    expect((await runGit(root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    // Committed on the branch: the base is still the merge base with main.
     await commitAll(root, 'break lint');
     const committed = await report((await runCli(['verify', '--json'], root)).stdout);
     expect(committed.result).toBe('failed');
@@ -254,6 +255,7 @@ describe('blame-aware verify', () => {
       "if (process.cwd().includes('firescale-base-')) setTimeout(() => process.exit(1), 20000); else process.exit(1);\n",
     );
     await commitAll(root, 'slow on the base');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
     await write('lint.txt', 'ok, changed\n');
     const result = await runCli(['verify', '--json'], root);
     expect(result.code).toBe(EXIT_VIOLATIONS);
@@ -277,6 +279,82 @@ describe('blame-aware verify', () => {
   });
 });
 
+describe('blame-aware verify needs evidence before it lets a failure pass', () => {
+  it('does not hide a new failure in a step that also failed on the base another way', async () => {
+    const { root, write } = await blameRepo('ok', 'ok');
+    // test.js prints which checks fail: on the base "mul" is broken.
+    const verbose = [
+      "const fs = require('fs');",
+      "const broken = fs.readFileSync('test.txt', 'utf8').split(',').map((s) => s.trim()).filter(Boolean);",
+      "for (const name of broken) console.log('FAIL ' + name);",
+      'process.exit(broken.length > 0 ? 1 : 0);',
+      '',
+    ].join('\n');
+    await write('test.js', verbose);
+    await write('test.txt', 'mul\n');
+    await commitAll(root, 'mul is broken on the base');
+    // The base of the branch is still the first commit; move main along.
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    await write('test.txt', 'mul, add\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base?.note).toContain('not in the same way');
+    // The same failure as on the base does not block.
+    await write('test.txt', 'mul\n');
+    await write('lint.txt', 'ok, changed\n');
+    const same = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(same, 'test').label).toBe('pre-existing');
+  });
+
+  it('never makes a commit on the default branch its own base', async () => {
+    const { root, write } = await blameRepo('ok', 'ok');
+    expect((await runGit(root, ['checkout', '--quiet', 'main'])).code).toBe(0);
+    await write('test.txt', 'fail\n');
+    await commitAll(root, 'a broken commit on main');
+    await write('lint.txt', 'ok, changed\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(json.base?.compared).toBe(false);
+    expect(json.base?.reason).toContain('default branch main with no upstream');
+    expect(step(json, 'test').label).toBeUndefined();
+  });
+
+  it('judges a project that is new on the head without failing the run', async () => {
+    const { root, write } = await blameRepo('ok', 'ok');
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.projects = {
+      fresh: { lint: false, typecheck: false, test: 'node -e "process.exit(1)"' },
+    };
+    await write('firescale.config.json', JSON.stringify(config));
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(path.join(root, 'fresh'), { recursive: true });
+    await write('fresh/package.json', '{"name":"fresh"}\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test', 'fresh').status).toBe('failed');
+    expect(step(json, 'test', 'fresh').label).toBeUndefined();
+    expect(step(json, 'test', 'fresh').base?.note).toContain('does not exist on the base commit');
+  });
+
+  it("leaves the index untouched even when a file's time changed", async () => {
+    const { root, write } = await blameRepo('ok', 'fail');
+    const index = async () =>
+      createHash('sha256')
+        .update(await readFile(path.join(root, '.git', 'index')))
+        .digest('hex');
+    // Same content, new time: `git status` would refresh the index.
+    await write('test.js', await readFile(path.join(root, 'test.js'), 'utf8'));
+    await write('lint.txt', 'ok, changed\n');
+    const before = await index();
+    await runCli(['verify'], root);
+    expect(await index()).toBe(before);
+  });
+});
+
 describe("the base worktree's dependencies", () => {
   it("links the head's node_modules in, and links nothing when verify.baseInstall is set", async () => {
     const { root, write } = await blameRepo('ok', 'fail');
@@ -295,6 +373,7 @@ describe("the base worktree's dependencies", () => {
     config.verify.test = `node probe.js ${JSON.stringify(log)}`;
     await write('firescale.config.json', JSON.stringify(config));
     await commitAll(root, 'probe');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
     const { mkdir } = await import('node:fs/promises');
     await mkdir(path.join(root, 'node_modules'), { recursive: true });
     await write('node_modules/marker.txt', 'installed\n');
@@ -318,6 +397,7 @@ describe('blame-aware verify on the course project', () => {
   it('runs on the base only the projects whose inputs differ', async () => {
     const repo: FixtureRepo = await fixtures.create({ files: courseProjectFiles() });
     await commitAll(repo.root, 'initial');
+    expect((await runGit(repo.root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
     const tools = await fixtures.create({ files: {}, track: 'no-git' });
     await writeToolShims(tools.root, { versions: true });
     const log = path.join(tools.root, 'calls.log');

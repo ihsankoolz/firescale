@@ -997,12 +997,26 @@ pub fn now_secs() -> u64 {
 pub fn store(root: &Path, entry: &Entry) -> std::io::Result<()> {
     let dir = cache_dir(root);
     fs::create_dir_all(&dir)?;
+    ignore_firescale_folder(root);
     let text = serde_json::to_string_pretty(entry).map_err(std::io::Error::other)?;
     let temp = dir.join(format!(".{}.{}.tmp", entry.key, std::process::id()));
     fs::write(&temp, text)?;
     fs::rename(&temp, entry_path(root, &entry.key)).inspect_err(|_| {
         let _ = fs::remove_file(&temp);
     })
+}
+
+/// Writes `.firescale/.gitignore` (`*`) when it is missing, so firescale's
+/// own files never show up as changes in git, also when the repo's own
+/// `.gitignore` does not list `.firescale/`.
+pub fn ignore_firescale_folder(root: &Path) {
+    let ignore = root.join(".firescale").join(".gitignore");
+    if !ignore.exists() {
+        let _ = fs::write(
+            ignore,
+            "# Created by firescale. Nothing in this folder should be committed.\n*\n",
+        );
+    }
 }
 
 /// Removes entries older than [`MAX_AGE`], and the least recently used
@@ -1252,29 +1266,34 @@ impl<'a> StepCache<'a> {
         }
     }
 
-    /// True when no file the unit's key holds differs between the base
-    /// commit and the working tree (`changed` lists the paths that do), so
-    /// the unit's key is the same on both. `None` when the unit's steps are
-    /// not cached, so their inputs are not known.
+    /// True when the step's key is the same on the base commit and the
+    /// working tree: the step is cached (every refusal of [`Self::key`]
+    /// holds here too) and no file its key holds differs between them
+    /// (`changed` lists the paths that do). Then its head result is its
+    /// base result (ADR 0037).
     #[must_use]
     pub fn same_on_base(
         &self,
         folder: Option<&str>,
         kind: Option<&str>,
+        step: &str,
+        command: &str,
         dir: &Path,
         changed: &BTreeSet<String>,
-    ) -> Option<bool> {
+    ) -> bool {
+        if self.key(folder, kind, step, command, dir).is_err() {
+            return false;
+        }
         let snapshot = self
             .snapshot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        if snapshot.problem.is_some() {
-            return None;
-        }
-        let scope = self.scope(folder, kind, dir, &snapshot).ok()?;
+        let Ok(scope) = self.scope(folder, kind, dir, &snapshot) else {
+            return false;
+        };
         let owned = &self.digests.owned;
-        Some(!changed.iter().any(|path| covers(&scope, owned, path)))
+        !changed.iter().any(|path| covers(&scope, owned, path))
     }
 
     /// The key of a step's result on the base commit: the step's own key

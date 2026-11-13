@@ -47,6 +47,9 @@ pub fn ignore_inherited_repo() {
 
 fn git_command() -> Command {
     let mut command = Command::new("git");
+    // firescale only reads: never refresh the index (`git status` would
+    // rewrite `.git/index` and take its lock while an agent commits).
+    command.env("GIT_OPTIONAL_LOCKS", "0");
     if IGNORE_INHERITED_REPO.load(Ordering::SeqCst) {
         for name in REPO_ENV {
             command.env_remove(name);
@@ -58,7 +61,16 @@ fn git_command() -> Command {
 /// Runs git in `cwd`. A non-zero exit is returned, not treated as an error;
 /// only failing to start git is an error.
 pub fn run_git(cwd: &Path, args: &[&str]) -> Result<GitOutput> {
-    let output = git_command()
+    run_git_env(cwd, args, &[])
+}
+
+/// [`run_git`] with extra environment variables for this one command.
+pub fn run_git_env(cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<GitOutput> {
+    let mut command = git_command();
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let output = command
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
