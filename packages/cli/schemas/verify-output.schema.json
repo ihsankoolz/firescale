@@ -413,6 +413,111 @@
           "type": "boolean"
         }
       }
+    },
+    "tamper": {
+      "description": "The tamper guard (ADR 0042): tests, skips and assertions in the changed JS/TS test files, compared with the base commit. Absent without a base commit.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "base", "files", "counts", "findings"],
+      "properties": {
+        "policy": {
+          "description": "verify.tamper on the base commit: off, evaluated (report only, the default) or enforced (findings fail verify).",
+          "enum": ["off", "evaluated", "enforced"]
+        },
+        "base": {
+          "description": "The base commit compared with.",
+          "type": "string"
+        },
+        "files": {
+          "description": "Test files compared.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "baseTests",
+            "headTests",
+            "baseSkipped",
+            "headSkipped",
+            "baseAssertions",
+            "headAssertions",
+            "excusedTests",
+            "excusedAssertions"
+          ],
+          "properties": {
+            "baseTests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "headTests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "baseSkipped": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "headSkipped": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "baseAssertions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "headAssertions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "excusedTests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "excusedAssertions": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "file", "line", "onBase", "what"],
+            "properties": {
+              "kind": {
+                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, or a new .only), assertion-removed (fewer assertions).",
+                "enum": ["test-deleted", "test-skipped", "assertion-removed"]
+              },
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "onBase": {
+                "description": "True when file and line are in the base commit's version (a deleted test or assertion).",
+                "type": "boolean"
+              },
+              "what": {
+                "description": "The test's describe path and title, or the assertion without white space.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "notChecked": {
+          "description": "Test files with syntax errors on the base or now: not compared.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

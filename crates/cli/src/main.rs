@@ -41,6 +41,8 @@ use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
 use firescale_core::sharedcache::{CiRun, SharedCache};
 use firescale_core::stepcache::{CacheSettings, StepCache};
+use firescale_core::tamper;
+use firescale_core::verify::add_tamper;
 use firescale_core::verify::{
     check_project_folders, format_verify_human, format_verify_json, format_verify_plan,
     limit_to_affected, plan_verify, run_verify_with, CheckStep, RunOptions, VerifyPlan,
@@ -1147,21 +1149,28 @@ fn verify_report(
             // A base that cannot be compared never fails the run: every
             // failure then blocks, as without a base.
             match changed_since(root, base) {
-                Ok(changed) => compare(
-                    &mut verify,
-                    &BaseRun {
-                        root,
-                        base,
-                        changed: changed.as_ref(),
-                        cache: &cache,
-                        plan: &plan,
-                        options: &options,
-                        check: &base_check,
-                        head_violations: &head_violations,
-                        judge_passes: mode == VerifyMode::Full,
-                        shortcuts: !args.no_cache,
-                    },
-                ),
+                Ok(changed) => {
+                    compare(
+                        &mut verify,
+                        &BaseRun {
+                            root,
+                            base,
+                            changed: changed.as_ref(),
+                            cache: &cache,
+                            plan: &plan,
+                            options: &options,
+                            check: &base_check,
+                            head_violations: &head_violations,
+                            judge_passes: mode == VerifyMode::Full,
+                            shortcuts: !args.no_cache,
+                        },
+                    );
+                    // The tamper guard: the same base, the same changed
+                    // files, and its policy from the base commit (ADR 0042).
+                    if let Some(changed) = &changed {
+                        add_tamper(&mut verify, tamper::guard(root, base, changed));
+                    }
+                }
                 Err(error) => {
                     verify.base = Some(BaseReport {
                         compared: false,
