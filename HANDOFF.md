@@ -4,12 +4,11 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Nothing is half-finished. This session (2026-11-13, from 07:06 UTC) built M18 to M21, one pull request each, and stopped after M21 as asked. **No tag has been pushed and the version is unchanged (0.2.1).**
+**0.3.0 is ready to tag.** `main` holds version 0.3.0 (set with `node scripts/bump-version.mjs 0.3.0`; `--check` passes). No tag has been pushed: push `v0.3.0` on `main` when you want it published (`RELEASING.md`). `v0.2.1` was never tagged; 0.3.0 includes everything since 0.2.0.
 
-- **Branch:** `claude/amazing-planck-g1745y` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
-- **Done in this session:** M18, the local step cache (#28, ADR 0036); M19, the base run (#29, ADR 0037); M20, per-test labels (#30, ADR 0038); M21, reruns and the stop hook (#31, ADR 0039).
-- **Next, in order:** M22 (faster generated CI and a shared cache); before it, the owner may want to tag `v0.2.1` or a later version (`RELEASING.md`).
-- The `v0.2.0` tag exists and 0.2.0 is on npm. `v0.2.1` has not been tagged.
+- **Branch:** `claude/vibrant-ramanujan-1ymxis` (the cloud session may push only to this branch; it is restarted from `main` after each merge).
+- **Done in this session (2026-11-13, afternoon):** two fixes to the base run and the version 0.3.0 (ADR 0040), then M22.
+- The `v0.2.0` tag exists and 0.2.0 is on npm.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
@@ -31,6 +30,11 @@ Nothing is half-finished. This session (2026-11-13, from 07:06 UTC) built M18 to
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on 0.3.0, for whoever touches the base run (ADR 0040):
+
+- A step's dependency lists are `facts::is_dependency_list` (Node and Python lockfiles, requirements lists), checked per step with `StepCache::changed_dependencies` in `blame::compare`; the check uses the whole repo.
+- `fixed` comes only from `confirm_fixed`: a base failure run now, plus a pass in a worktree of the head (`overlay_head`) in the same run. Only that pairing is kept (`fixed_key`); never use a kept base failure for a passing step without it.
 
 Notes on M20 and M21, for whoever touches per-test labels, reruns or the stop hook (ADR 0038, 0039):
 
@@ -152,7 +156,7 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Tag `v0.2.1` on `main` and push the tag when you are ready to release (`RELEASING.md`). `v0.2.0` is tagged and 0.2.0 is on npm.
+- Tag `v0.3.0` on `main` and push the tag when you are ready to release (`RELEASING.md`). `v0.2.0` is tagged and 0.2.0 is on npm; `v0.2.1` was never tagged.
 - Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
 - Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
 - Run 0.2.0 on the course project: `fscale doctor`, and `fscale adopt --dry-run` with `agent-ready` and `python` in `packs`, to see the agent files and the per-service checks on the real repo.
