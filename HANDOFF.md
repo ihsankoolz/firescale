@@ -4,13 +4,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Resumed on 2026-11-13 (about 06:00 UTC). M17 is merged (#25). This session's remaining pull requests, in order, each from `main` on `claude/dreamy-hopper-8aih76`:
-
-1. **M17 follow-up** (this pull request): a changed file that no project owns and that cannot affect a build or a test (Markdown, text, a licence, `docs/`) affects no project (ADR 0034); the cross-compiled release builds were proven to compile tree-sitter by a hand-started Release run.
-2. **The 0.2.1 fixes** (ADR 0035), then the version 0.2.1 with `scripts/bump-version.mjs`. No tag. Then stop.
+Nothing is half-finished. On 2026-11-13 this session merged M17 (#25), the M17 follow-up (#26) and the 0.2.1 fixes, and set the version to 0.2.1 (ADR 0034, 0035). **No tag has been pushed.**
 
 - **Branch:** `claude/dreamy-hopper-8aih76` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
-- **Next, in order:** the 0.2.1 fixes (the last pull request of this session); tag `v0.2.1` when ready (`RELEASING.md`); then M18, the local step-result cache (PLAN.md, ADR 0031).
+- **Next, in order:** tag `v0.2.1` when ready (`RELEASING.md`); then M18, the local step-result cache (PLAN.md, ADR 0031).
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
@@ -31,6 +28,14 @@ Resumed on 2026-11-13 (about 06:00 UTC). M17 is merged (#25). This session's rem
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on 0.2.1, for whoever touches how verify judges a test step (ADR 0035):
+
+- The early stops are in `run_step`'s `on_output` closure in `crates/core/src/verify.rs`: `service_down_while_running` (refused connections, and a named service that is down: `output_names` decides "named") and, after it, the `stopAfterErrors` stop (`EarlyKind::NoPass`).
+- After an early stop or a timeout, the `first_error` closure runs the command again with `--maxfail=1` under `FIRST_ERROR_LIMIT`; `first_error_lines` picks the lines, `hide_user` and `activity::redact` hide secrets.
+- A finished step: `setup_problem` (in `setup.rs`, now with `auth_failure`), then `errors_name_unreachable_service` (pytest's short summary).
+- Doctor reads `.env`/`.env.local` through `services::services_with_local_env`; verify's `services_for_folder` must keep not reading them.
+- The CLI tests use `fakePytest` in `packages/cli/src/verify-run.test.ts`: a stand-in that answers `--maxfail=1` with a first error.
 
 Notes on M17, for whoever builds M18 (the step cache) or touches the graph:
 
@@ -122,7 +127,7 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Tag `v0.2.0` on `main` and push the tag when you are ready to release (`RELEASING.md`).
+- Tag `v0.2.1` on `main` and push the tag when you are ready to release (`RELEASING.md`); 0.2.0 was never tagged, and 0.2.1 includes it.
 - Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
 - Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
 - Run 0.2.0 on the course project: `fscale doctor`, and `fscale adopt --dry-run` with `agent-ready` and `python` in `packs`, to see the agent files and the per-service checks on the real repo.

@@ -91,6 +91,55 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
 
+## 0.2.1 — setup problems in test steps, from running 0.2.0 on the course project
+
+**Found by the owner** (ADR 0035):
+
+- With Redis down, three pytest projects were stopped and Redis was named as the cause. With Redis up, the same three still errored on every test and ran to the 10-minute limit. Their real cause was a refused connection to the test database on `localhost:5433`; that port appears only in the tests' own settings (`TEST_DATABASE_URL` in `.env`).
+- A fourth project with 96 passes and 15 "Cannot reach the test Redis" errors was labelled FAILED.
+- After a stop or a timeout the summary showed only rows of `E`.
+
+**Built**
+
+1. A service that is down is named as the cause only when the step's output names it: its address, its name or its client library. Otherwise it is listed as "also not running".
+2. `verify.stopAfterErrors` (default 10, `false` turns it off) stops a pytest or unittest step that has reported that many errors with no pass and no failure, as likely setup.
+3. After a pytest step is stopped early or times out, one more run of the same command with `--maxfail=1` (limit 1 minute) gets the first error. Its text is printed under `First error of ...` and returned in JSON as `firstError`. If it shows a refused local connection or a failed login to a local database, the step is setup needed, naming the host and port.
+4. A finished pytest step whose errors (and no failures) all name a local service that is not running is setup needed, also when other tests passed.
+5. A timeout whose counts show mostly errors says the tests are erroring, not slow, and does not suggest a longer limit. The counts are in JSON as `tests`.
+6. "password authentication failed" (libpq, psycopg, asyncpg, Node `pg`), MySQL "Access denied ... (using password", and Prisma P1000, for a local database, are setup needed. The user name is never shown.
+7. Doctor checks local database, Redis and queue URLs found in `.env` and `.env.local` (localhost, 127.0.0.1, ::1). It keeps only the variable name, host and port, and its Debug-text and output tests prove that. `docs/doctor.md` says "reachable" means the port answers, not that it is the right database.
+
+**Proof** (stand-in pytest, `packages/cli/src/verify-run.test.ts`, "setup problems seen in a test step (ADR 0035)"):
+
+- all errors with a down service the output never mentions: not named as the cause;
+- all errors with every known service up: stopped early as likely setup, with the first error's text;
+- a refused local connection in the first error: setup needed, with its host and port;
+- a failed password login in the first error: setup needed, with no user name shown;
+- passes plus errors that all name an unreachable service: setup needed;
+- assertion failures, and errors that name no service: still FAILED with "Fix the failure";
+- a slow passing suite: never stopped;
+- a timeout of errors: no "raise the limit".
+
+Doctor: `doctor.test.ts` and `services.rs` tests. Rust unit tests for the first-error reader, the evidence check, the summary rule and the config key.
+
+**Independent review before the pull request** found seven issues, all fixed with tests (ADR 0035, "After the review"). Three could call a code failure setup needed, which tells an agent not to fix its code:
+
+- a test that quotes "password authentication failed" beside a real assertion failure;
+- an error in `test_redistribute_credits` (matched as "redis"), or `relation "orders" does not exist` while the database on 5433 was up (matched as PostgreSQL on 5432);
+- your run 1, which still named Redis because a progress line named a Redis test file.
+
+The others:
+
+- `--maxfail=1` was appended to piped or chained commands;
+- a passing suite that timed out got an extra run;
+- the last lines of a failed step were not cleaned of secrets;
+- port matches were prefixes.
+
+**Needs your decision**
+
+- **Thresholds.** The default of 10 errors, and the 1-minute limit of the extra run (it has no config key).
+- **No fix command for a failed login.** It has no command that fixes it, so the stop hook names none, and an agent will ask you to fix the test settings.
+
 ## M17 follow-up — files that affect no project, and the cross-compiled builds
 
 **Built** (ADR 0034): a changed file that no project owns and that cannot change a build or a test affects no project with `verify --affected`: Markdown, text files (not requirement or constraint lists, not `CMakeLists.txt`), a licence, and anything under the root `docs/`. `check` still runs, and a note names the files. Every other unowned file still runs everything. Tests: `a_root_readme_change_affects_no_project_but_an_unowned_root_script_affects_all` and "runs no project for a root README change, but everything for an unowned root script" in `graph.test.ts`.
@@ -328,7 +377,8 @@ Left: the facts schema stays at version 2 although its new `notes` field fails a
 
 ## Releases
 
-- **The version is 0.2.0 in every place it is recorded** (`node scripts/bump-version.mjs --check`), set after M16 in its own pull request. **No tag has been pushed and nothing was published:** tag `v0.2.0` on `main` yourself when ready (`RELEASING.md`). 0.2.0 holds M12 to M16: `fscale doctor`, the heartbeat counts and early stop for a service that is down, the agent files from `init`, `fscale add` and `fscale schema`, and the `nextjs` and `python` stack packs.
+- **The version is 0.2.1 in every place it is recorded** (`node scripts/bump-version.mjs --check`), set in the 0.2.1 pull request. **No tag has been pushed and nothing was published.** 0.2.1 holds M17 (the project graph, `fscale graph`, `verify --affected`, `verify --dry-run`), the M17 follow-up (docs-only changes run no project) and the 0.2.1 fixes (ADR 0035). 0.2.0 was never tagged either; tag `v0.2.1` on `main` when ready (`RELEASING.md`).
+- (Earlier) **The version was 0.2.0 in every place it is recorded** (`node scripts/bump-version.mjs --check`), set after M16 in its own pull request. **No tag has been pushed and nothing was published:** tag `v0.2.0` on `main` yourself when ready (`RELEASING.md`). 0.2.0 holds M12 to M16: `fscale doctor`, the heartbeat counts and early stop for a service that is down, the agent files from `init`, `fscale add` and `fscale schema`, and the `nextjs` and `python` stack packs.
 
 - **0.1.3 was released on 2026-11-12** and run on your course project on Windows the same day. Progress lines, setup detection, parallel projects (`--jobs`) and Ctrl+C all worked, and no process was left behind after Ctrl+C. Two problems from that run are fixed in M12's pull request: the heartbeat showed `last output: E` (a pytest marker), and three services spent over six minutes with every test erroring because their test database was not running.
 - **0.1.2 was released on 2026-11-12 through the Release workflow**, with npm trusted publishing, like 0.1.1.

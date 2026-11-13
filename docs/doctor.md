@@ -1,6 +1,6 @@
 # fscale doctor
 
-`fscale doctor` checks whether **this machine** is ready to work on the repo: the tools it declares, the env variables its `.env.example` files name, the installed dependencies of each project, and the local services it expects. It looks at the machine, not at the code; `fscale check` and `fscale verify` look at the code (SPEC §17, ADR 0026).
+`fscale doctor` checks whether **this machine** is ready to work on the repo: the tools it declares, the env variables its `.env.example` files name, the installed dependencies of each project, and the local services it expects (from Compose files, `.env.example`, and the local database URLs in your `.env` and `.env.local`). It looks at the machine, not at the code; `fscale check` and `fscale verify` look at the code (SPEC §17, ADR 0026).
 
 ```bash
 fscale doctor
@@ -50,7 +50,7 @@ A tool that is missing is a problem with the page or command that installs it.
 
 ### Environment variables
 
-For each `.env.example` at the root and in each project's folder, every name it lists must be set (to something) in the environment, or be present in `.env` or `.env.local` beside it. **Only names are read from those files; values are dropped as each line is read, and never printed.** The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
+For each `.env.example` at the root and in each project's folder, every name it lists must be set (to something) in the environment, or be present in `.env` or `.env.local` beside it. **For this check only names are read from those files; values are dropped as each line is read, and never printed.** (The services check below reads one more thing from them: the host and port of a local database URL.) The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
 
 ### Dependencies
 
@@ -67,8 +67,9 @@ Local services the repo expects, read by the same code as verify's "service not 
 
 - **Compose files** (`compose.yaml`, `compose.yml`, `docker-compose.yaml`, `docker-compose.yml`, each with its `.override` file) in each project's folder and every folder above it, up to the root: each service that publishes a port on this machine and is a known database, cache, queue or search service (PostgreSQL, MySQL, MariaDB, MongoDB, Redis, Valkey, RabbitMQ, Elasticsearch, OpenSearch, Memcached, MinIO, Kafka, NATS, SQL Server), by its image or its name. The app's own containers (a backend, a proxy, an admin page) are left out unless an `.env.example` names their port. The fix is `docker compose up -d <service>` (with `-f <folder>/<file>` when the file is not at the root).
 - **`.env.example` files:** URLs with a service scheme (`postgresql://`, `postgres+asyncpg://`, `mysql://`, `redis://`, `mongodb://`, `amqp://`...) and pairs such as `REDIS_HOST=localhost` with `REDIS_PORT=6379` (also `_SERVER` and `_HOSTNAME`). Only hosts on this machine count: `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`. Without a Compose file, the fix names a `docker run` command for the service, with `<password>` for you to fill in.
+- **`.env` and `.env.local` files** in the same folders as the `.env.example` files above (each project's folder and every folder above it, up to the root), even when there is no `.env.example`: a test database that only your own `.env` names, such as `TEST_DATABASE_URL=postgresql+asyncpg://...@localhost:5433/test`, is checked too. Only **URL values** with a service scheme (the same schemes as above, such as `postgresql+asyncpg://`, `mysql+pymysql://`, `redis://`, `rediss://`, `mongodb://`, `amqp://`; never `mongodb+srv://`) whose host is `localhost`, `127.0.0.1` or `::1` (also `[::1]`) are taken; `HOST`/`PORT` pairs and every other variable are not. **Of each URL only the variable's name, the host and the port are kept** (the scheme's usual port when it names none); the user, the password, the database name and the URL itself are dropped as the line is read, so they cannot be printed. The source reads like `backend/.env (TEST_DATABASE_URL)`. A port that a Compose file or `.env.example` already names is one service, with that file as its source. Verify's watch for a service that is down while a step runs does not read these files.
 
-Each one is **reachable** or **not reachable**. Only the service name, the host and the port are shown. User names, passwords, database names and connection strings are never kept, so they cannot be printed; a test proves it.
+Each one is **reachable** or **not reachable**. **Reachable means only that something accepts a connection on that host and port**: not that it is the right database, that the database the tests use exists, or that the user and password in your settings can log in. A wrong login shows up when the tests run, and verify reports it as setup needed (see [verify.md](verify.md)). Only the service name, the host and the port are shown. User names, passwords, database names and connection strings are never kept, so they cannot be printed; a test proves it, for `.env.example`, `.env` and `.env.local` alike.
 
 ## JSON
 
@@ -98,3 +99,4 @@ When a `fscale verify` step ends as **setup needed**, the summary ends with one 
 - "Matching the lockfile" for Node is a file-time comparison, not a full comparison of versions. For uv and Poetry projects the packages are read from `pyproject.toml`'s `[project] dependencies`, not from `uv.lock` or `poetry.lock`.
 - Compose files are read with a small line reader, not a YAML parser: `services:`, `image:` and `ports:` in the short and long forms. Anchors, `extends` and `include` are not followed.
 - A service on another host (a cloud database) is not checked.
+- A service check is a TCP connection, not a login: doctor does not know whether the user and password work or whether the database exists.

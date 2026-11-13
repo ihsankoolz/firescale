@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::activity::Activity;
+use crate::activity::{Activity, Runner, Tally};
 use crate::services::{listening, services_for_folder, Service, PROBE_TIMEOUT};
 
 use crate::error::{Error, Result};
@@ -27,6 +27,14 @@ use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
 
 /// Version of the `fscale verify --json` format.
 pub const VERIFY_SCHEMA_VERSION: u32 = 5;
+
+/// Errors with no test passed and none failed before a test step is stopped
+/// as likely setup, by default (ADR 0035).
+pub const DEFAULT_ERRORS_BEFORE_STOP: u64 = 10;
+
+/// The time limit of the extra pytest run that finds the first error after
+/// a step was stopped early or timed out (ADR 0035).
+pub const FIRST_ERROR_LIMIT: Duration = Duration::from_secs(60);
 
 /// The line the summary ends with when a step needs setup (ADR 0026).
 pub const DOCTOR_HINT: &str =
@@ -103,9 +111,24 @@ pub struct VerifyConfig {
     /// a local service it needs is not running keeps running to its end
     /// (ADR 0025). By default it is stopped as soon as that is clear.
     pub keep_running_when_service_down: bool,
+    /// `verify.stopAfterErrors`: how many errors a test step may report,
+    /// with no test passed and none failed, before it is stopped as likely
+    /// setup (ADR 0035). `None`: the default; `Some(0)`: `false`, never.
+    pub stop_after_errors: Option<u64>,
 }
 
 impl VerifyConfig {
+    /// The error count at which a test step with no pass and no failure is
+    /// stopped, or `None` when that is turned off.
+    #[must_use]
+    pub fn errors_before_stop(&self) -> Option<u64> {
+        match self.stop_after_errors {
+            None => Some(DEFAULT_ERRORS_BEFORE_STOP),
+            Some(0) => None,
+            Some(count) => Some(count),
+        }
+    }
+
     /// The time limit of a step, and the config key that sets it most
     /// specifically. The most specific setting wins: the project's step,
     /// the project, the step for the whole repo, `verify.timeout`, then
@@ -781,6 +804,33 @@ pub struct StepReport {
     /// time limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_key: Option<String>,
+    /// For a step that ran pytest or unittest: the tests its output counted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tests: Option<TestCounts>,
+    /// For a pytest step that was stopped early or timed out: the text of
+    /// its first error, from one more run with `--maxfail=1` (ADR 0035).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub first_error: Vec<String>,
+}
+
+/// Tests a known runner reported for a step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct TestCounts {
+    pub passed: u64,
+    pub failed: u64,
+    pub errors: u64,
+    pub skipped: u64,
+}
+
+impl From<Tally> for TestCounts {
+    fn from(tally: Tally) -> Self {
+        Self {
+            passed: tally.passed,
+            failed: tally.failed,
+            errors: tally.errors,
+            skipped: tally.skipped,
+        }
+    }
 }
 
 /// The overall outcome of a run.
@@ -927,10 +977,293 @@ fn tail(stdout: &[u8], stderr: &[u8]) -> Vec<String> {
     );
     let lines: Vec<String> = strip_ansi(&text)
         .lines()
-        .map(|line| line.trim_end().to_owned())
+        .map(|line| hide_secrets(line.trim_end()))
         .filter(|line| !line.is_empty())
         .collect();
     lines[lines.len().saturating_sub(TAIL_LINES)..].to_vec()
+}
+
+/// The counts a known test runner reported in a finished step's output.
+fn final_tally(command: &str, stdout: &[u8], stderr: &[u8]) -> Option<Tally> {
+    let mut activity = Activity::new(command);
+    activity.feed(0, stdout);
+    activity.feed(1, stderr);
+    activity.runner().map(|_| activity.tally())
+}
+
+/// True when `--maxfail=1` can be added to the end of `command` and reach
+/// pytest: the command names pytest, and is one program with its
+/// arguments, with no pipe, `&&`, `;`, redirection or substitution outside
+/// quotes (`pytest | tee log` would hand the flag to `tee`).
+fn takes_maxfail(command: &str) -> bool {
+    if Runner::from_command(command) != Some(Runner::Pytest) {
+        return false;
+    }
+    let mut quote: Option<char> = None;
+    for c in command.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '|' | '&' | ';' | '<' | '>' | '`' | '$' | '\n') => return false,
+            _ => {}
+        }
+    }
+    quote.is_none()
+}
+
+/// The lines of pytest output short summary: `ERROR tests/a.py::t - ...`
+/// and `FAILED ...`, in order.
+fn summary_lines(output: &str) -> Vec<&str> {
+    let mut lines = output.lines().map(str::trim);
+    if !lines.any(|line| line.contains("short test summary info")) {
+        return Vec::new();
+    }
+    lines
+        .take_while(|line| !line.starts_with('='))
+        .filter(|line| line.starts_with("ERROR ") || line.starts_with("FAILED "))
+        .collect()
+}
+
+/// What pytest says about its first error or failure: the first block of
+/// `E   ...` lines (at most 12) and the first line of the short summary, with
+/// connection strings' secrets replaced by `***`. The last 10 lines when
+/// neither is there.
+#[must_use]
+pub fn first_error_lines(output: &str) -> Vec<String> {
+    let mut found: Vec<String> = output
+        .lines()
+        .map(str::trim_end)
+        .skip_while(|line| !line.trim_start().starts_with("E "))
+        .take_while(|line| line.trim_start().starts_with("E "))
+        .take(12)
+        .map(|line| line.trim().to_owned())
+        .collect();
+    if let Some(summary) = summary_lines(output).first() {
+        found.push((*summary).to_owned());
+    }
+    if found.is_empty() {
+        let lines: Vec<&str> = output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        found = lines[lines.len().saturating_sub(10)..]
+            .iter()
+            .map(|line| line.trim_end().to_owned())
+            .collect();
+    }
+    found
+        .iter()
+        .map(|line| {
+            let line = hide_secrets(line);
+            if line.chars().count() > 300 {
+                format!("{}...", line.chars().take(300).collect::<String>())
+            } else {
+                line
+            }
+        })
+        .collect()
+}
+
+/// A line with what could be a secret replaced by `***`: a URL's user and
+/// password (up to the last `@`, so a password with `/` in it is hidden
+/// too), `password=` and `pwd=` values, and the names after `user` and
+/// `role`, quoted with `"`, `'` or backquotes (ADR 0035).
+#[must_use]
+pub fn hide_secrets(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(index) = rest.find("://") {
+        let (before, after) = rest.split_at(index + 3);
+        out.push_str(before);
+        let end = after
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '`')
+            .unwrap_or(after.len());
+        match after[..end].rfind('@') {
+            Some(at) => {
+                out.push_str("***");
+                rest = &after[at..];
+            }
+            None => rest = after,
+        }
+    }
+    out.push_str(rest);
+    let mut line = out;
+    for key in ["password=", "pwd=", "passwd="] {
+        let mut out = String::with_capacity(line.len());
+        let mut rest = line.as_str();
+        while let Some(index) = rest.to_ascii_lowercase().find(key) {
+            let (before, after) = rest.split_at(index + key.len());
+            out.push_str(before);
+            let end = after
+                .find(|c: char| {
+                    c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '&' | ',' | ')')
+                })
+                .unwrap_or(after.len());
+            if end > 0 {
+                out.push_str("***");
+            }
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        line = out;
+    }
+    hide_user(&line)
+}
+
+/// `... for user "app"` and MySQL's `user 'app'@` with the user name
+/// replaced by `***`, so a failed login's text never names the user.
+fn hide_user(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some((index, word)) = ["user ", "role ", "credentials for "]
+        .iter()
+        .filter_map(|word| rest.find(word).map(|index| (index, *word)))
+        .min()
+    {
+        let (before, after) = rest.split_at(index + word.len());
+        out.push_str(before);
+        let Some(quote) = after
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '"' | '\'' | '`'))
+        else {
+            rest = after;
+            continue;
+        };
+        match after[1..].find(quote) {
+            Some(end) => {
+                out.push(quote);
+                out.push_str("***");
+                out.push(quote);
+                rest = &after[end + 2..];
+            }
+            None => rest = after,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The usual port of a kind of service named in an error, for the kinds
+/// of [`SERVICE_CLIENTS`].
+fn usual_port(kind: &str) -> u16 {
+    match kind {
+        "postgresql" => 5432,
+        "redis" => 6379,
+        "mysql" => 3306,
+        "mongodb" => 27017,
+        _ => 5672,
+    }
+}
+
+/// The first `localhost:<port>` or `127.0.0.1:<port>` in a line.
+fn local_port_in(line: &str) -> Option<u16> {
+    for host in ["localhost:", "127.0.0.1:", "[::1]:"] {
+        if let Some(index) = line.find(host) {
+            let digits: String = line[index + host.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if let Ok(port) = digits.parse() {
+                return Some(port);
+            }
+        }
+    }
+    None
+}
+
+/// For a finished pytest step with errors and no failures (`failed` is the
+/// runner's own count): when the message of every error in its short
+/// summary says a connection failed and names a local service that is not
+/// running (a refused connection; or the service's address, name or client
+/// as a whole word, while nothing listens on its port), the step needs
+/// setup, not a code change (ADR 0035).
+fn errors_name_unreachable_service(
+    output: &str,
+    failed: u64,
+    root: &Path,
+    dir: &Path,
+) -> Option<SetupProblem> {
+    let summary = summary_lines(output);
+    if failed > 0 || summary.is_empty() || summary.iter().any(|line| line.starts_with("FAILED ")) {
+        return None;
+    }
+    let declared = services_for_folder(root, dir);
+    let mut probed: BTreeMap<(String, u16), bool> = BTreeMap::new();
+    let mut down = |host: &str, port: u16| {
+        *probed
+            .entry((host.to_owned(), port))
+            .or_insert_with(|| !listening(host, port, PROBE_TIMEOUT))
+    };
+    let mut named: Option<String> = None;
+    for line in &summary {
+        // `ERROR tests/a.py::test_b - <message>`: the test's path and name
+        // are not evidence, only the message is.
+        let message = line.split_once(" - ").map(|(_, message)| message)?;
+        if let Some(found) = refused_service(message) {
+            named.get_or_insert(found.described);
+            continue;
+        }
+        let lower = message.to_ascii_lowercase();
+        if !says_unreachable(&lower) {
+            return None;
+        }
+        let by_declared = declared
+            .iter()
+            .find(|service| output_names(&lower, service) && down(&service.host, service.port))
+            .map(Service::describe);
+        let described = match by_declared {
+            Some(described) => described,
+            None => {
+                let (kind, _) = SERVICE_CLIENTS.iter().find(|(_, clients)| {
+                    clients.iter().any(|client| names_client(&lower, client))
+                })?;
+                let name = match *kind {
+                    "postgresql" => "PostgreSQL",
+                    "redis" => "Redis",
+                    "mysql" => "MySQL",
+                    "mongodb" => "MongoDB",
+                    _ => "RabbitMQ",
+                };
+                // The port in the message, else the folder's own service of
+                // that kind (when it is up, this is not the cause), else the
+                // usual one.
+                let own = declared
+                    .iter()
+                    .find(|service| service.name.to_ascii_lowercase().contains(kind));
+                let (host, port) = match (local_port_in(&lower), own) {
+                    (Some(port), _) => ("localhost".to_owned(), port),
+                    (None, Some(service)) => (service.host.clone(), service.port),
+                    (None, None) => ("localhost".to_owned(), usual_port(kind)),
+                };
+                if !down(&host, port) {
+                    return None;
+                }
+                format!("{name} on localhost:{port}")
+            }
+        };
+        named.get_or_insert(described);
+    }
+    let described = named?;
+    let mut problem = crate::setup::service_down(&described, root, dir);
+    problem.reason = format!(
+        "every error ({}) says {described} cannot be reached, and it is not running; the tests that need it cannot pass until it is started",
+        summary.len()
+    );
+    Some(problem)
+}
+
+/// Services the step's folder names that are not listening, described.
+fn services_not_running(root: &Path, dir: &Path) -> Vec<String> {
+    let mut seen = Vec::new();
+    for service in services_for_folder(root, dir) {
+        let described = service.describe();
+        if !seen.contains(&described) && !listening(&service.host, service.port, PROBE_TIMEOUT) {
+            seen.push(described);
+        }
+    }
+    seen
 }
 
 /// The platform shell, set up to run one command line.
@@ -1003,9 +1336,128 @@ pub const CONFIRM_AFTER: Duration = Duration::from_secs(10);
 enum EarlyKind {
     /// The output shows refused connections to the service: setup needed.
     Refused,
-    /// Every test so far has errored and a service the repo names is down:
-    /// a likely cause, not a certain one, so the step counts as failed.
+    /// Every test so far has errored, a service the repo names is down, and
+    /// the output names that service: a likely cause, not a certain one, so
+    /// the step counts as failed.
     AllErrored,
+    /// Every test so far has errored, with none passed and none failed, and
+    /// no service is to blame on the evidence: likely setup (ADR 0035).
+    NoPass,
+}
+
+/// Client libraries that name a kind of service in an error, lower case.
+const SERVICE_CLIENTS: [(&str, &[&str]); 5] = [
+    (
+        "postgresql",
+        &["asyncpg", "psycopg", "libpq", "pg8000", "postgres"],
+    ),
+    ("redis", &["redis", "aioredis", "ioredis"]),
+    (
+        "mysql",
+        &["pymysql", "mysqlclient", "aiomysql", "mysql", "mariadb"],
+    ),
+    ("mongodb", &["pymongo", "motor", "mongoose", "mongo"]),
+    ("rabbitmq", &["pika", "aio_pika", "amqp", "rabbitmq"]),
+];
+
+/// Words that say a connection could not be made. Evidence that an error
+/// is about reaching a service, not about what the service returned
+/// (`relation "orders" does not exist` is a code or migration problem).
+const UNREACHABLE: [&str; 22] = [
+    "connection refused",
+    "connect call failed",
+    "could not connect",
+    "cannot connect",
+    "can't connect",
+    "unable to connect",
+    "failed to connect",
+    "cannot reach",
+    "can't reach",
+    "could not reach",
+    "unreachable",
+    "is it running",
+    "not running",
+    "connectionerror",
+    "connectionrefusederror",
+    "connection error",
+    "timed out",
+    "econnrefused",
+    "errno 111",
+    "error 111",
+    "no route to host",
+    "name or service not known",
+];
+
+/// True when `text` (lower case) says a connection could not be made.
+fn says_unreachable(text: &str) -> bool {
+    UNREACHABLE.iter().any(|phrase| text.contains(phrase))
+}
+
+/// True when `needle` occurs in `text` with no digit right after it and no
+/// letter or digit right before it: `localhost:5432` is not in
+/// `localhost:54321`, `port 6379` is not in `report 6379`.
+fn contains_bounded(text: &str, needle: &str) -> bool {
+    let mut from = 0;
+    while let Some(found) = text[from..].find(needle) {
+        let start = from + found;
+        let end = start + needle.len();
+        let after_ok = !text[end..].starts_with(|c: char| c.is_ascii_digit());
+        let before_ok = !needle.starts_with(|c: char| c.is_ascii_alphanumeric())
+            || !text[..start].ends_with(|c: char| c.is_ascii_alphanumeric());
+        if after_ok && before_ok {
+            return true;
+        }
+        from = start + 1;
+        while !text.is_char_boundary(from) {
+            from += 1;
+        }
+    }
+    false
+}
+
+/// The words of `text`: runs of letters, digits and `_`.
+fn words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|word| !word.is_empty())
+}
+
+/// True when a word of `text` is `client`, or `client` followed by digits
+/// (`psycopg2`): `redis` is not in `redistribute`.
+fn names_client(text: &str, client: &str) -> bool {
+    words(text).any(|word| {
+        word.strip_prefix(client)
+            .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+    })
+}
+
+/// True when `text` (lower case) names `service`: its host and port, its
+/// name, or the client library of its kind, as whole words (ADR 0035). Only
+/// then may a service that is down be named as the cause.
+fn output_names(text: &str, service: &Service) -> bool {
+    let port = service.port.to_string();
+    let host_port = [
+        format!("{}:{port}", service.host.to_ascii_lowercase()),
+        format!("localhost:{port}"),
+        format!("127.0.0.1:{port}"),
+        format!("port {port}"),
+        format!("', {port})"),
+    ];
+    if host_port
+        .iter()
+        .any(|needle| contains_bounded(text, needle))
+    {
+        return true;
+    }
+    let name = service.name.to_ascii_lowercase();
+    if name.len() >= 3 && words(&name).count() == 1 && words(text).any(|word| word == name) {
+        return true;
+    }
+    SERVICE_CLIENTS
+        .iter()
+        .filter(|(kind, _)| {
+            name.contains(kind) || (*kind == "postgresql" && name.contains("postgres"))
+        })
+        .any(|(_, clients)| clients.iter().any(|client| names_client(text, client)))
 }
 
 /// A service found down while a step runs, before it is confirmed.
@@ -1126,15 +1578,34 @@ fn service_down_while_running(
         }
     }
     if all_errored && !declared.is_empty() {
-        early.last_probe = Some(Instant::now());
-        if let Some(down) = declared
+        // A service that is down is the cause only when the output names it
+        // (ADR 0035); otherwise the step may still be stopped as likely
+        // setup, and the service is listed as also not running.
+        // Progress lines name test files (`tests/test_redis_cache.py E`):
+        // only lines that say a connection failed count.
+        let text = activity
+            .recent()
             .iter()
+            .map(|line| line.to_ascii_lowercase())
+            .filter(|line| says_unreachable(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let named: Vec<&Service> = declared
+            .iter()
+            .filter(|service| output_names(&text, service))
+            .collect();
+        if named.is_empty() {
+            return None;
+        }
+        early.last_probe = Some(Instant::now());
+        if let Some(down) = named
+            .into_iter()
             .find(|service| !listening(&service.host, service.port, PROBE_TIMEOUT))
         {
             early.suspect = Some(Suspect {
                 described: down.describe(),
                 evidence: format!(
-                    "every test so far has errored ({}), and {} names it",
+                    "every test so far has errored ({}), the output names it, and {} lists it",
                     tally.describe(),
                     down.source
                 ),
@@ -1243,6 +1714,7 @@ fn run_step(
     };
     let early = Mutex::new(Early::new(CONFIRM_AFTER));
     let stop_early = !options.config.keep_running_when_service_down;
+    let errors_before_stop = options.config.errors_before_stop();
     let on_output = |activity: &Activity| {
         let mut early = early.lock().unwrap_or_else(PoisonError::into_inner);
         if early.problem.is_some() {
@@ -1251,12 +1723,35 @@ fn run_step(
         let Some((service, evidence, kind)) =
             service_down_while_running(activity, &mut early, unit.root, &dir)
         else {
-            return false;
+            // No service to blame: every test erroring with none passed or
+            // failed is still likely setup (ADR 0035).
+            let tally = activity.tally();
+            let no_pass = activity.runner().is_some()
+                && tally.passed == 0
+                && tally.failed == 0
+                && errors_before_stop.is_some_and(|limit| tally.errors >= limit);
+            if !no_pass {
+                return false;
+            }
+            let seen = tally.describe();
+            options.say(&format!(
+                "{place}: LIKELY SETUP, seen while running: every test so far has errored ({seen}) and none passed; stopping the step to find the first error (set verify.stopAfterErrors to false to let it run on)"
+            ));
+            early.problem = Some((
+                SetupProblem {
+                    reason: format!("every test errored ({seen}) and none passed"),
+                    missing_program: None,
+                    missing_service: None,
+                    start_services: None,
+                },
+                EarlyKind::NoPass,
+            ));
+            return true;
         };
         let problem = service_down(&service, unit.root, &dir);
         let label = match kind {
             EarlyKind::Refused => "SETUP NEEDED",
-            EarlyKind::AllErrored => "LIKELY SETUP",
+            EarlyKind::AllErrored | EarlyKind::NoPass => "LIKELY SETUP",
         };
         let then = if stop_early {
             "stopping the step (set verify.stopWhenServiceDown to false to let it run on)"
@@ -1310,6 +1805,8 @@ fn run_step(
         fix: None,
         timeout_ms: None,
         timeout_key: None,
+        tests: None,
+        first_error: Vec::new(),
     };
     let text = || {
         strip_ansi(&format!(
@@ -1327,6 +1824,68 @@ fn run_step(
         .clone()
         .filter(|(_, kind)| *kind == EarlyKind::Refused)
         .map(|(problem, _)| problem);
+    let tally = final_tally(command, &finished.stdout, &finished.stderr);
+    // Left out when the runner counted nothing (no markers in the output).
+    report.tests = tally
+        .filter(|tally| !tally.is_empty())
+        .map(TestCounts::from);
+    // After an early stop or a timeout, pytest's own summary never came:
+    // one more short run with --maxfail=1 shows the first error (ADR 0035).
+    // The user's command runs as written; this is a separate run.
+    let first_error = |report: &mut StepReport| -> Option<SetupProblem> {
+        // Only when something errored or failed, and never after a stop.
+        let erred = tally.is_some_and(|tally| tally.errors + tally.failed > 0);
+        if !erred || !takes_maxfail(command) || options.stop.load(Ordering::SeqCst) {
+            return None;
+        }
+        let probe = format!("{command} --maxfail=1");
+        options.say(&format!(
+            "{place}: running `{probe}` (at most {}) to find the first error",
+            format_limit(FIRST_ERROR_LIMIT)
+        ));
+        let mut again = self::shell(&probe);
+        again.current_dir(&dir);
+        environment(&mut again, options.config);
+        let quiet = |_: Duration, _: Option<&str>| {};
+        let watch = Watch {
+            timeout: Some(FIRST_ERROR_LIMIT),
+            stop: options.stop,
+            heartbeat: options.heartbeat,
+            on_heartbeat: &quiet,
+            command: &probe,
+            on_output: &|_: &Activity| false,
+            on_spawn: &on_spawn,
+        };
+        let rerun = run_tree(again, &watch).ok()?;
+        if let (Some(record), Some(pid)) = (
+            options.record,
+            *spawned.lock().unwrap_or_else(PoisonError::into_inner),
+        ) {
+            record.ended(pid);
+        }
+        if rerun.ending == Ending::Stopped {
+            return None;
+        }
+        let output = strip_ansi(&format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&rerun.stdout),
+            String::from_utf8_lossy(&rerun.stderr)
+        ));
+        report.first_error = first_error_lines(&output);
+        let first = report.first_error.join("\n");
+        setup_problem(&first, None, unit.root, &dir)
+    };
+    let also_down = || {
+        let down = services_not_running(unit.root, &dir);
+        if down.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; also not running, though the output does not name it: {}",
+                down.join(", ")
+            )
+        }
+    };
     let code = match finished.ending {
         Ending::Exited(code) => code,
         Ending::GaveUp => {
@@ -1336,12 +1895,52 @@ fn run_step(
                     let start = setup_fix(&problem, unit.install)
                         .map_or_else(String::new, |fix| format!(" ({fix})"));
                     let service = problem.missing_service.clone().unwrap_or_default();
-                    report.status = StepStatus::Failed;
-                    report.detail = format!(
-                        "{command} (stopped early after {took}: every test errored while {service} was not running; start it{start} and run again. If the tests do not use it, the errors are in the code or the tests.)"
-                    );
-                    options.say(&format!("{place}: FAILED after {took} (stopped early)"));
+                    if let Some(found) = first_error(&mut report) {
+                        // The first error's own text is stronger evidence.
+                        report.status = StepStatus::SetupNeeded;
+                        report.detail = format!(
+                            "{command} (stopped early after {took}; its first error shows {})",
+                            found.reason
+                        );
+                        report.fix = setup_fix(&found, unit.install);
+                        options.say(&format!(
+                            "{place}: SETUP NEEDED after {took} (stopped early)"
+                        ));
+                    } else {
+                        report.status = StepStatus::Failed;
+                        report.detail = format!(
+                            "{command} (stopped early after {took}: every test errored, the output says {service} cannot be reached, and it was not running; start it{start} and run again. If the tests do not use it, the errors are in the code or the tests.)"
+                        );
+                        options.say(&format!("{place}: FAILED after {took} (stopped early)"));
+                    }
                 }
+                Some((problem, EarlyKind::NoPass)) => match first_error(&mut report) {
+                    Some(found) => {
+                        report.status = StepStatus::SetupNeeded;
+                        report.detail = format!(
+                            "{command} (stopped early after {took}; its first error shows {})",
+                            found.reason
+                        );
+                        report.fix = setup_fix(&found, unit.install);
+                        options.say(&format!(
+                            "{place}: SETUP NEEDED after {took} (stopped early)"
+                        ));
+                    }
+                    None => {
+                        report.status = StepStatus::Failed;
+                        let first = if report.first_error.is_empty() {
+                            ""
+                        } else {
+                            "; its first error is shown below"
+                        };
+                        report.detail = format!(
+                            "{command} (stopped early after {took}: {}, which usually means the environment is not ready (a service, a setting, test data){first}{})",
+                            problem.reason,
+                            also_down()
+                        );
+                        options.say(&format!("{place}: FAILED after {took} (stopped early)"));
+                    }
+                },
                 other => {
                     let problem = other.map_or_else(
                         || service_down("a local service", unit.root, &dir),
@@ -1382,6 +1981,14 @@ fn run_step(
                     problem.reason
                 );
                 report.fix = setup_fix(&problem, unit.install);
+            } else if let Some(found) = first_error(&mut report) {
+                // The first error names the environment: setup needed.
+                report.status = StepStatus::SetupNeeded;
+                report.detail = format!(
+                    "{command} (no result within {limit}; its first error shows {})",
+                    found.reason
+                );
+                report.fix = setup_fix(&found, unit.install);
             }
             options.say(&format!("{place}: TIMED OUT after {took} (limit {limit})"));
             return Ok(report);
@@ -1397,7 +2004,13 @@ fn run_step(
         Some(code) => format!("exit {code}"),
         None => "killed by a signal".to_owned(),
     };
-    match setup_problem(&text(), code, unit.root, &dir).or(seen_early) {
+    let found = setup_problem(&text(), code, unit.root, &dir)
+        .or(seen_early)
+        .or_else(|| {
+            let failed = tally.map_or(0, |tally| tally.failed);
+            errors_name_unreachable_service(&text(), failed, unit.root, &dir)
+        });
+    match found {
         Some(problem) => {
             report.status = StepStatus::SetupNeeded;
             report.detail = format!("{command} ({exit}): {}", problem.reason);
@@ -1477,6 +2090,8 @@ fn run_unit(
                 fix: None,
                 timeout_ms: None,
                 timeout_key: None,
+                tests: None,
+                first_error: Vec::new(),
             })
             .collect());
     }
@@ -1496,6 +2111,8 @@ fn run_unit(
             fix: None,
             timeout_ms: None,
             timeout_key: None,
+            tests: None,
+            first_error: Vec::new(),
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -1558,6 +2175,8 @@ pub fn run_verify_with(
         fix: None,
         timeout_ms: None,
         timeout_key: None,
+        tests: None,
+        first_error: Vec::new(),
     }];
     let check_failed = !check.ok;
 
@@ -2026,6 +2645,18 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                 out.push_str(&format!("  {line}\n"));
             }
         }
+        if !failure.first_error.is_empty() {
+            let how = failure
+                .command
+                .as_ref()
+                .map_or_else(String::new, |command| {
+                    format!(" (from one more run, `{command} --maxfail=1`)")
+                });
+            out.push_str(&format!("\nFirst error of {}{place}{how}:\n", failure.name));
+            for line in &failure.first_error {
+                out.push_str(&format!("  {line}\n"));
+            }
+        }
         let Some(command) = &failure.command else {
             continue;
         };
@@ -2045,7 +2676,19 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                     "Its output shows the environment is not ready. Set it up{place}: {fix}\n"
                 ));
             }
-            if let Some(key) = &failure.timeout_key {
+            let erroring = failure
+                .tests
+                .filter(|tests| tests.errors > 0 && tests.passed < tests.errors);
+            if let Some(tests) = erroring {
+                // Mostly errors is not slowness: a longer limit would not help.
+                out.push_str(&format!(
+                    "Its counts ({} passed, {} failed, {} errors) show tests erroring, not running slowly, so a longer time limit would not help. Look at the first error{}.\n",
+                    tests.passed,
+                    tests.failed,
+                    tests.errors,
+                    if failure.first_error.is_empty() { " in the output" } else { " above" }
+                ));
+            } else if let Some(key) = &failure.timeout_key {
                 out.push_str(&format!(
                     "If it is only slow, raise {key} in your firescale config.\n"
                 ));
@@ -3594,7 +4237,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_all_error_with_a_declared_service_down_are_seen_while_running() {
+    fn a_declared_service_that_is_down_is_named_only_when_the_output_names_it() {
         let port = closed_port();
         let fixture = Fixture::new(
             &[(
@@ -3606,12 +4249,27 @@ mod tests {
             Track::NoGit,
         )
         .unwrap();
+        // Down, but the output never mentions it: not the cause (ADR 0035).
+        assert_eq!(
+            early_in(&fixture, &fed("python -m pytest", "tests/test_a.py EEEE")),
+            None
+        );
+        // A test file's name in a progress line is not evidence (review of
+        // 0.2.1): only a line that says a connection failed.
+        assert_eq!(
+            early_in(
+                &fixture,
+                &fed("python -m pytest", "tests/test_postgres_repo.py EEEE")
+            ),
+            None
+        );
+        let named = format!("asyncpg: could not connect to localhost:{port}\ntests/test_a.py EEEE");
         let (service, evidence) =
-            early_in(&fixture, &fed("python -m pytest", "tests/test_a.py EEEE")).expect("seen");
+            early_in(&fixture, &fed("python -m pytest", &named)).expect("seen");
         assert_eq!(service, format!("PostgreSQL on localhost:{port}"));
         assert_eq!(
             evidence,
-            "every test so far has errored (0 passed, 0 failed, 4 errors), and .env.example (POSTGRES_SERVER) names it"
+            "every test so far has errored (0 passed, 0 failed, 4 errors), the output names it, and .env.example (POSTGRES_SERVER) lists it"
         );
         assert!(!evidence.contains("hunter2"));
         // Too few errors, a passed test, or an unknown runner: not clear yet.
@@ -4054,6 +4712,194 @@ mod tests {
                 "{text}"
             );
             assert!(text.contains("  in b: not affected\n"), "{text}");
+        }
+    }
+
+    // ------------------------------------------- setup in tests (ADR 0035)
+
+    mod first_errors {
+        use super::*;
+
+        const PYTEST: &str = "==== test session starts ====\ntests/test_a.py EE\n\n==== ERRORS ====\n____ ERROR at setup of test_x ____\n    def fixture():\n>       connect()\nE   ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', 5433)\nE   with postgresql://app:Sup3rSecret@localhost:5433/db\n\ntests/conftest.py:9: ConnectionRefusedError\n==== short test summary info ====\nERROR tests/test_a.py::test_x - ConnectionRefusedError: [Errno 111]\nERROR tests/test_a.py::test_y - ConnectionRefusedError: [Errno 111]\n==== 2 errors in 0.1s ====\n";
+
+        #[test]
+        fn the_first_error_is_its_e_lines_and_first_summary_line_without_secrets() {
+            let lines = first_error_lines(PYTEST);
+            assert_eq!(
+                lines,
+                [
+                    "E   ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', 5433)",
+                    "E   with postgresql://***@localhost:5433/db",
+                    "ERROR tests/test_a.py::test_x - ConnectionRefusedError: [Errno 111]",
+                ]
+            );
+            assert!(!lines.join("\n").contains("Sup3rSecret"));
+        }
+
+        #[test]
+        fn a_failed_login_s_user_name_is_never_shown() {
+            let text = "E   asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"course_app\"\nE   Access denied for user 'root'@'localhost' (using password: YES)\n";
+            let lines = first_error_lines(text);
+            assert_eq!(
+                lines,
+                [
+                    "E   asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"***\"",
+                    "E   Access denied for user '***'@'localhost' (using password: YES)",
+                ]
+            );
+        }
+
+        #[test]
+        fn without_e_lines_the_last_lines_stand_in() {
+            let text = (1..=15)
+                .map(|n| format!("line {n}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let lines = first_error_lines(&text);
+            assert_eq!(lines.len(), 10);
+            assert_eq!(lines[0], "line 6");
+        }
+
+        #[test]
+        fn summary_lines_are_read_only_from_the_short_summary() {
+            let text = "ERROR not a summary\n==== short test summary info ====\nFAILED a::b - assert 1\nERROR a::c - KeyError\n==== 1 failed ====\nERROR after\n";
+            assert_eq!(
+                summary_lines(text),
+                ["FAILED a::b - assert 1", "ERROR a::c - KeyError"]
+            );
+            assert!(summary_lines("ERROR a::c - KeyError\n").is_empty());
+        }
+
+        fn service(name: &str, port: u16) -> Service {
+            Service {
+                name: name.to_owned(),
+                host: "localhost".to_owned(),
+                port,
+                source: ".env.example (X)".to_owned(),
+                start: None,
+            }
+        }
+
+        #[test]
+        fn a_service_is_named_by_its_address_its_name_or_its_client() {
+            let redis = service("Redis", 6379);
+            let postgres = service("PostgreSQL", 5433);
+            assert!(output_names("cannot reach the test redis", &redis));
+            assert!(output_names(
+                "error 111 connecting to localhost:6379.",
+                &redis
+            ));
+            assert!(output_names(
+                "asyncpg.exceptions.toomanyconnections",
+                &postgres
+            ));
+            assert!(output_names(
+                "connect call failed ('127.0.0.1', 5433)",
+                &postgres
+            ));
+            assert!(!output_names("keyerror: 'total'", &redis));
+            assert!(!output_names("assert 6379 == 1", &postgres));
+        }
+
+        #[test]
+        fn errors_that_name_no_service_or_a_failure_are_not_setup() {
+            let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+            let root = fixture.root();
+            let check =
+                |text: &str, failed: u64| errors_name_unreachable_service(text, failed, root, root);
+            let failed = "==== short test summary info ====\nFAILED a::b - assert 1\nERROR a::c - Cannot reach the test Redis at localhost:1\n";
+            assert!(check(failed, 0).is_none());
+            let plain = "==== short test summary info ====\nERROR a::c - KeyError: 'x'\n";
+            assert!(check(plain, 0).is_none());
+            let mixed = "==== short test summary info ====\nERROR a::c - Cannot reach the test Redis at localhost:1\nERROR a::d - KeyError: 'x'\n";
+            assert!(check(mixed, 0).is_none());
+            let redis = "==== short test summary info ====\nERROR a::c - Cannot reach the test Redis at localhost:1\nERROR a::d - redis.exceptions.ConnectionError: Error 111 connecting to localhost:1\n";
+            let problem = check(redis, 0).unwrap();
+            assert!(
+                problem
+                    .reason
+                    .contains("every error (2) says Redis on localhost:1 cannot be reached"),
+                "{}",
+                problem.reason
+            );
+            // From the review of 0.2.1: failures the runner counted (with
+            // `-rE`, pytest prints no FAILED line), a client name inside a
+            // test's name, and an error about what the database returned.
+            assert!(check(redis, 1).is_none());
+            let names = "==== short test summary info ====\nERROR tests/test_redis_cache.py::test_redistribute_credits - KeyError: 'plan'\n";
+            assert!(check(names, 0).is_none());
+            let table = "==== short test summary info ====\nERROR tests/a.py::t - (psycopg.errors.UndefinedTable) relation \"orders\" does not exist\n";
+            assert!(check(table, 0).is_none());
+        }
+
+        #[test]
+        fn a_service_is_named_only_by_whole_words_and_exact_ports() {
+            let redis = service("Redis", 6379);
+            let postgres = service("PostgreSQL", 5432);
+            assert!(!output_names("test_redistribute_credits failed", &redis));
+            assert!(!output_names(
+                "connect to localhost:54321 refused",
+                &postgres
+            ));
+            assert!(!output_names("see report 6379 for details", &redis));
+            assert!(output_names(
+                "psycopg2.operationalerror: could not connect",
+                &postgres
+            ));
+        }
+
+        #[test]
+        fn only_a_plain_pytest_command_gets_maxfail() {
+            assert!(takes_maxfail("python -m pytest"));
+            assert!(takes_maxfail(".venv/bin/python -m pytest -q \"tests/a b\""));
+            assert!(takes_maxfail("uv run pytest"));
+            for command in [
+                "python -m pytest 2>&1 | tee run.log",
+                "pytest && echo ok",
+                "pytest > out.log",
+                "make test",
+                "tox",
+                "pytest $(cat args)",
+            ] {
+                assert!(!takes_maxfail(command), "{command}");
+            }
+        }
+
+        #[test]
+        fn secrets_are_hidden_in_every_form_the_review_found() {
+            for (line, secret) in [
+                ("postgresql://app:pa/ss@localhost:5433/db", "pa/ss"),
+                (
+                    "host=localhost user=app password=Hunter2 dbname=x",
+                    "Hunter2",
+                ),
+                ("role \"course_app\" does not exist", "course_app"),
+                (
+                    "credentials for `course_app` are not valid for user `course_app`",
+                    "course_app",
+                ),
+                (
+                    "FATAL: password authentication failed for user \"course_app\"",
+                    "course_app",
+                ),
+            ] {
+                let hidden = hide_secrets(line);
+                assert!(!hidden.contains(secret), "{line} -> {hidden}");
+            }
+            assert_eq!(hide_secrets("plain text"), "plain text");
+        }
+
+        #[test]
+        fn stop_after_errors_has_a_default_and_can_be_turned_off() {
+            let mut config = VerifyConfig::default();
+            assert_eq!(
+                config.errors_before_stop(),
+                Some(DEFAULT_ERRORS_BEFORE_STOP)
+            );
+            config.stop_after_errors = Some(25);
+            assert_eq!(config.errors_before_stop(), Some(25));
+            config.stop_after_errors = Some(0);
+            assert_eq!(config.errors_before_stop(), None);
         }
     }
 }
