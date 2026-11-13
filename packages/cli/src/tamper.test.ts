@@ -46,10 +46,12 @@ const corpus = JSON.parse(await readFile(CORPUS, 'utf8')) as { cases: Case[] };
 const config = (tamper?: unknown) =>
   `${JSON.stringify({
     packs: ['core'],
+    // No step runs: the guard needs none, and a step per case would make
+    // this file, which runs every corpus case, slower than it needs to be.
     verify: {
       lint: false,
       typecheck: false,
-      test: 'node -e 0',
+      test: false,
       ...(tamper ? { tamper } : {}),
     },
   })}\n`;
