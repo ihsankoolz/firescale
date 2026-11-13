@@ -213,6 +213,12 @@ export interface VerifyConfig extends VerifySteps {
    * is clear (ADR 0025).
    */
   stopWhenServiceDown?: boolean;
+  /**
+   * Errors a test step may report, with no test passed and none failed,
+   * before it is stopped as likely setup; `false` never stops it. Default 10
+   * (ADR 0035).
+   */
+  stopAfterErrors?: number | false;
   /** Per project, keyed by its folder: `false` turns it off, an object sets single steps. */
   projects?: Record<string, false | VerifyProjectSettings>;
 }

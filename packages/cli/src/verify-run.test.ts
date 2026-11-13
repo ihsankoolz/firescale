@@ -564,6 +564,24 @@ describe('setup problems seen in a test step (ADR 0035)', () => {
     expect(human.stdout).toContain('Do not change code for it.');
   }, 40_000);
 
+  it('makes a failed password login to a local database in the first error setup needed', async () => {
+    const repo = await repoWith(run, {
+      'fake-pytest.js': fakePytest({
+        marker: 'E',
+        first: [
+          'E   asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "course_app"',
+          'ERROR tests/test_a.py::test_x - asyncpg.exceptions.InvalidPasswordError: password authentication failed for user "course_app"',
+        ],
+      }),
+    });
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const step = testStep(result.stdout);
+    expect(step?.status).toBe('setup-needed');
+    expect(step?.detail).toContain('password authentication failed');
+    expect(result.stdout).not.toContain('course_app');
+  }, 40_000);
+
   it('makes passes plus errors that all name an unreachable service setup needed', async () => {
     const port = await closedPort();
     const lines = [1, 2, 3].map(

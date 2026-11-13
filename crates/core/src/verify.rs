@@ -1039,7 +1039,7 @@ pub fn first_error_lines(output: &str) -> Vec<String> {
     found
         .iter()
         .map(|line| {
-            let line = redact(line);
+            let line = hide_user(&redact(line));
             if line.chars().count() > 300 {
                 format!("{}...", line.chars().take(300).collect::<String>())
             } else {
@@ -1047,6 +1047,32 @@ pub fn first_error_lines(output: &str) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// `... for user "app"` and MySQL's `user 'app'@` with the user name
+/// replaced by `***`, so a failed login's text never names the user.
+fn hide_user(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(index) = rest.find("user ") {
+        let (before, after) = rest.split_at(index + "user ".len());
+        out.push_str(before);
+        let Some(quote) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+            rest = after;
+            continue;
+        };
+        match after[1..].find(quote) {
+            Some(end) => {
+                out.push(quote);
+                out.push_str("***");
+                out.push(quote);
+                rest = &after[end + 2..];
+            }
+            None => rest = after,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The usual port of a kind of service named in an error, for the kinds
@@ -4497,6 +4523,19 @@ mod tests {
                 ]
             );
             assert!(!lines.join("\n").contains("Sup3rSecret"));
+        }
+
+        #[test]
+        fn a_failed_login_s_user_name_is_never_shown() {
+            let text = "E   asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"course_app\"\nE   Access denied for user 'root'@'localhost' (using password: YES)\n";
+            let lines = first_error_lines(text);
+            assert_eq!(
+                lines,
+                [
+                    "E   asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"***\"",
+                    "E   Access denied for user '***'@'localhost' (using password: YES)",
+                ]
+            );
         }
 
         #[test]
