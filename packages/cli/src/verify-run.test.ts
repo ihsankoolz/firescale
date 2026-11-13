@@ -315,7 +315,7 @@ describe('time limits', () => {
 
     const json = await runCli(['verify', '--json'], repo.root);
     const report = JSON.parse(json.stdout) as Report;
-    expect(report.schemaVersion).toBe(4);
+    expect(report.schemaVersion).toBe(5);
     expect(report.result).toBe('failed');
     const step = report.steps.find((s) => s.project === 'backend/slow');
     expect(step?.status).toBe('timed-out');

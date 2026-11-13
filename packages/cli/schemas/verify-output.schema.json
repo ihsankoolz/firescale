@@ -15,12 +15,13 @@
     "stepsRun",
     "failOnSkipped",
     "steps",
-    "skipped"
+    "skipped",
+    "scope"
   ],
   "properties": {
     "schemaVersion": {
       "description": "Version of this format. Changes only on a breaking change.",
-      "const": 4
+      "const": 5
     },
     "version": {
       "description": "The firescale version that produced the report.",
@@ -39,7 +40,7 @@
       "enum": ["config", "nx", "turbo", "scripts", "cargo", "python", "go", "projects", "none"]
     },
     "stepsTotal": {
-      "description": "Steps that should run: every step except the ones whose status is off.",
+      "description": "Steps that should run: every step except the ones whose status is off or not-affected.",
       "type": "integer",
       "minimum": 1
     },
@@ -90,7 +91,7 @@
             "enum": ["go", "node", "python", "rust"]
           },
           "status": {
-            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it.",
+            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it. not-affected: --affected found that no change reaches the step's project, so it was not run (ADR 0032); not the same as skipped.",
             "enum": [
               "passed",
               "failed",
@@ -99,7 +100,8 @@
               "stopped",
               "skipped",
               "not-run",
-              "off"
+              "off",
+              "not-affected"
             ]
           },
           "command": {
@@ -167,6 +169,81 @@
       "type": "array",
       "items": {
         "type": "string"
+      }
+    },
+    "scope": {
+      "description": "all: every project. affected: --affected ran only the projects a change reaches, so result describes those, not the whole repo.",
+      "enum": ["all", "affected"]
+    },
+    "affected": {
+      "description": "Present when scope is affected: which projects ran and why (ADR 0032).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "everything",
+        "changedFiles",
+        "projectsTotal",
+        "projectsRun",
+        "projects"
+      ],
+      "properties": {
+        "base": {
+          "description": "The --base ref, or null when only uncommitted and untracked changes count.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "everything": {
+          "description": "True when every project is affected: a changed file no project owns, a root lockfile, a CI file, a Compose file or the firescale config, no commit to compare with, or nothing to compare (no --base and a clean tree).",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "Why every project is affected. Absent when everything is false.",
+          "type": "string"
+        },
+        "changedFiles": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projectsTotal": {
+          "description": "Units with steps: each project, and the repo root's own steps as one.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "projectsRun": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["affected", "reason"],
+            "properties": {
+              "project": {
+                "description": "Folder of the project. Absent for the repo root's own steps.",
+                "type": "string"
+              },
+              "kind": {
+                "enum": ["go", "node", "python", "rust"]
+              },
+              "affected": {
+                "type": "boolean"
+              },
+              "reason": {
+                "description": "Why it ran (a changed file, or the node it depends on), or why it did not.",
+                "type": "string"
+              }
+            }
+          }
+        }
       }
     }
   }

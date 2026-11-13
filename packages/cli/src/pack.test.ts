@@ -132,6 +132,7 @@ describe('npm packaging', () => {
       'dist/generators/types.js',
       'schemas/check-output.schema.json',
       'schemas/doctor-output.schema.json',
+      'schemas/graph-output.schema.json',
       'schemas/verify-output.schema.json',
     ]) {
       expect(await exists(path.join(extracted['firescale'] ?? '', file)), file).toBe(true);

@@ -1,0 +1,118 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ihsankoolz/firescale/blob/main/packages/cli/schemas/graph-output.schema.json",
+  "title": "fscale graph --json output",
+  "description": "The project graph printed by `fscale graph --json` (ADR 0032). Paths are relative to the repo root and use forward slashes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "nodes", "edges", "warnings"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of this format. Changes only on a breaking change.",
+      "const": 1
+    },
+    "nodes": {
+      "description": "Projects first, then shared nodes, each sorted by path.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "path", "kind"],
+        "properties": {
+          "id": {
+            "description": "<kind>:<path> for a project (python:backend/auth), shared:<path> for a shared folder or file.",
+            "type": "string"
+          },
+          "type": {
+            "description": "project: a project of fscale facts. shared: a folder or file that projects use and that belongs to no project; a change there affects only the projects that use it.",
+            "enum": ["project", "shared"]
+          },
+          "path": {
+            "description": "Repo-relative, forward slashes; . is the repo root.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "For a project: node, python, rust or go. For a shared node: folder or file.",
+            "enum": ["node", "python", "rust", "go", "folder", "file"]
+          },
+          "name": {
+            "description": "For a project: its name in fscale facts.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "edges": {
+      "description": "Sorted by from, then to.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "sources"],
+        "properties": {
+          "from": {
+            "description": "Id of the node that depends on to: a change in to affects from.",
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "sources": {
+            "description": "The evidence for the edge, most trusted first (lowest tier first).",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source", "tier", "file", "detail"],
+              "properties": {
+                "source": {
+                  "description": "dependency: a dependency on another project by name. requirements, pyproject, package-json, cargo: a local path in that manifest. dockerfile: a COPY or ADD. compose-build: a Compose build context outside the project. compose-depends-on: depends_on between two services that are projects. shared-input: a .env.example, Compose file or OpenAPI spec the project reads. python-import, js-import: an import read with tree-sitter. dynamic-import: a Python import of a module chosen at run time; the importer depends on every other Python project.",
+                  "enum": [
+                    "dependency",
+                    "requirements",
+                    "pyproject",
+                    "package-json",
+                    "cargo",
+                    "dockerfile",
+                    "compose-build",
+                    "compose-depends-on",
+                    "shared-input",
+                    "python-import",
+                    "js-import",
+                    "dynamic-import"
+                  ]
+                },
+                "tier": {
+                  "description": "1 manifests, 2 Docker, Compose and shared inputs, 3 imports, 4 dynamic imports.",
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4
+                },
+                "file": {
+                  "description": "Repo-relative file the evidence is in.",
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "detail": {
+                  "description": "What was found: the line, or a sentence.",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "description": "What the graph cannot see, such as dynamic imports. Sorted.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1653,7 +1653,10 @@ pub fn run_verify_with(
         .count();
     let steps_run = steps.iter().filter(|step| ran(step.status)).count();
     let mut on_path: Vec<&str> = Vec::new();
+    let unit_runs =
+        |project: Option<&ProjectPlan>| plan.affected.as_ref().is_none_or(|a| a.runs(project));
     if plan.python_from_path
+        && unit_runs(None)
         && plan
             .steps
             .iter()
@@ -1663,6 +1666,7 @@ pub fn run_verify_with(
     }
     for project in &plan.projects {
         if project.python_from_path
+            && unit_runs(Some(project))
             && project
                 .steps
                 .iter()
