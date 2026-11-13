@@ -309,6 +309,22 @@ impl Git {
     }
 }
 
+/// True when the repo at `cwd` is a shallow clone: its history stops
+/// before the first commit, so a merge base may be missing (ADR 0041).
+#[must_use]
+pub fn is_shallow(cwd: &Path) -> bool {
+    run_git(cwd, &["rev-parse", "--is-shallow-repository"])
+        .is_ok_and(|out| out.code == 0 && out.stdout.trim() == "true")
+}
+
+/// The note for a base that a shallow clone cannot compare with.
+#[must_use]
+pub fn shallow_note(base: &str) -> String {
+    format!(
+        "this clone is shallow, so it does not hold the merge base with {base}; fetch the full history (in GitHub Actions: actions/checkout with fetch-depth: 0)"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

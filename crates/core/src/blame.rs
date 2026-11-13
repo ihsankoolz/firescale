@@ -256,6 +256,9 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
         }
     };
     let Some(commit) = git_line(root, &["merge-base", "HEAD", &reference]) else {
+        if crate::git::is_shallow(root) {
+            return Ok(BaseChoice::Nothing(crate::git::shallow_note(&reference)));
+        }
         if given.is_some() {
             return Err(Error::user(format!(
                 "--base \"{reference}\" is not a commit git can compare with HEAD. Pass a branch, tag or commit that exists, for example --base origin/main."
@@ -296,7 +299,7 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
 /// When git cannot compare them.
 pub fn changed_since(root: &Path, base: &BaseCommit) -> Result<Option<BTreeSet<String>>> {
     Ok(match changed_files(root, Some(&base.commit))? {
-        Changed::Everything => None,
+        Changed::Everything | Changed::Shallow(_) => None,
         Changed::Files(files) => Some(
             files
                 .into_iter()

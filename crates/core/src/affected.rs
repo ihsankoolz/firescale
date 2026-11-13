@@ -18,6 +18,9 @@ pub enum Changed {
     /// There is nothing to compare against (not a git repo, or no commit yet),
     /// so every file counts as changed.
     Everything,
+    /// A shallow clone that does not hold the merge base with `--base`:
+    /// every file counts as changed (ADR 0041). Holds the note to show.
+    Shallow(String),
     Files(BTreeSet<String>),
 }
 
@@ -62,6 +65,9 @@ pub fn changed_files(root: &Path, base: Option<&str>) -> Result<Changed> {
             ],
         )?
         else {
+            if crate::git::is_shallow(root) {
+                return Ok(Changed::Shallow(crate::git::shallow_note(base)));
+            }
             return Err(Error::user(format!(
                 "--base \"{base}\" is not a commit git can compare with HEAD. Pass a branch, tag or commit that exists, for example --base origin/main."
             )));
