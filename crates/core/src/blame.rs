@@ -631,12 +631,21 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) -> Result<()> {
         }
         to_run.push(Pending { index, key });
     }
-    // Failures first: they are what the labels are for.
+    // Failures first: they are what the labels are for. Passing steps run on
+    // the base only when a worktree is needed anyway, so a run with no
+    // failure costs no base run (ADR 0037).
     to_run.sort_by_key(|pending| report.steps[pending.index].status == StepStatus::Passed);
+    let failing_left = to_run
+        .iter()
+        .any(|pending| report.steps[pending.index].status != StepStatus::Passed);
     let check_failed = report
         .steps
         .first()
         .is_some_and(|step| step.name == "check" && step.status == StepStatus::Failed);
+
+    if !failing_left && !check_failed {
+        to_run.clear();
+    }
 
     // 2. The base run, in a worktree, when anything is left.
     if !to_run.is_empty() || check_failed {

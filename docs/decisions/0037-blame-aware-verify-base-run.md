@@ -25,7 +25,7 @@ With a base, a failure no longer stops the rest of its project, and a failed `ch
 2. **The base-result store**, `.firescale/base/<key>.json`, from an earlier run with the same base. Its key is the step's cache key with the base commit's files (git's blob ids for the same scope) in place of the working tree's, and the head's lockfiles, because the base run uses the head's installed dependencies. Only `passed` and `failed` are kept; a result older than 30 days is not used. The same base and the same lockfiles give no base run; a changed lockfile runs it again.
 3. **A run in a worktree** of the base commit: `git worktree add --detach` in the temp folder, removed afterwards (`git worktree remove --force`, then `prune`). Only git's list of worktrees changes in the user's repo; the working tree and the index never do.
 
-Failing head steps run first, then passing ones (to find `fixed`), until the budget ends.
+Failing head steps run first, then passing ones (to find `fixed`), until the budget ends. **Passing steps run on the base only when a worktree is needed anyway** for a failure (or a failed check): a run with no failure costs no base run, and a passing step is labelled `fixed` only from a base result it already has (the same inputs never give `fixed`; a kept result can, for example after an earlier run in which the step failed on the head).
 
 ### The worktree's dependencies
 
