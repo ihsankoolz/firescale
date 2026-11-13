@@ -941,6 +941,10 @@ fn folder_of_file(file: &str, root: &Path, dir: &Path) -> Option<PathBuf> {
     if file.is_empty() || file.starts_with("file://") {
         return None;
     }
+    // On Windows a verbatim path (`\\?\C:\...`) does not take `/` as a
+    // separator, and messages mix both.
+    #[cfg(windows)]
+    let file = &file.replace('/', "\\");
     let path = Path::new(file);
     let path = if path.is_absolute() {
         path.to_path_buf()

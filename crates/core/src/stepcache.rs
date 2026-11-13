@@ -2168,7 +2168,14 @@ mod tests {
         fs::write(dir.path().join("npm.cmd"), "@echo off\r\necho 10.9.2\r\n").unwrap();
         let program = dir.path().join("npm");
         let found = locate(dir.path(), &program.to_string_lossy()).unwrap();
-        assert!(found.to_string_lossy().ends_with(".cmd"), "{found:?}");
+        // PATHEXT names it `.CMD`; Windows file names ignore case.
+        assert!(
+            found
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .ends_with(".cmd"),
+            "{found:?}"
+        );
         let tools = ToolVersions::new(&ThisMachine);
         let version = tools.version(dir.path(), &program.to_string_lossy(), &["--version"]);
         assert!(version.is_some_and(|line| line.ends_with("10.9.2")));
