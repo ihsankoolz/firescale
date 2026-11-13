@@ -23,7 +23,8 @@ pub struct SetupProblem {
     /// Installing the project's dependencies does not bring it back.
     pub missing_program: Option<String>,
     /// A local service that could not be reached, such as `PostgreSQL on
-    /// localhost:5432`. Starting the service fixes it, not an install.
+    /// localhost:5432`, or a local database that refused the login. Starting
+    /// the service, or fixing the login settings, fixes it, not an install.
     pub missing_service: Option<String>,
     /// The command that starts the services of a Docker Compose file in the
     /// step's folder or a folder above it, to be run in the step's folder:
@@ -559,6 +560,199 @@ fn service_problem(output: &str, root: &Path, dir: &Path) -> Option<SetupProblem
     refused_service(output).map(|found| service_down(&found.described, root, dir))
 }
 
+/// A failed login to a database on this machine, found in output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthFailure {
+    /// The host as the message names it, when it does.
+    pub host: Option<String>,
+    /// The port, when the message names it.
+    pub port: Option<u16>,
+    /// `PostgreSQL on localhost:5433`, or `PostgreSQL` when the message names no address. Never a user name.
+    pub described: String,
+}
+
+/// What PostgreSQL answers to a wrong user name or password. libpq,
+/// psycopg, asyncpg and node-postgres all print it.
+const PG_AUTH_FAILED: &str = "password authentication failed for user";
+
+/// What a failed login names: the kind of database, and the host and port
+/// when the message has them. Never the user name.
+#[derive(Debug, Clone, Copy)]
+struct Login<'a> {
+    kind: &'static str,
+    host: Option<&'a str>,
+    port: Option<u16>,
+}
+
+/// libpq 14 and later (psycopg2, psycopg, SQLAlchemy over them):
+/// `connection to server at "localhost" (127.0.0.1), port 5433 failed: FATAL:  password authentication failed for user "x"`.
+fn pg_auth_at(line: &str) -> Option<Login<'_>> {
+    const AT: &str = "connection to server at \"";
+    let rest = &line[line.find(AT)? + AT.len()..];
+    let host = &rest[..rest.find('"')?];
+    let after = &rest[host.len()..];
+    let failed = after.find(" failed: ")?;
+    if !after[failed..].contains(PG_AUTH_FAILED) {
+        return None;
+    }
+    let port = after[..failed]
+        .rfind("port ")
+        .and_then(|index| port_at(&after[index + "port ".len()..]));
+    Some(Login {
+        kind: "PostgreSQL",
+        host: Some(host),
+        port: port.or(Some(5432)),
+    })
+}
+
+/// libpq 14 and later on a Unix socket, which is always local:
+/// `connection to server on socket "/tmp/.s.PGSQL.5432" failed: FATAL:  password authentication failed for user "x"`.
+fn pg_auth_socket(line: &str) -> Option<Login<'_>> {
+    const ON: &str = "connection to server on socket \"";
+    let rest = &line[line.find(ON)? + ON.len()..];
+    let path = &rest[..rest.find('"')?];
+    if !rest[path.len()..].contains(PG_AUTH_FAILED) {
+        return None;
+    }
+    let port = path
+        .rfind(".s.PGSQL.")
+        .and_then(|index| port_at(&path[index + ".s.PGSQL.".len()..]));
+    Some(Login {
+        kind: "PostgreSQL",
+        host: Some("localhost"),
+        port: port.or(Some(5432)),
+    })
+}
+
+/// PostgreSQL's message with no address, after an error or `FATAL:` label:
+/// `FATAL:  password authentication failed for user "x"` (libpq 13 and
+/// earlier), `asyncpg.exceptions.InvalidPasswordError: password ...`
+/// (also inside SQLAlchemy's `<class '...InvalidPasswordError'>: password ...`),
+/// `error: password authentication failed for user "x"` (node-postgres). The
+/// label keeps out a test that only quotes the message.
+fn pg_auth_plain(line: &str) -> Option<Login<'_>> {
+    let index = line.find(PG_AUTH_FAILED)?;
+    let before = line[..index].trim_end().strip_suffix(':')?;
+    let label = before
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or(before)
+        .to_ascii_lowercase();
+    if !label.contains("fatal") && !label.contains("error") {
+        return None;
+    }
+    Some(Login {
+        kind: "PostgreSQL",
+        host: None,
+        port: None,
+    })
+}
+
+/// MySQL and MariaDB, error 1045:
+/// `Access denied for user 'x'@'localhost' (using password: YES)` (the
+/// `mysql` client prints `ERROR 1045 (28000): ` before it; PyMySQL and
+/// mysqlclient `(1045, "...")`). The host after `@` is where the server sees
+/// the client come from: `localhost` or `127.0.0.1` only when both are on
+/// this machine. `to database '...'` (error 1044, a missing grant) is not a
+/// login failure and is not matched.
+fn mysql_auth(line: &str) -> Option<Login<'_>> {
+    const DENIED: &str = "Access denied for user ";
+    let rest = &line[line.find(DENIED)? + DENIED.len()..];
+    let account = &rest[..rest.find(" (using password: ")?];
+    let host = account
+        .rsplit_once('@')
+        .map(|(_, host)| host.trim_matches(['\'', '"', '`']))
+        .filter(|host| !host.is_empty());
+    Some(Login {
+        kind: "MySQL",
+        host,
+        port: None,
+    })
+}
+
+/// Prisma P1000: ``Authentication failed against database server at `localhost`, the provided database credentials for `x` are not valid.``
+/// Prisma does not say which database it is.
+fn prisma_auth(line: &str) -> Option<Login<'_>> {
+    const AT: &str = "Authentication failed against database server at ";
+    let rest = &line[line.find(AT)? + AT.len()..];
+    let token = rest.split([',', ' ']).next()?;
+    let location = token.strip_prefix('`')?.strip_suffix('`')?;
+    let (host, port) = if is_local_host(location) {
+        (location, None)
+    } else {
+        match host_port(location) {
+            Some((host, port)) => (host, Some(port)),
+            None => (location, None),
+        }
+    };
+    Some(Login {
+        kind: "the database",
+        host: Some(host),
+        port,
+    })
+}
+
+/// `PostgreSQL on localhost:5433`, `MySQL on localhost`, or the kind of
+/// database alone when the message names no address.
+fn describe_login(login: Login<'_>) -> String {
+    match (login.host, login.port) {
+        (Some(_), Some(port)) => format!("{} on localhost:{port}", login.kind),
+        (Some(_), None) => format!("{} on localhost", login.kind),
+        (None, _) => login.kind.to_owned(),
+    }
+}
+
+/// The first failed login to a database on this machine in `output`. A
+/// message that names another host is not counted. A message that names
+/// no address counts, unless the output also has a failed login to another
+/// host: then it is most likely the same one.
+#[must_use]
+pub fn auth_failure(output: &str) -> Option<AuthFailure> {
+    let mut unaddressed = None;
+    let mut remote = false;
+    for raw in output.lines() {
+        let line = raw.trim();
+        let found = pg_auth_at(line)
+            .or_else(|| pg_auth_socket(line))
+            .or_else(|| mysql_auth(line))
+            .or_else(|| prisma_auth(line))
+            .or_else(|| pg_auth_plain(line));
+        let Some(login) = found else {
+            continue;
+        };
+        match login.host {
+            Some(host) if is_local_host(host) => return Some(auth_found(login)),
+            Some(_) => remote = true,
+            None => {
+                unaddressed.get_or_insert(login);
+            }
+        }
+    }
+    unaddressed.filter(|_| !remote).map(auth_found)
+}
+
+fn auth_found(login: Login<'_>) -> AuthFailure {
+    AuthFailure {
+        host: login.host.map(str::to_owned),
+        port: login.port,
+        described: describe_login(login),
+    }
+}
+
+/// The setup problem of a failed login to `described`. Starting a service
+/// does not fix it, so there is no start command; `missing_service` names
+/// the database, which also keeps verify from offering the install command.
+fn login_failed(described: &str) -> SetupProblem {
+    SetupProblem {
+        reason: format!(
+            "could not log in to {described}: password authentication failed; the user or password in the test settings does not match the database"
+        ),
+        missing_program: None,
+        missing_service: Some(described.to_owned()),
+        start_services: None,
+    }
+}
+
 /// Looks at the output of a failed step for a sign that the environment is
 /// not set up. `dir` is the folder the step ran in, `root` the repo root.
 /// Returns `None` when unsure: then the step is a normal failure.
@@ -573,6 +767,11 @@ pub fn setup_problem(
     // that need the service cannot be judged while it is down.
     if let Some(problem) = service_problem(output, root, dir) {
         return Some(problem);
+    }
+    // A database that refuses the test settings' login fails tests the same
+    // way, and no code change fixes it either.
+    if let Some(found) = auth_failure(output) {
+        return Some(login_failed(&found.described));
     }
     if reports_failed_tests(output) {
         return None;
@@ -872,9 +1071,11 @@ mod tests {
             ),
             None
         );
-        // The server answered: not a service that is down.
+        // The server answered: not a service that is down. (A failed
+        // password login is setup too, but of its own kind: see
+        // `a_failed_login_to_a_local_database_is_a_setup_problem`.)
         assert_eq!(
-            problem("connection to server at \"localhost\" (127.0.0.1), port 5432 failed: FATAL:  password authentication failed for user \"app\"\n", 1),
+            refused_service("connection to server at \"localhost\" (127.0.0.1), port 5432 failed: FATAL:  password authentication failed for user \"app\"\n"),
             None
         );
         assert_eq!(
@@ -1130,6 +1331,171 @@ mod tests {
         let remote =
             "FAILED tests/test_db.py::test_q - connect ECONNREFUSED 10.0.0.5:5432\n1 failed\n";
         assert_eq!(problem(remote, 1), None);
+    }
+
+    /// The database named by a failed-login problem, or `None`. Checks that
+    /// it is the login kind: no start command, and the user name `app_user`
+    /// nowhere in it.
+    fn login(output: &str) -> Option<String> {
+        let found = auth_failure(output);
+        let p = problem(output, 1)?;
+        if !p.reason.starts_with("could not log in to ") {
+            return None;
+        }
+        assert_eq!(p.start_services, None, "{output}");
+        assert_eq!(p.missing_program, None, "{output}");
+        assert_eq!(
+            p.missing_service,
+            found.as_ref().map(|f| f.described.clone())
+        );
+        let shown = format!("{p:?} {found:?}");
+        assert!(!shown.contains("app_user"), "user name leaked: {shown}");
+        p.missing_service
+    }
+
+    #[test]
+    fn a_failed_login_to_a_local_database_is_a_setup_problem() {
+        // libpq 14+ (psycopg2, psycopg).
+        let libpq = "E   psycopg2.OperationalError: connection to server at \"localhost\" (127.0.0.1), port 5433 failed: FATAL:  password authentication failed for user \"app_user\"\n";
+        let p = problem(libpq, 1).unwrap();
+        assert_eq!(
+            p.reason,
+            "could not log in to PostgreSQL on localhost:5433: password authentication failed; the user or password in the test settings does not match the database"
+        );
+        assert_eq!(
+            auth_failure(libpq),
+            Some(AuthFailure {
+                host: Some("localhost".into()),
+                port: Some(5433),
+                described: "PostgreSQL on localhost:5433".into(),
+            })
+        );
+        assert_eq!(
+            login(libpq).as_deref(),
+            Some("PostgreSQL on localhost:5433")
+        );
+        // psycopg 3 with an IP and no address in brackets.
+        assert_eq!(
+            login("psycopg.OperationalError: connection failed: connection to server at \"127.0.0.1\", port 5432 failed: FATAL:  password authentication failed for user \"app_user\"\n").as_deref(),
+            Some("PostgreSQL on localhost:5432")
+        );
+        // On a Unix socket.
+        assert_eq!(
+            login("connection to server on socket \"/tmp/.s.PGSQL.5434\" failed: FATAL:  password authentication failed for user \"app_user\"\n").as_deref(),
+            Some("PostgreSQL on localhost:5434")
+        );
+        // SQLAlchemy wrapping psycopg2.
+        assert_eq!(
+            login("sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at \"localhost\" (::1), port 5433 failed: FATAL:  password authentication failed for user \"app_user\"\n").as_deref(),
+            Some("PostgreSQL on localhost:5433")
+        );
+        // libpq 13 and earlier: no address.
+        assert_eq!(
+            login("psycopg2.OperationalError: FATAL:  password authentication failed for user \"app_user\"\n").as_deref(),
+            Some("PostgreSQL")
+        );
+        assert_eq!(
+            auth_failure("FATAL:  password authentication failed for user \"app_user\"\n"),
+            Some(AuthFailure {
+                host: None,
+                port: None,
+                described: "PostgreSQL".into(),
+            })
+        );
+        // asyncpg, alone and inside SQLAlchemy.
+        assert_eq!(
+            login("E   asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"app_user\"\n").as_deref(),
+            Some("PostgreSQL")
+        );
+        assert_eq!(
+            login("sqlalchemy.exc.DBAPIError: (sqlalchemy.dialects.postgresql.asyncpg.Error) <class 'asyncpg.exceptions.InvalidPasswordError'>: password authentication failed for user \"app_user\"\n").as_deref(),
+            Some("PostgreSQL")
+        );
+        // node-postgres.
+        assert_eq!(
+            login("error: password authentication failed for user \"app_user\"\n    at Parser.parseErrorMessage (node_modules/pg-protocol/dist/parser.js:283:98)\n").as_deref(),
+            Some("PostgreSQL")
+        );
+        // MySQL: the client, PyMySQL, mysql2.
+        assert_eq!(
+            login("ERROR 1045 (28000): Access denied for user 'app_user'@'localhost' (using password: YES)\n").as_deref(),
+            Some("MySQL on localhost")
+        );
+        assert_eq!(
+            login("pymysql.err.OperationalError: (1045, \"Access denied for user 'app_user'@'127.0.0.1' (using password: YES)\")\n").as_deref(),
+            Some("MySQL on localhost")
+        );
+        assert_eq!(
+            login("Error: Access denied for user 'app_user'@'localhost' (using password: NO)\n")
+                .as_deref(),
+            Some("MySQL on localhost")
+        );
+        // Prisma P1000.
+        assert_eq!(
+            login("Error: P1000: Authentication failed against database server at `localhost`, the provided database credentials for `app_user` are not valid.\n").as_deref(),
+            Some("the database on localhost")
+        );
+    }
+
+    #[test]
+    fn a_failed_login_is_setup_even_when_tests_failed() {
+        let out = "FAILED tests/test_db.py::test_q - asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"app_user\"\n===== 3 failed in 0.40s =====\n";
+        assert_eq!(login(out).as_deref(), Some("PostgreSQL"));
+        // A refused connection in the same output comes first.
+        let both = "Error: connect ECONNREFUSED 127.0.0.1:6379\nerror: password authentication failed for user \"app_user\"\n";
+        assert_eq!(
+            problem(both, 1).and_then(|p| p.missing_service).as_deref(),
+            Some("Redis on localhost:6379")
+        );
+    }
+
+    #[test]
+    fn a_failed_login_to_a_remote_database_is_a_normal_failure() {
+        for out in [
+            "connection to server at \"db.internal\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"app_user\"\n",
+            "connection to server at \"10.0.0.5\", port 5433 failed: FATAL:  password authentication failed for user \"app_user\"\n",
+            "ERROR 1045 (28000): Access denied for user 'app_user'@'10.0.0.7' (using password: YES)\n",
+            "Error: P1000: Authentication failed against database server at `db.example.com`, the provided database credentials for `app_user` are not valid.\n",
+            // The same remote failure, also printed without the address.
+            "E   connection to server at \"db.internal\" (10.0.0.5), port 5432 failed: FATAL:  password authentication failed for user \"app_user\"\nFATAL:  password authentication failed for user \"app_user\"\n",
+        ] {
+            assert_eq!(auth_failure(out), None, "{out}");
+            assert_eq!(problem(out, 1), None, "{out}");
+        }
+    }
+
+    #[test]
+    fn other_database_errors_and_quoted_messages_are_not_failed_logins() {
+        for out in [
+            // A missing grant, a missing role: not a wrong password.
+            "ERROR 1044 (42000): Access denied for user 'app_user'@'localhost' to database 'shop'\n",
+            "connection to server at \"localhost\" (127.0.0.1), port 5432 failed: FATAL:  role \"app_user\" does not exist\n",
+            // A test that only quotes the message.
+            "    assert \"password authentication failed for user\" in str(err)\n",
+            "",
+        ] {
+            assert_eq!(auth_failure(out), None, "{out}");
+        }
+    }
+
+    #[test]
+    fn a_failed_login_never_names_the_user() {
+        let user = "orders_admin_7";
+        for out in [
+            format!("connection to server at \"localhost\" (127.0.0.1), port 5433 failed: FATAL:  password authentication failed for user \"{user}\""),
+            format!("FATAL:  password authentication failed for user \"{user}\""),
+            format!("asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"{user}\""),
+            format!("error: password authentication failed for user \"{user}\""),
+            format!("ERROR 1045 (28000): Access denied for user '{user}'@'localhost' (using password: YES)"),
+            format!("Access denied for user '{user}@corp'@'localhost' (using password: YES)"),
+            format!("Error: P1000: Authentication failed against database server at `localhost`, the provided database credentials for `{user}` are not valid."),
+        ] {
+            let found = auth_failure(&out).expect(&out);
+            let p = problem(&out, 1).expect(&out);
+            for text in [format!("{found:?}"), found.described.clone(), p.reason.clone(), format!("{p:?}")] {
+                assert!(!text.contains(user), "user name in {text}");
+            }
+        }
     }
 
     const REFUSED: &str = "Error: connect ECONNREFUSED 127.0.0.1:5432\n";
