@@ -39,6 +39,9 @@ Options:
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
+  --shared-cache <dir>
+                   verify, in GitHub Actions only: use step results that CI on the
+                   default branch kept in <dir>, and keep them there on a push to it
   --progress       verify: print progress on stderr even when it is not a terminal
   --no-progress    verify: print no progress, even in a terminal
   --cwd <dir>      Run as if started in <dir>

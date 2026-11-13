@@ -840,6 +840,10 @@ pub struct StepReport {
     /// The runner's per-test results. Not in JSON.
     #[serde(skip)]
     pub test_results: Option<crate::pertest::TestResults>,
+    /// For a step that passed now: a blake3 digest of its output, kept in
+    /// the shared cache's record (ADR 0041). Not in JSON.
+    #[serde(skip)]
+    pub output_digest: Option<String>,
     /// The failure's signature: one short hash per normalised line of its
     /// output (ADR 0037). A failure is `pre-existing` only when its
     /// signature on the head is contained in the base's. Not in JSON.
@@ -867,6 +871,10 @@ pub struct CacheHit {
     pub duration_ms: u64,
     /// When it ran, as `2026-11-13T07:06:00Z`.
     pub ran_at: String,
+    /// For a result from the shared cache of CI: the commit of the default
+    /// branch whose run kept it (ADR 0041).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shared_from: Option<String>,
 }
 
 /// What the step cache did in a run (ADR 0036).
@@ -1934,6 +1942,7 @@ fn run_step(
         signature: Vec::new(),
         failed_tests: Vec::new(),
         test_results: None,
+        output_digest: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -2173,6 +2182,11 @@ fn run_step(
     report.exit_code = code;
     if code == Some(0) {
         options.say(&format!("{place}: passed after {took}"));
+        let mut output = blake3::Hasher::new();
+        output.update(&finished.stdout);
+        output.update(b"\0");
+        output.update(&finished.stderr);
+        report.output_digest = Some(output.finalize().to_hex().to_string());
         return Ok(report);
     }
     report.output_tail = tail(&finished.stdout, &finished.stderr);
@@ -2274,6 +2288,7 @@ fn run_unit(
                 signature: Vec::new(),
                 failed_tests: Vec::new(),
                 test_results: None,
+                output_digest: None,
             })
             .collect());
     }
@@ -2301,6 +2316,7 @@ fn run_unit(
             signature: Vec::new(),
             failed_tests: Vec::new(),
             test_results: None,
+            output_digest: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2469,11 +2485,21 @@ fn cached_or_run(
         }
     };
     if let Some(entry) = cache.hit(&key) {
-        cache.note(format!("cache: hit {place}"));
         let took = format_duration(Duration::from_millis(entry.duration_ms));
         let when = format_time(entry.ran_at);
+        let (from, source) = match &entry.shared_from {
+            Some(commit) => (
+                format!(
+                    "the shared cache of CI (kept by the default branch at {})",
+                    &commit[..commit.len().min(7)]
+                ),
+                "shared hit",
+            ),
+            None => ("the cache".to_owned(), "hit"),
+        };
+        cache.note(format!("cache: {source} {place}"));
         options.say(&format!(
-            "{place}: passed from the cache (it took {took} when it last ran, {when}); not run again"
+            "{place}: passed from {from} (it took {took} when it last ran, {when}); not run again"
         ));
         return Ok(StepReport {
             name: name.to_owned(),
@@ -2484,7 +2510,7 @@ fn cached_or_run(
             exit_code: None,
             duration_ms: 0,
             detail: format!(
-                "from the cache: it passed in {took} when it last ran ({when}), and nothing it depends on has changed since"
+                "from {from}: it passed in {took} when it last ran ({when}), and nothing it depends on has changed since"
             ),
             output_tail: Vec::new(),
             fix: None,
@@ -2495,12 +2521,14 @@ fn cached_or_run(
             cache: Some(CacheHit {
                 duration_ms: entry.duration_ms,
                 ran_at: format_iso(entry.ran_at),
+                shared_from: entry.shared_from.clone(),
             }),
             label: None,
             base: None,
             signature: Vec::new(),
             failed_tests: Vec::new(),
             test_results: None,
+                output_digest: None,
         });
     }
     let ran_at = now_secs();
@@ -2524,6 +2552,8 @@ fn cached_or_run(
                 ran_at,
                 detail: report.detail.clone(),
                 tests: report.tests,
+                output_digest: report.output_digest.clone(),
+                shared_from: None,
             },
         );
     } else {
@@ -2586,6 +2616,7 @@ pub fn run_verify_with(
         signature: Vec::new(),
         failed_tests: Vec::new(),
         test_results: None,
+        output_digest: None,
     }];
     let check_failed = !check.ok && !options.every_step;
 

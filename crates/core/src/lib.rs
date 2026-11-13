@@ -35,6 +35,7 @@ pub mod scratch;
 pub mod select;
 pub mod services;
 pub mod setup;
+pub mod sharedcache;
 pub mod stepcache;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
