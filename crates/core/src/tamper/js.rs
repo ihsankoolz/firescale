@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::{Language, Node};
 
+use super::reach::{self, Grammar};
 use super::{Assertion, TestCase, TestFile};
 use crate::imports::{js_dialect, js_string, parse, text, walk, JsDialect};
 
@@ -142,6 +143,112 @@ fn is_assertion(function: Node<'_>, src: &[u8]) -> bool {
     }
 }
 
+/// What the JS/TS grammars call the nodes of [`reach`].
+const GRAMMAR: Grammar = Grammar {
+    blocks: &["statement_block", "program"],
+    returns: &["return_statement"],
+    ifs: &["if_statement"],
+    whiles: &["while_statement"],
+    hoisted: &["function_declaration", "generator_function_declaration"],
+    stops: None,
+    noop: |node, _| node.kind() == "empty_statement",
+};
+
+/// The nodes of a value that is the same on every run.
+const LITERALS: [&str; 16] = [
+    "number",
+    "string",
+    "string_fragment",
+    "escape_sequence",
+    "template_string",
+    "true",
+    "false",
+    "null",
+    "undefined",
+    "binary_expression",
+    "unary_expression",
+    "parenthesized_expression",
+    "array",
+    "regex",
+    "regex_pattern",
+    "regex_flags",
+];
+
+/// True for an assertion that cannot fail because it checks nothing that
+/// the code under test computes: every argument along its chain is a
+/// literal (`expect(true).toBe(true)`, `expect(1).toBe(1)`,
+/// `assert.ok(true)`, `expect(true).toBeTruthy()`). `expect.assertions(n)`
+/// and `expect.hasAssertions()` count other assertions and never are.
+fn cannot_fail(whole: Node<'_>, src: &[u8]) -> bool {
+    let mut arguments: Vec<Node<'_>> = Vec::new();
+    let mut at = whole;
+    for _ in 0..MAX_CHAIN {
+        match at.kind() {
+            "await_expression" => match at.named_child(0) {
+                Some(inner) => at = inner,
+                None => return false,
+            },
+            "call_expression" => {
+                if let Some(list) = at.child_by_field_name("arguments") {
+                    let mut cursor = list.walk();
+                    arguments.extend(list.named_children(&mut cursor).filter(|n| !n.is_extra()));
+                }
+                match at.child_by_field_name("function") {
+                    Some(function) => at = function,
+                    None => return false,
+                }
+            }
+            "member_expression" => {
+                let property = at
+                    .child_by_field_name("property")
+                    .map_or("", |property| text(property, src));
+                let object = at.child_by_field_name("object");
+                if object.is_some_and(|object| {
+                    object.kind() == "identifier"
+                        && text(object, src) == "expect"
+                        && matches!(property, "assertions" | "hasAssertions")
+                }) {
+                    return false;
+                }
+                match object {
+                    Some(object) => at = object,
+                    None => return false,
+                }
+            }
+            "identifier" => break,
+            _ => return false,
+        }
+    }
+    !arguments.is_empty()
+        && arguments
+            .iter()
+            .all(|argument| reach::constant(*argument, &LITERALS))
+}
+
+/// Why a test call runs nothing: it has no function (`it("x")`), or its
+/// function's body does nothing (`() => {}`, `() => { return; … }`).
+/// `None` when it runs something, or its function is not written inline.
+fn empty_body(call: Node<'_>, src: &[u8]) -> Option<&'static str> {
+    let arguments = call.child_by_field_name("arguments")?;
+    let mut cursor = arguments.walk();
+    let all: Vec<Node<'_>> = arguments
+        .named_children(&mut cursor)
+        .filter(|n| !n.is_extra())
+        .collect();
+    if all.len() == 1 {
+        return Some("it has no body");
+    }
+    let function = all.iter().rev().find(|argument| {
+        matches!(
+            argument.kind(),
+            "arrow_function" | "function_expression" | "function"
+        )
+    })?;
+    let body = function.child_by_field_name("body")?;
+    (body.kind() == "statement_block" && reach::does_nothing(body, src, &GRAMMAR))
+        .then_some("its body does nothing")
+}
+
 /// The outermost call or member chain that starts with `node`
 /// (`expect(a)` → `expect(a).not.toBe(1)`).
 fn chain(node: Node<'_>) -> Node<'_> {
@@ -277,6 +384,11 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
         };
         if is_assertion(function, src) {
             let whole = chain(node);
+            // Code that never runs, and an assertion that cannot fail
+            // (`expect(true).toBe(true)`), are not counted (ADR 0044).
+            if reach::unreachable(node, src, &GRAMMAR).is_some() || cannot_fail(whole, src) {
+                return true;
+            }
             let inside = open.iter().rev().find(|block| block.test.is_some());
             file.assertions.push(Assertion {
                 line: node.start_position().row + 1,
@@ -311,7 +423,14 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
             return true;
         }
         let (own_skip, own_focus) = marks(&path);
-        let skipped = own_skip || open.iter().any(|block| block.skipped);
+        // A test or suite that never runs, or a test whose body runs
+        // nothing, is skipped as surely as one marked `.skip` (ADR 0044).
+        let why = reach::unreachable(node, src, &GRAMMAR).or_else(|| {
+            (is_test && !own_skip)
+                .then(|| empty_body(node, src))
+                .flatten()
+        });
+        let skipped = own_skip || why.is_some() || open.iter().any(|block| block.skipped);
         let focused = own_focus || open.iter().any(|block| block.focused);
         let own_title = title(node, src);
         let rows = if path.iter().any(|part| part == "each") {
@@ -343,7 +462,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
                 line: node.start_position().row + 1,
                 skipped,
                 skipped_rows: 0,
-                why: None,
+                why,
                 focused,
                 uses,
                 weight,
@@ -432,10 +551,10 @@ describe("math", () => {
     expect(add(1, 2)).toBe(3);
     expect(add(0, 0)).not.toBe(1);
   });
-  it.skip("skipped", () => { assert.equal(1, 1); });
+  it.skip("skipped", () => { assert.equal(add(1, 0), 1); });
   test.todo("later");
   xit("x skipped", () => {});
-  describe.skip("off", () => { test("inside", () => { assert(true); }); });
+  describe.skip("off", () => { test("inside", () => { assert(ok); }); });
   it.only("focused", async () => { await expect(p).resolves.toBe(1); });
   it.each([1, 2])("table %i", (n) => { expect(n).toBeTruthy(); });
 });
@@ -464,8 +583,8 @@ describe("math", () => {
             [
                 "expect(add(1,2)).toBe(3)",
                 "expect(add(0,0)).not.toBe(1)",
-                "assert.equal(1,1)",
-                "assert(true)",
+                "assert.equal(add(1,0),1)",
+                "assert(ok)",
                 "awaitexpect(p).resolves.toBe(1)",
                 "expect(n).toBeTruthy()",
             ]
@@ -499,7 +618,7 @@ describe("math", () => {
 
     #[test]
     fn table_rows_weigh_their_tests_and_assertions() {
-        let file = ts("describe.each([[1], [2]])(\"s\", () => {\n  it.each([[1], [2], [3]])(\"t\", () => { expect(1).toBe(1); });\n});\n");
+        let file = ts("describe.each([[1], [2]])(\"s\", () => {\n  it.each([[1], [2], [3]])(\"t\", (n) => { expect(n).toBe(1); });\n});\n");
         assert_eq!(file.tests[0].weight, 6);
         assert_eq!(file.assertions[0].weight, 6);
     }
@@ -513,6 +632,123 @@ describe("math", () => {
             .map(|t| (t.id.as_str(), t.skipped))
             .collect();
         assert_eq!(ids, [("home > a", false), ("home > off > b", true)]);
+    }
+
+    #[test]
+    fn code_that_never_runs_is_not_counted() {
+        let file = ts(r#"
+it("returns early", () => {
+  return;
+  expect(total()).toBe(3);
+});
+it("if false", () => {
+  if (false) {
+    expect(total()).toBe(3);
+  }
+  expect(other()).toBe(1);
+});
+if (false) {
+  it("hidden", () => { expect(total()).toBe(3); });
+}
+describe("after return", () => {
+  return;
+  it("never registered", () => { expect(total()).toBe(3); });
+});
+it("hoisted helper", () => {
+  check();
+  return;
+  function check() { expect(total()).toBe(3); }
+});
+it("conditional return", () => {
+  if (ready()) { return; }
+  expect(total()).toBe(3);
+});
+"#);
+        let tests: Vec<(&str, bool, Option<&str>)> = file
+            .tests
+            .iter()
+            .map(|t| (t.id.as_str(), t.skipped, t.why))
+            .collect();
+        assert_eq!(
+            tests,
+            [
+                ("returns early", true, Some("its body does nothing")),
+                ("if false", false, None),
+                ("hidden", true, Some("inside if (false)")),
+                (
+                    "after return > never registered",
+                    true,
+                    Some("after a return")
+                ),
+                ("hoisted helper", false, None),
+                ("conditional return", false, None),
+            ]
+        );
+        let lines: Vec<usize> = file.assertions.iter().map(|a| a.line).collect();
+        // Only `other()`, the hoisted helper's and the one after a
+        // conditional return run.
+        assert_eq!(lines, [10, 22, 26]);
+    }
+
+    #[test]
+    fn an_assertion_that_cannot_fail_is_not_counted() {
+        let file = ts(r#"
+it("placeholders", () => {
+  expect(true).toBe(true);
+  expect(1).toBe(1);
+  expect(true).toBeTruthy();
+  expect(1 + 1).toEqual(2);
+  assert(true);
+  assert.ok(1);
+  assert.equal("a", "a");
+  expect.assertions(2);
+  expect.hasAssertions();
+  expect(total).toBe(true);
+  expect(true).toBe(isReady());
+  expect(screen.getByText("x")).toBeTruthy();
+});
+"#);
+        let shapes: Vec<&str> = file.assertions.iter().map(|a| a.shape.as_str()).collect();
+        assert_eq!(
+            shapes,
+            [
+                "expect.assertions(2)",
+                "expect.hasAssertions()",
+                "expect(total).toBe(true)",
+                "expect(true).toBe(isReady())",
+                "expect(screen.getByText(\"x\")).toBeTruthy()",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_test_with_an_empty_body_is_skipped() {
+        let file = ts(r#"
+it("empty", () => {});
+it("only a comment", () => {
+  // TODO
+});
+it("no function");
+it("expression body", () => expect(total()).toBe(3));
+it("a named function", runCase);
+it.todo("later");
+"#);
+        let tests: Vec<(&str, bool, Option<&str>)> = file
+            .tests
+            .iter()
+            .map(|t| (t.id.as_str(), t.skipped, t.why))
+            .collect();
+        assert_eq!(
+            tests,
+            [
+                ("empty", true, Some("its body does nothing")),
+                ("only a comment", true, Some("its body does nothing")),
+                ("no function", true, Some("it has no body")),
+                ("expression body", false, None),
+                ("a named function", false, None),
+                ("later", true, None),
+            ]
+        );
     }
 
     #[test]

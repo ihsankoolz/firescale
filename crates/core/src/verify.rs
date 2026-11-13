@@ -142,7 +142,7 @@ pub struct VerifyConfig {
     /// `verify.tamper` as the working tree's config says. Checked, but never
     /// used: the tamper guard reads its policy from the base commit's config
     /// (ADR 0042).
-    pub tamper: Option<crate::tamper::Policy>,
+    pub tamper: Option<crate::tamper::TamperPolicy>,
 }
 
 impl VerifyConfig {
@@ -3825,7 +3825,7 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
             _ => "report only; verify.tamper on the base commit decides, and \"enforced\" makes this fail",
         };
         out.push_str(&format!(
-            "\nTamper guard ({how}): compared with the base commit {base}, this change takes away tests or assertions, or changes test files it cannot read.\n"
+            "\nTamper guard ({how}): compared with the base commit {base}, this change takes away tests or assertions, adds lint suppressions, or changes test files it cannot read.\n"
         ));
         for finding in &tamper.findings {
             let place = if finding.on_base {
@@ -3844,6 +3844,17 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
             "  In the changed test files: {} tests on the base, {} now; {} skipped on the base, {} now; {} assertions on the base, {} now.\n",
             c.base_tests, c.head_tests, c.base_skipped, c.head_skipped, c.base_assertions, c.head_assertions
         ));
+        if c.head_suppressions > c.base_suppressions
+            || tamper
+                .findings
+                .iter()
+                .any(|finding| finding.kind == crate::tamper::Kind::SuppressionAdded)
+        {
+            out.push_str(&format!(
+                "  Lint suppressions in the changed files: {} on the base, {} now.\n",
+                c.base_suppressions, c.head_suppressions
+            ));
+        }
         if c.excused_tests > 0 {
             out.push_str(&format!(
                 "  Not counted: {} deleted with the code they test.\n",
@@ -3854,6 +3865,24 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
                 }
             ));
         }
+    }
+    if !tamper.allowed.is_empty() {
+        let mut listed: Vec<String> = tamper
+            .allowed
+            .iter()
+            .take(10)
+            .map(|allowed| {
+                let kinds: Vec<&str> = allowed.kinds.iter().map(|kind| kind.as_str()).collect();
+                format!("{} ({})", allowed.file, kinds.join(", "))
+            })
+            .collect();
+        if tamper.allowed.len() > 10 {
+            listed.push(format!("and {} more", tamper.allowed.len() - 10));
+        }
+        out.push_str(&format!(
+            "\nTamper guard: verify.tamper.allow on the base commit leaves out {}.\n",
+            listed.join(", ")
+        ));
     }
     out
 }

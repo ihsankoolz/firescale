@@ -23,9 +23,11 @@
 //! - Findings are report-only unless the base's policy is `enforced`.
 
 mod js;
+mod policy;
 mod python;
 mod reach;
 mod rust;
+mod suppress;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -36,6 +38,9 @@ use serde::Serialize;
 use crate::blame::BaseCommit;
 use crate::git::run_git;
 use crate::imports::{js_dialect, JsDialect};
+
+pub use policy::{Allowance, TamperPolicy};
+pub use suppress::{suppressions, Suppression};
 
 /// The languages the guard reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +234,8 @@ pub enum Kind {
     TestSkipped,
     /// Fewer assertions than on the base.
     AssertionRemoved,
+    /// More lint suppressions of a rule than on the base.
+    SuppressionAdded,
     /// A changed test file tree-sitter cannot read, on the base or now: its
     /// tests and assertions could not be compared.
     NotChecked,
@@ -241,6 +248,7 @@ impl Kind {
             Self::TestDeleted => "test deleted",
             Self::TestSkipped => "test skipped",
             Self::AssertionRemoved => "assertion removed",
+            Self::SuppressionAdded => "suppression added",
             Self::NotChecked => "not checked",
         }
     }
@@ -256,11 +264,12 @@ pub struct Finding {
     /// True when the line is in the base commit's version of the file (a
     /// deleted test or assertion), false when it is in the working tree.
     pub on_base: bool,
-    /// The test's id, or the assertion's text.
+    /// The test's id, the assertion's text, or the suppression's comment
+    /// or attribute with its key.
     pub what: String,
 }
 
-/// Net counts over the changed test files.
+/// Net counts over the changed files.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Counts {
@@ -273,6 +282,19 @@ pub struct Counts {
     /// Tests deleted with their subject, left out of the base counts.
     pub excused_tests: usize,
     pub excused_assertions: usize,
+    /// Lint suppressions in every changed source file.
+    pub base_suppressions: usize,
+    pub head_suppressions: usize,
+}
+
+/// A changed file that `verify.tamper.allow` on the base commit leaves
+/// out of the counts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AllowedFile {
+    pub file: String,
+    /// The kinds of finding left out for it.
+    pub kinds: Vec<Kind>,
 }
 
 /// The `tamper` object of `fscale verify --json`.
@@ -290,6 +312,9 @@ pub struct TamperReport {
     /// Test files with syntax errors on either side: not compared.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_checked: Vec<String>,
+    /// Changed files the base commit's `verify.tamper.allow` leaves out.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allowed: Vec<AllowedFile>,
 }
 
 impl TamperReport {
@@ -301,10 +326,10 @@ impl TamperReport {
 }
 
 /// The policy in the base commit's `firescale.config.json`: `evaluated`
-/// when it has none, or its config cannot be read as JSON (a
-/// `firescale.config.ts` is not run for this).
+/// with no test paths or exceptions when it has none, or its config cannot
+/// be read as JSON (a `firescale.config.ts` is not run for this).
 #[must_use]
-pub fn base_policy(root: &Path, base: &BaseCommit) -> Policy {
+pub fn base_policy(root: &Path, base: &BaseCommit) -> TamperPolicy {
     show(root, &base.commit, "firescale.config.json")
         .and_then(|text| {
             serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}')).ok()
@@ -312,11 +337,10 @@ pub fn base_policy(root: &Path, base: &BaseCommit) -> Policy {
         .and_then(|config| {
             config
                 .get("verify")?
-                .get("tamper")?
-                .as_str()
-                .and_then(Policy::parse)
+                .get("tamper")
+                .map(TamperPolicy::lenient)
         })
-        .unwrap_or(Policy::Evaluated)
+        .unwrap_or_default()
 }
 
 /// A file as the base commit has it, `None` when it has none.
@@ -325,28 +349,85 @@ fn show(root: &Path, commit: &str, path: &str) -> Option<String> {
     (out.code == 0).then_some(out.stdout)
 }
 
+/// One changed file in a language the guard reads.
+struct Changed {
+    path: String,
+    language: Language,
+    /// As the base commit has it; `None` when it has none.
+    base: Option<String>,
+    /// In the working tree: `Ok(None)` when it is gone, `Err` when it
+    /// cannot be read.
+    head: Result<Option<String>, ()>,
+}
 
-/// Compares the test files that `changed` (paths that differ between the
-/// base commit and the working tree) holds, on the base and in the working
-/// tree.
+/// A test the working tree runs fewer of than the base, for naming.
+struct Skip<'a> {
+    file: &'a str,
+    line: usize,
+    test: &'a TestCase,
+    weight: usize,
+}
+
+/// How many runs of a test are skipped: all of them when it is skipped,
+/// else the rows skipped one by one.
+fn skipped_weight(test: &TestCase) -> usize {
+    if test.skipped {
+        test.weight
+    } else {
+        test.skipped_rows.min(test.weight)
+    }
+}
+
+/// Compares the files that `changed` (paths that differ between the base
+/// commit and the working tree) holds, on the base and in the working
+/// tree: the tests, skips and assertions of its test files, and the lint
+/// suppressions of all its source files.
 #[must_use]
 pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> TamperReport {
     let policy = base_policy(root, base);
     let mut report = TamperReport {
-        policy,
+        policy: policy.mode,
         base: base.commit.clone(),
         files: 0,
         counts: Counts::default(),
         findings: Vec::new(),
         not_checked: Vec::new(),
+        allowed: Vec::new(),
     };
-    if policy == Policy::Off {
+    if policy.mode == Policy::Off {
         return report;
     }
     let on_disk = |path: &str| {
         path.split('/')
             .fold(root.to_path_buf(), |dir, part| dir.join(part))
     };
+
+    // Every changed file in a language the guard reads, on both sides. The
+    // base side comes from one `git cat-file --batch`. Bytes are decoded
+    // leniently: a stray Latin-1 byte in a comment must not make a file
+    // read as deleted.
+    let sources: Vec<(&String, Language)> = changed
+        .iter()
+        .filter_map(|path| Language::of(path).map(|language| (path, language)))
+        .collect();
+    let wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
+    let mut on_base = crate::git::files_at(root, &base.commit, &wanted);
+    let files: Vec<Changed> = sources
+        .into_iter()
+        .map(|(path, language)| Changed {
+            path: path.clone(),
+            language,
+            base: on_base
+                .remove(path)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+            head: match fs::read(on_disk(path)) {
+                Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(()),
+            },
+        })
+        .collect();
+
     // What the change deleted: on the base, gone from the working tree, and
     // not the old side of a rename git sees.
     let renamed: BTreeSet<String> = crate::blame::renames_since(root, base)
@@ -356,13 +437,13 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
         .iter()
         .filter(|path| !on_disk(path).exists() && !renamed.contains(*path))
         .collect();
-    // Every identifier in the JS/TS files of the change that still exist:
-    // a name a deleted test used is "deleted with it" only if it is in none
-    // of them (a module renamed without git seeing it keeps its names).
+    // Every identifier in the files of the change that still exist: a name
+    // a deleted test used is "deleted with it" only if it is in none of
+    // them (a module renamed without git seeing it keeps its names).
     let mut surviving: BTreeSet<String> = BTreeSet::new();
-    for path in changed.iter().filter(|path| Language::of(path).is_some()) {
-        if let Ok(bytes) = fs::read(on_disk(path)) {
-            for word in String::from_utf8_lossy(&bytes)
+    for file in &files {
+        if let Ok(Some(text)) = &file.head {
+            for word in text
                 .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
                 .filter(|word| !word.is_empty())
             {
@@ -370,19 +451,78 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             }
         }
     }
+
+    // Files the base's `allow` leaves out, for the kinds it names.
+    const KINDS: [Kind; 5] = [
+        Kind::TestDeleted,
+        Kind::TestSkipped,
+        Kind::AssertionRemoved,
+        Kind::SuppressionAdded,
+        Kind::NotChecked,
+    ];
+    for file in &files {
+        let kinds: Vec<Kind> = KINDS
+            .into_iter()
+            .filter(|kind| policy.allows(&file.path, *kind))
+            .collect();
+        if !kinds.is_empty() {
+            report.allowed.push(AllowedFile {
+                file: file.path.clone(),
+                kinds,
+            });
+        }
+    }
+    let allows = |path: &str, kind: Kind| policy.allows(path, kind);
+
+    // Lint suppressions, by key, in every changed source file.
+    let mut base_keys: BTreeMap<String, usize> = BTreeMap::new();
+    let mut base_texts: BTreeMap<(String, String, String), usize> = BTreeMap::new();
+    let mut head_suppressions: Vec<(String, Suppression)> = Vec::new();
+    for file in files
+        .iter()
+        .filter(|file| !allows(&file.path, Kind::SuppressionAdded))
+    {
+        if let Some(text) = &file.base {
+            for found in suppressions(text, file.language) {
+                *base_keys.entry(found.key.clone()).or_default() += 1;
+                *base_texts
+                    .entry((file.path.clone(), found.key, found.text))
+                    .or_default() += 1;
+                report.counts.base_suppressions += 1;
+            }
+        }
+        if let Ok(Some(text)) = &file.head {
+            for found in suppressions(text, file.language) {
+                report.counts.head_suppressions += 1;
+                head_suppressions.push((file.path.clone(), found));
+            }
+        }
+    }
+
+    // The test files: by name or folder, by the base's `testPaths`, or (Rust)
+    // because they hold tests on either side.
     let mut not_checked: Vec<Finding> = Vec::new();
-    let mut pairs: Vec<(String, Language, Option<TestFile>, Option<TestFile>)> = Vec::new();
-    for path in changed.iter().filter(|path| is_test_path(path)) {
-        let Some(language) = Language::of(path) else {
-            continue;
+    let mut pairs: Vec<(&Changed, Option<TestFile>, Option<TestFile>)> = Vec::new();
+    for file in &files {
+        let holds = |text: &Option<String>| {
+            text.as_deref()
+                .is_some_and(|text| holds_tests(text, file.language))
         };
-        let base_file = show(root, &base.commit, path).map(|text| read_test_file(&text, language));
-        // Bytes, decoded leniently: a stray Latin-1 byte in a comment must
-        // not make a file read as deleted.
-        let head_file = match fs::read(on_disk(path)) {
-            Ok(bytes) => Some(read_test_file(&String::from_utf8_lossy(&bytes), language)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(_) => Some(TestFile {
+        let is_test = is_test_path(&file.path)
+            || policy.names_test(&file.path)
+            || holds(&file.base)
+            || file.head.as_ref().is_ok_and(holds);
+        if !is_test {
+            continue;
+        }
+        let base_file = file
+            .base
+            .as_deref()
+            .map(|text| read_test_file(text, file.language));
+        let head_file = match &file.head {
+            Ok(Some(text)) => Some(read_test_file(text, file.language)),
+            Ok(None) => None,
+            Err(()) => Some(TestFile {
                 has_errors: true,
                 ..TestFile::default()
             }),
@@ -391,26 +531,29 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             continue;
         }
         // A file tree-sitter cannot read is never taken as clean: it is a
-        // finding of its own, which counts and blocks like the others.
+        // finding of its own, which counts and blocks like the others,
+        // unless the base's `allow` leaves it out.
         let broken = [(&head_file, false), (&base_file, true)]
             .into_iter()
-            .find_map(|(file, on_base)| {
-                file.as_ref()
-                    .filter(|file| file.has_errors)
-                    .map(|file| (file.error_line.unwrap_or(1), on_base))
+            .find_map(|(read, on_base)| {
+                read.as_ref()
+                    .filter(|read| read.has_errors)
+                    .map(|read| (read.error_line.unwrap_or(1), on_base))
             });
         if let Some((line, on_base)) = broken {
-            report.not_checked.push(path.clone());
-            not_checked.push(Finding {
-                kind: Kind::NotChecked,
-                file: path.clone(),
-                line,
-                on_base,
-                what: "tree-sitter cannot read this file, so its tests and assertions were not compared".to_owned(),
-            });
+            if !allows(&file.path, Kind::NotChecked) {
+                report.not_checked.push(file.path.clone());
+                not_checked.push(Finding {
+                    kind: Kind::NotChecked,
+                    file: file.path.clone(),
+                    line,
+                    on_base,
+                    what: "tree-sitter cannot read this file, so its tests and assertions were not compared".to_owned(),
+                });
+            }
             continue;
         }
-        pairs.push((path.clone(), language, base_file, head_file));
+        pairs.push((file, base_file, head_file));
     }
     report.files = pairs.len();
 
@@ -419,14 +562,14 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     // names is left in the change.
     let existed_on_base =
         |path: &str| deleted.contains(&path.to_owned()) || on_disk(path).is_file();
-    let excused = |path: &str, language: Language, file: &TestFile, test: &TestCase| -> bool {
+    let excused = |file: &Changed, read: &TestFile, test: &TestCase| -> bool {
         let mut modules: BTreeSet<String> = BTreeSet::new();
         let mut names: Vec<&String> = Vec::new();
         for name in &test.uses {
-            if let Some(module) = file
+            if let Some(module) = read
                 .imports
                 .get(name)
-                .and_then(|spec| resolve(language, path, spec, &existed_on_base))
+                .and_then(|spec| resolve(file.language, &file.path, spec, &existed_on_base))
             {
                 modules.insert(module);
                 names.push(name);
@@ -439,44 +582,56 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
 
     let mut base_ids: Vec<(String, String, usize)> = Vec::new();
     let mut head_ids: BTreeMap<String, usize> = BTreeMap::new();
-    let mut base_skipped_ids: BTreeSet<String> = BTreeSet::new();
-    let mut head_skips: Vec<(String, usize, String)> = Vec::new();
+    let mut base_skipped_ids: BTreeMap<String, usize> = BTreeMap::new();
+    let mut head_skips: Vec<Skip<'_>> = Vec::new();
     let mut base_focus: BTreeSet<String> = BTreeSet::new();
     let mut head_focus: Vec<(String, usize, String)> = Vec::new();
     let mut base_shapes: Vec<(String, String, String, usize)> = Vec::new();
     let mut head_shapes: BTreeMap<String, usize> = BTreeMap::new();
     let counts = &mut report.counts;
-    for (path, language, base_file, head_file) in &pairs {
+    for (file, base_file, head_file) in &pairs {
+        let path = &file.path;
+        let count_tests = !allows(path, Kind::TestDeleted);
+        let count_skips = !allows(path, Kind::TestSkipped);
+        let count_assertions = !allows(path, Kind::AssertionRemoved);
         let head_has: BTreeSet<&str> = head_file
             .iter()
-            .flat_map(|file| file.tests.iter().map(|test| test.id.as_str()))
+            .flat_map(|read| read.tests.iter().map(|test| test.id.as_str()))
             .collect();
-        if let Some(file) = base_file {
+        if let Some(read) = base_file {
             let mut excused_tests: BTreeSet<usize> = BTreeSet::new();
-            for (index, test) in file.tests.iter().enumerate() {
-                if !head_has.contains(test.id.as_str()) && excused(path, *language, file, test) {
+            for (index, test) in read.tests.iter().enumerate() {
+                if !head_has.contains(test.id.as_str()) && excused(file, read, test) {
                     excused_tests.insert(index);
                     counts.excused_tests += test.weight;
                     continue;
                 }
-                counts.base_tests += test.weight;
-                if test.skipped {
-                    counts.base_skipped += test.weight;
-                    base_skipped_ids.insert(test.id.clone());
+                if count_tests {
+                    counts.base_tests += test.weight;
+                    for _ in 0..test.weight {
+                        base_ids.push((test.id.clone(), path.clone(), test.line));
+                    }
                 }
-                if test.focused {
-                    base_focus.insert(test.id.clone());
-                }
-                for _ in 0..test.weight {
-                    base_ids.push((test.id.clone(), path.clone(), test.line));
+                if count_skips {
+                    let skipped = skipped_weight(test);
+                    counts.base_skipped += skipped;
+                    if skipped > 0 {
+                        *base_skipped_ids.entry(test.id.clone()).or_default() += skipped;
+                    }
+                    if test.focused {
+                        base_focus.insert(test.id.clone());
+                    }
                 }
             }
-            for assertion in &file.assertions {
+            for assertion in &read.assertions {
                 if assertion
                     .test
                     .is_some_and(|test| excused_tests.contains(&test))
                 {
                     counts.excused_assertions += assertion.weight;
+                    continue;
+                }
+                if !count_assertions {
                     continue;
                 }
                 counts.base_assertions += assertion.weight;
@@ -490,21 +645,33 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
                 }
             }
         }
-        if let Some(file) = head_file {
-            for test in &file.tests {
-                counts.head_tests += test.weight;
-                *head_ids.entry(test.id.clone()).or_default() += test.weight;
-                if test.skipped {
-                    counts.head_skipped += test.weight;
-                    head_skips.push((path.clone(), test.line, test.id.clone()));
+        if let Some(read) = head_file {
+            for test in &read.tests {
+                if count_tests {
+                    counts.head_tests += test.weight;
+                    *head_ids.entry(test.id.clone()).or_default() += test.weight;
                 }
-                if test.focused {
-                    head_focus.push((path.clone(), test.line, test.id.clone()));
+                if count_skips {
+                    let skipped = skipped_weight(test);
+                    counts.head_skipped += skipped;
+                    if skipped > 0 {
+                        head_skips.push(Skip {
+                            file: path,
+                            line: test.line,
+                            test,
+                            weight: skipped,
+                        });
+                    }
+                    if test.focused {
+                        head_focus.push((path.clone(), test.line, test.id.clone()));
+                    }
                 }
             }
-            for assertion in &file.assertions {
-                counts.head_assertions += assertion.weight;
-                *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
+            if count_assertions {
+                for assertion in &read.assertions {
+                    counts.head_assertions += assertion.weight;
+                    *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
+                }
             }
         }
     }
@@ -534,19 +701,38 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             }
         }
     }
-    // More skipped tests.
+    // More skipped runs: name the tests that skip more runs than on the
+    // base, up to the shortfall.
     if counts.head_skipped > counts.base_skipped {
-        for (file, line, id) in head_skips
-            .iter()
-            .filter(|(_, _, id)| !base_skipped_ids.contains(id))
-            .take(counts.head_skipped - counts.base_skipped)
-        {
+        let mut shortfall = counts.head_skipped - counts.base_skipped;
+        let mut left = base_skipped_ids;
+        for skip in &head_skips {
+            if shortfall == 0 {
+                break;
+            }
+            let had = left.entry(skip.test.id.clone()).or_default();
+            let covered = skip.weight.min(*had);
+            *had -= covered;
+            let more = skip.weight - covered;
+            if more == 0 {
+                continue;
+            }
+            shortfall = shortfall.saturating_sub(more);
+            let mut what = skip.test.id.clone();
+            if let Some(why) = skip.test.why {
+                what.push_str(&format!(" (never runs: {why})"));
+            } else if !skip.test.skipped {
+                what.push_str(&format!(
+                    " ({} of its {} rows skipped)",
+                    skip.weight, skip.test.weight
+                ));
+            }
             findings.push(Finding {
                 kind: Kind::TestSkipped,
-                file: file.clone(),
-                line: *line,
+                file: skip.file.to_owned(),
+                line: skip.line,
                 on_base: false,
-                what: id.clone(),
+                what,
             });
         }
     }
@@ -586,6 +772,44 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
                 });
             }
         }
+    }
+    // More suppressions of a rule: name the new ones, up to the shortfall
+    // per key. One that the base has in the same file, with the same text,
+    // is not new.
+    let mut head_keys: BTreeMap<&str, usize> = BTreeMap::new();
+    for (_, found) in &head_suppressions {
+        *head_keys.entry(found.key.as_str()).or_default() += 1;
+    }
+    let mut shortfall: BTreeMap<&str, usize> = head_keys
+        .iter()
+        .filter_map(|(key, head)| {
+            let base = base_keys.get(*key).copied().unwrap_or(0);
+            (*head > base).then(|| (*key, head - base))
+        })
+        .collect();
+    let mut left = base_texts;
+    for (path, found) in &head_suppressions {
+        let Some(more) = shortfall.get_mut(found.key.as_str()) else {
+            continue;
+        };
+        if *more == 0 {
+            continue;
+        }
+        if let Some(had) = left
+            .get_mut(&(path.clone(), found.key.clone(), found.text.clone()))
+            .filter(|had| **had > 0)
+        {
+            *had -= 1;
+            continue;
+        }
+        *more -= 1;
+        findings.push(Finding {
+            kind: Kind::SuppressionAdded,
+            file: path.clone(),
+            line: found.line,
+            on_base: false,
+            what: format!("{} ({})", found.text, found.key),
+        });
     }
     findings.sort_by(|a, b| (a.kind, &a.file, a.line).cmp(&(b.kind, &b.file, b.line)));
     report.findings = findings;

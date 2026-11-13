@@ -1,6 +1,10 @@
 #!/usr/bin/env node
-// Counts what the tamper guard (ADR 0042) catches and gets wrong on the
-// labelled corpus in bench/tamper-corpus.json.
+// Counts what the tamper guard (ADR 0042, ADR 0044) catches and gets wrong
+// on the labelled corpus in bench/tamper-corpus.json.
+//
+// The corpus was written together with the guard, so these counts show that
+// the guard does what its ADRs say. They are not a measured false-positive
+// or miss rate on real changes: M26 measures that.
 //
 // Usage: node bench/tamper-rates.mjs [--bin target/debug/fscale]
 //
@@ -53,8 +57,21 @@ function put(root, files) {
   }
 }
 
-const kinds = ['test-deleted', 'test-skipped', 'assertion-removed', 'not-checked'];
+const kinds = [
+  'test-deleted',
+  'test-skipped',
+  'assertion-removed',
+  'suppression-added',
+  'not-checked',
+];
+const languages = { ts: 'TypeScript', js: 'JavaScript', py: 'Python', rs: 'Rust' };
 const tally = Object.fromEntries(kinds.map((kind) => [kind, { cases: 0, caught: 0, missed: 0 }]));
+const byLanguage = Object.fromEntries(
+  Object.keys(languages).map((key) => [
+    key,
+    { caught: 0, cleanCases: 0, missed: 0, falsePositives: 0, cases: 0 },
+  ]),
+);
 let cleanCases = 0;
 let falsePositives = 0;
 let cleanWithFinding = 0;
@@ -84,21 +101,27 @@ for (const labelled of corpus.cases) {
     }
     const report = JSON.parse(stdout);
     const found = new Set((report.tamper?.findings ?? []).map((finding) => finding.kind));
+    const language = byLanguage[labelled.name.split(':')[0]];
+    language.cases += 1;
     for (const kind of labelled.expect) {
       tally[kind].cases += 1;
       if (found.has(kind)) {
         tally[kind].caught += 1;
+        language.caught += 1;
       } else {
         tally[kind].missed += 1;
+        language.missed += 1;
         wrong.push(`missed ${kind}: ${labelled.name}`);
       }
     }
     const extra = [...found].filter((kind) => !labelled.expect.includes(kind));
     if (labelled.expect.length === 0) {
       cleanCases += 1;
+      language.cleanCases += 1;
       if (found.size > 0) cleanWithFinding += 1;
     }
     falsePositives += extra.length;
+    language.falsePositives += extra.length;
     for (const kind of extra) wrong.push(`false positive ${kind}: ${labelled.name}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -117,7 +140,24 @@ for (const kind of kinds) {
   console.log(`| ${kind} | ${cases} | ${caught} | ${missed} |`);
 }
 console.log('');
+console.log(
+  '| Language | Cases | Not-a-finding cases | Findings caught | Missed | False positives |',
+);
+console.log(
+  '| -------- | ----- | ------------------- | --------------- | ------ | --------------- |',
+);
+for (const [key, name] of Object.entries(languages)) {
+  const row = byLanguage[key];
+  console.log(
+    `| ${name} | ${row.cases} | ${row.cleanCases} | ${row.caught} | ${row.missed} | ${row.falsePositives} |`,
+  );
+}
+console.log('');
 console.log(`False positives (a kind reported that the case does not have): ${falsePositives}`);
 console.log(`Not-a-finding cases with any finding: ${cleanWithFinding} of ${cleanCases}`);
 for (const line of wrong) console.log(`  ${line}`);
+console.log('');
+console.log(
+  'These are counts on fixtures written with the guard, not a measured false-positive or miss rate (M26).',
+);
 process.exitCode = wrong.length === 0 ? 0 : 1;

@@ -1,5 +1,5 @@
 {
-  "about": "Labelled changes for the tamper guard (ADR 0042). expect lists the kinds of finding a case must give; an empty list means none. Each case is a git repo whose main branch has base and whose working tree on a branch has head (null deletes a file).",
+  "about": "Labelled changes for the tamper guard (ADR 0042, ADR 0044). expect lists the kinds of finding a case must give; an empty list means none. Each case is a git repo whose main branch has base and whose working tree on a branch has head (null deletes a file). The cases were written together with the guard: their counts show it does what the ADRs say, not a measured false-positive or miss rate (M26 measures that).",
   "cases": [
     {
       "name": "ts: a test deleted",
@@ -454,6 +454,328 @@
       },
       "head": {
         "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect.soft(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion wrapped in if (false)",
+      "expect": ["assertion-removed"],
+      "note": "The assertion is still written but never runs (ADR 0044).",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    if (false) {\n      expect(sub(3, 1)).toBe(2);\n    }\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an early return before the assertions",
+      "expect": ["assertion-removed"],
+      "note": "The test still computes something, then returns before its assertions.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    const sum = add(1, 2);\n    return;\n    expect(sum).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a return as the first statement of a test",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The body runs nothing: the test is as good as skipped.",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  return;\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test wrapped in if (false)",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The test is never registered.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  if (false) {\n    it(\"subtracts\", () => {\n      expect(sub(3, 1)).toBe(2);\n    });\n  }\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion replaced by expect(true).toBe(true)",
+      "expect": ["assertion-removed"],
+      "note": "An assertion that cannot fail is not counted.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(true).toBe(true);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: an assertion replaced by assert.ok(true)",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.ok(true);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The test still exists and passes, testing nothing.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {});\n});\n"
+      }
+    },
+    {
+      "name": "ts: a placeholder expect(true).toBe(true) kept while a test is added",
+      "expect": [],
+      "note": "A placeholder on both sides counts on neither.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"loads\", () => {\n    expect(true).toBe(true);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"loads\", () => {\n    expect(true).toBe(true);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n\n  it(\"adds negatives\", () => {\n    expect(add(-1, -2)).toBe(-3);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a dead if (false) block removed",
+      "expect": [],
+      "note": "Code that never ran was not counted on the base.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n    if (false) {\n      expect(sub(1, 1)).toBe(0);\n    }\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an early return removed",
+      "expect": [],
+      "note": "Turning an assertion back on is not a finding.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    const diff = sub(3, 1);\n    return;\n    expect(diff).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    const diff = sub(3, 1);\n    expect(diff).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a conditional return before an assertion",
+      "expect": [],
+      "note": "Only a return that always runs makes what follows unreachable.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    if (typeof sub !== \"function\") {\n      return;\n    }\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an eslint-disable-next-line added",
+      "expect": ["suppression-added"],
+      "note": "A new suppression in a source file, not a test.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "ts: a @ts-ignore added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // @ts-ignore\n  return total.toFixed(\"2\");\n}\n"
+      }
+    },
+    {
+      "name": "js: line disables replaced by one file-wide eslint-disable",
+      "expect": ["suppression-added"],
+      "note": "Fewer comments, but a wider reach: the range form is its own key.",
+      "base": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "/* eslint-disable no-console */\nfunction run(items) {\n  console.log(items.length);\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "js: an eslint-disable comment added to a test",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "/* eslint-disable jest/no-disabled-tests */\nconst assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a suppression moved with its code to another file",
+      "expect": [],
+      "note": "Counted per rule over the whole change, so a move is not a finding.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export { report } from \"./format\";\n",
+        "src/format.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "ts: @ts-ignore turned into @ts-expect-error",
+      "expect": [],
+      "note": "Both are one ts:ignore suppression; the second is stricter.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  // @ts-ignore\n  return total.toFixed(\"2\");\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // @ts-expect-error: toFixed takes a number\n  return total.toFixed(\"2\");\n}\n"
+      }
+    },
+    {
+      "name": "js: an eslint-disable removed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "js: eslint-disable-next-line mentioned in prose",
+      "expect": [],
+      "note": "A directive must open the comment.",
+      "base": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "// Do not add eslint-disable-next-line here: fix the code instead.\nfunction run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "ts: a reason added to an existing suppression",
+      "expect": [],
+      "note": "Same rule, same place.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console -- the CLI prints the total\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "py: a # noqa added to an import",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "import os\nfrom decimal import Decimal  # noqa: F401\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      }
+    },
+    {
+      "name": "py: a # type: ignore added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum(  # type: ignore[arg-type]\n        (Decimal(p) for p in prices), Decimal(0)\n    )\n"
+      }
+    },
+    {
+      "name": "py: a # pylint: disable moved with its function to another module",
+      "expect": [],
+      "note": "Counted per rule over the whole change.",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):  # pylint: disable=invalid-name\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "from app.totals import total\n\n__all__ = [\"total\"]\n",
+        "app/totals.py": "from decimal import Decimal\n\n\ndef total(prices):  # pylint: disable=invalid-name\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      }
+    },
+    {
+      "name": "py: noqa mentioned in a comment's prose",
+      "expect": [],
+      "note": "A directive must open its # part.",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "# Keep imports used: do not reach for noqa here.\nfrom decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      }
+    },
+    {
+      "name": "rs: an #[allow(dead_code)] added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\n#[allow(dead_code)]\nfn unused() -> u32 {\n    0\n}\n"
+      }
+    },
+    {
+      "name": "rs: a crate-wide #![allow(clippy::pedantic)] added",
+      "expect": ["suppression-added"],
+      "note": "An inner attribute reaches the whole module: its own key.",
+      "base": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "#![allow(clippy::pedantic)]\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      }
+    },
+    {
+      "name": "rs: #[allow] turned into #[expect]",
+      "expect": [],
+      "note": "Both suppress the lint; #[expect] also fails when it is no longer needed.",
+      "base": {
+        "src/pricing.rs": "#[allow(clippy::cast_possible_truncation)]\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "#[expect(clippy::cast_possible_truncation, reason = \"prices fit in u32\")]\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      }
+    },
+    {
+      "name": "rs: an #[allow] in a comment or a string",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "// Never add #[allow(dead_code)] here.\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub const NOTE: &str = \"#[allow(unused)]\";\n"
       }
     }
   ]
