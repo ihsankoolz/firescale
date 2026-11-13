@@ -15,22 +15,22 @@ Running verify on the course project took over ten minutes: one service's tests 
 
 ### Order of milestones
 
-| Milestone                                                      | Was        | Now        |
-| -------------------------------------------------------------- | ---------- | ---------- |
-| Project graph and affected verify                              | —          | M17        |
-| Local step-result cache and timings                            | —          | M18        |
-| Blame-aware verify: the base run                               | M17        | M19        |
-| Blame-aware verify: per-test labels                            | M18        | M20        |
-| Blame-aware verify: reruns and the stop hook                   | M19        | M21        |
-| Faster generated CI and a shared cache                         | —          | M22        |
-| Tamper guard: design and the first language                    | M20        | M23        |
-| Tamper guard: more languages and policy                        | M21        | M24        |
-| Tamper guard: config and CI                                    | M22        | M25        |
-| Tamper guard: approvals and measured rates                     | M23        | M26        |
-| Guarded agent runner                                           | M24        | M27        |
-| Agent adapters and `fscale ledger`                             | M25        | M28        |
-| Stack pack: Supabase                                           | M26        | M29        |
-| Stack pack: Expo                                               | M27        | M30        |
+| Milestone                                    | Was | Now |
+| -------------------------------------------- | --- | --- |
+| Project graph and affected verify            | —   | M17 |
+| Local step-result cache and timings          | —   | M18 |
+| Blame-aware verify: the base run             | M17 | M19 |
+| Blame-aware verify: per-test labels          | M18 | M20 |
+| Blame-aware verify: reruns and the stop hook | M19 | M21 |
+| Faster generated CI and a shared cache       | —   | M22 |
+| Tamper guard: design and the first language  | M20 | M23 |
+| Tamper guard: more languages and policy      | M21 | M24 |
+| Tamper guard: config and CI                  | M22 | M25 |
+| Tamper guard: approvals and measured rates   | M23 | M26 |
+| Guarded agent runner                         | M24 | M27 |
+| Agent adapters and `fscale ledger`           | M25 | M28 |
+| Stack pack: Supabase                         | M26 | M29 |
+| Stack pack: Expo                             | M27 | M30 |
 
 M0 to M16 keep their numbers. Older ADRs and the older sections of DECISIONS.md keep the numbers they were written with; this table translates them.
 
