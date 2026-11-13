@@ -73,14 +73,18 @@ function stepScript(name: string, file: string, log: string): string {
  * A repo on `main`, committed, with lint and test steps that fail when
  * `lint.txt` or `test.txt` says "fail". The log of runs sits outside it.
  */
-async function blameRepo(lint: 'ok' | 'fail', test: 'ok' | 'fail') {
+async function blameRepo(
+  lint: 'ok' | 'fail',
+  test: 'ok' | 'fail',
+  verify: Record<string, unknown> = {},
+) {
   const outside = await fixtures.create({ files: {}, track: 'no-git' });
   const log = path.join(outside.root, 'runs.log');
   const repo = await fixtures.create({
     files: {
       'firescale.config.json': JSON.stringify({
         packs: ['core'],
-        verify: { lint: 'node lint.js', typecheck: false, test: 'node test.js' },
+        verify: { lint: 'node lint.js', typecheck: false, test: 'node test.js', ...verify },
       }),
       '.gitignore': '.firescale/\n',
       'lint.js': stepScript('lint', 'lint.txt', log),
@@ -122,8 +126,23 @@ describe('blame-aware verify', () => {
     expect(step(json, 'test').base?.status).toBe('failed');
   });
 
-  it('blocks a failure introduced on the head, committed or not, and labels a repaired one fixed', async () => {
-    const { root, write } = await blameRepo('ok', 'fail');
+  it('runs no base step for a step that passed on the head, so a repaired one has no label (ADR 0043)', async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    await write('lint.txt', 'fail\n');
+    await write('test.txt', 'ok\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'lint').label).toBe('new');
+    expect(step(json, 'test').status).toBe('passed');
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base).toBeUndefined();
+    expect(json.base).toMatchObject({ ran: 1 });
+    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual(['base lint']);
+  });
+
+  it('blocks a failure introduced on the head, committed or not, and with verify.labelFixed labels a repaired one fixed', async () => {
+    const { root, write } = await blameRepo('ok', 'fail', { labelFixed: true });
     // Uncommitted: lint breaks, test is repaired.
     await write('lint.txt', 'fail\n');
     await write('test.txt', 'ok\n');
@@ -178,16 +197,17 @@ describe('blame-aware verify', () => {
     await commitAll(root, 'base install');
     await write('lint.txt', 'ok, changed\n');
     await runCli(['verify'], root);
+    // lint passes on the head, so only test runs on the base (ADR 0043).
     const first = (await runs()).filter((run) => run.startsWith('base '));
-    expect(first.sort()).toEqual(['base lint', 'base test']);
+    expect(first).toEqual(['base test']);
     const second = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(2);
-    expect(second.base).toMatchObject({ ran: 0, fromCache: 2 });
+    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(1);
+    expect(second.base).toMatchObject({ ran: 0, fromCache: 1 });
     expect(step(second, 'test').label).toBe('pre-existing');
     expect(step(second, 'test').base?.source).toBe('cache');
     await write('package-lock.json', '{"lockfileVersion":3,"packages":{}}\n');
     const third = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(4);
+    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(2);
     expect(step(third, 'test').base?.source).toBe('ran');
   });
 
@@ -717,17 +737,18 @@ describe("a project's changed lockfile", () => {
     expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
     await write('lint.txt', 'ok, changed\n');
     await runCli(['verify'], root);
+    // Only the failing test runs on the base (ADR 0043).
     const before = (await runs()).filter((run) => run.startsWith('base ')).length;
-    expect(before).toBe(2);
+    expect(before).toBe(1);
     // Same base, other requirements: the kept result is not used.
     await write('requirements.txt', 'requests==2.1.0\n');
     const json = await report((await runCli(['verify', '--json'], root)).stdout);
     expect(step(json, 'test').base?.source).toBe('ran');
-    expect((await runs()).filter((run) => run.startsWith('base ')).length).toBe(4);
+    expect((await runs()).filter((run) => run.startsWith('base ')).length).toBe(2);
   });
 });
 
-describe('fixed needs a real failure on the base', () => {
+describe('fixed needs a real failure on the base (with verify.labelFixed, ADR 0043)', () => {
   /**
    * test.js passes when test.txt says ok and the ignored build output
    * `build/out.txt` exists: a worktree, which has no ignored files, fails
@@ -745,7 +766,7 @@ describe('fixed needs a real failure on the base', () => {
     ].join('\n');
 
   it('gives no label, and a note, when the step fails in any worktree', async () => {
-    const { root, runs, write } = await blameRepo('ok', 'ok');
+    const { root, runs, write } = await blameRepo('ok', 'ok', { labelFixed: true });
     const outside = path.join(root, '..', `${path.basename(root)}-needs-build.log`);
     await write('test.js', NEEDS_BUILD(outside));
     await write('.gitignore', '.firescale/\nbuild/\n');
@@ -787,7 +808,7 @@ describe('fixed needs a real failure on the base', () => {
   });
 
   it('labels the step fixed when it passes in a worktree of the head, and keeps that pairing', async () => {
-    const { root, runs, write } = await blameRepo('ok', 'fail');
+    const { root, runs, write } = await blameRepo('ok', 'fail', { labelFixed: true });
     await write('lint.txt', 'fail\n');
     await write('test.txt', 'ok\n');
     const json = await report((await runCli(['verify', '--json'], root)).stdout);
@@ -803,7 +824,7 @@ describe('fixed needs a real failure on the base', () => {
   });
 
   it('does not pair a kept base failure with a later run of the head', async () => {
-    const { root, write } = await blameRepo('ok', 'ok');
+    const { root, write } = await blameRepo('ok', 'ok', { labelFixed: true });
     // The test also needs an installed dependency, which is missing at first.
     const needsDep = [
       "const fs = require('fs');",

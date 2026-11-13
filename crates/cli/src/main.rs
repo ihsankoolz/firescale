@@ -1161,7 +1161,7 @@ fn verify_report(
                             options: &options,
                             check: &base_check,
                             head_violations: &head_violations,
-                            judge_passes: mode == VerifyMode::Full,
+                            judge_passes: mode == VerifyMode::Full && verify_config.label_fixed,
                             shortcuts: !args.no_cache,
                         },
                     );
