@@ -22,6 +22,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(0.3.0) `fixed` costs a run in a worktree of the head**, kept afterwards (ADR 0040). A step that fails in any worktree (this repo's `pnpm test` without its build) is never `fixed`; say if you would rather drop the label than pay for the run.
 - **(M21) The stop hook judges only failures on the base**: a passing step never runs there in the hook, so `fixed` labels appear only in a full `fscale verify` (ADR 0039).
 - **(M21) A timed-out step is not run again** before it blocks: a second timeout would double the wait.
 - **(M21) A run that stops at its first failure is never `pre-existing`**: `cargo test` without `--no-fail-fast`, pytest `-x`, Jest `--bail`. This repo's own `pnpm test` runs `cargo test --workspace`, so a failing Rust test there always blocks. Say if verify should add `--no-fail-fast` itself (it does not edit commands today).
@@ -110,6 +111,18 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## 0.3.0 — two fixes to the base run, after M21
+
+**Built** (ADR 0040, `docs/verify.md` "Only new failures block"):
+
+1. **A changed lockfile counts per project.** A lockfile or requirements list (`requirements*.txt`, `constraints*.txt`, a `.txt` in `requirements/`) that a step's cache key covers and that differs between the base and the head means the linked `node_modules` or virtual environment is wrong for that step's base. With `verify.baseInstall` set, it runs as before; without it, that step has no base: its failure blocks, with a note naming the file and `verify.baseInstall`. Other projects are still judged. The base store's key now holds the head's requirements lists too, so a kept result is not reused after one changes.
+2. **`fixed` needs a real failure on the base.** Before a passing step is labelled `fixed`, it runs once in a worktree of the head (`HEAD` plus the working tree's changes, ignored files left out, dependencies set up as for the base). Only a pass there makes it `fixed`; otherwise no label and a note. A per-test base on which no test passed is never evidence. The control result is kept in `.firescale/base/`. The stop hook no longer looks up base results for passing steps.
+3. The version is 0.3.0 (`node scripts/bump-version.mjs 0.3.0`). No tag pushed.
+
+**Decided on your behalf:** `verify.baseInstall`, when set, still runs on every base run (not only when a lockfile changed): mixing linked and installed folders in one worktree would let an install write through a link into the head (ADR 0037). The check counts any changed dependency list, as the root's steps do.
+
+**Proof** (`blame.test.ts`): with two projects whose tests fail on the base, a changed lockfile in `a` leaves `a`'s failure unlabelled and blocking with the note while `b` is `pre-existing` and only `b` runs on the base; with `baseInstall`, both are judged; a changed `requirements.txt` makes the kept base result unused; a test that needs an ignored build output fails on the base and in the head's worktree, so it gets no `fixed` label and a note, and a second run repeats neither run; a real repair is still `fixed`. The three tests aimed at the fixes fail on the code before them. `facts::tests::dependency_lists_are_lockfiles_and_requirements_lists`.
 
 ## M21 — Blame-aware verify: reruns and the stop hook
 
