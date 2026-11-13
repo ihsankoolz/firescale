@@ -280,7 +280,8 @@ describe('no Node process for built-in rules', () => {
     }
     expect(await existing.read('.github/workflows/ci.yml')).toContain('npx firescale verify');
     expect(await exists(stub.marker)).toBe(false);
-  });
+    // Six fscale runs: 25 s on the Windows runner in CI, over the 30 s default once (the M19 pull request).
+  }, 60_000);
 
   it('control: a custom pack does start node, and the stub intercepts it', async () => {
     const stub = await stubNode();
