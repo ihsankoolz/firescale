@@ -357,7 +357,12 @@ describe('lint and typecheck on a package that is not installed', () => {
         private: true,
         devDependencies: { '@eslint/js': '9.9.0', eslint: '9.9.0' },
       }),
-      'package-lock.json': '{}\n',
+      // The lockfile names the package: it was installed before, so npm ci
+      // can install it again without rewriting the lockfile.
+      'package-lock.json': JSON.stringify({
+        lockfileVersion: 3,
+        packages: { 'node_modules/@eslint/js': { version: '9.9.0' } },
+      }),
       'eslint.config.js':
         "import js from '@eslint/js';\nexport default [js.configs.recommended];\n",
       'lint.cjs': ESLINT_MISSING,
@@ -381,6 +386,16 @@ describe('lint and typecheck on a package that is not installed', () => {
     const lint = json.steps.find((step) => step.name === 'lint');
     expect(lint?.status).toBe('setup-needed');
     expect((lint as { fix?: string } | undefined)?.fix).toBe('npm ci');
+  });
+
+  it('names npm install when the lockfile does not name the package yet (ADR 0043)', async () => {
+    // Just added to package.json: npm ci would refuse the lockfile.
+    const repo = await fixtures.create({
+      files: lintRepo({ 'package-lock.json': '{"lockfileVersion":3,"packages":{}}\n' }),
+    });
+    const result = await runCli(['verify'], repo.root);
+    expect(result.stdout.split('\n')[0]).toBe('verify: SETUP NEEDED for lint');
+    expect(result.stdout).toContain('Set it up: npm install\nThen run again: node lint.cjs\n');
   });
 
   it('is a normal failure when the package is installed', async () => {
