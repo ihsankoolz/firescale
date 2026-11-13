@@ -174,55 +174,99 @@ const LITERALS: [&str; 16] = [
     "regex_flags",
 ];
 
-/// True for an assertion that cannot fail because it checks nothing that
-/// the code under test computes: every argument along its chain is a
-/// literal (`expect(true).toBe(true)`, `expect(1).toBe(1)`,
-/// `assert.ok(true)`, `expect(true).toBeTruthy()`). `expect.assertions(n)`
-/// and `expect.hasAssertions()` count other assertions and never are.
+/// True for an assertion that cannot fail: it checks only literals, and
+/// they certainly pass. `expect(<literal>)` with `toBe`, `toEqual` or
+/// `toStrictEqual` of the same literal, `toBeTruthy` of a truthy one or
+/// `toBeFalsy` of a falsy one; `assert(<truthy>)`, `assert.ok(<truthy>)`,
+/// `assert.equal`, `strictEqual`, `deepEqual` or `deepStrictEqual` of the
+/// same literal twice. An assertion that certainly fails
+/// (`expect(true).toBe(false)`, `assert.fail(…)`) marks code that must not
+/// be reached and counts like any other; so does anything else
+/// (`.not`, `.resolves`, `expect.assertions(n)`, other matchers).
 fn cannot_fail(whole: Node<'_>, src: &[u8]) -> bool {
-    let mut arguments: Vec<Node<'_>> = Vec::new();
+    // The chain from the outside in: the arguments of each call, and the
+    // names between them, down to `expect` or `assert`.
+    let mut calls: Vec<Vec<Node<'_>>> = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
     let mut at = whole;
-    for _ in 0..MAX_CHAIN {
+    let root = loop {
+        if calls.len() + names.len() > MAX_CHAIN {
+            return false;
+        }
         match at.kind() {
-            "await_expression" => match at.named_child(0) {
-                Some(inner) => at = inner,
-                None => return false,
-            },
             "call_expression" => {
-                if let Some(list) = at.child_by_field_name("arguments") {
-                    let mut cursor = list.walk();
-                    arguments.extend(list.named_children(&mut cursor).filter(|n| !n.is_extra()));
+                let mut list = Vec::new();
+                if let Some(arguments) = at.child_by_field_name("arguments") {
+                    let mut cursor = arguments.walk();
+                    list.extend(
+                        arguments
+                            .named_children(&mut cursor)
+                            .filter(|n| !n.is_extra()),
+                    );
                 }
+                calls.push(list);
                 match at.child_by_field_name("function") {
                     Some(function) => at = function,
                     None => return false,
                 }
             }
             "member_expression" => {
-                let property = at
-                    .child_by_field_name("property")
-                    .map_or("", |property| text(property, src));
-                let object = at.child_by_field_name("object");
-                if object.is_some_and(|object| {
-                    object.kind() == "identifier"
-                        && text(object, src) == "expect"
-                        && matches!(property, "assertions" | "hasAssertions")
-                }) {
-                    return false;
-                }
-                match object {
+                names.push(
+                    at.child_by_field_name("property")
+                        .map_or("", |property| text(property, src)),
+                );
+                match at.child_by_field_name("object") {
                     Some(object) => at = object,
                     None => return false,
                 }
             }
-            "identifier" => break,
+            "identifier" => break text(at, src),
             _ => return false,
         }
+    };
+    let literal = |node: &Node<'_>| reach::constant(*node, &LITERALS);
+    let same = |a: &Node<'_>, b: &Node<'_>| {
+        literal(a)
+            && literal(b)
+            && text(*a, src).split_whitespace().collect::<String>()
+                == text(*b, src).split_whitespace().collect::<String>()
+    };
+    let truthy = |node: &Node<'_>| match node.kind() {
+        "true" | "array" | "regex" => true,
+        "number" => text(*node, src).parse::<f64>().is_ok_and(|n| n != 0.0),
+        "string" => js_string(*node, src).is_some_and(|value| !value.is_empty()),
+        _ => false,
+    };
+    let falsy = |node: &Node<'_>| match node.kind() {
+        "false" | "null" | "undefined" => true,
+        "number" => text(*node, src).parse::<f64>().is_ok_and(|n| n == 0.0),
+        "string" => js_string(*node, src).is_some_and(|value| value.is_empty()),
+        _ => false,
+    };
+    match (root, names.as_slice(), calls.as_slice()) {
+        // `expect(subject).matcher(…)`: the outer call is the matcher's.
+        ("expect", [matcher], [expected, subject]) if subject.len() == 1 => {
+            let subject = &subject[0];
+            match (*matcher, expected.as_slice()) {
+                ("toBe" | "toEqual" | "toStrictEqual", [value]) => same(subject, value),
+                ("toBeTruthy", []) => truthy(subject),
+                ("toBeFalsy", []) => falsy(subject),
+                _ => false,
+            }
+        }
+        ("assert", [], [arguments]) | ("assert", ["ok"], [arguments]) => {
+            arguments.first().is_some_and(truthy)
+        }
+        ("assert", [method], [arguments])
+            if matches!(
+                *method,
+                "equal" | "strictEqual" | "deepEqual" | "deepStrictEqual"
+            ) =>
+        {
+            matches!(arguments.as_slice(), [a, b, ..] if same(a, b))
+        }
+        _ => false,
     }
-    !arguments.is_empty()
-        && arguments
-            .iter()
-            .all(|argument| reach::constant(*argument, &LITERALS))
 }
 
 /// Why a test call runs nothing: it has no function (`it("x")`), or its
@@ -707,17 +751,28 @@ it("placeholders", () => {
   expect(total).toBe(true);
   expect(true).toBe(isReady());
   expect(screen.getByText("x")).toBeTruthy();
+  expect(true).toBe(false);
+  assert.fail("should have thrown");
+  expect(null).toBeFalsy();
+  expect(1).not.toBe(2);
 });
 "#);
+        // Only literals that certainly pass are left out: arithmetic is not
+        // worked out, and an assertion that certainly fails marks code that
+        // must not be reached.
         let shapes: Vec<&str> = file.assertions.iter().map(|a| a.shape.as_str()).collect();
         assert_eq!(
             shapes,
             [
+                "expect(1+1).toEqual(2)",
                 "expect.assertions(2)",
                 "expect.hasAssertions()",
                 "expect(total).toBe(true)",
                 "expect(true).toBe(isReady())",
                 "expect(screen.getByText(\"x\")).toBeTruthy()",
+                "expect(true).toBe(false)",
+                "assert.fail(\"shouldhavethrown\")",
+                "expect(1).not.toBe(2)",
             ]
         );
     }

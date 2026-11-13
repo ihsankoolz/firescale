@@ -168,6 +168,11 @@ struct Marks {
     never: bool,
     /// `#[cfg(test)]`: compiled only for tests.
     cfg_test: bool,
+    /// Any other `#[cfg(…)]` (`feature = "slow"`, `unix`, `not(test)`,
+    /// `all(test, …)`): compiled only sometimes, like a conditional skip.
+    gated: bool,
+    /// A `#[cfg(…)]` that names `test` (`test`, `all(test, …)`).
+    names_test: bool,
     /// `#[rstest]`.
     rstest: bool,
     /// `#[case(…)]` attributes, for `rstest`.
@@ -197,11 +202,17 @@ fn marks(attributes: &[Node<'_>], src: &[u8]) -> Marks {
         }
         match path.as_str() {
             "ignore" => found.ignored = true,
-            "cfg" => match attribute_arguments(*attribute, src).as_str() {
-                "(any())" => found.never = true,
-                "(test)" => found.cfg_test = true,
-                _ => {}
-            },
+            "cfg" => {
+                let arguments = attribute_arguments(*attribute, src);
+                found.names_test |= arguments
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .any(|word| word == "test");
+                match arguments.as_str() {
+                    "(any())" => found.never = true,
+                    "(test)" => found.cfg_test = true,
+                    _ => found.gated = true,
+                }
+            }
             "cfg_attr" => {
                 // `#[cfg_attr(windows, ignore)]`, `ignore = "…"`: the test
                 // runs only sometimes.
@@ -251,13 +262,15 @@ fn assertion_name<'s>(invocation: Node<'_>, src: &'s [u8]) -> Option<&'s str> {
     .then_some(name)
 }
 
-/// True for an assertion that cannot fail: every argument it checks is a
-/// literal (`assert!(true)`, `assert_eq!(1, 1)`, `assert!(1 == 1)`). Only
-/// `assert`, `*_eq` and `*_ne` forms are judged; others never are.
-fn cannot_fail(invocation: Node<'_>, name: &str) -> bool {
+/// True for an assertion that cannot fail: it checks only literals, and
+/// they certainly pass (`assert!(true)`, `assert!(1 == 1)`,
+/// `assert_eq!(1, 1)`). One that certainly fails (`assert!(false, "…")`,
+/// `assert_eq!(1, 2)`) is an assertion like any other: it marks code that
+/// must not be reached. Only `assert` and `*_eq` forms are judged.
+fn cannot_fail(invocation: Node<'_>, name: &str, src: &[u8]) -> bool {
     let checked = if matches!(name, "assert" | "debug_assert" | "prop_assert") {
         1
-    } else if name.ends_with("_eq") || name.ends_with("_ne") {
+    } else if name.ends_with("_eq") {
         2
     } else {
         return false;
@@ -270,14 +283,38 @@ fn cannot_fail(invocation: Node<'_>, name: &str) -> bool {
         return false;
     };
     let arguments = split_arguments(tree);
-    arguments.len() >= checked
-        && arguments[..checked].iter().all(|argument| {
-            let mut named = argument
+    if arguments.len() < checked {
+        return false;
+    }
+    let mut texts: Vec<String> = Vec::new();
+    for argument in &arguments[..checked] {
+        let mut named = argument
+            .iter()
+            .filter(|node| node.is_named() && !node.is_extra())
+            .peekable();
+        if named.peek().is_none() || !named.all(|node| reach::constant(*node, &LITERALS)) {
+            return false;
+        }
+        texts.push(
+            argument
                 .iter()
-                .filter(|node| node.is_named() && !node.is_extra())
-                .peekable();
-            named.peek().is_some() && named.all(|node| reach::constant(*node, &LITERALS))
-        })
+                .filter(|node| !node.is_extra())
+                .map(|node| text(*node, src))
+                .collect::<String>()
+                .split_whitespace()
+                .collect(),
+        );
+    }
+    match texts.as_slice() {
+        [condition] => {
+            condition == "true"
+                || condition
+                    .split_once("==")
+                    .is_some_and(|(left, right)| !right.contains('=') && left == right)
+        }
+        [left, right] => left == right,
+        _ => false,
+    }
 }
 
 /// Reads the tests, skips and assertions of a Rust file.
@@ -313,6 +350,8 @@ pub(super) fn read(source: &str) -> TestFile {
         module: Option<String>,
         never: bool,
         cfg_test: bool,
+        /// Under a `#[cfg(…)]` other than `test` and `any()`.
+        gated: bool,
         /// A function, not a module or the file.
         function: bool,
         /// For a function: the index of the test it is.
@@ -324,6 +363,7 @@ pub(super) fn read(source: &str) -> TestFile {
         module: None,
         never: file_marks.never,
         cfg_test: file_marks.cfg_test,
+        gated: file_marks.gated,
         function: false,
         test: None,
     }];
@@ -341,16 +381,41 @@ pub(super) fn read(source: &str) -> TestFile {
         match node.kind() {
             "mod_item" => {
                 let own = module_marks(node, src);
-                let (never, cfg_test) = open
-                    .last()
-                    .map_or((false, false), |scope| (scope.never, scope.cfg_test));
+                let (never, cfg_test, gated) = open.last().map_or((false, false, false), |scope| {
+                    (scope.never, scope.cfg_test, scope.gated)
+                });
+                let name = node
+                    .child_by_field_name("name")
+                    .map(|name| text(name, src).to_owned());
+                // `#[cfg(test)] mod tests;`: the tests are in another file,
+                // which this declaration compiles. It counts as one test,
+                // so turning it off or deleting it is a finding even when
+                // that file is not part of the change.
+                if node.child_by_field_name("body").is_none() && (cfg_test || own.names_test) {
+                    let id = open
+                        .iter()
+                        .filter_map(|scope| scope.module.as_deref())
+                        .chain(name.as_deref())
+                        .collect::<Vec<_>>()
+                        .join("::");
+                    let never = never || own.never;
+                    file.tests.push(TestCase {
+                        id: format!("mod {id}; (its tests are in another file)"),
+                        line: node.start_position().row + 1,
+                        skipped: never || gated || own.gated,
+                        skipped_rows: 0,
+                        why: never.then_some(NEVER_COMPILED),
+                        focused: false,
+                        uses: BTreeSet::new(),
+                        weight: 1,
+                    });
+                }
                 open.push(Scope {
                     end: node.end_byte(),
-                    module: node
-                        .child_by_field_name("name")
-                        .map(|name| text(name, src).to_owned()),
+                    module: name,
                     never: never || own.never,
                     cfg_test: cfg_test || own.cfg_test,
+                    gated: gated || own.gated,
                     function: false,
                     test: None,
                 });
@@ -358,9 +423,9 @@ pub(super) fn read(source: &str) -> TestFile {
             }
             "function_item" => {
                 let own = marks(&outer_attributes(node), src);
-                let (never, cfg_test) = open
-                    .last()
-                    .map_or((false, false), |scope| (scope.never, scope.cfg_test));
+                let (never, cfg_test, gated) = open.last().map_or((false, false, false), |scope| {
+                    (scope.never, scope.cfg_test, scope.gated)
+                });
                 let mut test = None;
                 if own.test {
                     let name = node
@@ -401,7 +466,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     file.tests.push(TestCase {
                         id,
                         line: node.start_position().row + 1,
-                        skipped: own.ignored || why.is_some(),
+                        skipped: own.ignored || gated || own.gated || why.is_some(),
                         skipped_rows: 0,
                         why,
                         focused: false,
@@ -414,6 +479,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     module: None,
                     never: never || own.never,
                     cfg_test: cfg_test || own.cfg_test,
+                    gated: gated || own.gated,
                     function: true,
                     test,
                 });
@@ -423,7 +489,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 let Some(name) = assertion_name(node, src) else {
                     return false;
                 };
-                if dead.why(node).is_some() || cannot_fail(node, name) {
+                if dead.why(node).is_some() || cannot_fail(node, name, src) {
                     return false;
                 }
                 // The function it is in, if that is a test.
@@ -697,8 +763,59 @@ mod on {
             [
                 ("off::inside", true, Some(NEVER_COMPILED), 1),
                 ("on::alone", true, Some(NEVER_COMPILED), 1),
-                ("on::on_unix", false, None, 1),
+                // Any other `cfg` compiles the test only sometimes: a
+                // conditional skip, like `cfg_attr(…, ignore)`.
+                ("on::on_unix", true, None, 1),
             ]
+        );
+    }
+
+    #[test]
+    fn a_cfg_other_than_test_is_a_conditional_skip() {
+        let file = read(
+            r#"
+#[cfg(test)]
+mod plain {
+    #[test]
+    fn runs() { assert!(a); }
+}
+#[cfg(all(test, feature = "slow-tests"))]
+mod slow {
+    #[test]
+    fn only_with_the_feature() { assert!(a); }
+}
+#[cfg(not(test))]
+mod never_in_tests {
+    #[test]
+    fn hidden() { assert!(a); }
+}
+"#,
+        );
+        assert_eq!(
+            ids(&file),
+            [
+                ("plain::runs", false, None, 1),
+                ("slow::only_with_the_feature", true, None, 1),
+                ("never_in_tests::hidden", true, None, 1),
+            ]
+        );
+        let gated = read("#![cfg(feature = \"integration\")]\n#[test]\nfn t() { assert!(a); }\n");
+        assert_eq!(ids(&gated), [("t", true, None, 1)]);
+    }
+
+    #[test]
+    fn a_test_module_in_another_file_counts_as_one_test() {
+        let on = read("#[cfg(test)]\nmod tests;\nmod helpers;\n");
+        assert_eq!(
+            ids(&on),
+            [("mod tests; (its tests are in another file)", false, None, 1)]
+        );
+        let off = read("#[cfg(any())]\nmod tests;\n");
+        assert!(off.tests.is_empty());
+        let gated = read("#[cfg(all(test, feature = \"slow\"))]\nmod tests;\n");
+        assert_eq!(
+            ids(&gated),
+            [("mod tests; (its tests are in another file)", true, None, 1)]
         );
     }
 
@@ -766,18 +883,28 @@ fn t() {
     assert_eq!(1, 1 + y);
     assert_matches!(1, 1);
     insta::assert_snapshot!("fixed");
+    assert!(false, "must not be reached");
+    assert_eq!(1, 2);
 }
 "#,
         );
+        // Only literals that certainly pass are left out. Comparisons other
+        // than `==` are not worked out, and one that certainly fails marks
+        // code that must not be reached: both count.
         assert_eq!(
             shapes(&file),
             [
+                "assert_ne!(\"a\",'b')",
+                "assert!(-1.5<2.0)",
+                "debug_assert!(r\"x\"!=\"y\\n\")",
                 "assert_eq!(x,1)",
                 "assert!(ok)",
                 "assert!(true&&ok)",
                 "assert_eq!(1,1+y)",
                 "assert_matches!(1,1)",
                 "insta::assert_snapshot!(\"fixed\")",
+                "assert!(false,\"mustnotbereached\")",
+                "assert_eq!(1,2)",
             ]
         );
     }

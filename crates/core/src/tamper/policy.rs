@@ -155,8 +155,10 @@ impl TamperPolicy {
     }
 
     /// Reads the base commit's value: like [`TamperPolicy::parse`], but a
-    /// value it cannot read never fails the run. It keeps the mode when
-    /// that is readable, else `evaluated`, and drops the rest.
+    /// value it cannot read never fails the run, and is never read looser
+    /// than it is written: it keeps the mode when that is readable (else
+    /// `evaluated`) and every `testPaths` glob that is valid, and drops
+    /// `allow`.
     #[must_use]
     pub fn lenient(value: &Value) -> Self {
         Self::parse(value).unwrap_or_else(|_| {
@@ -165,7 +167,20 @@ impl TamperPolicy {
                 .or_else(|| value.get("policy").and_then(Value::as_str))
                 .and_then(Policy::parse)
                 .unwrap_or(Policy::Evaluated);
-            Self::of_mode(mode)
+            let mut policy = Self::of_mode(mode);
+            for pattern in value
+                .get("testPaths")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if let Ok(matcher) = glob(pattern) {
+                    policy.test_matchers.push(matcher);
+                    policy.test_paths.push(pattern.to_owned());
+                }
+            }
+            policy
         })
     }
 
@@ -288,5 +303,13 @@ mod tests {
             TamperPolicy::lenient(&json!("strict")),
             TamperPolicy::of_mode(Policy::Evaluated)
         );
+        // A bad `allow` entry drops `allow`, never the test paths.
+        let kept = TamperPolicy::lenient(&json!({
+            "testPaths": ["checks/**", "a/[b"],
+            "allow": ["tests/**", 3]
+        }));
+        assert_eq!(kept.test_paths, ["checks/**"]);
+        assert!(kept.names_test("checks/smoke.py"));
+        assert!(kept.allow.is_empty());
     }
 }

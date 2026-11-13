@@ -43,13 +43,52 @@ pub fn suppressions(source: &str, language: Language) -> Vec<Suppression> {
         return Vec::new();
     };
     let src = source.as_bytes();
+    let root = tree.root_node();
+    // Python: a comment before the module's first statement (docstrings and
+    // imports are statements) reaches the whole module.
+    let first_statement = {
+        let mut cursor = root.walk();
+        let first = root
+            .named_children(&mut cursor)
+            .find(|child| !child.is_extra() && child.kind() != "comment")
+            .map_or(usize::MAX, |child| child.start_byte());
+        first
+    };
+    // Rust: the item each outer attribute applies to, found once per list
+    // of items: `#[allow(…)]` on a `mod` reaches the whole module.
+    let mut applies_to_module: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut found = Vec::new();
-    walk(tree.root_node(), |node| {
+    walk(root, |node| {
+        if language == Language::Rust {
+            let mut pending: Vec<usize> = Vec::new();
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "attribute_item" => pending.push(child.id()),
+                    "line_comment" | "block_comment" => {}
+                    kind => {
+                        if kind == "mod_item" {
+                            applies_to_module.extend(pending.iter().copied());
+                        }
+                        pending.clear();
+                    }
+                }
+            }
+        }
         let line = node.start_position().row + 1;
         let keys = match (language, node.kind()) {
             (Language::Js(_), "comment") => js_comment(text(node, src)),
-            (Language::Python, "comment") => python_comment(text(node, src)),
-            (Language::Rust, "attribute_item") => rust_attribute(node, src, "allow"),
+            (Language::Python, "comment") => {
+                python_comment(text(node, src), node.start_byte() < first_statement)
+            }
+            (Language::Rust, "attribute_item") => {
+                let tool = if applies_to_module.contains(&node.id()) {
+                    "allow-module"
+                } else {
+                    "allow"
+                };
+                rust_attribute(node, src, tool)
+            }
             (Language::Rust, "inner_attribute_item") => rust_attribute(node, src, "allow-module"),
             _ => return true,
         };
@@ -140,6 +179,11 @@ fn js_comment(raw: &str) -> Vec<String> {
             }
         }
     }
+    // `/* eslint no-console: 0, "no-alert": "off" */`: rules configured
+    // in the file; those set to off are turned off for the rest of it.
+    if let Some(rest) = directive(body, "eslint") {
+        return eslint_settings(rest);
+    }
     if directive(body, "@ts-ignore").is_some() || directive(body, "@ts-expect-error").is_some() {
         return vec!["ts:ignore".to_owned()];
     }
@@ -171,6 +215,41 @@ fn js_comment(raw: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// The rules an inline ESLint configuration turns off: `rule: 0`,
+/// `rule: "off"` or `rule: ["off", …]`, split at the commas outside
+/// brackets and strings.
+fn eslint_settings(rest: &str) -> Vec<String> {
+    let mut settings: Vec<String> = vec![String::new()];
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    for c in rest.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '[' | '{' | '(') => depth += 1,
+            (None, ']' | '}' | ')') => depth = depth.saturating_sub(1),
+            (None, ',') if depth == 0 => {
+                settings.push(String::new());
+                continue;
+            }
+            _ => {}
+        }
+        if let Some(setting) = settings.last_mut() {
+            setting.push(c);
+        }
+    }
+    settings
+        .iter()
+        .filter_map(|setting| setting.split_once(':'))
+        .filter(|(_, value)| {
+            let value = value.trim().trim_start_matches('[').trim_start();
+            value.starts_with('0') || value.starts_with("\"off\"") || value.starts_with("'off'")
+        })
+        .map(|(rule, _)| format!("eslint-range:{}", rule.trim().trim_matches(['"', '\''])))
+        .collect()
+}
+
 /// Codes after `noqa:` or in `[…]`: split at commas and white space.
 fn codes(list: &str) -> Vec<String> {
     list.split(|c: char| c == ',' || c.is_whitespace())
@@ -180,7 +259,7 @@ fn codes(list: &str) -> Vec<String> {
 
 /// The suppressions a Python comment holds. A comment may hold several,
 /// each opening one `#` part: `# type: ignore[attr-defined]  # noqa: E501`.
-fn python_comment(raw: &str) -> Vec<String> {
+fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
     let mut keys = Vec::new();
     for part in raw.split('#').map(str::trim) {
         if let Some(rest) = directive_nocase(part, "noqa") {
@@ -195,12 +274,28 @@ fn python_comment(raw: &str) -> Vec<String> {
             .strip_prefix("type:")
             .and_then(|rest| directive(rest.trim_start(), "ignore"))
         {
-            keys.extend(bracketed("type-ignore", rest));
-        } else if let Some(rest) = part
-            .strip_prefix("pyright:")
-            .and_then(|rest| directive(rest.trim_start(), "ignore"))
-        {
-            keys.extend(bracketed("pyright", rest));
+            // At the top of a module, mypy ignores the whole module.
+            keys.extend(bracketed(
+                if module_top {
+                    "type-ignore-file"
+                } else {
+                    "type-ignore"
+                },
+                rest,
+            ));
+        } else if let Some(rest) = part.strip_prefix("pyright:").map(str::trim_start) {
+            if let Some(rest) = directive(rest, "ignore") {
+                keys.extend(bracketed("pyright", rest));
+            } else {
+                // `# pyright: reportOptionalMemberAccess=false`: a rule
+                // turned off for the file.
+                keys.extend(
+                    rest.split(',')
+                        .filter_map(|setting| setting.split_once('='))
+                        .filter(|(_, value)| matches!(value.trim(), "false" | "none" | "\"none\""))
+                        .map(|(rule, _)| format!("pyright-file:{}", rule.trim())),
+                );
+            }
         } else if let Some(rest) = part.strip_prefix("mypy:").map(str::trim_start) {
             if directive(rest, "ignore-errors").is_some() {
                 keys.push("mypy-file:*".to_owned());
@@ -209,6 +304,10 @@ fn python_comment(raw: &str) -> Vec<String> {
                 keys.extend(keyed("mypy-file", codes(list.trim_matches(['"', '\'']))));
             }
         } else if let Some(rest) = part.strip_prefix("pylint:").map(str::trim_start) {
+            if directive(rest, "skip-file").is_some() {
+                keys.push("pylint-file:*".to_owned());
+                continue;
+            }
             let list = ["disable-next=", "disable="]
                 .iter()
                 .find_map(|form| rest.strip_prefix(form));
@@ -424,6 +523,40 @@ const T: &str = "#[allow(dead_code)]";
                 "allow:clippy::too_many_lines",
                 "allow:unused_variables",
                 "allow:clippy::unwrap_used",
+            ]
+        );
+    }
+
+    #[test]
+    fn wider_forms_have_their_own_keys() {
+        // A `# type: ignore` before the first statement reaches the module.
+        let python = "# type: ignore\n\"\"\"Docs.\"\"\"\nx = f()  # type: ignore\n# pylint: skip-file\n# pyright: reportOptionalMemberAccess=false, strict=true\n";
+        assert_eq!(
+            keys(python, Language::Python),
+            [
+                "type-ignore-file:*",
+                "type-ignore:*",
+                "pylint-file:*",
+                "pyright-file:reportOptionalMemberAccess",
+            ]
+        );
+        // `#[allow]` on a `mod` reaches the module; on a fn, the fn.
+        let rust = "#[allow(clippy::unwrap_used)]\n// big\npub mod big;\n#[allow(dead_code)]\n#[inline]\nfn f() {}\n";
+        assert_eq!(
+            keys(rust, Language::Rust),
+            ["allow-module:clippy::unwrap_used", "allow:dead_code"]
+        );
+        // An inline ESLint configuration that turns rules off.
+        let js = r#"/* eslint no-console: 0, "no-alert": "off", eqeqeq: ["off", "smart"], semi: ["error", "always"], curly: 2 */
+// eslint-env node
+// eslint is how we lint: see the docs
+"#;
+        assert_eq!(
+            keys(js, TS),
+            [
+                "eslint-range:no-console",
+                "eslint-range:no-alert",
+                "eslint-range:eqeqeq",
             ]
         );
     }

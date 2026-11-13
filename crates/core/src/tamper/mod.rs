@@ -566,13 +566,35 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
         let mut modules: BTreeSet<String> = BTreeSet::new();
         let mut names: Vec<&String> = Vec::new();
         for name in &test.uses {
-            if let Some(module) = read
-                .imports
-                .get(name)
-                .and_then(|spec| resolve(file.language, &file.path, spec, &existed_on_base))
-            {
-                modules.insert(module);
-                names.push(name);
+            let Some(spec) = read.imports.get(name) else {
+                continue;
+            };
+            // Python `from app import pricing` may name the module
+            // `app.pricing`: try that first.
+            let module = (file.language == Language::Python && spec != SELF)
+                .then(|| {
+                    let joined = if spec.ends_with('.') {
+                        format!("{spec}{name}")
+                    } else {
+                        format!("{spec}.{name}")
+                    };
+                    resolve(file.language, &file.path, &joined, &existed_on_base)
+                })
+                .flatten()
+                .or_else(|| resolve(file.language, &file.path, spec, &existed_on_base));
+            match module {
+                // A helper of the tests (a factory, a fixture module) is
+                // not what they test: deleting it with them excuses nothing.
+                Some(module) if is_test_path(&module) || policy.names_test(&module) => {}
+                Some(module) => {
+                    modules.insert(module);
+                    names.push(name);
+                }
+                // A relative import that names no file the guard can find
+                // (a path alias, a namespace package): the subject is not
+                // known, so the test is never excused.
+                None if spec.starts_with('.') => return false,
+                None => {}
             }
         }
         !modules.is_empty()
@@ -787,6 +809,27 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             (*head > base).then(|| (*key, head - base))
         })
         .collect();
+    // A suppression the change removed may stand for a narrower one it
+    // added: `# type: ignore` turned into `# type: ignore[union-attr]`,
+    // `#[allow(clippy::all)]` into one clippy lint, one for another. Each
+    // removed one covers one added one, anywhere in the change; a removed
+    // file-wide one also covers every narrower one added in its own file.
+    let mut file_keys: BTreeMap<(String, String), isize> = BTreeMap::new();
+    for ((path, key, _), count) in &base_texts {
+        *file_keys.entry((path.clone(), key.clone())).or_default() += *count as isize;
+    }
+    for (path, found) in &head_suppressions {
+        *file_keys
+            .entry((path.clone(), found.key.clone()))
+            .or_default() -= 1;
+    }
+    let mut surplus: BTreeMap<String, usize> = base_keys
+        .iter()
+        .filter_map(|(key, base)| {
+            let head = head_keys.get(key.as_str()).copied().unwrap_or(0);
+            (*base > head).then(|| (key.clone(), base - head))
+        })
+        .collect();
     let mut left = base_texts;
     for (path, found) in &head_suppressions {
         let Some(more) = shortfall.get_mut(found.key.as_str()) else {
@@ -803,6 +846,23 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             continue;
         }
         *more -= 1;
+        let wider_here = file_keys.iter().any(|((file, key), removed)| {
+            file == path
+                && *removed > 0
+                && covers(key, &found.key)
+                && reach_rank(key) > reach_rank(&found.key)
+        });
+        if wider_here {
+            continue;
+        }
+        if let Some(count) = surplus
+            .iter_mut()
+            .find(|(key, count)| **count > 0 && covers(key, &found.key))
+            .map(|(_, count)| count)
+        {
+            *count -= 1;
+            continue;
+        }
         findings.push(Finding {
             kind: Kind::SuppressionAdded,
             file: path.clone(),
@@ -814,4 +874,79 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     findings.sort_by(|a, b| (a.kind, &a.file, a.line).cmp(&(b.kind, &b.file, b.line)));
     report.findings = findings;
     report
+}
+
+/// A suppression key's tool family, how far it reaches (0: a line or an
+/// item, 1: a file, a range to its end, or a module) and its rule.
+fn reach_of(key: &str) -> (&str, u8, &str) {
+    let (tool, rule) = key.split_once(':').unwrap_or((key, "*"));
+    match tool {
+        "ts" => ("ts", u8::from(rule == "nocheck"), "*"),
+        "mypy-file" => ("type-ignore", 1, rule),
+        _ => match tool
+            .strip_suffix("-range")
+            .or_else(|| tool.strip_suffix("-file"))
+            .or_else(|| tool.strip_suffix("-module"))
+        {
+            Some(family) => (family, 1, rule),
+            None => (tool, 0, rule),
+        },
+    }
+}
+
+fn reach_rank(key: &str) -> u8 {
+    reach_of(key).1
+}
+
+/// Clippy's lint groups: allowing one allows every clippy lint in it.
+const CLIPPY_GROUPS: [&str; 10] = [
+    "clippy::all",
+    "clippy::pedantic",
+    "clippy::nursery",
+    "clippy::restriction",
+    "clippy::style",
+    "clippy::complexity",
+    "clippy::perf",
+    "clippy::correctness",
+    "clippy::suspicious",
+    "clippy::cargo",
+];
+
+/// True when the suppression `wide` turns off at least what `narrow` does:
+/// the same tool, as far or further, and every rule or the same one.
+fn covers(wide: &str, narrow: &str) -> bool {
+    let (family, rank, rule) = reach_of(wide);
+    let (narrow_family, narrow_rank, narrow_rule) = reach_of(narrow);
+    family == narrow_family
+        && rank >= narrow_rank
+        && (rule == "*"
+            || rule == narrow_rule
+            || rule == "warnings"
+            || (CLIPPY_GROUPS.contains(&rule) && narrow_rule.starts_with("clippy::")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wider_suppression_covers_a_narrower_one() {
+        assert!(covers("type-ignore:*", "type-ignore:union-attr"));
+        assert!(covers("noqa:*", "noqa:F841"));
+        assert!(covers("eslint:*", "eslint:no-console"));
+        assert!(covers("eslint-range:no-console", "eslint:no-console"));
+        assert!(covers(
+            "allow:clippy::all",
+            "allow:clippy::needless_range_loop"
+        ));
+        assert!(covers("allow-module:dead_code", "allow:dead_code"));
+        assert!(covers("ts:nocheck", "ts:ignore"));
+        assert!(covers("mypy-file:*", "type-ignore:attr-defined"));
+        assert!(!covers("type-ignore:union-attr", "type-ignore:*"));
+        assert!(!covers("eslint:no-console", "eslint-range:no-console"));
+        assert!(!covers("allow:dead_code", "allow-module:dead_code"));
+        assert!(!covers("noqa:E501", "noqa:F841"));
+        assert!(!covers("allow:clippy::all", "allow:dead_code"));
+        assert!(!covers("noqa:*", "type-ignore:*"));
+    }
 }

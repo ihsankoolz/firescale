@@ -1373,6 +1373,207 @@
       "head": {
         "tests/smoke.rs": "use shop::pricing::total;\n\n#[test]\nfn runs() {\n    total(&[1, 2, 3]);\n    assert!(true, \"it did not panic\");\n}\n"
       }
+    },
+    {
+      "name": "js: assert.fail on a path that must not be reached removed",
+      "expect": ["assertion-removed"],
+      "note": "An assertion that always fails is not one that cannot fail: it marks a path that must not run.",
+      "base": {
+        "parse.js": "exports.parse = (text) => {\n  if (!/^\\d+$/.test(text)) throw new Error(\"not a number\");\n  return Number(text);\n};\n",
+        "__tests__/parse.js": "const assert = require(\"node:assert\");\nconst { parse } = require(\"../parse\");\n\ntest(\"rejects words\", () => {\n  try {\n    parse(\"x\");\n    assert.fail(\"parse should throw\");\n  } catch (error) {\n    assert.match(String(error), /not a number/);\n  }\n});\n"
+      },
+      "head": {
+        "__tests__/parse.js": "const assert = require(\"node:assert\");\nconst { parse } = require(\"../parse\");\n\ntest(\"rejects words\", () => {\n  try {\n    parse(\"x\");\n  } catch (error) {\n    assert.match(String(error), /not a number/);\n  }\n});\n"
+      }
+    },
+    {
+      "name": "rs: assert!(false) in a match arm removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => assert!(false, \"parse should fail\"),\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      },
+      "head": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => {}\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test module gated behind a feature",
+      "expect": ["test-skipped"],
+      "note": "cargo test without the feature compiles none of these tests.",
+      "base": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => assert!(false, \"parse should fail\"),\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      },
+      "head": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(all(test, feature = \"slow-tests\"))]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => assert!(false, \"parse should fail\"),\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: an integration test file gated with #![cfg(feature)]",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "tests/parse.rs": "use parse::parse;\n\n#[test]\nfn reads_numbers() {\n    assert_eq!(parse(\"12\"), Ok(12));\n}\n"
+      },
+      "head": {
+        "tests/parse.rs": "#![cfg(feature = \"integration\")]\nuse parse::parse;\n\n#[test]\nfn reads_numbers() {\n    assert_eq!(parse(\"12\"), Ok(12));\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test module in another file turned off with cfg(any())",
+      "expect": ["test-deleted"],
+      "note": "src/tests.rs is not part of the change; its declaration counts as one test.",
+      "base": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(test)]\nmod tests;\n",
+        "src/tests.rs": "use super::*;\n\n#[test]\nfn doubles() {\n    assert_eq!(double(2), 4);\n}\n\n#[test]\nfn doubles_zero() {\n    assert_eq!(double(0), 0);\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(any())]\nmod tests;\n"
+      }
+    },
+    {
+      "name": "rs: a test module in another file renamed",
+      "expect": [],
+      "note": "The declaration and the file are renamed together.",
+      "base": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(test)]\nmod tests;\n",
+        "src/tests.rs": "use super::*;\n\n#[test]\nfn doubles() {\n    assert_eq!(double(2), 4);\n}\n\n#[test]\nfn doubles_zero() {\n    assert_eq!(double(0), 0);\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(test)]\nmod unit;\n",
+        "src/tests.rs": null,
+        "src/unit.rs": "use super::*;\n\n#[test]\nfn doubles() {\n    assert_eq!(double(2), 4);\n}\n\n#[test]\nfn doubles_zero() {\n    assert_eq!(double(0), 0);\n}\n"
+      }
+    },
+    {
+      "name": "rs: a #[cfg(unix)] test kept while another is added",
+      "expect": [],
+      "note": "A test gated on both sides counts as skipped on both.",
+      "base": {
+        "src/sep.rs": "pub fn sep() -> char {\n    '/'\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    #[cfg(unix)]\n    fn slash_on_unix() {\n        assert_eq!(sep(), '/');\n    }\n}\n"
+      },
+      "head": {
+        "src/sep.rs": "pub fn sep() -> char {\n    '/'\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    #[cfg(unix)]\n    fn slash_on_unix() {\n        assert_eq!(sep(), '/');\n    }\n\n    #[test]\n    fn is_ascii() {\n        assert!(sep().is_ascii());\n    }\n}\n"
+      }
+    },
+    {
+      "name": "py: tests deleted with their helper module, the subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "A factory beside the tests is a helper, not what they test: app/payments.py stays.",
+      "base": {
+        "app/__init__.py": "",
+        "app/payments.py": "def refund(order, amount):\n    if amount > order[\"total\"]:\n        raise ValueError(\"refund exceeds total\")\n    return order[\"total\"] - amount\n",
+        "tests/payments/__init__.py": "",
+        "tests/payments/factories.py": "def make_order(total=100):\n    return {\"id\": 1, \"total\": total}\n",
+        "tests/payments/test_refunds.py": "import pytest\n\nfrom app.payments import refund\nfrom .factories import make_order\n\n\ndef test_partial_refund():\n    assert refund(make_order(), 30) == 70\n\n\ndef test_refund_too_large():\n    with pytest.raises(ValueError):\n        refund(make_order(), 300)\n"
+      },
+      "head": {
+        "tests/payments/__init__.py": null,
+        "tests/payments/factories.py": null,
+        "tests/payments/test_refunds.py": null
+      }
+    },
+    {
+      "name": "ts: tests deleted with their fixture module, the subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "",
+      "base": {
+        "src/payments.ts": "export const refund = (order: { total: number }, amount: number): number => order.total - amount;\n",
+        "__tests__/fixtures.ts": "export const makeOrder = (total = 100) => ({ id: 1, total });\n",
+        "__tests__/payments.test.ts": "import { refund } from \"../src/payments\";\nimport { makeOrder } from \"./fixtures\";\n\nit(\"refunds part of an order\", () => {\n  expect(refund(makeOrder(), 30)).toBe(70);\n});\n"
+      },
+      "head": {
+        "__tests__/fixtures.ts": null,
+        "__tests__/payments.test.ts": null
+      }
+    },
+    {
+      "name": "py: # type: ignore narrowed to one error code",
+      "expect": [],
+      "note": "A narrower suppression in place of a wider one.",
+      "base": {
+        "app/pricing.py": "def total(order):\n    return order.total  # type: ignore\n"
+      },
+      "head": {
+        "app/pricing.py": "def total(order):\n    return order.total  # type: ignore[union-attr]\n"
+      }
+    },
+    {
+      "name": "ts: a bare eslint-disable-next-line narrowed to one rule",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/load.ts": "export function load(raw: string): unknown {\n  // eslint-disable-next-line\n  const data: any = JSON.parse(raw);\n  return data;\n}\n"
+      },
+      "head": {
+        "src/load.ts": "export function load(raw: string): unknown {\n  // eslint-disable-next-line @typescript-eslint/no-explicit-any\n  const data: any = JSON.parse(raw);\n  return data;\n}\n"
+      }
+    },
+    {
+      "name": "rs: #[allow(clippy::all)] narrowed to one lint",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/sum.rs": "#[allow(clippy::all)]\npub fn sum(values: &[u32]) -> u32 {\n    let mut total = 0;\n    for i in 0..values.len() {\n        total += values[i];\n    }\n    total\n}\n"
+      },
+      "head": {
+        "src/sum.rs": "#[allow(clippy::needless_range_loop)]\npub fn sum(values: &[u32]) -> u32 {\n    let mut total = 0;\n    for i in 0..values.len() {\n        total += values[i];\n    }\n    total\n}\n"
+      }
+    },
+    {
+      "name": "js: a file-wide eslint-disable split into line disables",
+      "expect": [],
+      "note": "Two narrower suppressions in the same file in place of the file-wide one.",
+      "base": {
+        "src/run.js": "/* eslint-disable no-console */\nfunction run(items) {\n  console.log(items.length);\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "py: a # type: ignore moved to the top of the module",
+      "expect": ["suppression-added"],
+      "note": "Before the first statement, mypy ignores the whole module.",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)  # type: ignore\n"
+      },
+      "head": {
+        "app/pricing.py": "# type: ignore\nfrom decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)\n"
+      }
+    },
+    {
+      "name": "rs: an #[allow] moved from a function to its module",
+      "expect": ["suppression-added"],
+      "note": "On the mod item it reaches every function in it.",
+      "base": {
+        "src/lib.rs": "mod big {\n    #[allow(clippy::unwrap_used)]\n    pub fn first(values: &[u32]) -> u32 {\n        *values.first().unwrap()\n    }\n\n    pub fn last(values: &[u32]) -> u32 {\n        *values.last().unwrap_or(&0)\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "#[allow(clippy::unwrap_used)]\nmod big {\n    pub fn first(values: &[u32]) -> u32 {\n        *values.first().unwrap()\n    }\n\n    pub fn last(values: &[u32]) -> u32 {\n        *values.last().unwrap_or(&0)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "ts: rules turned off in an inline eslint configuration comment",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "/* eslint no-console: \"off\" */\nexport function report(total: number): string {\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "py: # pylint: skip-file added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)  # type: ignore\n"
+      },
+      "head": {
+        "app/pricing.py": "# pylint: skip-file\nfrom decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)  # type: ignore\n"
+      }
     }
   ]
 }
