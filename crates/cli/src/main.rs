@@ -78,7 +78,8 @@ Options:
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>
   --explain        graph: show where each edge comes from
-  --no-cache       check: run every rule again, ignoring .firescale/cache
+  --no-cache       check: run every rule again, ignoring .firescale/cache;
+                   verify: run every step again (passes are still stored)
   --dry-run        fix, adopt, add: print what would change as a diff, and change nothing;
                    verify: print what would run (with --affected, and why), run nothing
   --packs <list>   init: rule packs to turn on, comma-separated (default: core,agent-ready)
