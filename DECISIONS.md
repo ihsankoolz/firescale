@@ -116,6 +116,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 **Independent review before the pull request** found five ways a change could run too little, all fixed with regression tests: the root's steps did not run for a change in a Cargo workspace member when the root has a `package.json` (this repo's own layout); a root project's Python imports gave no edge; with a root project a shared folder's own imports were lost; a shared node at `.` (a Docker context of the root) or at a folder of projects hid "a file nobody owns runs everything"; and a shared folder holding only subpackages was not seen as Python. Also fixed: `verify --dry-run` ran a `firescale.config.ts` through Node (it now refuses one), a root project's top-level files now affect everything, a Python file inside a Node project is read, dynamic imports reach shared `.py` files, and all-off projects are not counted. Left: paths are compared as written, so a `COPY` written in another letter case is missed on Windows and macOS.
 
+**Tests changed on purpose, none weakened** (after the first CI run of the pull request): the scaffold test "`--check` exits 1 after a generated file is deleted" has 60 s instead of 30 s (it took 25 s on Windows before M17 and timed out after it); the Linux daemon test's command now waits until the daemon is up before the step ends, because verify could stop the step's process group before `setsid` had taken the daemon out of it (a race in the test, seen under load). Both assert what they asserted before.
+
 **Known limits** (`docs/graph.md`): TypeScript path aliases, run-time `sys.path`, uv workspace sources, Go `replace` and Compose volumes are not read; files over 1 MiB are skipped.
 
 ## M16 — Stack pack: Python

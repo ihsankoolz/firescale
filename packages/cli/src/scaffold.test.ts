@@ -615,7 +615,9 @@ describe('fscale sync', () => {
       expect(await repo.read(file), file).toBe(generated);
       expect((await runCli(['sync', '--check'], repo.root)).code, file).toBe(EXIT_OK);
     }
-  });
+    // Fourteen runs of fscale and git: 25 s of the old 30 s limit on a Windows
+    // runner before M17, whose binary is twice the size.
+  }, 60_000);
 
   it('does not recreate a file git still tracks: staged work in the index is never replaced', async () => {
     const repo = await fixtures.create({
