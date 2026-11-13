@@ -140,7 +140,8 @@ The graph:
 
 - **Node projects**: the root `package.json` if it has a `name`, plus workspace members. Members come from the `packages:` list of `pnpm-workspace.yaml`, or else from `workspaces` in `package.json` (an array, or an object with `packages`). A member is a folder with a `package.json` that has a `name`. `dependsOn` uses `dependencies`, `devDependencies`, `peerDependencies` and `optionalDependencies`.
 - **Rust projects**: the root `[package]` if present, plus the `[workspace] members` of the root `Cargo.toml`. `dependsOn` uses the keys of `[dependencies]`, `[dev-dependencies]` and `[build-dependencies]`, including `x.workspace = true`, `x = { path = ... }` and `[dependencies.x]` tables.
-- **Python and Go projects** have no `dependsOn` yet.
+- **Python and Go projects** have no `dependsOn`: names are not how they depend on each other.
+- **The full graph** is in `graph`: nodes for projects and for the shared folders and files they use, and edges from manifests, Dockerfiles, Compose files and imports, each with its evidence. It is the same graph `fscale graph --json` prints, and is described in [graph.md](graph.md). Its warnings (dynamic imports) are added to `warnings`. Human output lists the edges under `Graph`. `dependsOn` keeps its old meaning.
 
 ## Limits
 

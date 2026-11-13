@@ -264,7 +264,11 @@ describe("a daemon that leaves the step's process group", () => {
       const repo = await repoWith({
         lint: false,
         typecheck: false,
-        test: `setsid ${treeCommand(pids, 0)} & echo daemon-started`,
+        // The step waits (at most 10 s) until the daemon is up before it
+        // ends. Without that, verify could stop the step's process group
+        // before setsid has taken the daemon out of it, and on a busy
+        // machine it sometimes did: the daemon never started.
+        test: `setsid ${treeCommand(pids, 0)} & i=0; while [ ! -f "${path.join(pids, 'ready')}" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done; echo daemon-started`,
       });
       const begun = Date.now();
       const result = await runCli(['verify'], repo.root);
@@ -315,7 +319,7 @@ describe('time limits', () => {
 
     const json = await runCli(['verify', '--json'], repo.root);
     const report = JSON.parse(json.stdout) as Report;
-    expect(report.schemaVersion).toBe(4);
+    expect(report.schemaVersion).toBe(5);
     expect(report.result).toBe('failed');
     const step = report.steps.find((s) => s.project === 'backend/slow');
     expect(step?.status).toBe('timed-out');

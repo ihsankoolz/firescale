@@ -1,0 +1,308 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale graph > prints schema-valid JSON whose edges name their source 1`] = `
+"{
+  "schemaVersion": 1,
+  "nodes": [
+    {
+      "id": "python:backend/audit_service",
+      "type": "project",
+      "path": "backend/audit_service",
+      "kind": "python",
+      "name": "audit_service"
+    },
+    {
+      "id": "python:backend/auth_service",
+      "type": "project",
+      "path": "backend/auth_service",
+      "kind": "python",
+      "name": "auth_service"
+    },
+    {
+      "id": "python:backend/ledger_service",
+      "type": "project",
+      "path": "backend/ledger_service",
+      "kind": "python",
+      "name": "ledger_service"
+    },
+    {
+      "id": "python:backend/market_service",
+      "type": "project",
+      "path": "backend/market_service",
+      "kind": "python",
+      "name": "market_service"
+    },
+    {
+      "id": "python:backend/realtime_service",
+      "type": "project",
+      "path": "backend/realtime_service",
+      "kind": "python",
+      "name": "realtime_service"
+    },
+    {
+      "id": "node:frontend",
+      "type": "project",
+      "path": "frontend",
+      "kind": "node",
+      "name": "frontend"
+    },
+    {
+      "id": "shared:.env.example",
+      "type": "shared",
+      "path": ".env.example",
+      "kind": "file"
+    },
+    {
+      "id": "shared:backend/shared",
+      "type": "shared",
+      "path": "backend/shared",
+      "kind": "folder"
+    },
+    {
+      "id": "shared:docker-compose.yml",
+      "type": "shared",
+      "path": "docker-compose.yml",
+      "kind": "file"
+    }
+  ],
+  "edges": [
+    {
+      "from": "python:backend/audit_service",
+      "to": "shared:.env.example",
+      "sources": [
+        {
+          "source": "shared-input",
+          "tier": 2,
+          "file": ".env.example",
+          "detail": "the example env file of a folder above this project"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/auth_service",
+      "to": "shared:.env.example",
+      "sources": [
+        {
+          "source": "shared-input",
+          "tier": 2,
+          "file": ".env.example",
+          "detail": "the example env file of a folder above this project"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/auth_service",
+      "to": "shared:backend/shared",
+      "sources": [
+        {
+          "source": "python-import",
+          "tier": 3,
+          "file": "backend/auth_service/main.py",
+          "line": 1,
+          "detail": "from shared.db import URL"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/auth_service",
+      "to": "shared:docker-compose.yml",
+      "sources": [
+        {
+          "source": "shared-input",
+          "tier": 2,
+          "file": "docker-compose.yml",
+          "line": 2,
+          "detail": "service auth is built from this project"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/ledger_service",
+      "to": "shared:.env.example",
+      "sources": [
+        {
+          "source": "shared-input",
+          "tier": 2,
+          "file": ".env.example",
+          "detail": "the example env file of a folder above this project"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/ledger_service",
+      "to": "shared:backend/shared",
+      "sources": [
+        {
+          "source": "python-import",
+          "tier": 3,
+          "file": "backend/ledger_service/main.py",
+          "line": 1,
+          "detail": "from shared.db import URL"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/market_service",
+      "to": "shared:.env.example",
+      "sources": [
+        {
+          "source": "shared-input",
+          "tier": 2,
+          "file": ".env.example",
+          "detail": "the example env file of a folder above this project"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/market_service",
+      "to": "shared:backend/shared",
+      "sources": [
+        {
+          "source": "python-import",
+          "tier": 3,
+          "file": "backend/market_service/main.py",
+          "line": 1,
+          "detail": "from shared.db import URL"
+        }
+      ]
+    },
+    {
+      "from": "python:backend/realtime_service",
+      "to": "shared:.env.example",
+      "sources": [
+        {
+          "source": "shared-input",
+          "tier": 2,
+          "file": ".env.example",
+          "detail": "the example env file of a folder above this project"
+        }
+      ]
+    },
+    {
+      "from": "node:frontend",
+      "to": "shared:.env.example",
+      "sources": [
+        {
+          "source": "shared-input",
+          "tier": 2,
+          "file": ".env.example",
+          "detail": "the example env file of a folder above this project"
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}
+"
+`;
+
+exports[`fscale graph > prints the projects, the shared folder and the edges of the course project 1`] = `
+"Projects (6):
+  backend/audit_service [python]
+  backend/auth_service [python]
+  backend/ledger_service [python]
+  backend/market_service [python]
+  backend/realtime_service [python]
+  frontend [node]
+Shared, used by projects but part of none (3):
+  .env.example (file)
+  backend/shared (folder)
+  docker-compose.yml (file)
+Edges (10), "a -> b" means a change in b affects a:
+  backend/audit_service -> .env.example (shared input)
+  backend/auth_service -> .env.example (shared input)
+  backend/auth_service -> backend/shared (Python import)
+  backend/auth_service -> docker-compose.yml (shared input)
+  backend/ledger_service -> .env.example (shared input)
+  backend/ledger_service -> backend/shared (Python import)
+  backend/market_service -> .env.example (shared input)
+  backend/market_service -> backend/shared (Python import)
+  backend/realtime_service -> .env.example (shared input)
+  frontend -> .env.example (shared input)
+Run fscale graph --explain to see where each edge comes from.
+"
+`;
+
+exports[`fscale graph > prints the projects, the shared folder and the edges of the course project 2`] = `
+"Projects (6):
+  backend/audit_service [python]
+  backend/auth_service [python]
+  backend/ledger_service [python]
+  backend/market_service [python]
+  backend/realtime_service [python]
+  frontend [node]
+Shared, used by projects but part of none (3):
+  .env.example (file)
+  backend/shared (folder)
+  docker-compose.yml (file)
+Edges (10), "a -> b" means a change in b affects a:
+  backend/audit_service -> .env.example (shared input)
+      shared input: .env.example: the example env file of a folder above this project
+  backend/auth_service -> .env.example (shared input)
+      shared input: .env.example: the example env file of a folder above this project
+  backend/auth_service -> backend/shared (Python import)
+      Python import: backend/auth_service/main.py:1: from shared.db import URL
+  backend/auth_service -> docker-compose.yml (shared input)
+      shared input: docker-compose.yml:2: service auth is built from this project
+  backend/ledger_service -> .env.example (shared input)
+      shared input: .env.example: the example env file of a folder above this project
+  backend/ledger_service -> backend/shared (Python import)
+      Python import: backend/ledger_service/main.py:1: from shared.db import URL
+  backend/market_service -> .env.example (shared input)
+      shared input: .env.example: the example env file of a folder above this project
+  backend/market_service -> backend/shared (Python import)
+      Python import: backend/market_service/main.py:1: from shared.db import URL
+  backend/realtime_service -> .env.example (shared input)
+      shared input: .env.example: the example env file of a folder above this project
+  frontend -> .env.example (shared input)
+      shared input: .env.example: the example env file of a folder above this project
+"
+`;
+
+exports[`fscale verify --affected > plans with --dry-run and runs nothing, not even a script 1`] = `
+"verify --affected (dry run): 3 of 6 projects would run, 3 not affected. Nothing was run.
+  check      would run  fscale check --affected
+  in backend/audit_service: not affected
+  in backend/auth_service:
+    lint       would run  python -m ruff check .
+    typecheck  skipped    no type checker was found (looked for mypy)
+    test       would run  python -m pytest
+  in backend/ledger_service:
+    lint       skipped    no linter was found (looked for ruff)
+    typecheck  skipped    no type checker was found (looked for mypy)
+    test       would run  python -m pytest
+  in backend/market_service:
+    lint       skipped    no linter was found (looked for ruff)
+    typecheck  skipped    no type checker was found (looked for mypy)
+    test       would run  python -m pytest
+  in backend/realtime_service: not affected
+  in frontend: not affected
+
+Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
+  backend/auth_service: depends on backend/shared (Python import)
+  backend/ledger_service: depends on backend/shared (Python import)
+  backend/market_service: depends on backend/shared (Python import)
+"
+`;
+
+exports[`fscale verify --affected > runs only the service that changed, and says how many projects ran 1`] = `
+"verify: PARTIAL (affected only) - 1 of 6 projects ran, 5 not affected; 2 of 4 steps ran, 2 skipped
+  check      passed   8 rules, no enforced violations
+  in backend/audit_service:
+    lint       skipped  no linter was found (looked for ruff)
+    typecheck  skipped  no type checker was found (looked for mypy)
+    test       passed   python -m pytest
+  in backend/auth_service: not affected
+  in backend/ledger_service: not affected
+  in backend/market_service: not affected
+  in backend/realtime_service: not affected
+  in frontend: not affected
+
+Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
+  backend/audit_service: changed: backend/audit_service/main.py
+
+warning: steps were skipped because no command was found: lint in backend/audit_service, typecheck in backend/audit_service. Set verify.projects["backend/audit_service"].lint in your firescale config to a command, or to false if that project has none.
+
+note: no virtual environment was found for backend/audit_service, so its Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.
+"
+`;

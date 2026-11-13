@@ -597,6 +597,22 @@ pub fn load_config<'a>(
     resolve_config(&raw, file, builtin, &mut |specs| host.describe_packs(specs))
 }
 
+/// Reads only the `verify` settings, never starting Node: for
+/// `fscale verify --dry-run`, which must not run code from the repo. A
+/// `firescale.config.ts` is code, so it is refused with the next step.
+pub fn load_verify_config(root: &Path) -> Result<VerifyConfig> {
+    if root.join(TS_CONFIG).exists() {
+        return Err(Error::user(format!(
+            "verify --dry-run never runs code from the repo, and {TS_CONFIG} is code. Run fscale verify (it loads the config through Node), or keep the config in {JSON_CONFIG}."
+        )));
+    }
+    if !root.join(JSON_CONFIG).exists() {
+        return Ok(VerifyConfig::default());
+    }
+    let raw = read_json(root)?;
+    parse_verify(JSON_CONFIG, raw.get("verify"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

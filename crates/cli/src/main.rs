@@ -11,7 +11,9 @@ use std::time::Instant;
 
 use firescale_core::affected::{changed_files, narrow_report, Changed};
 use firescale_core::check::run_check;
-use firescale_core::config::{find_root, load_config, ConfiguredRule, RuleSource};
+use firescale_core::config::{
+    find_root, load_config, load_verify_config, ConfiguredRule, RuleSource,
+};
 use firescale_core::diff::unified_diff;
 use firescale_core::doctor::{format_doctor_human, format_doctor_json, run_doctor, ThisMachine};
 use firescale_core::explain::{explain_rule, find_rule};
@@ -19,6 +21,7 @@ use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json}
 use firescale_core::fixloop::{
     plan_order, run_fix_loop, LoopFailure, LoopReport, LoopRule, MAX_PASSES,
 };
+use firescale_core::graph::{affected, build_graph, format_graph_human, format_graph_json};
 use firescale_core::hooks::{
     block_summary, decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent,
     AGENTS,
@@ -34,8 +37,9 @@ use firescale_core::sarif::format_sarif;
 use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
 use firescale_core::verify::{
-    check_project_folders, format_verify_human, format_verify_json, plan_verify, run_verify_with,
-    CheckStep, RunOptions, VerifyReport, VerifyResult, TAIL_LINES,
+    check_project_folders, format_verify_human, format_verify_json, format_verify_plan,
+    limit_to_affected, plan_verify, run_verify_with, CheckStep, RunOptions, VerifyPlan,
+    VerifyReport, VerifyResult, TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -57,6 +61,7 @@ Usage:
   fscale verify [options]      Check, then lint, typecheck and test: the definition of done
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
+  fscale graph [--explain]     Print the project graph; --explain says where each edge comes from
   fscale doctor [--json]       Check this machine: tools, env variables, dependencies, services
   fscale add <generator> --json <input> [--dry-run]
                                Scaffold new files from JSON input (package, rule)
@@ -67,12 +72,14 @@ Usage:
 
 Options:
   --rules <glob>   check, fix: only matching rules, e.g. \"core/*\" (comma-separated)
-  --json           check, verify, facts, doctor: print JSON (see docs/)
+  --json           check, verify, facts, graph, doctor: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>
+  --explain        graph: show where each edge comes from
   --no-cache       check: run every rule again, ignoring .firescale/cache
-  --dry-run        fix, adopt, add: print what would change as a diff, and change nothing
+  --dry-run        fix, adopt, add: print what would change as a diff, and change nothing;
+                   verify: print what would run (with --affected, and why), run nothing
   --packs <list>   init: rule packs to turn on, comma-separated (default: core,agent-ready)
   --force          init: run in a folder that is not empty (nothing is overwritten)
   --check          sync: change nothing, and exit 1 when sync would change something
@@ -99,6 +106,7 @@ struct Args {
     json: bool,
     sarif: bool,
     affected: bool,
+    explain: bool,
     base: Option<String>,
     no_cache: bool,
     dry_run: bool,
@@ -148,7 +156,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
         };
         match name.as_str() {
             "--version" | "--help" | "--json" | "--sarif" | "--no-cache" | "--dry-run"
-            | "--affected" | "--all" | "--force" | "--check" | "--progress" | "--no-progress" => {
+            | "--affected" | "--all" | "--force" | "--check" | "--progress" | "--no-progress"
+            | "--explain" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -161,6 +170,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--dry-run" => args.dry_run = true,
                     "--sarif" => args.sarif = true,
                     "--affected" => args.affected = true,
+                    "--explain" => args.explain = true,
                     "--all" => args.all = true,
                     "--force" => args.force = true,
                     "--check" => args.check = true,
@@ -590,11 +600,37 @@ fn facts(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             extra.join(" ")
         )));
     }
-    let facts = detect_facts(root)?;
+    let mut facts = detect_facts(root)?;
+    let graph = build_graph(root, &facts);
+    facts.warnings.extend(graph.warnings.iter().cloned());
+    facts.graph = Some(graph);
     Ok(Output::ok(if args.json {
         format_facts_json(&facts)
     } else {
         format_facts_human(&facts)
+    }))
+}
+
+/// `fscale graph`: the projects, shared folders and files, and the edges
+/// between them (ADR 0032). Needs no config and no Node.
+fn graph(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
+    if !extra.is_empty() {
+        return Err(Error::usage(format!(
+            "graph takes no arguments, got \"{}\".",
+            extra.join(" ")
+        )));
+    }
+    if args.json && args.explain {
+        return Err(Error::usage(
+            "--explain is for people; --json always carries every edge's sources. Use one of them.",
+        ));
+    }
+    let facts = detect_facts(root)?;
+    let graph = build_graph(root, &facts);
+    Ok(Output::ok(if args.json {
+        format_graph_json(&graph)
+    } else {
+        format_graph_human(&graph, args.explain)
     }))
 }
 
@@ -818,6 +854,64 @@ fn jobs(args: &Args) -> Result<usize> {
     }
 }
 
+/// The commands verify will run. With `--affected`, the units that no change
+/// reaches are marked, using the project graph (ADR 0032). `changed` is
+/// computed here when the caller has not done so already.
+fn verify_plan(
+    root: &Path,
+    args: &Args,
+    facts: &firescale_core::facts::RepoFacts,
+    verify_config: &firescale_core::verify::VerifyConfig,
+    changed: Option<Changed>,
+) -> Result<VerifyPlan> {
+    let base = args.base.as_deref();
+    let mut plan = plan_verify(root, facts, verify_config, args.affected, base);
+    if !args.affected {
+        return Ok(plan);
+    }
+    let changed = match changed {
+        Some(changed) => changed,
+        None => changed_files(root, base)?,
+    };
+    let graph = build_graph(root, facts);
+    let mut set = affected(&graph, &changed);
+    let mut notes = Vec::new();
+    match &changed {
+        Changed::Everything => notes.push(
+            "--affected found no commit to compare with (not a git repo, or no commit yet), so every project ran.".to_owned(),
+        ),
+        Changed::Files(files) if files.is_empty() && base.is_none() => {
+            set.everything = Some(
+                "nothing changed since the last commit and no --base was given, so there is nothing to compare with".to_owned(),
+            );
+            notes.push(
+                "--affected found no uncommitted change and no --base was given, so there was nothing to compare with and every project ran. Pass --base <ref> (for example --base origin/main) to compare with a branch.".to_owned(),
+            );
+        }
+        Changed::Files(_) => {}
+    }
+    limit_to_affected(&mut plan, facts, &graph, &set, base);
+    if let Some(affected) = plan.affected.as_mut() {
+        affected.notes = notes;
+    }
+    Ok(plan)
+}
+
+/// `fscale verify --dry-run`: prints the plan and runs nothing, not even the
+/// check. No scripts, no installs.
+fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
+    let verify_config = load_verify_config(root)?;
+    check_project_folders(root, &verify_config)?;
+    let facts = detect_facts(root)?;
+    let plan = verify_plan(root, args, &facts, &verify_config, None)?;
+    let check_command = if args.affected {
+        "fscale check --affected"
+    } else {
+        "fscale check"
+    };
+    Ok(Output::ok(format_verify_plan(&plan, check_command)))
+}
+
 /// Runs check and then the planned lint, typecheck and test commands.
 /// `progress` turns on the live lines on stderr.
 fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyReport, Vec<String>)> {
@@ -851,13 +945,13 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
     let outcome = run_check(root, &selection.rules, version(), &mut host, !args.no_cache)?;
     let mut report = outcome.report;
     let facts = detect_facts(root)?;
-    if args.affected {
-        narrow_report(
-            &mut report,
-            &facts,
-            &changed_files(root, args.base.as_deref())?,
-        );
-    }
+    let changed = if args.affected {
+        let changed = changed_files(root, args.base.as_deref())?;
+        narrow_report(&mut report, &facts, &changed);
+        Some(changed)
+    } else {
+        None
+    };
     say(&format!(
         "check: {} after {}",
         if report.ok { "passed" } else { "FAILED" },
@@ -878,13 +972,7 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         command: check_command.to_owned(),
     };
-    let plan = plan_verify(
-        root,
-        &facts,
-        &verify_config,
-        args.affected,
-        args.base.as_deref(),
-    );
+    let plan = verify_plan(root, args, &facts, &verify_config, changed)?;
     let options = RunOptions {
         stop: &STOP,
         progress: progress.as_ref(),
@@ -912,6 +1000,14 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
         return Err(Error::usage(
             "--base only works together with --affected. Add --affected.",
         ));
+    }
+    if args.dry_run {
+        if args.json {
+            return Err(Error::usage(
+                "verify --dry-run prints the plan for people and has no --json form. Drop one of them.",
+            ));
+        }
+        return verify_dry_run(root, args);
     }
     // Progress is for a person watching: on in a terminal, off when stderr
     // goes to a file or a pipe, unless --progress or --no-progress says.
@@ -1112,6 +1208,7 @@ fn run() -> Result<Output> {
         "fix" => fix(&root, &args, rest),
         "explain" => explain(&root, rest),
         "facts" => facts(&root, &args, rest),
+        "graph" => graph(&root, &args, rest),
         "doctor" => doctor(&root, &args, rest),
         "add" => add(&root, &args, rest),
         "schema" => schema(&root, rest),

@@ -42,6 +42,17 @@ Projects (6):
     test: python -m pytest
     install: python -m pip install -r requirements-dev.txt
     interpreter: python (no virtual environment found, so python from the PATH: no .venv or venv folder in the project, no active VIRTUAL_ENV, and not a uv or poetry project)
+Graph (10 edges; fscale graph --explain says where each comes from):
+  backend/audit_service -> .env.example (shared input)
+  backend/auth_service -> .env.example (shared input)
+  backend/auth_service -> backend/shared (Python import)
+  backend/auth_service -> docker-compose.yml (shared input)
+  backend/ledger_service -> .env.example (shared input)
+  backend/ledger_service -> backend/shared (Python import)
+  backend/market_service -> .env.example (shared input)
+  backend/market_service -> backend/shared (Python import)
+  backend/realtime_service -> .env.example (shared input)
+  frontend -> .env.example (shared input)
 Notes:
   frontend: the test script runs \`vitest\`, which watches for changes; verify uses test:run (\`vitest run\`) instead.
 "
@@ -231,7 +242,197 @@ exports[`fscale facts > in a repo with projects in subfolders > reports each Pyt
   "warnings": [],
   "notes": [
     "frontend: the test script runs \`vitest\`, which watches for changes; verify uses test:run (\`vitest run\`) instead."
-  ]
+  ],
+  "graph": {
+    "nodes": [
+      {
+        "id": "python:backend/audit_service",
+        "type": "project",
+        "path": "backend/audit_service",
+        "kind": "python",
+        "name": "audit_service"
+      },
+      {
+        "id": "python:backend/auth_service",
+        "type": "project",
+        "path": "backend/auth_service",
+        "kind": "python",
+        "name": "auth_service"
+      },
+      {
+        "id": "python:backend/ledger_service",
+        "type": "project",
+        "path": "backend/ledger_service",
+        "kind": "python",
+        "name": "ledger_service"
+      },
+      {
+        "id": "python:backend/market_service",
+        "type": "project",
+        "path": "backend/market_service",
+        "kind": "python",
+        "name": "market_service"
+      },
+      {
+        "id": "python:backend/realtime_service",
+        "type": "project",
+        "path": "backend/realtime_service",
+        "kind": "python",
+        "name": "realtime_service"
+      },
+      {
+        "id": "node:frontend",
+        "type": "project",
+        "path": "frontend",
+        "kind": "node",
+        "name": "frontend"
+      },
+      {
+        "id": "shared:.env.example",
+        "type": "shared",
+        "path": ".env.example",
+        "kind": "file"
+      },
+      {
+        "id": "shared:backend/shared",
+        "type": "shared",
+        "path": "backend/shared",
+        "kind": "folder"
+      },
+      {
+        "id": "shared:docker-compose.yml",
+        "type": "shared",
+        "path": "docker-compose.yml",
+        "kind": "file"
+      }
+    ],
+    "edges": [
+      {
+        "from": "python:backend/audit_service",
+        "to": "shared:.env.example",
+        "sources": [
+          {
+            "source": "shared-input",
+            "tier": 2,
+            "file": ".env.example",
+            "detail": "the example env file of a folder above this project"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/auth_service",
+        "to": "shared:.env.example",
+        "sources": [
+          {
+            "source": "shared-input",
+            "tier": 2,
+            "file": ".env.example",
+            "detail": "the example env file of a folder above this project"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/auth_service",
+        "to": "shared:backend/shared",
+        "sources": [
+          {
+            "source": "python-import",
+            "tier": 3,
+            "file": "backend/auth_service/main.py",
+            "line": 1,
+            "detail": "from shared.db import URL"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/auth_service",
+        "to": "shared:docker-compose.yml",
+        "sources": [
+          {
+            "source": "shared-input",
+            "tier": 2,
+            "file": "docker-compose.yml",
+            "line": 2,
+            "detail": "service auth is built from this project"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/ledger_service",
+        "to": "shared:.env.example",
+        "sources": [
+          {
+            "source": "shared-input",
+            "tier": 2,
+            "file": ".env.example",
+            "detail": "the example env file of a folder above this project"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/ledger_service",
+        "to": "shared:backend/shared",
+        "sources": [
+          {
+            "source": "python-import",
+            "tier": 3,
+            "file": "backend/ledger_service/main.py",
+            "line": 1,
+            "detail": "from shared.db import URL"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/market_service",
+        "to": "shared:.env.example",
+        "sources": [
+          {
+            "source": "shared-input",
+            "tier": 2,
+            "file": ".env.example",
+            "detail": "the example env file of a folder above this project"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/market_service",
+        "to": "shared:backend/shared",
+        "sources": [
+          {
+            "source": "python-import",
+            "tier": 3,
+            "file": "backend/market_service/main.py",
+            "line": 1,
+            "detail": "from shared.db import URL"
+          }
+        ]
+      },
+      {
+        "from": "python:backend/realtime_service",
+        "to": "shared:.env.example",
+        "sources": [
+          {
+            "source": "shared-input",
+            "tier": 2,
+            "file": ".env.example",
+            "detail": "the example env file of a folder above this project"
+          }
+        ]
+      },
+      {
+        "from": "node:frontend",
+        "to": "shared:.env.example",
+        "sources": [
+          {
+            "source": "shared-input",
+            "tier": 2,
+            "file": ".env.example",
+            "detail": "the example env file of a folder above this project"
+          }
+        ]
+      }
+    ]
+  }
 }
 "
 `;
@@ -255,6 +456,8 @@ Projects (3):
     build: pnpm run build
     test: pnpm run test
     install: pnpm install
+Graph (1 edges; fscale graph --explain says where each comes from):
+  packages/b -> packages/a (dependency by name, package.json)
 "
 `;
 
@@ -327,7 +530,52 @@ exports[`fscale facts > prints schema-valid JSON for a pnpm monorepo 1`] = `
     }
   ],
   "warnings": [],
-  "notes": []
+  "notes": [],
+  "graph": {
+    "nodes": [
+      {
+        "id": "node:.",
+        "type": "project",
+        "path": ".",
+        "kind": "node",
+        "name": "root"
+      },
+      {
+        "id": "node:packages/a",
+        "type": "project",
+        "path": "packages/a",
+        "kind": "node",
+        "name": "@x/a"
+      },
+      {
+        "id": "node:packages/b",
+        "type": "project",
+        "path": "packages/b",
+        "kind": "node",
+        "name": "@x/b"
+      }
+    ],
+    "edges": [
+      {
+        "from": "node:packages/b",
+        "to": "node:packages/a",
+        "sources": [
+          {
+            "source": "dependency",
+            "tier": 1,
+            "file": "packages/b/package.json",
+            "detail": "depends on @x/a, a project of this repo"
+          },
+          {
+            "source": "package-json",
+            "tier": 1,
+            "file": "packages/b/package.json",
+            "detail": "dependencies \\"@x/a\\": \\"workspace:*\\""
+          }
+        ]
+      }
+    ]
+  }
 }
 "
 `;

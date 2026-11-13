@@ -8,6 +8,8 @@ Nothing is owed. The last open item, M6's npm install test on Windows, passed on
 
 History: GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), so M6 was merged on Linux results only, and M7's first two runs did not execute. Both were made up later the same day. If jobs ever end within seconds with no logs again, list here what is unproven on macOS or Windows.
 
+**Owed from M17:** tree-sitter is C code. The two release targets that are cross-compiled (macOS x64 on an Arm runner, Windows Arm64 on an x64 runner) have not built it yet; CI builds only the runner's own target. The first Release run (tag `v0.2.1` or later) proves them; if one fails, the fix is in the release workflow, not in the code.
+
 Still not measured anywhere: verify latency on macOS and Windows. The `bench` job runs the 50k-file check benchmark, not `bench/verify-bench.mjs`.
 
 ## Real repos used for testing
@@ -21,6 +23,13 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 | Several Python services, each with its own `requirements.txt` | `GoogleCloudPlatform/microservices-demo` | `c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712` |
 
 ## Needs your decision (all milestones, most important first)
+
+- **(M17) A changed file that no project owns runs everything with `verify --affected`.** That is your rule, and it is safe, but in a repo with no root project a README or `docs/` change runs every project. A list of paths that affect nothing (`*.md`, `docs/**`) would fix that, at the risk of a doc that a test reads. Say if you want it, and which paths.
+- **(M17) The binary is 4.3 MB larger** (3.9 to 8.2 MB, ADR 0033): tree-sitter's TypeScript and Python grammars. The tamper guard needs them too. Say if size matters enough to load grammars some other way.
+- **(M17) A dynamic import also depends on every shared folder with Python in it**, not only on every other Python project, since it can load those too (ADR 0032).
+- **(M17) With a root project, a file directly in the repo root folder runs everything** (it may be `ruff.toml` or `tsconfig.base.json`, read by projects below). A file in a subfolder of the root's project runs only the root's steps.
+- **(M17) `fscale check --affected` keeps its old rules** (workspace graph only; a clean tree reports nothing). Only `verify --affected` uses the full graph and the "unsure means everything" rules. Say if `check` should follow.
+- **(M17) An affected run's headline is `verify: OK (affected only) - 2 of 6 projects ran, 4 not affected`**; the JSON `result` stays `ok` and the new `scope` is `affected`. The repo root's own steps count as one project.
 
 - **(M16) The Python starter has no type checker,** so `fscale verify` there is `PARTIAL` (typecheck skipped). Say if the starter should add mypy to `requirements-dev.txt`.
 - **(M16) The Python pack never edits a requirements file a person wrote.** A project with tests whose development list lacks pytest gets an agent finding rather than an appended line.
@@ -84,6 +93,32 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M17 — Project graph and affected verify
+
+**Plan update first** (ADR 0031): affected-only verify (M17) and a local step-result cache (M18) now come before blame-aware verify (M19 to M21), whose base run reuses the cache; faster generated CI with a shared cache that only the default branch writes is M22 (CVE-2025-36852); the old M20 to M27 are M23 to M30; test-level selection is under "Later". PLAN.md, SPEC §8 and HANDOFF.md use the new numbers.
+
+**Built** (ADR 0032, ADR 0033, `docs/graph.md`)
+
+1. **The project graph**, built on demand: projects, **shared nodes** (a folder or file projects use that no project owns, such as `backend/shared`; a change there affects only its users), and edges with their evidence. Sources, most trusted first: requirements files, `pyproject.toml` path sources, `package.json` `file:`/`link:`/`portal:`/`workspace:`, Cargo `path` and dependencies by name; Dockerfile `COPY`, Compose `build.context` and `depends_on`, shared inputs (`.env.example`, OpenAPI specs, Compose files); Python and JS/TS imports read with tree-sitter; dynamic Python imports (a warning, and an edge to every other Python project and Python shared folder).
+2. **`fscale graph [--explain] [--json]`**, with `graph-output.schema.json`. `fscale facts` shows the same edges (`Graph` section, `graph` in JSON; facts schema still 2).
+3. **`fscale verify --affected [--base <ref>]`** runs only the projects a change reaches; the others are `not affected` (a new status, apart from skipped). The headline counts projects and never reads as a plain OK. A changed file no project owns, a root lockfile, a CI file, a Compose file or the firescale config runs everything; so does a clean tree with no `--base`, with a note. Verify schema 5 (`scope`, `affected`, `not-affected`).
+4. **`fscale verify --dry-run`**: the plan, with `--affected` the reason for each project, and nothing run.
+5. The course fixture's services `auth`, `ledger` and `market` import `backend/shared`, in both copies of the fixture.
+
+**Proof** (each a test): `graph::tests` (a change in `backend/shared` affects the three services that import it; one service's change only that service; a frontend change only the frontend; the root Compose file everything; a fixture per edge source with its `--explain` text; the dynamic import's warning and wide edges); `verify::tests::affected_runs` (the same four cases through the verify plan, the headline, `not-affected`, the dry run); `packages/cli/src/graph.test.ts` (the same through the binary, in git, with the stand-in tools showing that only the affected projects' commands ran; no base and a clean tree runs everything with the note; `--base HEAD` with no change runs nothing; schema validation).
+
+**Found on real repos** (release build; `facts`, `graph --explain`, `verify --affected --dry-run`, with one file touched in each clone and restored; nothing run):
+
+- _Fixed:_ `fastapi/full-stack-fastapi-template`'s backend Dockerfile copies the root `package.json` and `bun.lock`. A change to such a root file affected only the backend, not the repo root's own Node project, whose file it is. The root's project now always holds files no other project holds (`a_root_file_that_a_project_copies_affects_that_project_and_the_root_project`).
+- _Seen, correct:_ the same repo gets `frontend -> backend` from Compose (`playwright` depends_on `backend`), so a backend change also runs the root's steps (which cover the frontend workspace member). `microservices-demo`: ten projects, no edges (each service is built from its own folder and imports only its own generated code); touching `src/emailservice` runs 1 of 10. `vercel/commerce`: one project at the root.
+- _Left:_ `microservices-demo` copies `protos/` into services with a script, not Docker, so there is no edge; `protos/` belongs to no project, so a change there runs everything, which is the safe answer.
+
+**Independent review before the pull request** found five ways a change could run too little, all fixed with regression tests: the root's steps did not run for a change in a Cargo workspace member when the root has a `package.json` (this repo's own layout); a root project's Python imports gave no edge; with a root project a shared folder's own imports were lost; a shared node at `.` (a Docker context of the root) or at a folder of projects hid "a file nobody owns runs everything"; and a shared folder holding only subpackages was not seen as Python. Also fixed: `verify --dry-run` ran a `firescale.config.ts` through Node (it now refuses one), a root project's top-level files now affect everything, a Python file inside a Node project is read, dynamic imports reach shared `.py` files, and all-off projects are not counted. Left: paths are compared as written, so a `COPY` written in another letter case is missed on Windows and macOS.
+
+**Tests changed on purpose, none weakened** (after the first CI run of the pull request): the scaffold test "`--check` exits 1 after a generated file is deleted" has 60 s instead of 30 s (it took 25 s on Windows before M17 and timed out after it); the Linux daemon test's command now waits until the daemon is up before the step ends, because verify could stop the step's process group before `setsid` had taken the daemon out of it (a race in the test, seen under load). Both assert what they asserted before.
+
+**Known limits** (`docs/graph.md`): TypeScript path aliases, run-time `sys.path`, uv workspace sources, Go `replace` and Compose volumes are not read; files over 1 MiB are skipped.
 
 ## M16 — Stack pack: Python
 

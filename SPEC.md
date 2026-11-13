@@ -50,9 +50,10 @@ Every command is served by the native `fscale` binary. Commands marked **Node** 
 | `fscale fix [--dry-run] [--rules <glob>]` | Apply deterministic fixes, in dependency order, until nothing is left to fix (§15). |
 | `fscale fix --agent <claude\|codex\|gemini> [--rule <id>]` | Hand one rule's remaining violations to an agent, with guardrails. **Node** (agent adapter). |
 | `fscale explain <rule>` | Print what a rule checks, why, and how to fix it by hand. |
-| `fscale verify [--affected] [--base <ref>] [--json]` | Conformance, then lint, typecheck and tests, judged by the referee (§8) against the base commit. One compact failure summary. |
+| `fscale verify [--affected] [--base <ref>] [--json]` | Conformance, then lint, typecheck and tests, judged by the referee (§8) against the base commit. `--affected` runs only the projects a change can affect. One compact failure summary. |
 | `fscale hooks install [--agent <name>\|--all]` | Write agent hook config that calls `fscale verify` before the agent may stop. |
 | `fscale facts [--json]` | Print detected repo facts: the projects, also those in subfolders, each with its package manager, tools and commands; and the project graph. |
+| `fscale graph [--explain] [--json]` | Print the project graph: projects, shared folders and files, and the edges between them. `--explain` names the source of each edge. |
 
 ### Scaffold: init, adopt, sync, add
 
@@ -188,6 +189,19 @@ Each agent sits behind an adapter interface. Exact CLI flags must be confirmed a
 - A step with no command is skipped, and verify prints a visible warning that names it. A skipped step is not a failure unless `verify.failOnSkipped` is on, but a run with a skipped step is never reported as a clean pass: the headline says `PARTIAL` and how many steps ran.
 - Hooks must guard against loops: detect a repeated stop attempt and cap retries. The hook releases an agent after 3 blocks in a row.
 
+### Affected-only verify (M17)
+
+- `fscale verify --affected [--base <ref>]` runs lint, typecheck and test only for the projects a change can affect: the owners of the changed files and every project that depends on them in the project graph (§9). The others are reported as `not affected`, which is not the same as skipped.
+- The headline says how many projects ran out of how many. An affected run never reads as a plain OK for the whole repo.
+- When unsure, more is affected, never less. A changed file that no project owns, a root lockfile, a CI workflow, a Compose file or the firescale config affects every project. A dynamic Python import counts as depending on every other Python project, with a warning. With no base and a clean tree there is nothing to compare, so everything is affected, with a note.
+- The stop hook runs a full verify until blame-aware verify changes it (M21).
+
+### The step cache (M18, M22)
+
+- A verify step that **passed** is cached on the machine, keyed by the firescale version, the command, the hashes of the project's files and of the projects and shared folders it depends on, the lockfile, the tool versions, the OS and CPU architecture, and an allowlist of environment variables. A failure always runs again.
+- A step that needs a network service that is not in the repo is never cached.
+- The CI that `init` generates keeps the cache in the GitHub Actions cache. Only pushes to the default branch write it; pull requests and laptops only read it, so a pull request cannot plant a result that the default branch trusts (CVE-2025-36852).
+
 ### Blame-aware verify
 
 Each failure gets a label, and only `new` blocks. The labels are on by default whenever there is a base commit:
@@ -202,7 +216,7 @@ Each failure gets a label, and only `new` blocks. The labels are on by default w
 - The **head** is the working tree, uncommitted changes included. The **base** is the merge base with `--base <ref>`, or with the default branch.
 - The base commit is run in a git worktree. The user's working tree and index are never touched.
 - With a base, every step runs, so an old failure in one step cannot hide a new failure in a later one.
-- Base results are cached by base SHA + toolchain versions + lockfile hash.
+- The base run uses the step cache: a project whose inputs are equal on the base and the head needs no base run, and only the projects whose inputs differ are run in the worktree.
 - With no base that differs from the head (a clean tree on the default branch, or outside git), every failure blocks, as before.
 - A `new` failure is run again before it blocks. **No flaky-test history is kept**: the rerun is all there is.
 - The stop hook uses the same labels, so an agent is only sent back for what it broke.
@@ -266,7 +280,7 @@ firescale/
 
 **Distribution:** installed through npm. The `firescale` package depends on one prebuilt binary package per platform, so `npx firescale` works with no Rust toolchain on the user's machine.
 
-**Project graph:** read from Nx when present. Otherwise build a simple one from workspace files (pnpm/npm/yarn workspaces, Cargo workspace, uv workspace). Projects in subfolders that no workspace file lists are found by their marker files, four folder levels deep (ADR 0020).
+**Project graph:** read from Nx when present. Otherwise build one from workspace files (pnpm/npm/yarn workspaces, Cargo workspace, uv workspace). Projects in subfolders that no workspace file lists are found by their marker files, four folder levels deep (ADR 0020). Edges between projects come, most trusted first, from local paths in manifests, from Dockerfile `COPY` and Compose `build` and `depends_on`, and from Python and JavaScript/TypeScript imports read with tree-sitter. A folder that projects use but that is not a project is a shared-source node; root files such as `.env.example`, Compose files and OpenAPI specs are inputs of the projects that read them (ADR 0032).
 
 ## 10. Config
 

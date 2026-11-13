@@ -25,6 +25,8 @@ fscale adopt --dry-run                # existing repo: preview what is missing; 
 fscale sync --check                   # CI: exit 1 when `fscale sync` would repair something
 fscale check --affected               # only report what your changes touch
 fscale facts                          # detected package manager, tools and projects
+fscale graph --explain                # how projects depend on each other, and why
+fscale verify --affected --dry-run    # which projects a change reaches; runs nothing
 fscale explain core/no-committed-env  # what a rule checks and how to fix it
 fscale verify                         # check, lint, typecheck, test: the definition of done
 fscale hooks install --all            # agents must pass verify before they stop
@@ -33,7 +35,7 @@ fscale schema package                 # a generator's input; `fscale schema` lis
 fscale add package --json '{"name":"utils"}' --dry-run   # scaffold from JSON input
 ```
 
-Releases are described in [RELEASING.md](RELEASING.md). `fscale verify` is described in [docs/verify.md](docs/verify.md) the agent hooks in [docs/hooks.md](docs/hooks.md), `fscale doctor` in [docs/doctor.md](docs/doctor.md), and `fscale add` in [docs/generators.md](docs/generators.md).
+Releases are described in [RELEASING.md](RELEASING.md). `fscale verify` is described in [docs/verify.md](docs/verify.md) the agent hooks in [docs/hooks.md](docs/hooks.md), `fscale graph` and affected verify in [docs/graph.md](docs/graph.md), `fscale doctor` in [docs/doctor.md](docs/doctor.md), and `fscale add` in [docs/generators.md](docs/generators.md).
 
 The built-in rules are listed in [docs/rules.md](docs/rules.md). Built-in rules run with no Node process. Node is started only for a `firescale.config.ts` or custom TypeScript rules.
 

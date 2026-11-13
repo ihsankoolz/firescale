@@ -19,6 +19,14 @@ tempfile = "=3.27.0"
 ignore = "=0.4.34"
 globset = "=0.4.21"
 blake3 = "=1.8.7"
+# Parse Python and JS/TS imports for the project graph (ADR 0033). The TSX
+# grammar also reads .js/.jsx/.mjs/.cjs, so tree-sitter-javascript is not
+# needed. tree-sitter 0.27 needs Rust 1.90; we declare 1.85.
+tree-sitter = "=0.26.3"
+tree-sitter-python = "=0.25.0"
+tree-sitter-typescript = "=0.23.2"
+# Not used directly: held at 0.1.7 because 0.1.8+ needs Rust 1.90.
+tree-sitter-language = "=0.1.7"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

@@ -19,13 +19,14 @@ use crate::services::{listening, services_for_folder, Service, PROBE_TIMEOUT};
 
 use crate::error::{Error, Result};
 use crate::facts::{source, Project, RepoFacts};
+use crate::graph::{project_id, Affected, Graph};
 use crate::process::{run_tree, Ending, Watch};
 use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT};
 use crate::runs::{RunRecord, RunningStep};
 use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
 
 /// Version of the `fscale verify --json` format.
-pub const VERIFY_SCHEMA_VERSION: u32 = 4;
+pub const VERIFY_SCHEMA_VERSION: u32 = 5;
 
 /// The line the summary ends with when a step needs setup (ADR 0026).
 pub const DOCTOR_HINT: &str =
@@ -176,6 +177,177 @@ pub struct VerifyPlan {
     pub install: Option<String>,
     /// True when the root is a Python project with no virtual environment.
     pub python_from_path: bool,
+    /// The kind of project the root's own commands run (`node` for Nx,
+    /// Turborepo and package scripts, `rust` for Cargo).
+    pub covered: String,
+    /// True when the root's commands are not tied to its projects: Nx and
+    /// Turborepo pick their own projects, and a command from the config can
+    /// run anything.
+    pub root_whole_repo: bool,
+    /// Set by [`limit_to_affected`] for `--affected`: which units run.
+    pub affected: Option<AffectedPlan>,
+}
+
+/// Which units of a plan an affected run runs, and why (ADR 0032).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AffectedPlan {
+    /// The `--base` ref, if one was given.
+    pub base: Option<String>,
+    /// Set when every project is affected, with the reason.
+    pub everything: Option<String>,
+    /// How many files changed.
+    pub changed_files: usize,
+    /// One entry per unit with steps: the repo root first, then each project.
+    pub units: Vec<AffectedUnit>,
+    /// Said once, below the summary: why everything ran, for example.
+    pub notes: Vec<String>,
+    /// What the graph cannot see, such as dynamic imports.
+    pub warnings: Vec<String>,
+}
+
+/// One unit of an affected run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedUnit {
+    /// The project's folder. Absent for the repo root's own steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub affected: bool,
+    /// Why it runs, or why it does not.
+    pub reason: String,
+}
+
+impl AffectedPlan {
+    fn unit(&self, project: Option<&ProjectPlan>) -> Option<&AffectedUnit> {
+        self.units.iter().find(|unit| match project {
+            None => unit.project.is_none(),
+            Some(plan) => {
+                unit.project.as_deref() == Some(plan.root.as_str()) && unit.kind == plan.kind
+            }
+        })
+    }
+
+    /// True when the unit runs. A unit not listed runs.
+    #[must_use]
+    pub fn runs(&self, project: Option<&ProjectPlan>) -> bool {
+        self.unit(project).is_none_or(|unit| unit.affected)
+    }
+}
+
+/// Marks the units of `plan` that a change does not affect, so verify
+/// reports them as `not affected` instead of running them.
+///
+/// - The root's own steps run when every project is affected, when one of
+///   the projects they cover is (the root's project and the workspace
+///   members of the kind they run), or, when anything at all is affected,
+///   if they are not tied to projects (Nx, Turborepo, config commands) or
+///   cover no project.
+/// - A project runs when its node in the graph is affected.
+/// - A folder named only in `verify.projects` runs whenever anything is
+///   affected: `--affected` cannot tell what it uses.
+pub fn limit_to_affected(
+    plan: &mut VerifyPlan,
+    facts: &RepoFacts,
+    graph: &Graph,
+    affected: &Affected,
+    base: Option<&str>,
+) {
+    let anything = !affected.is_empty();
+    let mut units = Vec::new();
+    if plan
+        .steps
+        .iter()
+        .any(|(_, planned)| !matches!(planned, Planned::NotNeeded(_)))
+    {
+        let covered: Vec<&Project> = facts
+            .projects
+            .iter()
+            // Workspace members of every kind: a Cargo workspace beside a
+            // package.json root has no plan of its own, so the root's
+            // commands are what run it.
+            .filter(|project| {
+                project.source == source::WORKSPACE
+                    || (project.root == "." && project.kind == plan.covered)
+            })
+            .collect();
+        let hit = covered.iter().find_map(|project| {
+            let id = project_id(&project.kind, &project.root);
+            affected.reason(&id).map(|reason| {
+                if project.root == "." {
+                    reason
+                } else {
+                    format!("{}: {reason}", graph.display(&id))
+                }
+            })
+        });
+        let (runs, reason) = if let Some(reason) = &affected.everything {
+            (true, reason.clone())
+        } else if let Some(reason) = hit {
+            (true, reason)
+        } else if anything && plan.root_whole_repo {
+            (
+                true,
+                "the repo root's commands are not tied to one project, so they run whenever anything changed".to_owned(),
+            )
+        } else if anything && covered.is_empty() {
+            (
+                true,
+                "the repo root's commands cover no project, so they run whenever anything changed"
+                    .to_owned(),
+            )
+        } else {
+            (
+                false,
+                "no change reaches the projects the repo root's commands run".to_owned(),
+            )
+        };
+        units.push(AffectedUnit {
+            project: None,
+            kind: None,
+            affected: runs,
+            reason,
+        });
+    }
+    for project in &plan.projects {
+        // A project whose steps are all turned off is not counted.
+        if project
+            .steps
+            .iter()
+            .all(|(_, planned)| matches!(planned, Planned::NotNeeded(_)))
+        {
+            continue;
+        }
+        let (runs, reason) = match &project.kind {
+            Some(kind) => {
+                let id = project_id(kind, &project.root);
+                match affected.reason(&id) {
+                    Some(reason) => (true, reason),
+                    None => (false, "no change reaches this project".to_owned()),
+                }
+            }
+            None if anything => (
+                true,
+                "named in verify.projects but not a detected project, so --affected cannot tell what it uses; it runs whenever anything changed".to_owned(),
+            ),
+            None => (false, "nothing changed".to_owned()),
+        };
+        units.push(AffectedUnit {
+            project: Some(project.root.clone()),
+            kind: project.kind.clone(),
+            affected: runs,
+            reason,
+        });
+    }
+    plan.affected = Some(AffectedPlan {
+        base: base.map(str::to_owned),
+        everything: affected.everything.clone(),
+        changed_files: affected.changed_files,
+        units,
+        notes: Vec::new(),
+        warnings: graph.warnings.clone(),
+    });
 }
 
 const OFF_IN_CONFIG: &str = "turned off in your firescale config";
@@ -524,6 +696,9 @@ pub fn plan_verify(
         fail_on_skipped: config.fail_on_skipped,
         install,
         python_from_path,
+        covered: covered.to_owned(),
+        root_whole_repo: matches!(detected_runner, "nx" | "turbo") || !overrides.is_empty(),
+        affected: None,
     }
 }
 
@@ -548,6 +723,9 @@ pub enum StepStatus {
     NotRun,
     /// Not run on purpose: turned off in the config, or covered by another step.
     Off,
+    /// Not run because `--affected` found that no change reaches its project
+    /// (ADR 0032). Not the same as skipped: the step has a command.
+    NotAffected,
 }
 
 impl StepStatus {
@@ -561,6 +739,7 @@ impl StepStatus {
             Self::Skipped => "skipped",
             Self::NotRun => "not run",
             Self::Off => "off",
+            Self::NotAffected => "not affected",
         }
     }
 }
@@ -668,6 +847,42 @@ pub struct VerifyReport {
     /// with `python` from the PATH because no virtual environment was found.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// `all`, or `affected` for `--affected`: only the projects a change
+    /// reaches ran, so `result` describes them, not the whole repo.
+    pub scope: Scope,
+    /// For `--affected`: which projects ran, and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affected: Option<AffectedReport>,
+}
+
+/// What a verify run covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Scope {
+    /// Every project.
+    All,
+    /// Only the projects a change reaches (`--affected`).
+    Affected,
+}
+
+/// The `affected` object of `fscale verify --affected --json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AffectedReport {
+    /// The `--base` ref, or null for uncommitted changes only.
+    pub base: Option<String>,
+    /// True when every project is affected.
+    pub everything: bool,
+    /// Why every project is affected. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub changed_files: usize,
+    /// Units with steps: the repo root's own steps count as one.
+    pub projects_total: usize,
+    /// Units that ran.
+    pub projects_run: usize,
+    /// Each unit, in plan order.
+    pub projects: Vec<AffectedUnit>,
 }
 
 /// The result of the `check` step, worked out by the caller.
@@ -754,6 +969,8 @@ struct Unit<'a> {
     project: Option<&'a ProjectPlan>,
     /// The command that installs this unit's dependencies.
     install: Option<&'a str>,
+    /// False when `--affected` found that no change reaches this unit.
+    runs: bool,
 }
 
 /// The next step when the environment is not set up: the command that
@@ -1241,6 +1458,28 @@ fn run_unit(
     check_failed: bool,
     options: &RunOptions<'_>,
 ) -> Result<Vec<StepReport>> {
+    if !unit.runs {
+        return Ok(unit_steps
+            .iter()
+            .map(|(name, planned)| StepReport {
+                name: name.clone(),
+                project: unit.project.map(|project| project.root.clone()),
+                kind: unit.project.and_then(|project| project.kind.clone()),
+                status: StepStatus::NotAffected,
+                command: match planned {
+                    Planned::Command(command) => Some(command.clone()),
+                    _ => None,
+                },
+                exit_code: None,
+                duration_ms: 0,
+                detail: "no change reaches this project".to_owned(),
+                output_tail: Vec::new(),
+                fix: None,
+                timeout_ms: None,
+                timeout_key: None,
+            })
+            .collect());
+    }
     let mut steps = Vec::new();
     let mut failed = check_failed;
     for (name, planned) in unit_steps {
@@ -1328,6 +1567,10 @@ pub fn run_verify_with(
             root,
             project: None,
             install: plan.install.as_deref(),
+            runs: plan
+                .affected
+                .as_ref()
+                .is_none_or(|affected| affected.runs(None)),
         },
     ))
     .chain(plan.projects.iter().map(|project| {
@@ -1337,6 +1580,10 @@ pub fn run_verify_with(
                 root,
                 project: Some(project),
                 install: project.install.as_deref(),
+                runs: plan
+                    .affected
+                    .as_ref()
+                    .is_none_or(|affected| affected.runs(Some(project))),
             },
         )
     }))
@@ -1415,13 +1662,20 @@ pub fn run_verify_with(
             )]
         }
     };
+    let mut warnings = warnings;
+    if let Some(affected) = &plan.affected {
+        warnings.extend(affected.warnings.iter().cloned());
+    }
     let steps_total = steps
         .iter()
-        .filter(|step| step.status != StepStatus::Off)
+        .filter(|step| !matches!(step.status, StepStatus::Off | StepStatus::NotAffected))
         .count();
     let steps_run = steps.iter().filter(|step| ran(step.status)).count();
     let mut on_path: Vec<&str> = Vec::new();
+    let unit_runs =
+        |project: Option<&ProjectPlan>| plan.affected.as_ref().is_none_or(|a| a.runs(project));
     if plan.python_from_path
+        && unit_runs(None)
         && plan
             .steps
             .iter()
@@ -1431,6 +1685,7 @@ pub fn run_verify_with(
     }
     for project in &plan.projects {
         if project.python_from_path
+            && unit_runs(Some(project))
             && project
                 .steps
                 .iter()
@@ -1439,7 +1694,7 @@ pub fn run_verify_with(
             on_path.push(&project.root);
         }
     }
-    let notes = if on_path.is_empty() {
+    let mut notes = if on_path.is_empty() {
         Vec::new()
     } else {
         let places: Vec<&str> = on_path.iter().map(|folder| place_name(folder)).collect();
@@ -1449,6 +1704,9 @@ pub fn run_verify_with(
             if places.len() == 1 { "its" } else { "their" }
         )]
     };
+    if let Some(affected) = &plan.affected {
+        notes.extend(affected.notes.iter().cloned());
+    }
     let first_failure = steps
         .iter()
         .find(|step| blocks(step.status) && step.status != StepStatus::Stopped);
@@ -1482,6 +1740,12 @@ pub fn run_verify_with(
         skipped,
         warnings,
         notes,
+        scope: if plan.affected.is_some() {
+            Scope::Affected
+        } else {
+            Scope::All
+        },
+        affected: affected_report(plan),
     })
 }
 
@@ -1497,6 +1761,39 @@ fn step_place(step: &StepReport) -> String {
 /// step ran and passed, and it names every step that failed, timed out or
 /// needs setup.
 fn headline(report: &VerifyReport) -> String {
+    let Some(affected) = &report.affected else {
+        return whole_headline(report);
+    };
+    let left_out = affected.projects_total - affected.projects_run;
+    let counts = format!(
+        "{} of {} ran{}",
+        affected.projects_run,
+        plural_projects(affected.projects_total),
+        if left_out == 0 {
+            String::new()
+        } else {
+            format!(", {left_out} not affected")
+        }
+    );
+    let whole = whole_headline(report);
+    match (report.result, whole.as_str()) {
+        (VerifyResult::Ok, _) => format!("verify: OK (affected only) - {counts}"),
+        (VerifyResult::Partial, _) => format!(
+            "verify: PARTIAL (affected only) - {counts}; {} of {} ran, {} skipped",
+            report.steps_run,
+            plural_steps(report.steps_total),
+            report.skipped.len()
+        ),
+        _ => format!("{whole} (affected only: {counts})"),
+    }
+}
+
+fn plural_projects(count: usize) -> String {
+    format!("{count} project{}", if count == 1 { "" } else { "s" })
+}
+
+/// The headline of a run over every project.
+fn whole_headline(report: &VerifyReport) -> String {
     let named = |status: StepStatus| -> Vec<String> {
         report
             .steps
@@ -1544,16 +1841,153 @@ fn headline(report: &VerifyReport) -> String {
     }
 }
 
+fn affected_report(plan: &VerifyPlan) -> Option<AffectedReport> {
+    plan.affected.as_ref().map(|affected| AffectedReport {
+        base: affected.base.clone(),
+        everything: affected.everything.is_some(),
+        reason: affected.everything.clone(),
+        changed_files: affected.changed_files,
+        projects_total: affected.units.len(),
+        projects_run: affected.units.iter().filter(|unit| unit.affected).count(),
+        projects: affected.units.clone(),
+    })
+}
+
+/// `fscale verify --dry-run`: what would run, and for `--affected` why,
+/// without running anything (not even the check).
+#[must_use]
+pub fn format_verify_plan(plan: &VerifyPlan, check_command: &str) -> String {
+    let report = affected_report(plan);
+    let steps_of = |steps: &[(String, Planned)], indent: &str, out: &mut String| {
+        for (name, planned) in steps {
+            let (status, detail) = match planned {
+                Planned::Command(command) => ("would run", command.as_str()),
+                Planned::Skipped(reason) => ("skipped", reason.as_str()),
+                Planned::NotNeeded(reason) => ("off", reason.as_str()),
+            };
+            out.push_str(&format!("{indent}{name:<10} {status:<10} {detail}\n"));
+        }
+    };
+    let mut out = match &report {
+        Some(affected) => {
+            let left_out = affected.projects_total - affected.projects_run;
+            format!(
+                "verify --affected (dry run): {} of {} would run, {left_out} not affected. Nothing was run.\n",
+                affected.projects_run,
+                plural_projects(affected.projects_total)
+            )
+        }
+        None => "verify (dry run): nothing was run.\n".to_owned(),
+    };
+    out.push_str(&format!(
+        "  {:<10} {:<10} {check_command}\n",
+        "check", "would run"
+    ));
+    let runs =
+        |project: Option<&ProjectPlan>| plan.affected.as_ref().is_none_or(|a| a.runs(project));
+    if !plan.steps.is_empty() {
+        if runs(None) {
+            steps_of(&plan.steps, "  ", &mut out);
+        } else {
+            out.push_str("  the repo root's own steps: not affected\n");
+        }
+    }
+    for project in &plan.projects {
+        let place = match &project.kind {
+            Some(kind) if project.root == "." => format!("{} ({kind})", place_name(&project.root)),
+            _ => place_name(&project.root).to_owned(),
+        };
+        if runs(Some(project)) {
+            out.push_str(&format!("  in {place}:\n"));
+            steps_of(&project.steps, "    ", &mut out);
+        } else {
+            out.push_str(&format!("  in {place}: not affected\n"));
+        }
+    }
+    if let Some(affected) = &report {
+        out.push_str(&format!("\n{}\n", affected_intro(affected)));
+        for unit in affected.projects.iter().filter(|unit| unit.affected) {
+            let place = match (&unit.project, &unit.kind) {
+                (None, _) => "the repo root's own steps".to_owned(),
+                (Some(folder), Some(kind)) if folder == "." => {
+                    format!("{} ({kind})", place_name(folder))
+                }
+                (Some(folder), _) => folder.clone(),
+            };
+            out.push_str(&format!("  {place}: {}\n", unit.reason));
+        }
+    }
+    if let Some(affected) = &plan.affected {
+        if !affected.warnings.is_empty() {
+            out.push('\n');
+            for warning in &affected.warnings {
+                out.push_str(&format!("warning: {warning}\n"));
+            }
+        }
+        if !affected.notes.is_empty() {
+            out.push('\n');
+            for note in &affected.notes {
+                out.push_str(&format!("note: {note}\n"));
+            }
+        }
+    }
+    out
+}
+
+/// The line that opens the list of what an affected run ran, and why.
+fn affected_intro(affected: &AffectedReport) -> String {
+    let compared = match &affected.base {
+        Some(base) => format!("changes since the merge base with {base}, and uncommitted ones"),
+        None => "uncommitted and untracked changes".to_owned(),
+    };
+    let files = format!(
+        "{} changed file{}",
+        affected.changed_files,
+        if affected.changed_files == 1 { "" } else { "s" }
+    );
+    if affected.projects_run == 0 {
+        format!(
+            "Affected only ({compared}; {files}): no project is affected, so only the check ran."
+        )
+    } else {
+        format!("Affected only ({compared}; {files}). Why each ran:")
+    }
+}
+
 /// Renders the compact summary. No durations, so the text is stable.
 #[must_use]
 pub fn format_verify_human(report: &VerifyReport) -> String {
     let mut out = format!("{}\n", headline(report));
     let mut current: Option<(&str, Option<&str>)> = None;
+    let mut collapsed: Option<Option<(&str, Option<&str>)>> = None;
     for step in &report.steps {
         let project = step
             .project
             .as_deref()
             .map(|project| (project, step.kind.as_deref()));
+        // A unit that --affected left out is one line, not one per step.
+        if step.status == StepStatus::NotAffected {
+            let whole_unit = report.steps.iter().all(|other| {
+                other.name == "check"
+                    || other.project.as_deref().map(|p| (p, other.kind.as_deref())) != project
+                    || other.status == StepStatus::NotAffected
+            });
+            if whole_unit {
+                if collapsed != Some(project) {
+                    let place = match project {
+                        None => "the repo root's own steps".to_owned(),
+                        Some((folder, Some(kind))) if folder == "." => {
+                            format!("in {} ({kind})", place_name(folder))
+                        }
+                        Some((folder, _)) => format!("in {}", place_name(folder)),
+                    };
+                    out.push_str(&format!("  {place}: not affected\n"));
+                    collapsed = Some(project);
+                }
+                current = project;
+                continue;
+            }
+        }
         if project != current {
             if let Some((folder, kind)) = project {
                 // The kind is named when the folder alone does not say which
@@ -1644,6 +2078,19 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
     }
     if report.result == VerifyResult::Stopped {
         out.push_str("\nStopped: verify was interrupted (Ctrl+C or a termination signal), and every command it had started was stopped. Steps marked STOPPED or not run did not finish; run fscale verify again to check them.\n");
+    }
+    if let Some(affected) = &report.affected {
+        out.push_str(&format!("\n{}\n", affected_intro(affected)));
+        for unit in affected.projects.iter().filter(|unit| unit.affected) {
+            let place = match (&unit.project, &unit.kind) {
+                (None, _) => "the repo root's own steps".to_owned(),
+                (Some(folder), Some(kind)) if folder == "." => {
+                    format!("{} ({kind})", place_name(folder))
+                }
+                (Some(folder), _) => folder.clone(),
+            };
+            out.push_str(&format!("  {place}: {}\n", unit.reason));
+        }
     }
     if !report.warnings.is_empty() {
         out.push('\n');
@@ -1985,6 +2432,7 @@ mod tests {
                                 fail_on_skipped,
                                 install: None,
                                 python_from_path: false,
+                                ..VerifyPlan::default()
                             };
                             let report =
                                 run_verify(fixture.root(), "0.0.0", passing_check(), &plan)
@@ -2790,7 +3238,7 @@ mod tests {
         let json = format_verify_json(&report);
         assert!(json.contains("\"result\": \"setup-needed\""), "{json}");
         assert!(json.contains("\"status\": \"setup-needed\""), "{json}");
-        assert!(json.contains("\"schemaVersion\": 4"), "{json}");
+        assert!(json.contains("\"schemaVersion\": 5"), "{json}");
     }
 
     #[test]
@@ -3399,5 +3847,213 @@ mod tests {
                 .all(|line| line.starts_with("[verify] test in ")),
             "{lines}"
         );
+    }
+
+    // ------------------------------------------------- --affected (M17)
+
+    mod affected_runs {
+        use super::*;
+        use crate::affected::Changed;
+        use crate::facts::detect_facts_with;
+        use crate::graph::{affected, build_graph};
+        use crate::testing::{course_project, COURSE_SERVICES, COURSE_SHARED_USERS};
+
+        /// The units of the course project's plan that a change runs.
+        fn running(files: &[&str]) -> Vec<String> {
+            let fixture = course_project().unwrap();
+            let facts = detect_facts_with(fixture.root(), None).unwrap();
+            let graph = build_graph(fixture.root(), &facts);
+            let mut plan =
+                plan_verify(fixture.root(), &facts, &VerifyConfig::default(), true, None);
+            let changed = Changed::Files(files.iter().map(|file| (*file).to_owned()).collect());
+            limit_to_affected(&mut plan, &facts, &graph, &affected(&graph, &changed), None);
+            let units = &plan.affected.as_ref().unwrap().units;
+            assert_eq!(units.len(), 6, "five services and the frontend: {units:?}");
+            units
+                .iter()
+                .filter(|unit| unit.affected)
+                .map(|unit| unit.project.clone().unwrap_or_default())
+                .collect()
+        }
+
+        fn services(names: &[&str]) -> Vec<String> {
+            names.iter().map(|name| format!("backend/{name}")).collect()
+        }
+
+        #[test]
+        fn a_change_in_the_shared_folder_runs_every_service_that_imports_it() {
+            assert_eq!(
+                running(&["backend/shared/db.py"]),
+                services(&COURSE_SHARED_USERS)
+            );
+        }
+
+        #[test]
+        fn a_change_in_one_service_runs_only_that_service() {
+            for service in COURSE_SERVICES {
+                let file = format!("backend/{service}/unit_test/conftest.py");
+                assert_eq!(running(&[&file]), services(&[service]));
+            }
+        }
+
+        #[test]
+        fn a_frontend_change_runs_only_the_frontend() {
+            assert_eq!(running(&["frontend/src/main.ts"]), ["frontend"]);
+        }
+
+        #[test]
+        fn a_change_to_the_root_compose_file_runs_everything() {
+            assert_eq!(running(&["docker-compose.yml"]).len(), 6);
+        }
+
+        #[test]
+        fn a_cargo_member_under_a_package_json_root_runs_the_root_s_steps() {
+            let fixture = Fixture::new(
+                &[
+                    (
+                        "package.json",
+                        r#"{"name":"mono","scripts":{"test":"cargo test"}}"#,
+                    ),
+                    ("pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n"),
+                    ("packages/ui/package.json", r#"{"name":"ui"}"#),
+                    ("Cargo.toml", "[workspace]\nmembers = [\"crates/a\"]\n"),
+                    ("crates/a/Cargo.toml", "[package]\nname = \"a\"\n"),
+                    ("crates/a/src/lib.rs", ""),
+                ],
+                Track::NoGit,
+            )
+            .unwrap();
+            let facts = detect_facts_with(fixture.root(), None).unwrap();
+            let graph = build_graph(fixture.root(), &facts);
+            let mut plan =
+                plan_verify(fixture.root(), &facts, &VerifyConfig::default(), true, None);
+            let changed = Changed::Files(["crates/a/src/lib.rs".to_owned()].into_iter().collect());
+            limit_to_affected(&mut plan, &facts, &graph, &affected(&graph, &changed), None);
+            let root = &plan.affected.as_ref().unwrap().units[0];
+            assert!(root.project.is_none() && root.affected, "{root:?}");
+        }
+
+        fn two_projects(first_runs: bool) -> VerifyPlan {
+            let project = |root: &str| ProjectPlan {
+                root: root.to_owned(),
+                kind: Some("python".to_owned()),
+                steps: vec![
+                    ("lint".to_owned(), Planned::Skipped("no linter".to_owned())),
+                    ("test".to_owned(), Planned::Command("echo fine".to_owned())),
+                ],
+                install: None,
+                python_from_path: false,
+            };
+            let unit = |root: &str, affected: bool| AffectedUnit {
+                project: Some(root.to_owned()),
+                kind: Some("python".to_owned()),
+                affected,
+                reason: if affected {
+                    "changed: a/x.py".to_owned()
+                } else {
+                    "no change reaches this project".to_owned()
+                },
+            };
+            VerifyPlan {
+                runner: "projects".to_owned(),
+                projects: vec![project("a"), project("b")],
+                affected: Some(AffectedPlan {
+                    changed_files: 1,
+                    units: vec![unit("a", first_runs), unit("b", false)],
+                    ..AffectedPlan::default()
+                }),
+                ..VerifyPlan::default()
+            }
+        }
+
+        #[test]
+        fn left_out_projects_are_not_affected_and_the_headline_counts_projects() {
+            let fixture = Fixture::new(&[("a/x.py", ""), ("b/y.py", "")], Track::NoGit).unwrap();
+            let report = run_verify(
+                fixture.root(),
+                "0.0.0",
+                passing_check(),
+                &two_projects(true),
+            )
+            .unwrap();
+            let text = format_verify_human(&report);
+            assert!(
+                text.starts_with("verify: PARTIAL (affected only) - 1 of 2 projects ran, 1 not affected; 2 of 3 steps ran, 1 skipped\n"),
+                "{text}"
+            );
+            assert!(text.contains("  in b: not affected\n"), "{text}");
+            assert!(text.contains("  a: changed: a/x.py\n"), "{text}");
+            let b: Vec<StepStatus> = report
+                .steps
+                .iter()
+                .filter(|step| step.project.as_deref() == Some("b"))
+                .map(|step| step.status)
+                .collect();
+            assert_eq!(b, [StepStatus::NotAffected, StepStatus::NotAffected]);
+            // Not affected is not skipped: no warning names b.
+            assert_eq!(report.skipped.len(), 1);
+            assert!(
+                !report.warnings[0].contains(" in b"),
+                "{:?}",
+                report.warnings
+            );
+            assert_eq!(report.scope, Scope::Affected);
+            let json = format_verify_json(&report);
+            assert!(json.contains("\"status\": \"not-affected\""), "{json}");
+            assert!(json.contains("\"scope\": \"affected\""), "{json}");
+            assert!(json.contains("\"projectsRun\": 1"), "{json}");
+        }
+
+        #[test]
+        fn an_affected_run_never_reads_as_a_plain_ok() {
+            let fixture = Fixture::new(&[("a/x.py", ""), ("b/y.py", "")], Track::NoGit).unwrap();
+            for first_runs in [true, false] {
+                let mut plan = two_projects(first_runs);
+                for project in &mut plan.projects {
+                    project.steps.remove(0);
+                }
+                let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+                let text = format_verify_human(&report);
+                let first = text.lines().next().unwrap_or_default();
+                assert_eq!(report.result, VerifyResult::Ok);
+                assert_ne!(first, "verify: OK", "{text}");
+                let ran = usize::from(first_runs);
+                assert_eq!(
+                    first,
+                    format!(
+                        "verify: OK (affected only) - {ran} of 2 projects ran, {} not affected",
+                        2 - ran
+                    )
+                );
+            }
+        }
+
+        #[test]
+        fn a_failure_in_an_affected_run_says_what_ran() {
+            let fixture = Fixture::new(&[("a/x.py", ""), ("b/y.py", "")], Track::NoGit).unwrap();
+            let mut plan = two_projects(true);
+            let fail = if cfg!(windows) { "exit /b 3" } else { "exit 3" };
+            plan.projects[0].steps = vec![("test".to_owned(), Planned::Command(fail.to_owned()))];
+            let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+            let text = format_verify_human(&report);
+            assert!(
+                text.starts_with("verify: FAILED at test in a (affected only: 1 of 2 projects ran, 1 not affected)\n"),
+                "{text}"
+            );
+        }
+
+        #[test]
+        fn the_dry_run_lists_what_would_run_and_why() {
+            let text = format_verify_plan(&two_projects(true), "fscale check --affected");
+            assert!(
+                text.starts_with("verify --affected (dry run): 1 of 2 projects would run, 1 not affected. Nothing was run.\n"),
+                "{text}"
+            );
+            assert!(
+                text.contains("    test       would run  echo fine\n"),
+                "{text}"
+            );
+            assert!(text.contains("  in b: not affected\n"), "{text}");
+        }
     }
 }

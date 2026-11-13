@@ -4,10 +4,15 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Nothing is half-finished. The session of 2026-11-12 (17:05 to about 19:30 UTC) merged M12 (#19), M13 (#20), M14 (#21), M15 (#22) and M16 (#23), then set the version to 0.2.0 in its own pull request. **No tag has been pushed.**
+**Paused by the owner on 2026-11-13 (about 00:45 UTC), to resume later the same day.** The plan update (ADR 0031) and M17 (ADR 0032, 0033) are done, reviewed (review findings fixed) and pushed on `claude/dreamy-hopper-8aih76`; the M17 pull request is open and waits for green CI on Linux, macOS and Windows. **No tag has been pushed.**
 
-- **Branch:** `claude/jolly-hamilton-qwq6vk` (the cloud session may push only to this branch; it was restarted from `main` after each merge, so each milestone was one pull request).
-- **Next, in order:** tag `v0.2.0` when ready (`RELEASING.md`); then M17 to M19, blame-aware verify (it must take verify schema version 5).
+To resume:
+
+1. Check the M17 pull request's CI. If a job failed, fix it on the same branch. When all three OSes are green, merge it.
+2. Then restart the branch from `main` and do the 0.2.1 fixes as a second pull request (the owner's list, in the session's request: name a service as the cause only with evidence from the output; stop early as likely setup with no pass, N errors and no failure, with a config key; show the first error's text after an early stop or a timeout, e.g. a short extra `--maxfail=1` run; passes plus errors that all name an unreachable service are setup needed; a timeout with mostly errors must not say "raise the timeout"; a refused local connection or "password authentication failed" in the first error makes the step setup needed and names host and port; docs/doctor.md says "reachable" means the port answers). One ADR, version 0.2.1 with `scripts/bump-version.mjs`, no tag. Then stop.
+
+- **Branch:** `claude/dreamy-hopper-8aih76` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
+- **Next, in order:** the 0.2.1 fixes (second pull request of this session); tag `v0.2.0` or `v0.2.1` when ready (`RELEASING.md`); then M18, the local step-result cache (PLAN.md, ADR 0031).
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
@@ -19,7 +24,8 @@ Nothing is half-finished. The session of 2026-11-12 (17:05 to about 19:30 UTC) m
 - **Done in an earlier session, after 0.1.2:** M11 the group-project pack (ADR 0023).
 - **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. **0.1.3 was released on 2026-11-12** and run on the course project on Windows: progress lines, setup detection, parallel projects and Ctrl+C worked, and no process was left behind.
 - **Done in the session of 2026-11-12 (evening):** M12 `doctor` and the two fixes from the 0.1.3 run (ADR 0025, 0026), M13 agent files (ADR 0027), M14 generators (ADR 0028), M15 Next.js pack (ADR 0029), M16 Python pack (ADR 0030), and the 0.2.0 version.
-- **Not started, in order:** M17 to M19 blame-aware verify, M20 to M23 tamper guard, M24 guarded agent runner, M25 adapters and `fscale ledger`, M26 Supabase pack, M27 Expo pack. These numbers are one higher than before M10 was added; ADR 0020 has the table.
+- **Done in the session of 2026-11-12/13:** the plan update (ADR 0031) and M17, the project graph and affected verify (ADR 0032, ADR 0033).
+- **Not started, in order:** M18 step cache, M19 to M21 blame-aware verify (verify schema 6), M22 faster generated CI and a shared cache, M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
 
 ## How to resume
 
@@ -28,12 +34,21 @@ Nothing is half-finished. The session of 2026-11-12 (17:05 to about 19:30 UTC) m
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
 
+Notes on M17, for whoever builds M18 (the step cache) or touches the graph:
+
+- The graph is `crates/core/src/graph.rs`: `build_graph(root, &facts)`, `affected(&graph, &changed)`, `widening_reason`. It is never built by `detect_facts` (rules call that on every check). Imports come from `crates/core/src/imports.rs` (tree-sitter), manifest, Dockerfile and Compose paths from `crates/core/src/references.rs` (line readers, no file access).
+- Node ids are `<kind>:<folder>` and `shared:<path>` (`graph::project_id`). M18's key needs "the hashes of the projects and shared nodes a project depends on": walk `graph.edges` from the project's id, transitively, and hash the files each node holds (a shared file node is one file; a project holds its folder minus deeper projects).
+- Verify marks units with `limit_to_affected`; a unit that does not run reports `StepStatus::NotAffected`. The CLI's `verify_plan` in `crates/cli/src/main.rs` builds the graph and handles the "no base and a clean tree" case.
+- `fscale check --affected` still uses `affected::narrow_report` with `dependsOn` only (ADR 0032 says why).
+- Verify schema is 5. Blame-aware verify takes 6 (ADR 0031).
+- The course fixture's `auth`, `ledger` and `market` services import `backend/shared` (`COURSE_SHARED_USERS` in both copies of the fixture).
+
 Notes on M10, for whoever touches facts or verify next:
 
 - Discovery is `discovered_projects` in `crates/core/src/facts.rs`. The depth (`DISCOVERY_DEPTH`) and the skipped folders (`DISCOVERY_SKIPPED_DIRS`) are constants there. Per-project detection is `node_detail`, `python_detail`, `rust_detail` and `go_detail`.
 - The repo-level `commands`, `packageManager` and `lockfiles` still describe the root only, because rules read them. Do not fold the projects' commands into them without checking `agent-ready/commands-documented` and `core/readme-setup`.
 - Verify plans the root's steps and then one `ProjectPlan` per discovered project (`plan_verify` and `plan_projects` in `crates/core/src/verify.rs`). A step is `Skipped` (no command, makes the run partial) or `NotNeeded` (shown as `off`). Keep that difference: a test tries every mix and fails if a headline says `OK` with a skipped step.
-- Blame-aware verify (M17) must bump the verify schema to 5; M10 took 2, 0.1.2 took 3 and 0.1.3 took 4. It also has to decide how labels work per project, now that projects run independently, and needs a time budget for the base run (PLAN.md).
+- Blame-aware verify (now M19) must bump the verify schema to 6; M10 took 2, 0.1.2 took 3, 0.1.3 took 4 and M17 took 5. It also has to decide how labels work per project, now that projects run independently, and needs a time budget for the base run (PLAN.md).
 - The course-project fixture exists twice with the same files: `course_project_files` in `crates/core/src/testing.rs` and `courseProjectFiles` in `packages/cli/src/course-fixture.ts`. The CLI tests put stand-ins for `python` and `npx` on the PATH (`writeToolShims`), so they need neither tool.
 - `detect_facts` is called by four rules in one `check`, and each call walks the tree. Caching it per run would win back the 7 to 15% recorded in `bench/RESULTS.md`; mind the fix loop, where files change between calls.
 
@@ -51,7 +66,7 @@ Notes on 0.1.3, for whoever touches how verify runs commands:
 - `run_verify` keeps its old signature (one job, no progress, default limits); `run_verify_with` takes `RunOptions`. Units run in parallel with `--jobs`, but reports are put back in plan order.
 - Time limits are resolved by `VerifyConfig::timeout_for`. Progress lines are `crates/core/src/progress.rs`; run records `crates/core/src/runs.rs` (in `<temp>/firescale-runs`).
 - Watch-mode detection is `watch_tool` and `script_commands` in `crates/core/src/facts.rs`; local-service detection is `service_problem` in `crates/core/src/setup.rs`.
-- The M19 stop hook must stay fast: only the projects a change touches, and a time budget for the base run (PLAN.md).
+- The M21 stop hook must stay fast: only the projects a change touches, and a time budget for the base run (PLAN.md).
 
 Notes on M11, for whoever touches the group-project pack or M12 (`doctor`, the other half of SPEC §17):
 
@@ -118,4 +133,4 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
 - Tick the second box of the publishing checkpoint: see a repo made by `npx firescale@0.1.0 init` pass its generated CI on GitHub (step 7 under "Publishing to npm" in `DECISIONS.md`).
-- The manual test with a real agent (now M25) is not reachable yet.
+- The manual test with a real agent (now M28) is not reachable yet.
