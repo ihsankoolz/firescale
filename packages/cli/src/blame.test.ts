@@ -1,0 +1,308 @@
+import { createHash } from 'node:crypto';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { runGit } from '@firescale/sdk';
+import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
+import { Ajv } from 'ajv';
+import { afterEach, describe, expect, it } from 'vitest';
+import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
+import {
+  baseCalls,
+  commitAll,
+  EXIT_OK,
+  EXIT_VIOLATIONS,
+  runCli,
+  stepCalls,
+} from './test-helpers.js';
+
+// Blame-aware verify: the base run (M19, ADR 0037).
+
+const fixtures = fixtureSet();
+afterEach(fixtures.cleanup);
+
+const SCHEMA = new URL('../schemas/verify-output.schema.json', import.meta.url);
+
+interface Step {
+  name: string;
+  project?: string;
+  status: string;
+  label?: string;
+  base?: { status: string; source: string; note?: string };
+}
+
+interface Report {
+  schemaVersion: number;
+  ok: boolean;
+  result: string;
+  steps: Step[];
+  base?: { compared: boolean; reason?: string; ran: number; sameInputs: number; fromCache: number };
+  notes?: string[];
+}
+
+async function report(json: string): Promise<Report> {
+  const schema: object = JSON.parse(await readFile(SCHEMA, 'utf8'));
+  const check = new Ajv({ strict: true }).compile(schema);
+  const data: unknown = JSON.parse(json);
+  check(data);
+  expect(check.errors ?? []).toEqual([]);
+  return data as Report;
+}
+
+function step(report: Report, name: string, project?: string): Step {
+  const found = report.steps.find((s) => s.name === name && s.project === project);
+  if (!found) throw new Error(`no step ${name} in ${project ?? 'the root'}`);
+  return found;
+}
+
+/**
+ * A step that passes or fails by what `file` holds: "fail" fails it. It
+ * appends `head <name>` or `base <name>` to the log, by whether it runs in
+ * the base worktree.
+ */
+function stepScript(name: string, file: string, log: string): string {
+  return [
+    "const fs = require('fs');",
+    "const where = process.cwd().includes('firescale-base-') ? 'base' : 'head';",
+    `fs.appendFileSync(${JSON.stringify(log)}, where + ' ${name}\\n');`,
+    `process.exit(fs.readFileSync(${JSON.stringify(file)}, 'utf8').includes('fail') ? 1 : 0);`,
+    '',
+  ].join('\n');
+}
+
+/**
+ * A repo on `main`, committed, with lint and test steps that fail when
+ * `lint.txt` or `test.txt` says "fail". The log of runs sits outside it.
+ */
+async function blameRepo(lint: 'ok' | 'fail', test: 'ok' | 'fail') {
+  const outside = await fixtures.create({ files: {}, track: 'no-git' });
+  const log = path.join(outside.root, 'runs.log');
+  const repo = await fixtures.create({
+    files: {
+      'firescale.config.json': JSON.stringify({
+        packs: ['core'],
+        verify: { lint: 'node lint.js', typecheck: false, test: 'node test.js' },
+      }),
+      '.gitignore': '.firescale/\n',
+      'lint.js': stepScript('lint', 'lint.txt', log),
+      'test.js': stepScript('test', 'test.txt', log),
+      'lint.txt': `${lint}\n`,
+      'test.txt': `${test}\n`,
+      'package-lock.json': '{"lockfileVersion":3}\n',
+    },
+    track: 'no-git',
+  });
+  const root = repo.root;
+  const init = await runGit(root, ['init', '--quiet', '--initial-branch=main']);
+  expect(init.code).toBe(0);
+  await commitAll(root, 'base');
+  const runs = async (): Promise<string[]> =>
+    (await readFile(log, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
+  const write = (file: string, content: string) => writeFile(path.join(root, file), content);
+  return { root, runs, write };
+}
+
+describe('blame-aware verify', () => {
+  it('passes, labelled pre-existing, when the test already fails on the base commit', async () => {
+    const { root, write } = await blameRepo('ok', 'fail');
+    await write('lint.txt', 'ok, changed\n');
+    const result = await runCli(['verify'], root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout.split('\n')[0]).toMatch(
+      /^verify: OK - no new failures; pre-existing \(fails on the base commit [0-9a-f]{7} too\): test$/,
+    );
+    expect(result.stdout).toMatch(/ {2}test +FAILED +\[pre-existing\] node test\.js \(exit 1\)/);
+    expect(result.stdout).toMatch(/Pre-existing: test fails on the base commit [0-9a-f]{7} too/);
+    const json = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(json.schemaVersion).toBe(6);
+    expect(json.result).toBe('pre-existing');
+    expect(json.ok).toBe(true);
+    expect(step(json, 'test').label).toBe('pre-existing');
+    expect(step(json, 'test').base?.status).toBe('failed');
+  });
+
+  it('blocks a failure introduced on the head, committed or not, and labels a repaired one fixed', async () => {
+    const { root, write } = await blameRepo('ok', 'fail');
+    // Uncommitted: lint breaks, test is repaired.
+    await write('lint.txt', 'fail\n');
+    await write('test.txt', 'ok\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(json.result).toBe('failed');
+    expect(step(json, 'lint').label).toBe('new');
+    expect(step(json, 'test').label).toBe('fixed');
+    const human = await runCli(['verify'], root);
+    // The repaired test passed in the run above, so its pass comes from the cache.
+    expect(human.stdout.split('\n')[0]).toBe(
+      'verify: FAILED at lint (new) (1 of 3 steps passed from the cache, not run now)',
+    );
+    expect(human.stdout).toMatch(
+      /New: lint passes on the base commit [0-9a-f]{7}, so this change broke it\./,
+    );
+    expect(human.stdout).toMatch(
+      /Fixed by this change \(it fails on the base commit [0-9a-f]{7}\): test/,
+    );
+
+    // Committed on a branch: the base is the merge base with main.
+    expect((await runGit(root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    await commitAll(root, 'break lint');
+    const committed = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(committed.result).toBe('failed');
+    expect(step(committed, 'lint').label).toBe('new');
+    expect(step(committed, 'test').label).toBe('fixed');
+  });
+
+  it('does not let a pre-existing lint failure hide a new test failure', async () => {
+    const { root, write } = await blameRepo('fail', 'ok');
+    await write('test.txt', 'fail\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'lint').status).toBe('failed');
+    expect(step(json, 'lint').label).toBe('pre-existing');
+    expect(step(json, 'test').status).toBe('failed');
+    expect(step(json, 'test').label).toBe('new');
+    const human = await runCli(['verify'], root);
+    expect(human.stdout.split('\n')[0]).toMatch(
+      /^verify: FAILED at test \(new\); pre-existing \(fails on the base commit [0-9a-f]{7} too, does not block\): lint$/,
+    );
+  });
+
+  it('makes no base run the second time with the same base, and runs it again after a lockfile change', async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    // An install command for the base worktree, so a lockfile change can be judged.
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.baseInstall = 'node -e 0';
+    await write('firescale.config.json', JSON.stringify(config));
+    await commitAll(root, 'base install');
+    await write('lint.txt', 'ok, changed\n');
+    await runCli(['verify'], root);
+    const first = (await runs()).filter((run) => run.startsWith('base '));
+    expect(first.sort()).toEqual(['base lint', 'base test']);
+    const second = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(2);
+    expect(second.base).toMatchObject({ ran: 0, fromCache: 2 });
+    expect(step(second, 'test').label).toBe('pre-existing');
+    expect(step(second, 'test').base?.source).toBe('cache');
+    await write('package-lock.json', '{"lockfileVersion":3,"packages":{}}\n');
+    const third = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(4);
+    expect(step(third, 'test').base?.source).toBe('ran');
+  });
+
+  it("does not judge the base with the head's dependencies after a lockfile change", async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    await write('package-lock.json', '{"lockfileVersion":3,"packages":{}}\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base?.status).toBe('setup-needed');
+    expect(json.notes?.join('\n')).toContain(
+      "package-lock.json changed, so the head's installed dependencies do not stand for the base's; set verify.baseInstall",
+    );
+    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual([]);
+  });
+
+  it('never touches the working tree or the index', async () => {
+    const { root, write } = await blameRepo('ok', 'fail');
+    await write('lint.txt', 'fail\n');
+    await write('untracked.txt', 'new file\n');
+    await runGit(root, ['add', 'lint.txt']);
+    await write('lint.txt', 'fail, and an unstaged change\n');
+    const state = async () => {
+      const files: string[] = [];
+      for (const file of ['lint.txt', 'test.txt', 'untracked.txt', 'lint.js', 'test.js']) {
+        files.push(await readFile(path.join(root, file), 'utf8'));
+      }
+      const index = createHash('sha256')
+        .update(await readFile(path.join(root, '.git', 'index')))
+        .digest('hex');
+      const status = (await runGit(root, ['status', '--porcelain'])).stdout;
+      const worktrees = (await runGit(root, ['worktree', 'list'])).stdout.split('\n').length;
+      return { files, index, status, worktrees };
+    };
+    const before = await state();
+    const result = await runCli(['verify'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(await state()).toEqual(before);
+  });
+
+  it('still blocks a failing test on the default branch with a clean tree, where there is no base', async () => {
+    const { root } = await blameRepo('ok', 'fail');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(json.result).toBe('failed');
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(json.base?.compared).toBe(false);
+    expect(json.base?.reason).toContain('nothing to compare');
+    const human = await runCli(['verify'], root);
+    expect(human.stdout).toContain(
+      'No base commit to compare with (the working tree is the base commit',
+    );
+  });
+
+  it('falls back to blocking when the base run runs out of its budget, and says so', async () => {
+    const { root, write } = await blameRepo('ok', 'fail');
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.test = 'node slow-on-base.js';
+    config.verify.baseBudget = '2s';
+    await write('firescale.config.json', JSON.stringify(config));
+    await write(
+      'slow-on-base.js',
+      "if (process.cwd().includes('firescale-base-')) setTimeout(() => process.exit(1), 20000); else process.exit(1);\n",
+    );
+    await commitAll(root, 'slow on the base');
+    await write('lint.txt', 'ok, changed\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base?.status).toBe('over-budget');
+    expect(json.notes?.join('\n')).toContain('ran out of its time budget (2s, verify.baseBudget)');
+  }, 30_000);
+
+  it('never labels a step that needs setup on the head new', async () => {
+    const { root, write } = await blameRepo('ok', 'ok');
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.test = 'no-such-program-firescale-test';
+    await write('firescale.config.json', JSON.stringify(config));
+    await commitAll(root, 'a missing program');
+    await write('lint.txt', 'ok, changed\n');
+    const json = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(json, 'test').status).toBe('setup-needed');
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(json.result).toBe('setup-needed');
+  });
+});
+
+describe('blame-aware verify on the course project', () => {
+  it('runs on the base only the projects whose inputs differ', async () => {
+    const repo: FixtureRepo = await fixtures.create({ files: courseProjectFiles() });
+    await commitAll(repo.root, 'initial');
+    const tools = await fixtures.create({ files: {}, track: 'no-git' });
+    await writeToolShims(tools.root, { versions: true });
+    const log = path.join(tools.root, 'calls.log');
+    // Every Python test fails, on the head and on the base.
+    const env = shimEnv(tools.root, log, 'python');
+    await repo.write('backend/audit_service/main.py', 'app = 1\n');
+    const result = await runCli(['verify', '--json'], repo.root, env);
+    const json = await report(result.stdout);
+    expect(result.code).toBe(EXIT_OK);
+    expect(json.result).toBe('pre-existing');
+    expect(await baseCalls(log)).toEqual(['python -m pytest in audit_service']);
+    for (const service of [
+      'auth_service',
+      'ledger_service',
+      'market_service',
+      'realtime_service',
+    ]) {
+      const test = step(json, 'test', `backend/${service}`);
+      expect(test.label).toBe('pre-existing');
+      expect(test.base?.source).toBe('same-inputs');
+    }
+    expect(step(json, 'test', 'backend/audit_service').base?.source).toBe('ran');
+    expect((await stepCalls(log)).length).toBeGreaterThan(0);
+  });
+});

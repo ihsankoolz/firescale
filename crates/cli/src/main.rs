@@ -10,6 +10,9 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use firescale_core::affected::{changed_files, narrow_report, Changed};
+use firescale_core::blame::{
+    changed_since, choose_base, compare, violation_id, BaseChoice, BaseReport, BaseRun,
+};
 use firescale_core::check::run_check;
 use firescale_core::config::{
     find_root, load_config, load_verify_config, ConfiguredRule, RuleSource,
@@ -843,6 +846,23 @@ fn enforced_violation_lines(report: &CheckReport) -> Vec<String> {
     lines
 }
 
+/// The identity of every enforced violation, for comparing with the base
+/// commit's (ADR 0037).
+fn violation_ids(report: &CheckReport) -> Vec<String> {
+    report
+        .rules
+        .iter()
+        .filter(|rule| rule.status == Status::Enforced && rule.violations > 0)
+        .flat_map(|rule| {
+            report
+                .diagnostics
+                .iter()
+                .filter(move |d| d.rule_id == rule.id)
+                .map(|d| violation_id(&d.rule_id, &d.file, &d.message))
+        })
+        .collect()
+}
+
 /// The value of `--jobs`: a whole number of at least 1.
 fn jobs(args: &Args) -> Result<usize> {
     match &args.jobs {
@@ -994,7 +1014,12 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
         output: enforced_violation_lines(&report),
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         command: check_command.to_owned(),
+        violations: violation_ids(&report),
     };
+    let head_violations = check.violations.clone();
+    // Blame-aware verify (ADR 0037): with a base commit, every step runs and
+    // each failure is compared with the base.
+    let base = choose_base(root, args.base.as_deref())?;
     let (plan, graph) = verify_plan(root, args, &facts, &verify_config, changed)?;
     // The step cache (ADR 0036) needs the graph only for projects below the
     // root: the root's own steps cover the whole repo.
@@ -1024,8 +1049,45 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
         heartbeat: heartbeat_from_env(),
         record: record.as_ref(),
         cache: Some(&cache),
+        every_step: matches!(base, BaseChoice::Compare(_)),
+        deadline: None,
+        base_run: false,
     };
-    let verify = run_verify_with(root, version(), check, &plan, &options)?;
+    let mut verify = run_verify_with(root, version(), check, &plan, &options)?;
+    match &base {
+        BaseChoice::Compare(base) if verify.result != VerifyResult::Stopped => {
+            let changed = changed_since(root, base)?;
+            let base_check = |worktree: &Path| -> Result<Vec<String>> {
+                let mut host = NodeHost::new(worktree);
+                let config = load_config(worktree, &packs, &mut host)?;
+                let selection = select_rules(config.rules, None)?;
+                let outcome = run_check(worktree, &selection.rules, version(), &mut host, false)?;
+                Ok(violation_ids(&outcome.report))
+            };
+            compare(
+                &mut verify,
+                &BaseRun {
+                    root,
+                    base,
+                    changed: changed.as_ref(),
+                    cache: &cache,
+                    plan: &plan,
+                    options: &options,
+                    check: &base_check,
+                    head_violations: &head_violations,
+                    judge_passes: true,
+                },
+            )?;
+        }
+        BaseChoice::Compare(_) => {}
+        BaseChoice::Nothing(reason) => {
+            verify.base = Some(BaseReport {
+                compared: false,
+                reason: Some(reason.clone()),
+                ..BaseReport::default()
+            });
+        }
+    }
     if verify.result == VerifyResult::Stopped {
         say("stopped: every command verify started has been stopped");
     }
@@ -1044,11 +1106,6 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             "verify takes no arguments, got \"{}\".",
             extra.join(" ")
         )));
-    }
-    if args.base.is_some() && !args.affected {
-        return Err(Error::usage(
-            "--base only works together with --affected. Add --affected.",
-        ));
     }
     if args.dry_run {
         if args.json {

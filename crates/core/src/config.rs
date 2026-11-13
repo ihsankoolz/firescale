@@ -458,6 +458,20 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                 })?;
             }
             "timeout" => verify.timeout = Some(parse_limit(name, "verify.timeout", value)?),
+            "baseBudget" => {
+                verify.base_budget = Some(parse_limit(name, "verify.baseBudget", value)?);
+            }
+            "baseInstall" => {
+                verify.base_install = match value {
+                    Value::Bool(false) => None,
+                    Value::String(command) if !command.trim().is_empty() => Some(command.clone()),
+                    _ => {
+                        return Err(Error::user(format!(
+                            "{name}: verify.baseInstall must be a command that installs the dependencies in the base commit's worktree, or false."
+                        )))
+                    }
+                };
+            }
             "projects" => {
                 let Value::Object(projects) = value else {
                     return Err(Error::user(format!(
@@ -537,6 +551,10 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     Some("projects")
                 } else if lower.starts_with("time") {
                     Some("timeout")
+                } else if lower.contains("budget") {
+                    Some("baseBudget")
+                } else if lower.contains("install") {
+                    Some("baseInstall")
                 } else {
                     None
                 };
@@ -545,7 +563,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                         "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
                     ),
                     None => format!(
-                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, projects."
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, projects."
                     ),
                 }));
             }

@@ -298,6 +298,8 @@ exports[`fscale verify --affected > runs only the service that changed, and says
   in backend/realtime_service: not affected
   in frontend: not affected
 
+Compared with the base commit <commit> (<default branch>): 1 step run in a worktree of it.
+
 Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
   backend/audit_service: changed: backend/audit_service/main.py
 

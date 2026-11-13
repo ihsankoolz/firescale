@@ -77,5 +77,7 @@ Last lines of test:
   1 test failed
 
 Fix the failure, then run again: node test.js
+
+No base commit to compare with (this is not a git repo, or it has no commit yet), so every failure blocks.
 "
 `;

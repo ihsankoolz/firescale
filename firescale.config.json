@@ -6,5 +6,8 @@
         "excludePaths": ["crates/rules/src/core/env-example/"]
       }
     }
+  },
+  "verify": {
+    "baseInstall": "pnpm build"
   }
 }

@@ -6,6 +6,7 @@
 
 pub mod activity;
 pub mod affected;
+pub mod blame;
 pub mod cache;
 pub mod check;
 pub mod config;

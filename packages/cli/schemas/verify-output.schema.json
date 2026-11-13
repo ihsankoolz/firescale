@@ -21,7 +21,7 @@
   "properties": {
     "schemaVersion": {
       "description": "Version of this format. Changes only on a breaking change.",
-      "const": 5
+      "const": 6
     },
     "version": {
       "description": "The firescale version that produced the report.",
@@ -32,8 +32,8 @@
       "type": "boolean"
     },
     "result": {
-      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up. stopped: verify was stopped by Ctrl+C or a termination signal before every step finished; the steps that finished are reported.",
-      "enum": ["ok", "partial", "failed", "setup-needed", "stopped"]
+      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up. stopped: verify was stopped by Ctrl+C or a termination signal before every step finished; the steps that finished are reported. pre-existing: nothing failed that the change introduced; every failure also fails on the base commit (ADR 0037); exit code 0.",
+      "enum": ["ok", "partial", "failed", "setup-needed", "stopped", "pre-existing"]
     },
     "runner": {
       "description": "How the commands of the repo root were chosen: all three from the config, Nx, Turborepo, package.json scripts, Cargo, a Python or Go project at the root, none found, or projects when the root has no commands of its own and the projects below it supply them.",
@@ -187,6 +187,30 @@
                 "type": "string"
               }
             }
+          },
+          "label": {
+            "description": "With a base commit to compare with (ADR 0037): new (fails on the head, passed on the base; blocks), pre-existing (fails on both; does not block), fixed (failed on the base, passes on the head) or flaky (failed, then passed when run again; does not block). Absent when there is no label: a failure with no label blocks.",
+            "enum": ["new", "pre-existing", "fixed", "flaky"]
+          },
+          "base": {
+            "description": "With a base commit: how the step did on it, and where that came from.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "source"],
+            "properties": {
+              "status": {
+                "description": "The step's result on the base commit. setup-needed, timed-out, over-budget (the base run's time budget ran out) and stopped say nothing about the code: a failure with such a base result has no label and blocks.",
+                "enum": ["passed", "failed", "setup-needed", "timed-out", "over-budget", "stopped"]
+              },
+              "source": {
+                "description": "same-inputs: no file the step reads differs between the base and the head, so its head result is its base result. cache: kept from an earlier run with the same base. ran: run now in a worktree of the base commit.",
+                "enum": ["same-inputs", "cache", "ran"]
+              },
+              "note": {
+                "description": "Why a failure blocks as it would without a base.",
+                "type": "string"
+              }
+            }
           }
         }
       }
@@ -313,6 +337,59 @@
           "description": "What those steps took when they last ran, in milliseconds.",
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "base": {
+      "description": "Blame-aware verify (ADR 0037): the base commit failures were compared with, or why there is none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compared", "sameInputs", "fromCache", "ran", "durationMs", "overBudget"],
+      "properties": {
+        "compared": {
+          "description": "True when failures were compared with a base commit.",
+          "type": "boolean"
+        },
+        "reference": {
+          "description": "The ref the base came from: --base, or the default branch.",
+          "type": "string"
+        },
+        "commit": {
+          "description": "The base commit: the merge base of HEAD and the reference.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Without a base: why there is none. Every failure then blocks.",
+          "type": "string"
+        },
+        "sameInputs": {
+          "description": "Steps whose base result was their head result.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "fromCache": {
+          "description": "Steps whose base result was kept from an earlier run.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "ran": {
+          "description": "Steps run in a worktree of the base commit.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "budgetMs": {
+          "description": "The base run's time budget (verify.baseBudget); absent with no limit.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "durationMs": {
+          "description": "How long the base run took.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "overBudget": {
+          "description": "True when the budget ran out before every base step had run.",
+          "type": "boolean"
         }
       }
     }

@@ -111,7 +111,10 @@ export async function writeToolShims(
         : [];
       const script = [
         '@echo off',
-        `for %%I in (.) do echo ${tool} %* in %%~nxI>> "%SHIM_LOG%"`,
+        // A call from the base run of blame-aware verify ends in " [base]".
+        `set "SHIM_WHERE="`,
+        `if defined FSCALE_BASE_RUN set "SHIM_WHERE= [base]"`,
+        `for %%I in (.) do echo ${tool} %* in %%~nxI%SHIM_WHERE%>> "%SHIM_LOG%"`,
         ...version,
         `if "%SHIM_FAIL%"=="${tool}" exit /b 1`,
         'exit /b 0',
@@ -124,7 +127,8 @@ export async function writeToolShims(
         : [];
       const script = [
         '#!/bin/sh',
-        `echo "${tool} $* in $(basename "$PWD")" >> "$SHIM_LOG"`,
+        // A call from the base run of blame-aware verify ends in " [base]".
+        `echo "${tool} $* in $(basename "$PWD")\${FSCALE_BASE_RUN:+ [base]}" >> "$SHIM_LOG"`,
         ...version,
         `if [ "$SHIM_FAIL" = "${tool}" ]; then echo "${tool} failed" >&2; exit 1; fi`,
         'exit 0',
