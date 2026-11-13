@@ -3215,6 +3215,104 @@ fn affected_intro(affected: &AffectedReport) -> String {
     }
 }
 
+/// Why a step needs setup, as its detail says it after the command:
+/// `cmd (exit 2): <reason>`, `cmd (stopped early after 3s): <reason>`, or
+/// `cmd (stopped early after 3s; its first error shows <reason>)`. Without
+/// the timings, so projects with the same problem have the same reason.
+fn setup_reason<'a>(detail: &'a str, command: &str) -> Option<&'a str> {
+    let rest = detail.strip_prefix(command)?.strip_prefix(" (")?;
+    let close = rest.find(')')?;
+    if let Some(reason) = rest[close..].strip_prefix("): ") {
+        return Some(reason).filter(|reason| !reason.is_empty());
+    }
+    let inside = &rest[..close];
+    for marker in ["; its first error shows ", "; the output shows "] {
+        if let Some(at) = inside.find(marker) {
+            // The reason itself can hold brackets: up to the detail's last one.
+            let reason = rest[at + marker.len()..].strip_suffix(')')?;
+            return Some(reason).filter(|reason| !reason.is_empty());
+        }
+    }
+    None
+}
+
+/// The setup-needed steps that share their reason with another one, as
+/// groups of indexes into `report.steps`, in step order (ADR 0022's text,
+/// printed once per reason).
+fn shared_setup_reasons(report: &VerifyReport) -> Vec<(&str, Vec<usize>)> {
+    let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (index, step) in report.steps.iter().enumerate() {
+        if step.status != StepStatus::SetupNeeded || step.label.is_some() {
+            continue;
+        }
+        let Some(reason) = step
+            .command
+            .as_deref()
+            .and_then(|command| setup_reason(&step.detail, command))
+        else {
+            continue;
+        };
+        match groups.iter_mut().find(|(shared, _)| *shared == reason) {
+            Some((_, members)) => members.push(index),
+            None => groups.push((reason, vec![index])),
+        }
+    }
+    groups.retain(|(_, members)| members.len() > 1);
+    groups
+}
+
+/// One block for several steps that need the same setup: the reason once,
+/// then each step with its own setup command and the command to run again.
+/// Only the first step's last lines are shown; `--json` has every step's.
+fn format_setup_group(out: &mut String, report: &VerifyReport, reason: &str, members: &[usize]) {
+    let steps: Vec<&StepReport> = members.iter().map(|&index| &report.steps[index]).collect();
+    let place = |step: &StepReport| {
+        step.project.as_ref().map_or_else(String::new, |project| {
+            format!(" in {}", place_name(project))
+        })
+    };
+    let first = steps[0];
+    let note = format!(
+        " (the first of {} with this reason; `fscale verify --json` has the output of each)",
+        steps.len()
+    );
+    if !first.output_tail.is_empty() {
+        out.push_str(&format!(
+            "\nLast lines of {}{}{note}:\n",
+            first.name,
+            place(first)
+        ));
+        for line in &first.output_tail {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    if !first.first_error.is_empty() {
+        out.push_str(&format!(
+            "\nFirst error of {}{}{note}:\n",
+            first.name,
+            place(first)
+        ));
+        for line in &first.first_error {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    out.push_str(&format!(
+        "\nSetup needed for {} steps, all for one reason: {reason}. The environment is not ready, so this is not a problem in the code. Do not change code for it.\n",
+        steps.len()
+    ));
+    for step in steps {
+        let place = place(step);
+        out.push_str(&format!("- {}{place}\n", step.name));
+        match &step.fix {
+            Some(fix) => out.push_str(&format!("  Set it up{place}: {fix}\n")),
+            None => out.push_str("  Set up what the reason names, or ask a person to.\n"),
+        }
+        if let Some(command) = &step.command {
+            out.push_str(&format!("  Then run again{place}: {command}\n"));
+        }
+    }
+}
+
 /// Renders the compact summary. No durations, so the text is stable.
 #[must_use]
 pub fn format_verify_human(report: &VerifyReport) -> String {
@@ -3287,7 +3385,22 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         .and_then(|base| base.commit.as_deref())
         .map(|commit| commit[..commit.len().min(7)].to_owned())
         .unwrap_or_default();
-    for failure in report.steps.iter().filter(|step| blocks(step.status)) {
+    let shared = shared_setup_reasons(report);
+    for (index, failure) in report
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| blocks(step.status))
+    {
+        // Several steps with the same setup problem: one block, where the
+        // first of them is.
+        if let Some((reason, members)) = shared.iter().find(|(_, members)| members.contains(&index))
+        {
+            if members[0] == index {
+                format_setup_group(&mut out, report, reason, members);
+            }
+            continue;
+        }
         let place = failure
             .project
             .as_ref()
@@ -4771,6 +4884,81 @@ mod tests {
             text.contains("\nFix the failure, then run again in b: "),
             "{text}"
         );
+    }
+
+    #[test]
+    fn projects_with_the_same_setup_problem_share_one_block() {
+        let fixture = Fixture::new(
+            &[
+                ("a/x.txt", ""),
+                ("b/x.txt", ""),
+                ("c/x.txt", ""),
+                ("d/x.txt", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let jwt = say_and_exit("E   ModuleNotFoundError: No module named 'jwt'", 2);
+        let flask = say_and_exit("E   ModuleNotFoundError: No module named 'flask'", 2);
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                project("a", &[("test", &jwt)], Some("pip install -r a.txt")),
+                project("b", &[("test", &flask)], Some("pip install -r b.txt")),
+                project("c", &[("test", &jwt)], Some("pip install -r c.txt")),
+                project("d", &[("test", &jwt)], None),
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.result, VerifyResult::SetupNeeded);
+        let text = format_verify_human(&report);
+        // The reason once, then each project with its own commands.
+        let group = format!(
+            "\nSetup needed for 3 steps, all for one reason: the Python module 'jwt' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.\n- test in a\n  Set it up in a: pip install -r a.txt\n  Then run again in a: {jwt}\n- test in c\n  Set it up in c: pip install -r c.txt\n  Then run again in c: {jwt}\n- test in d\n  Set up what the reason names, or ask a person to.\n  Then run again in d: {jwt}\n"
+        );
+        assert!(text.contains(&group), "{text}");
+        assert_eq!(
+            text.matches("the Python module 'jwt' is not installed. The")
+                .count(),
+            1
+        );
+        // The last lines of the first one only.
+        assert!(
+            text.contains("\nLast lines of test in a (the first of 3 with this reason; `fscale verify --json` has the output of each):\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Last lines of test in c"), "{text}");
+        // A project with its own reason keeps today's layout.
+        assert!(
+            text.contains("\nSetup needed for test in b: the environment is not ready, so this is not a problem in the code. Do not change code for it.\nSet it up in b: pip install -r b.txt\nThen run again in b: "),
+            "{text}"
+        );
+        assert!(text.contains("Last lines of test in b:\n"), "{text}");
+        // The block comes where the first of its steps is: before b's.
+        assert!(text.find("- test in a").unwrap() < text.find("for test in b:").unwrap());
+        // The JSON still has every step with its own detail and fix.
+        let json = format_verify_json(&report);
+        assert_eq!(
+            json.matches("\"status\": \"setup-needed\"").count(),
+            4,
+            "{json}"
+        );
+        assert!(json.contains("\"fix\": \"pip install -r c.txt\""), "{json}");
+    }
+
+    #[test]
+    fn the_reason_of_a_setup_step_leaves_out_its_timings() {
+        for (detail, reason) in [
+            ("pytest -q (exit 2): the Python module 'jwt' is not installed", Some("the Python module 'jwt' is not installed")),
+            ("pytest -q (stopped early after 12s): could not connect to Redis on localhost:6379; the service is probably not running, so start it", Some("could not connect to Redis on localhost:6379; the service is probably not running, so start it")),
+            ("pytest -q (stopped early after 3m 2s; its first error shows could not log in to MySQL on localhost: password authentication failed (x))", Some("could not log in to MySQL on localhost: password authentication failed (x)")),
+            ("pytest -q (no result within 5m; its first error shows the package 'zod' is not installed)", Some("the package 'zod' is not installed")),
+            ("pytest -q (exit 2)", None),
+            ("other (exit 2): x", None),
+        ] {
+            assert_eq!(setup_reason(detail, "pytest -q"), reason, "{detail}");
+        }
     }
 
     #[test]

@@ -29,6 +29,19 @@ Then run again in backend/audit_service: .venv/bin/python -m pytest
 
 The setup command is the project's install command, in the form that keeps its lockfile when it has one: `npm ci` for a `package-lock.json`, `pnpm install --frozen-lockfile`, `uv sync --locked` and so on (the table is in [doctor.md](doctor.md#install-commands-that-keep-the-lockfile)).
 
+When several steps need setup for the same reason, as when five services have nothing installed, the summary says the reason once and lists each step under it with its own setup command and the command to run again. Only the first step's last lines are shown; `--json` keeps every step as it is, with its own `detail` and `fix`. A step with a reason of its own keeps the layout above.
+
+```
+Setup needed for 4 steps, all for one reason: the Python module 'pytest' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.
+- test in backend/audit_service
+  Set it up in backend/audit_service: python -m pip install -r requirements-dev.txt
+  Then run again in backend/audit_service: python -m pytest
+- test in backend/ledger_service
+  Set it up in backend/ledger_service: python -m pip install -r requirements-dev.txt
+  Then run again in backend/ledger_service: python -m pytest
+  ...
+```
+
 With failures of both kinds the headline names both: `verify: FAILED at lint in frontend; SETUP NEEDED for test in backend/audit_service`.
 
 The detection is a short list of exact messages in the step's output. Anything else is a normal failure, and so is anything that could be a mistake in the code. Output that reports failed tests (a line starting with `FAILED `, or a count such as `2 failed`) is always a normal failure, even when a test failed on a missing module: the tests ran, so the environment was ready enough. A pytest collection error, which stops pytest before any test runs, is setup. The one exception is a refused connection to a local service (the last rows of the table): it is setup even when the output also reports failed tests, because tests that need the service cannot be judged while it is down.
