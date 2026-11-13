@@ -564,6 +564,25 @@ Decisions in ADR 0042: net counts over the changed test files, from tree-sitter 
 
 ---
 
+## Fixes in 0.4.0 ☑ (after running 0.3.0 on the same course project)
+
+Not a milestone. Running 0.3.0 on the course project (Windows 11) blocked on a head with no code change. Fixed in one pull request (ADR 0043):
+
+- ☑ Per-test labels decide first: the same failing tests on head and base, with different durations, paths and order, are `pre-existing`; a new failing test beside them is `new`, named, and blocks; a test failing on both for a clearly different reason blocks.
+- ☑ On Windows tool versions are read the way the step starts (`npm.cmd`, `npx.cmd`, `pnpm.cmd`, `yarn.cmd`), so Node steps are cached; a pass that is not stored or not reused says why, without `FSCALE_LOG`.
+- ☑ Base results are kept, passed or failed, keyed as M18 keys them; a second verify with no change runs no base step again.
+- ☑ The head's ignored `.env` and `.env.local` (root and each project) are copied into the base and head-check worktrees (copied, not linked, so a base step cannot overwrite yours); no value from them is written anywhere.
+- ☑ A base step runs only for a step that did not pass on the head (`verify.labelFixed` brings back `fixed`).
+- ☑ Time limits follow progress: 10 minutes with no new output (`verify.idleTimeout`), 60 minutes in all (`verify.timeout`), a per-project limit still wins; the time left from a printed percent.
+- ☑ Lint or typecheck failing on a package that is not installed is setup needed, with the install command.
+- ☑ Doctor and the setup-needed text name `npm ci` (and the frozen-lockfile install of other managers).
+- ☑ Unowned images, documents, archives and media run no project; any other unowned file still runs every project.
+- ☑ Several projects with the same setup reason print it once, with each project's commands under it.
+- ☑ Each pass is stored in the step cache as soon as its step finishes, so a run stopped later keeps it; a config change that alters every key is said once.
+- ☑ The tamper guard of M23 is unchanged. The version is 0.4.0; no tag pushed.
+
+---
+
 ## M24 — Tamper guard: more languages and policy ☐
 
 **Build**

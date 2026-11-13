@@ -39,6 +39,7 @@ interface Step {
   status: string;
   timeoutMs?: number;
   timeoutKey?: string;
+  detail?: string;
   outputTail?: string[];
 }
 
@@ -129,6 +130,37 @@ function startVerify(cwd: string, args: string[] = []) {
   );
   return { child, exited, out: () => ({ stdout, stderr }) };
 }
+
+describe('the step cache and a run that is stopped (ADR 0043)', () => {
+  it('stores each pass as its step finishes, so a run killed later keeps it', async () => {
+    const repo = await repoWith(
+      { lint: nodeScript('lint.js'), typecheck: false, test: nodeScript('test.js') },
+      {
+        '.gitignore': 'hang.flag\nran.log\n',
+        'lint.js': "require('fs').appendFileSync('ran.log', 'lint\\n');\n",
+        'test.js':
+          "const fs = require('fs');\nfs.appendFileSync('ran.log', 'test\\n');\nif (fs.existsSync('hang.flag')) setTimeout(() => {}, 15000);\n",
+      },
+    );
+    await writeFile(path.join(repo.root, 'hang.flag'), '');
+    const ran = async () =>
+      (await readFile(path.join(repo.root, 'ran.log'), 'utf8').catch(() => ''))
+        .split(/\r?\n/)
+        .filter(Boolean);
+    const run = startVerify(repo.root);
+    await until(async () => (await ran()).includes('test'));
+    // Killed outright: nothing at the end of the run gets a chance to run.
+    run.child.kill('SIGKILL');
+    await run.exited;
+    const { rm } = await import('node:fs/promises');
+    await rm(path.join(repo.root, 'hang.flag'));
+    const again = await runCli(['verify'], repo.root);
+    expect(again.code).toBe(EXIT_OK);
+    expect(again.stdout).toMatch(/ {2}lint +cached +from the cache/);
+    expect(again.stdout).toMatch(/ {2}test +passed /);
+    expect(await ran()).toEqual(['lint', 'test', 'test']);
+  });
+});
 
 describe('stopping verify stops every process it started', () => {
   it.skipIf(WINDOWS).each(['SIGINT', 'SIGTERM'] as const)(
@@ -334,6 +366,128 @@ describe('time limits', () => {
     expect(result.stderr).toContain(
       'verify.test.timeout must be a time such as "10m", "90s" or "1h 30m", a number of seconds, or false for no limit.',
     );
+  });
+});
+
+describe('time limits follow progress (ADR 0043)', () => {
+  // The defaults are 10 minutes with no new output and 60 minutes in all
+  // (config::tests::a_step_is_stopped_after_ten_quiet_minutes_or_an_hour_in_all_by_default);
+  // here the same limits are set in seconds.
+  /** A fake pytest that prints a line of markers with its percent every 250 ms. */
+  const CHATTY = (lines: number) =>
+    [
+      "console.log('==== test session starts ====');",
+      `const total = ${lines};`,
+      'let n = 0;',
+      'const tick = () => {',
+      '  n += 1;',
+      '  console.log(`tests/test_${n}.py .... [${String(Math.min(99, Math.floor((n * 100) / total))).padStart(3)}%]`);',
+      '  if (n >= total) process.exit(0);',
+      '  setTimeout(tick, 250);',
+      '};',
+      'tick();',
+      '',
+    ].join('\n');
+
+  it('lets a slow suite that keeps reporting results run past its idle limit, with the time left in the heartbeat', async () => {
+    const repo = await repoWith(
+      {
+        idleTimeout: '2s',
+        timeout: '60s',
+        lint: false,
+        typecheck: false,
+        test: nodeScript('chatty.js'),
+      },
+      // 20 lines, 250 ms apart: 5 s in all, more than twice the idle limit.
+      { 'chatty.js': CHATTY(20) },
+    );
+    const result = await runCli(['verify', '--progress'], repo.root, {
+      FSCALE_HEARTBEAT_MS: '1500',
+    });
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout.split('\n')[0]).toBe('verify: OK');
+    expect(result.stderr).toMatch(
+      /\[verify\] test: still running after [\d.]+s; \d+% done, about .+? left at this pace/,
+    );
+  });
+
+  it('stops a step that prints nothing new for its idle limit, and says so', async () => {
+    const repo = await repoWith(
+      {
+        idleTimeout: '2s',
+        timeout: '60s',
+        lint: false,
+        typecheck: false,
+        test: nodeScript('quiet.js'),
+      },
+      {
+        'quiet.js':
+          "console.log('==== test session starts ====');\nconsole.log('tests/test_a.py .. [ 25%]');\nsetTimeout(() => {}, 60000);\n",
+      },
+    );
+    const started = Date.now();
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(Date.now() - started).toBeLessThan(30000);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as Report & { steps: (Step & { detail: string })[] };
+    const test = report.steps.find((step) => step.name === 'test');
+    expect(test?.status).toBe('timed-out');
+    expect(test?.timeoutKey).toBe('verify.idleTimeout');
+    expect(test?.timeoutMs).toBe(2000);
+    expect(test?.detail).toMatch(
+      /\(no new output for 2s, stopped after \S+; 25% done, about .+? left at this pace\)$/,
+    );
+    const human = await runCli(['verify'], repo.root);
+    expect(human.stdout).toMatch(
+      /Timed out: test printed nothing new for 2s, so it was stopped with every process it started\. It was 25% done, about .+? left at this pace\./,
+    );
+    expect(human.stdout).toContain(
+      'If it is only slow, raise verify.idleTimeout in your firescale config.',
+    );
+  });
+
+  it('still stops a step that keeps printing at the overall limit', async () => {
+    const repo = await repoWith(
+      {
+        idleTimeout: '2s',
+        timeout: '3s',
+        lint: false,
+        typecheck: false,
+        test: nodeScript('chatty.js'),
+      },
+      { 'chatty.js': CHATTY(1000) },
+    );
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as Report & { steps: (Step & { detail: string })[] };
+    const test = report.steps.find((step) => step.name === 'test');
+    expect(test?.status).toBe('timed-out');
+    expect(test?.timeoutKey).toBe('verify.test.timeout');
+    expect(test?.timeoutMs).toBe(3000);
+    expect(test?.detail).toMatch(
+      /\(no result within 3s; \d+% done, about .+? left at this pace\)$/,
+    );
+  });
+
+  it('keeps a limit set for the project as the only one, as before', async () => {
+    const repo = await repoWith(
+      {
+        idleTimeout: '1s',
+        lint: false,
+        typecheck: false,
+        projects: { api: { test: { command: nodeScript('quiet.js'), timeout: '3s' } } },
+      },
+      {
+        'api/pyproject.toml': '[project]\nname = "api"\n',
+        'api/quiet.js': "console.log('working');\nsetTimeout(() => process.exit(0), 2000);\n",
+      },
+    );
+    // Quiet for 2 s, longer than verify.idleTimeout, but the project's own
+    // limit of 3 s wins.
+    const result = await runCli(['verify', '--json'], repo.root);
+    const report = JSON.parse(result.stdout) as Report;
+    const test = report.steps.find((step) => step.name === 'test' && step.project === 'api');
+    expect(test?.status).toBe('passed');
   });
 });
 

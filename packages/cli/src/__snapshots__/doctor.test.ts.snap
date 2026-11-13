@@ -57,7 +57,7 @@ exports[`fscale doctor > prints JSON that matches its schema 1`] = `
       "subject": "node_modules",
       "status": "problem",
       "detail": "the dependencies of package.json are not installed.",
-      "fix": "bun install"
+      "fix": "bun install --frozen-lockfile"
     },
     {
       "section": "services",
@@ -89,7 +89,7 @@ Dependencies
   PROBLEM  backend packages: 1 of 2 packages in backend/requirements.txt are not installed: flask; 1 does not match its pinned version: requests 2.30.0 (wants 2.31.0).
            next: in backend: .venv/bin/python -m pip install -r requirements.txt
   PROBLEM  node_modules: the dependencies of package.json are not installed.
-           next: bun install
+           next: bun install --frozen-lockfile
 
 Services
   PROBLEM  PostgreSQL on localhost:<port>: not reachable: nothing listens on port <port> (.env.example (DATABASE_URL)).

@@ -944,7 +944,7 @@ fn verify_plan(
             )
         };
         notes.push(format!(
-            "{files} {verb} to no project and cannot change a build or a test (Markdown, text, a licence or docs/), so {run} nothing; the check still covers {them}."
+            "{files} {verb} to no project and cannot change a build or a test (Markdown, text, a licence, docs/, or an image, PDF, archive or media file), so {run} nothing; the check still covers {them}."
         ));
     }
     limit_to_affected(&mut plan, facts, &graph, &set, base);
@@ -1124,6 +1124,8 @@ fn verify_report(
         },
     )
     .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
+    // A config change alters every key: say so once (ADR 0043).
+    let config_note = cache.config_note().filter(|_| !args.no_cache);
     let options = RunOptions {
         stop: &STOP,
         progress: progress.as_ref(),
@@ -1161,7 +1163,7 @@ fn verify_report(
                             options: &options,
                             check: &base_check,
                             head_violations: &head_violations,
-                            judge_passes: mode == VerifyMode::Full,
+                            judge_passes: mode == VerifyMode::Full && verify_config.label_fixed,
                             shortcuts: !args.no_cache,
                         },
                     );
@@ -1198,6 +1200,7 @@ fn verify_report(
     }
     let mut notes = outcome.warnings;
     verify.notes.extend(shared_note);
+    verify.notes.extend(config_note);
     // FSCALE_LOG=cache shows, per step, whether its result came from the cache.
     if env::var("FSCALE_LOG").is_ok_and(|value| value.split(',').any(|part| part == "cache")) {
         notes.extend(cache.log());

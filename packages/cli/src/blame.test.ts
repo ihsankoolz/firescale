@@ -28,6 +28,7 @@ interface Step {
   status: string;
   label?: string;
   base?: { status: string; source: string; note?: string };
+  cache?: { durationMs: number };
 }
 
 interface Report {
@@ -73,14 +74,18 @@ function stepScript(name: string, file: string, log: string): string {
  * A repo on `main`, committed, with lint and test steps that fail when
  * `lint.txt` or `test.txt` says "fail". The log of runs sits outside it.
  */
-async function blameRepo(lint: 'ok' | 'fail', test: 'ok' | 'fail') {
+async function blameRepo(
+  lint: 'ok' | 'fail',
+  test: 'ok' | 'fail',
+  verify: Record<string, unknown> = {},
+) {
   const outside = await fixtures.create({ files: {}, track: 'no-git' });
   const log = path.join(outside.root, 'runs.log');
   const repo = await fixtures.create({
     files: {
       'firescale.config.json': JSON.stringify({
         packs: ['core'],
-        verify: { lint: 'node lint.js', typecheck: false, test: 'node test.js' },
+        verify: { lint: 'node lint.js', typecheck: false, test: 'node test.js', ...verify },
       }),
       '.gitignore': '.firescale/\n',
       'lint.js': stepScript('lint', 'lint.txt', log),
@@ -122,8 +127,23 @@ describe('blame-aware verify', () => {
     expect(step(json, 'test').base?.status).toBe('failed');
   });
 
-  it('blocks a failure introduced on the head, committed or not, and labels a repaired one fixed', async () => {
-    const { root, write } = await blameRepo('ok', 'fail');
+  it('runs no base step for a step that passed on the head, so a repaired one has no label (ADR 0043)', async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    await write('lint.txt', 'fail\n');
+    await write('test.txt', 'ok\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'lint').label).toBe('new');
+    expect(step(json, 'test').status).toBe('passed');
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base).toBeUndefined();
+    expect(json.base).toMatchObject({ ran: 1 });
+    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual(['base lint']);
+  });
+
+  it('blocks a failure introduced on the head, committed or not, and with verify.labelFixed labels a repaired one fixed', async () => {
+    const { root, write } = await blameRepo('ok', 'fail', { labelFixed: true });
     // Uncommitted: lint breaks, test is repaired.
     await write('lint.txt', 'fail\n');
     await write('test.txt', 'ok\n');
@@ -178,16 +198,17 @@ describe('blame-aware verify', () => {
     await commitAll(root, 'base install');
     await write('lint.txt', 'ok, changed\n');
     await runCli(['verify'], root);
+    // lint passes on the head, so only test runs on the base (ADR 0043).
     const first = (await runs()).filter((run) => run.startsWith('base '));
-    expect(first.sort()).toEqual(['base lint', 'base test']);
+    expect(first).toEqual(['base test']);
     const second = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(2);
-    expect(second.base).toMatchObject({ ran: 0, fromCache: 2 });
+    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(1);
+    expect(second.base).toMatchObject({ ran: 0, fromCache: 1 });
     expect(step(second, 'test').label).toBe('pre-existing');
     expect(step(second, 'test').base?.source).toBe('cache');
     await write('package-lock.json', '{"lockfileVersion":3,"packages":{}}\n');
     const third = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(4);
+    expect((await runs()).filter((run) => run.startsWith('base '))).toHaveLength(2);
     expect(step(third, 'test').base?.source).toBe('ran');
   });
 
@@ -203,6 +224,70 @@ describe('blame-aware verify', () => {
       "package-lock.json changed, so the head's installed dependencies do not stand for the base's; set verify.baseInstall",
     );
     expect((await runs()).filter((run) => run.startsWith('base '))).toEqual([]);
+  });
+
+  it("puts the head's ignored root .env into the base worktree, never writes the head's through it, and keeps no value from it (ADR 0043)", async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    const secret = 'sk-test-9f8e7d6c5b4a-never-shown';
+    // The test reads the ignored .env, as the course project's tests do.
+    await write(
+      'test.js',
+      [
+        "const fs = require('fs');",
+        "const where = process.cwd().includes('firescale-base-') ? 'base' : 'head';",
+        `fs.appendFileSync(${JSON.stringify(path.join(root, '..', `${path.basename(root)}-env.log`))}, where + ' test\\n');`,
+        "if (!fs.existsSync('.env')) { console.log('KeyError: API_KEY (no .env file)'); process.exit(1); }",
+        "if (!fs.readFileSync('.env', 'utf8').includes('API_KEY=')) process.exit(2);",
+        // A base run that writes .env must not reach the head's file.
+        "if (where === 'base') fs.writeFileSync('.env', 'API_KEY=overwritten-by-the-base\\n');",
+        "console.log('AssertionError: expected 2 to equal 3');",
+        "process.exit(fs.readFileSync('test.txt', 'utf8').includes('fail') ? 1 : 0);",
+        '',
+      ].join('\n'),
+    );
+    await write('.gitignore', '.firescale/\n.env\n');
+    await commitAll(root, 'the test reads .env');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    await write('.env', `API_KEY=${secret}\n`);
+    await write('lint.txt', 'ok, changed\n');
+    const human = await runCli(['verify', '--progress'], root, { FSCALE_LOG: 'cache' });
+    expect(human.code).toBe(EXIT_OK);
+    expect(human.stdout.split('\n')[0]).toMatch(/^verify: OK - no new failures; pre-existing/);
+    const json = await runCli(['verify', '--json', '--no-cache'], root);
+    const data = await report(json.stdout);
+    expect(step(data, 'test').label).toBe('pre-existing');
+    expect(step(data, 'test').base?.source).toBe('ran');
+    const envLog = await readFile(path.join(root, '..', `${path.basename(root)}-env.log`), 'utf8');
+    expect(envLog.split(/\r?\n/).filter((line) => line === 'base test').length).toBe(2);
+    // No value from .env in any output or stored file.
+    for (const text of [human.stdout, human.stderr, json.stdout, json.stderr]) {
+      expect(text).not.toContain(secret);
+    }
+    const { readdir, stat } = await import('node:fs/promises');
+    const os = await import('node:os');
+    const walk = async (dir: string): Promise<string[]> => {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      const files: string[] = [];
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) files.push(...(await walk(full)));
+        else if (entry.isFile()) files.push(full);
+      }
+      return files;
+    };
+    const stored = [
+      ...(await walk(path.join(root, '.firescale'))),
+      ...(await walk(path.join(os.tmpdir(), 'firescale-runs'))),
+    ];
+    expect(stored.length).toBeGreaterThan(0);
+    for (const file of stored) {
+      expect(await readFile(file, 'utf8'), file).not.toContain(secret);
+    }
+    // The head's .env is untouched, and no worktree is left with a link to it.
+    expect(await readFile(path.join(root, '.env'), 'utf8')).toBe(`API_KEY=${secret}\n`);
+    expect((await stat(path.join(root, '.env'))).isFile()).toBe(true);
+    expect((await runGit(root, ['worktree', 'list'])).stdout.trim().split('\n')).toHaveLength(1);
+    expect((await runs()).filter((run) => run === 'base lint')).toEqual([]);
   });
 
   it('never touches the working tree or the index', async () => {
@@ -424,6 +509,43 @@ describe('blame-aware verify on the course project', () => {
   });
 });
 
+describe('a second verify with no change (ADR 0043)', () => {
+  it('reuses every passed step, Node steps included, and runs no base step again', async () => {
+    const repo: FixtureRepo = await fixtures.create({ files: courseProjectFiles() });
+    await commitAll(repo.root, 'initial');
+    expect((await runGit(repo.root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    const tools = await fixtures.create({ files: {}, track: 'no-git' });
+    await writeToolShims(tools.root, { versions: true });
+    const log = path.join(tools.root, 'calls.log');
+    // Every Python step fails, on the head and on the base; Node steps pass.
+    const env = shimEnv(tools.root, log, 'python');
+    // A root file every project reads: no step has the same inputs as on the base.
+    await repo.write('ruff.toml', 'line-length = 90\n');
+    const first = await runCli(['verify'], repo.root, env);
+    expect(first.code).toBe(EXIT_OK);
+    const base = await baseCalls(log);
+    expect(base.length).toBeGreaterThan(0);
+    // Only steps that did not pass on the head ran on the base.
+    expect(base.every((call) => call.startsWith('python '))).toBe(true);
+    const ranFirst = await stepCalls(log);
+    expect(ranFirst.some((call) => !call.startsWith('python '))).toBe(true);
+    await writeFile(log, '');
+    const second = await runCli(['verify', '--json'], repo.root, env);
+    expect(second.code).toBe(EXIT_OK);
+    const json = await report(second.stdout);
+    // Failures run again on the head; every pass comes from the cache.
+    const again = await stepCalls(log);
+    expect(again.length).toBeGreaterThan(0);
+    expect(again.every((call) => call.startsWith('python '))).toBe(true);
+    for (const passed of json.steps.filter((s) => s.status === 'passed' && s.name !== 'check')) {
+      expect(passed.cache, `${passed.name} in ${passed.project ?? 'the root'}`).toBeDefined();
+    }
+    expect(await baseCalls(log)).toEqual([]);
+    expect(json.base).toMatchObject({ ran: 0 });
+    expect(second.stdout).not.toContain('Not cached');
+  });
+});
+
 // Per-test labels (M20, ADR 0038).
 
 /** A stand-in for pytest: tests test_a, test_b and test_c in each tests/test_*.py, failing those failing.txt names. */
@@ -459,6 +581,49 @@ const FAKE_VITEST = [
   "if (failing.length > 0) console.log('⎯⎯⎯⎯⎯⎯⎯ Failed Tests ' + failing.length + ' ⎯⎯⎯⎯⎯⎯⎯\\n');",
   "for (const name of failing) console.log(' FAIL  src/math.test.ts > math > ' + name + '\\nAssertionError: expected 1 to be 2');",
   "console.log('      Tests  ' + failing.length + ' failed | ' + (names.length - failing.length) + ' passed (' + names.length + ')');",
+  'process.exit(failing.length > 0 ? 1 : 0);',
+  '',
+].join('\n');
+
+/**
+ * A stand-in for Vitest's default reporter as it prints on a real run: its
+ * folder in the header and stack frames, a duration on every line, a random
+ * temp folder in one error, and the failing tests in a random order. Each
+ * entry of failing.txt is a test name, or `name=value` for the value it
+ * received (3 by default).
+ */
+const REAL_VITEST = [
+  "const fs = require('fs');",
+  "const os = require('os');",
+  "const path = require('path');",
+  "const entries = fs.readFileSync('failing.txt', 'utf8').split(',').map((s) => s.trim()).filter(Boolean);",
+  "const failing = entries.map((e) => { const [name, value] = e.split('='); return { name, value: value || '3' }; });",
+  'failing.sort(() => Math.random() - 0.5);',
+  "const names = ['adds', 'multiplies', 'divides', 'reads'];",
+  "const ms = () => Math.floor(Math.random() * 900) + 's'.replace('s', 'ms');",
+  'const cwd = process.cwd();',
+  "console.log(' RUN  v3.2.4 ' + cwd + '\\n');",
+  "console.log(' ❯ src/math.test.ts (' + names.length + ' tests | ' + failing.length + ' failed) ' + ms());",
+  "for (const f of failing) console.log('   × math > ' + f.name + ' ' + ms());",
+  "if (failing.length > 0) console.log('\\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests ' + failing.length + ' ⎯⎯⎯⎯⎯⎯⎯\\n');",
+  'failing.forEach((f, i) => {',
+  "  console.log(' FAIL  src/math.test.ts > math > ' + f.name);",
+  "  if (f.name === 'reads') {",
+  "    const tmp = path.join(os.tmpdir(), 'vitest-' + Math.random().toString(36).slice(2));",
+  '    console.log("Error: ENOENT: no such file or directory, open \'" + path.join(tmp, \'grades.json\') + "\'");',
+  '  } else {',
+  "    console.log('AssertionError: expected ' + f.value + ' to be 4 // Object.is equality\\n\\n- Expected\\n+ Received\\n\\n- 4\\n+ ' + f.value + '\\n');",
+  '  }',
+  "  console.log(' ❯ ' + path.join(cwd, 'src', 'math.test.ts') + ':' + (5 + i) + ':15');",
+  "  console.log('      ' + (4 + i) + '|   it(\\'' + f.name + '\\', () => {');",
+  "  console.log('      ' + (5 + i) + '|     expect(x).toBe(4);');",
+  "  console.log('       |               ^');",
+  "  console.log('\\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[' + (i + 1) + '/' + failing.length + ']⎯\\n');",
+  '});',
+  "console.log(' Test Files  ' + (failing.length ? '1 failed' : '1 passed') + ' (1)');",
+  "console.log('      Tests  ' + failing.length + ' failed | ' + (names.length - failing.length) + ' passed (' + names.length + ')');",
+  "console.log('   Start at  ' + new Date().toTimeString().slice(0, 8));",
+  "console.log('   Duration  ' + (Math.random() * 3).toFixed(2) + 's (transform ' + ms() + ', setup 0ms, collect ' + ms() + ', tests ' + ms() + ')');",
   'process.exit(failing.length > 0 ? 1 : 0);',
   '',
 ].join('\n');
@@ -534,6 +699,91 @@ describe('per-test labels', () => {
     expect(old.result).toBe('pre-existing');
   });
 
+  it('labels the same failing Vitest tests pre-existing despite other durations, paths and order, and blocks a new one beside them (ADR 0043)', async () => {
+    const { root, write } = await runnerRepo(REAL_VITEST, 'vitest.js', 'adds, reads');
+    // Something else changes; the same two tests fail as on the base.
+    await write('tests/note.txt', 'a change\n');
+    const result = await runCli(['verify', '--json'], root);
+    const json = await report(result.stdout);
+    expect(result.code).toBe(EXIT_OK);
+    expect(json.result).toBe('pre-existing');
+    expect(step(json, 'test').label).toBe('pre-existing');
+    expect(step(json, 'test').base?.source).toBe('ran');
+    expect(failedTests(json)).toEqual([
+      { id: 'src/math.test.ts > math > adds', label: 'pre-existing' },
+      { id: 'src/math.test.ts > math > reads', label: 'pre-existing' },
+    ]);
+    const human = await runCli(['verify'], root);
+    expect(human.code).toBe(EXIT_OK);
+    expect(human.stdout.split('\n')[0]).toMatch(/^verify: OK - no new failures; pre-existing/);
+
+    // A new failing test beside them: `new`, named, and it blocks.
+    await write('failing.txt', 'adds, reads, divides\n');
+    const added = await runCli(['verify', '--json'], root);
+    expect(added.code).toBe(EXIT_VIOLATIONS);
+    const withNew = await report(added.stdout);
+    expect(step(withNew, 'test').label).toBe('new');
+    expect(failedTests(withNew)).toEqual([
+      { id: 'src/math.test.ts > math > adds', label: 'pre-existing' },
+      { id: 'src/math.test.ts > math > divides', label: 'new' },
+      { id: 'src/math.test.ts > math > reads', label: 'pre-existing' },
+    ]);
+    const blocked = await runCli(['verify'], root);
+    expect(blocked.code).toBe(EXIT_VIOLATIONS);
+    expect(blocked.stdout).toContain('New failing tests:\n  src/math.test.ts > math > divides\n');
+  });
+
+  it('blocks a test that fails on the base too, but for a clearly different reason (ADR 0043)', async () => {
+    const { root, write } = await runnerRepo(REAL_VITEST, 'vitest.js', 'adds');
+    // On the base `adds` received 3; on the head it receives 5.
+    await write('failing.txt', 'adds=5\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    const test = step(json, 'test');
+    expect(test.label).toBeUndefined();
+    expect(test.base?.note).toMatch(
+      /^this test fails on the base commit [0-9a-f]{7} too, but for a different reason: src\/math\.test\.ts > math > adds, so this failure blocks as it would without a base$/,
+    );
+    expect(failedTests(json)).toEqual([{ id: 'src/math.test.ts > math > adds' }]);
+    // The same value again: pre-existing.
+    await write('failing.txt', 'adds=3\n');
+    const same = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(same, 'test').label).toBe('pre-existing');
+  });
+
+  it('does not let per-test results decide when one step ran pytest twice and the report holds only the last run (ADR 0043)', async () => {
+    // Two pytest sessions write the same JUnit report: the first one's
+    // failures are not in it. failing.txt is `<first run's>|<second run's>`.
+    const twice = [
+      "const fs = require('fs');",
+      "const [first, second] = fs.readFileSync('failing.txt', 'utf8').trim().split('|').map((part) => part.split(',').map((s) => s.trim()).filter(Boolean));",
+      "const words = [...(process.env.PYTEST_ADDOPTS || '').matchAll(/'([^']*)'|(\\S+)/g)].map((m) => m[1] ?? m[2]);",
+      "const report = /^--junitxml=(.+)$/.exec(words.find((w) => w.startsWith('--junitxml=')) || '');",
+      'for (const [suite, failing] of [["unit", first], ["api", second]]) {',
+      "  console.log('============ test session starts ============');",
+      '  let xml = \'<?xml version="1.0"?><testsuites><testsuite name="pytest">\';',
+      "  for (const name of ['test_a', 'test_b', 'test_c']) {",
+      '    const bad = failing.includes(name);',
+      "    xml += '<testcase classname=\"tests.test_' + suite + '\" name=\"' + name + '\" file=\"tests/test_' + suite + '.py\">' + (bad ? '<failure message=\"assert False\">assert False</failure>' : '') + '</testcase>';",
+      "    if (bad) console.log('FAILED tests/test_' + suite + '.py::' + name + ' - assert False');",
+      '  }',
+      "  xml += '</testsuite></testsuites>';",
+      '  if (report) fs.writeFileSync(report[1], xml);',
+      '}',
+      'process.exit(first.length + second.length > 0 ? 1 : 0);',
+      '',
+    ].join('\n');
+    const { root, write } = await runnerRepo(twice, 'pytest.js', 'test_a|test_b');
+    // The first run gets a new failure; the report only shows the second.
+    await write('failing.txt', 'test_a, test_c|test_b\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base?.note).toMatch(/not in the same way/);
+  });
+
   it('falls back to step labels, with a note, for a runner without per-test results', async () => {
     const plain = [
       "const fs = require('fs');",
@@ -558,11 +808,11 @@ describe('per-test labels', () => {
     const result = await runCli(['verify', '--json'], root);
     const json = await report(result.stdout);
     // The same test, by git's rename: never new. Its output names the new
-    // file, so it is not proven the same failure either: it blocks, saying so.
+    // file, but per-test results decide first (ADR 0043): it fails for the
+    // same reason as on the base, so it is pre-existing.
     expect(failedTests(json)).toEqual([{ id: 'tests/test_new.py::test_a', label: 'pre-existing' }]);
-    expect(step(json, 'test').label).toBeUndefined();
-    expect(step(json, 'test').base?.note).toContain('the same tests fail on the base commit');
-    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(step(json, 'test').label).toBe('pre-existing');
+    expect(result.code).toBe(EXIT_OK);
   });
 
   it('keeps per-test labels when the temp folder has a space in its name', async () => {
@@ -717,17 +967,18 @@ describe("a project's changed lockfile", () => {
     expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
     await write('lint.txt', 'ok, changed\n');
     await runCli(['verify'], root);
+    // Only the failing test runs on the base (ADR 0043).
     const before = (await runs()).filter((run) => run.startsWith('base ')).length;
-    expect(before).toBe(2);
+    expect(before).toBe(1);
     // Same base, other requirements: the kept result is not used.
     await write('requirements.txt', 'requests==2.1.0\n');
     const json = await report((await runCli(['verify', '--json'], root)).stdout);
     expect(step(json, 'test').base?.source).toBe('ran');
-    expect((await runs()).filter((run) => run.startsWith('base ')).length).toBe(4);
+    expect((await runs()).filter((run) => run.startsWith('base ')).length).toBe(2);
   });
 });
 
-describe('fixed needs a real failure on the base', () => {
+describe('fixed needs a real failure on the base (with verify.labelFixed, ADR 0043)', () => {
   /**
    * test.js passes when test.txt says ok and the ignored build output
    * `build/out.txt` exists: a worktree, which has no ignored files, fails
@@ -745,7 +996,7 @@ describe('fixed needs a real failure on the base', () => {
     ].join('\n');
 
   it('gives no label, and a note, when the step fails in any worktree', async () => {
-    const { root, runs, write } = await blameRepo('ok', 'ok');
+    const { root, runs, write } = await blameRepo('ok', 'ok', { labelFixed: true });
     const outside = path.join(root, '..', `${path.basename(root)}-needs-build.log`);
     await write('test.js', NEEDS_BUILD(outside));
     await write('.gitignore', '.firescale/\nbuild/\n');
@@ -787,7 +1038,7 @@ describe('fixed needs a real failure on the base', () => {
   });
 
   it('labels the step fixed when it passes in a worktree of the head, and keeps that pairing', async () => {
-    const { root, runs, write } = await blameRepo('ok', 'fail');
+    const { root, runs, write } = await blameRepo('ok', 'fail', { labelFixed: true });
     await write('lint.txt', 'fail\n');
     await write('test.txt', 'ok\n');
     const json = await report((await runCli(['verify', '--json'], root)).stdout);
@@ -803,7 +1054,7 @@ describe('fixed needs a real failure on the base', () => {
   });
 
   it('does not pair a kept base failure with a later run of the head', async () => {
-    const { root, write } = await blameRepo('ok', 'ok');
+    const { root, write } = await blameRepo('ok', 'ok', { labelFixed: true });
     // The test also needs an installed dependency, which is missing at first.
     const needsDep = [
       "const fs = require('fs');",

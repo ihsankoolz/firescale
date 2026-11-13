@@ -79,19 +79,32 @@ pub struct Finished {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub duration: Duration,
+    /// For [`Ending::TimedOut`]: true when it was stopped because it printed
+    /// nothing new for the idle limit, false for the overall limit.
+    pub silent: bool,
+    /// The last percent done the command printed (pytest's `[ 46%]`).
+    pub percent: Option<u8>,
 }
+
+/// Called with the time so far, what the command is doing and the percent
+/// done it printed.
+pub type Heartbeat<'a> = dyn Fn(Duration, Option<&str>, Option<u8>) + Sync + 'a;
 
 /// What to watch for while a command runs.
 pub struct Watch<'a> {
     /// Stop the tree once this much time has passed. `None`: no limit.
     pub timeout: Option<Duration>,
+    /// Stop the tree once it has printed nothing new for this long
+    /// (ADR 0043). `None`: no such limit.
+    pub idle: Option<Duration>,
     /// Stop the tree once this is set.
     pub stop: &'a AtomicBool,
     /// How often to call `on_heartbeat` while the command runs.
     pub heartbeat: Duration,
-    /// Called every `heartbeat` with the time so far and what the command
-    /// is doing, read from its output ([`Activity::heartbeat`]), if anything.
-    pub on_heartbeat: &'a (dyn Fn(Duration, Option<&str>) + Sync),
+    /// Called every `heartbeat` with the time so far, what the command is
+    /// doing, read from its output ([`Activity::heartbeat`]), if anything,
+    /// and the last percent done it printed ([`Activity::percent`]).
+    pub on_heartbeat: &'a Heartbeat<'a>,
     /// The command line, to know its test runner ([`Activity::new`]).
     pub command: &'a str,
     /// Called with the output so far every [`OUTPUT_CHECK`], once there is
@@ -178,6 +191,10 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
 
     let mut next_heartbeat = watch.heartbeat;
     let mut next_output_check = OUTPUT_CHECK;
+    // When output last arrived, for the idle limit.
+    let mut seen_generation = 0;
+    let mut quiet_since = Duration::ZERO;
+    let mut silent = false;
     // The time is taken when the ending is known, before any stopping.
     let (ending, duration) = loop {
         let elapsed = started.elapsed();
@@ -213,6 +230,17 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
             tree.stop();
             break (Ending::TimedOut, elapsed);
         }
+        if let Some(idle) = watch.idle {
+            let generation = lock(&collected).activity.generation();
+            if generation != seen_generation {
+                seen_generation = generation;
+                quiet_since = elapsed;
+            } else if elapsed.saturating_sub(quiet_since) >= idle {
+                tree.stop();
+                silent = true;
+                break (Ending::TimedOut, elapsed);
+            }
+        }
         if elapsed >= next_output_check {
             next_output_check = elapsed + OUTPUT_CHECK;
             // A copy, so the readers are not held up while it is read. It
@@ -225,8 +253,11 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
             }
         }
         if !watch.heartbeat.is_zero() && elapsed >= next_heartbeat {
-            let line = lock(&collected).activity.heartbeat();
-            (watch.on_heartbeat)(elapsed, line.as_deref());
+            let (line, percent) = {
+                let collected = lock(&collected);
+                (collected.activity.heartbeat(), collected.activity.percent())
+            };
+            (watch.on_heartbeat)(elapsed, line.as_deref(), percent);
             while next_heartbeat <= elapsed {
                 next_heartbeat += watch.heartbeat;
             }
@@ -248,6 +279,8 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
         stdout: collected.stdout.clone(),
         stderr: collected.stderr.clone(),
         duration,
+        silent,
+        percent: collected.activity.percent(),
     })
 }
 

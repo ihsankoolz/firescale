@@ -458,6 +458,16 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                 })?;
             }
             "timeout" => verify.timeout = Some(parse_limit(name, "verify.timeout", value)?),
+            "idleTimeout" => {
+                verify.idle_timeout = Some(parse_limit(name, "verify.idleTimeout", value)?);
+            }
+            "labelFixed" => {
+                verify.label_fixed = value.as_bool().ok_or_else(|| {
+                    Error::user(format!(
+                        "{name}: verify.labelFixed must be true (steps that pass also run on the base commit, to be labelled fixed) or false."
+                    ))
+                })?;
+            }
             "baseBudget" => {
                 verify.base_budget = Some(parse_limit(name, "verify.baseBudget", value)?);
             }
@@ -561,6 +571,10 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     Some("failOnSkipped")
                 } else if lower.starts_with("proj") {
                     Some("projects")
+                } else if lower.starts_with("idle") || lower.contains("silen") {
+                    Some("idleTimeout")
+                } else if lower.contains("fixed") {
+                    Some("labelFixed")
                 } else if lower.starts_with("time") {
                     Some("timeout")
                 } else if lower.contains("budget") {
@@ -577,7 +591,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                         "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
                     ),
                     None => format!(
-                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, tamper, projects."
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, idleTimeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, labelFixed, tamper, projects."
                     ),
                 }));
             }
@@ -1149,6 +1163,67 @@ mod tests {
         assert!(!plain.no_ci_variable);
         assert_eq!(plain.timeout_for(None, "test").0, Some(DEFAULT_TIMEOUT));
         assert_eq!(plain.timeout_for(None, "test").1, "verify.test.timeout");
+    }
+
+    #[test]
+    fn a_step_is_stopped_after_ten_quiet_minutes_or_an_hour_in_all_by_default() {
+        use crate::verify::{Limit, DEFAULT_IDLE_TIMEOUT, DEFAULT_TIMEOUT};
+        use std::time::Duration;
+        let packs = builtin();
+        let minutes = |m: u64| Some(Duration::from_secs(m * 60));
+        // ADR 0043 changes the default of ADR 0024 (a fixed 10 minutes).
+        assert_eq!(DEFAULT_IDLE_TIMEOUT, Duration::from_secs(600));
+        assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(3600));
+        let plain = resolve(&json!({}), &packs).expect("valid").verify;
+        assert_eq!(plain.idle_for(None, "test"), minutes(10));
+        assert_eq!(plain.timeout_for(None, "test").0, minutes(60));
+        assert_eq!(plain.idle_for(Some("api"), "lint"), minutes(10));
+        assert!(!plain.label_fixed);
+        // Both have keys; verify.timeout is the overall limit.
+        let raw = json!({
+            "verify": {
+                "timeout": "2h",
+                "idleTimeout": "15m",
+                "labelFixed": true,
+                "lint": { "timeout": "5m" },
+                "projects": { "api": { "timeout": "30m" }, "web": { "test": { "timeout": false } } }
+            }
+        });
+        let verify = resolve(&raw, &packs).expect("valid").verify;
+        assert!(verify.label_fixed);
+        assert_eq!(
+            verify.idle_timeout,
+            Some(Limit::After(Duration::from_secs(900)))
+        );
+        assert_eq!(verify.idle_for(None, "test"), minutes(15));
+        assert_eq!(verify.timeout_for(None, "test").0, minutes(120));
+        assert_eq!(verify.idle_for(Some("web"), "lint"), None);
+        // A limit for the project or the step wins, alone.
+        assert_eq!(verify.idle_for(Some("api"), "test"), None);
+        assert_eq!(verify.timeout_for(Some("api"), "test").0, minutes(30));
+        assert_eq!(verify.idle_for(Some("web"), "test"), None);
+        assert_eq!(verify.timeout_for(Some("web"), "test").0, None);
+        assert_eq!(verify.idle_for(Some("web"), "typecheck"), minutes(15));
+        let off = resolve(&json!({ "verify": { "idleTimeout": false } }), &packs)
+            .expect("valid")
+            .verify;
+        assert_eq!(off.idle_for(None, "test"), None);
+        for bad in [
+            json!({ "idleTimeout": "soon" }),
+            json!({ "labelFixed": "yes" }),
+        ] {
+            let error = resolve(&json!({ "verify": bad }), &packs)
+                .err()
+                .expect("rejected");
+            assert!(
+                error
+                    .message()
+                    .contains("verify.idleTimeout must be a time")
+                    || error.message().contains("verify.labelFixed must be true"),
+                "{}",
+                error.message()
+            );
+        }
     }
 
     #[test]

@@ -59,7 +59,10 @@ impl TestRunner {
     pub fn read(self, stdout: &str, stderr: &str, junit: Option<&str>) -> Option<TestResults> {
         let output = || format!("{stdout}\n{stderr}");
         match self {
-            Self::Pytest => junit.and_then(parse_junit),
+            Self::Pytest => junit.and_then(parse_junit).map(|mut results| {
+                pytest_extras(&mut results, &output());
+                results
+            }),
             Self::Vitest => parse_vitest(&output()),
             Self::Jest => parse_jest(&output()),
             Self::Cargo => parse_cargo(stdout, stderr),
@@ -84,6 +87,371 @@ pub struct TestResults {
     pub failed: BTreeSet<String>,
     /// How many tests passed.
     pub passed: u64,
+    /// Why each failing test failed, where the runner says: its error's
+    /// lines, without stack frames or code excerpts. A parser fills in the
+    /// text; [`TestResults::hash_reasons`] then replaces it with hashes of
+    /// the lines with what changes between runs taken out, so no text is
+    /// kept (ADR 0043).
+    pub reasons: BTreeMap<String, Vec<String>>,
+    /// True when the output shows the results may not cover the whole run:
+    /// more than one run of the runner in the step, or a test binary that
+    /// ended without its results. Then per-test results cannot make a
+    /// failure pre-existing on their own (ADR 0043).
+    pub partial: bool,
+}
+
+impl TestResults {
+    /// Replaces each reason's lines with short hashes of the lines,
+    /// normalised by [`normalise_reason_line`] with `roots` (the folder the
+    /// step ran in: the head, or a worktree) written as `<root>`.
+    pub fn hash_reasons(&mut self, roots: &[String]) {
+        for lines in self.reasons.values_mut() {
+            let mut hashed: Vec<String> = lines
+                .iter()
+                .map(|line| normalise_reason_line(line, roots))
+                .filter(|line| !line.is_empty())
+                .map(|line| blake3::hash(line.as_bytes()).to_hex()[..16].to_owned())
+                .collect();
+            // The order of lines in a message is not the reason.
+            hashed.sort();
+            *lines = hashed;
+        }
+        self.reasons.retain(|_, lines| !lines.is_empty());
+    }
+
+    /// Adds lines to a reason, for failures reported one line at a time.
+    fn append_reason(&mut self, id: &str, line: &str) {
+        self.reasons
+            .entry(id.to_owned())
+            .or_default()
+            .push(line.trim().to_owned());
+    }
+
+    fn add_reason(&mut self, id: &str, lines: &[String]) {
+        let lines: Vec<String> = lines
+            .iter()
+            .map(|line| line.trim().to_owned())
+            .filter(|line| !line.is_empty())
+            .take(MAX_REASON_LINES)
+            .collect();
+        if !lines.is_empty() {
+            // A runner that prints a summary of failures again keeps the first.
+            self.reasons.entry(id.to_owned()).or_insert(lines);
+        }
+    }
+}
+
+/// At most this many lines of a test's error are its reason.
+const MAX_REASON_LINES: usize = 40;
+
+/// The id given to a run's unhandled errors (Vitest), which fail the step
+/// beside its tests.
+pub const UNHANDLED_ERRORS: &str = "(unhandled errors)";
+
+/// The id given to a coverage threshold that is not met (Vitest, Jest),
+/// which fails the step even when every test passed.
+pub const COVERAGE_THRESHOLD: &str = "(coverage threshold)";
+
+/// The roots of a run as they can appear in its output: as given, with
+/// forward slashes, and resolved, longest first.
+#[must_use]
+pub fn roots_of(root: &std::path::Path) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
+    let shown = root.to_string_lossy().into_owned();
+    roots.push(shown.replace('\\', "/"));
+    roots.push(shown);
+    if let Ok(real) = root.canonicalize() {
+        let real = real.to_string_lossy().into_owned();
+        let real = real
+            .strip_prefix("\\\\?\\")
+            .map_or(real.clone(), str::to_owned);
+        roots.push(real.replace('\\', "/"));
+        roots.push(real);
+    }
+    // Python's repr of a Windows path doubles its backslashes.
+    let doubled: Vec<String> = roots
+        .iter()
+        .filter(|root| root.contains('\\'))
+        .map(|root| root.replace('\\', "\\\\"))
+        .collect();
+    roots.extend(doubled);
+    roots.retain(|root| root.len() > 1);
+    roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
+    roots.dedup();
+    roots
+}
+
+/// True for a line of a stack trace: `at f (file:1:2)`, Vitest's
+/// `❯ file:1:2`, Python's `File "x.py", line 3`.
+fn is_stack_frame(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("at ")
+        || line.starts_with("❯ ")
+        || line.starts_with("File \"")
+        || line.starts_with("stack backtrace:")
+}
+
+/// True for the first line of an error: `TypeError: x is not a function`,
+/// `Error: boom`, `AssertionError: expected 3 to be 4`.
+fn is_error_headline(line: &str) -> bool {
+    let line = line.trim_start();
+    let Some((head, _)) = line.split_once(':') else {
+        return false;
+    };
+    !head.contains(' ')
+        && (head.ends_with("Error") || head.ends_with("Exception") || head == "Error")
+}
+
+/// True for a line of a code excerpt: `  3| x`, `> 4 |   expect(x)`,
+/// `    |   ^`.
+fn is_code_frame(line: &str) -> bool {
+    let line = line.trim_start();
+    let line = line.strip_prefix('>').unwrap_or(line).trim_start();
+    let digits = line.chars().take_while(char::is_ascii_digit).count();
+    let rest = line[digits..].trim_start();
+    (digits > 0 || line.starts_with('|')) && rest.starts_with('|')
+}
+
+/// Replaces `needle` in `text`, in any letter case (Windows paths).
+fn replace_any_case(text: &str, needle: &str, with: &str) -> String {
+    if needle.is_empty() {
+        return text.to_owned();
+    }
+    let lower_text = text.to_lowercase();
+    let lower_needle = needle.to_lowercase();
+    // Only when lowercasing keeps byte offsets, which holds for paths
+    // without letters that change length.
+    if lower_text.len() != text.len() || lower_needle.len() != needle.len() {
+        return text.replace(needle, with);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while let Some(found) = lower_text[at..].find(&lower_needle) {
+        out.push_str(&text[at..at + found]);
+        out.push_str(with);
+        at += found + needle.len();
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// A word that names a time: `12ms`, `1.5 s`, `3 seconds`.
+const TIME_UNITS: [&str; 15] = [
+    "ms", "s", "sec", "secs", "second", "seconds", "m", "min", "mins", "minute", "minutes", "h",
+    "us", "µs", "ns",
+];
+
+/// A line of a test's error with what changes from run to run taken out
+/// (ADR 0043): the run's folders (`<root>`) and the temp folder
+/// (`<temp>/*`), durations (`<time>`), clock times and dates, the line and
+/// column numbers after a file name, `line 12` in Python tracebacks,
+/// memory addresses, and runs of spaces. Other numbers stay: an expected
+/// or received value is part of the reason.
+#[must_use]
+pub fn normalise_reason_line(line: &str, roots: &[String]) -> String {
+    // Python's repr of a Windows path doubles its backslashes.
+    let mut line = crate::verify::strip_ansi(line).trim().replace("\\\\", "\\");
+    for root in roots {
+        line = replace_any_case(&line, root, "<root>");
+    }
+    let temp = std::env::temp_dir();
+    let mut temps = roots_of(&temp);
+    for extra in ["/tmp", "/var/folders", "/private/var/folders"] {
+        temps.push(extra.to_owned());
+    }
+    for temp in temps.iter().filter(|temp| temp.len() > 1) {
+        let replaced = replace_any_case(&line, temp, "\u{1}");
+        if replaced.contains('\u{1}') {
+            // The folder or file just inside the temp folder is random.
+            let mut out = String::new();
+            let mut parts = replaced.split('\u{1}');
+            out.push_str(parts.next().unwrap_or(""));
+            for part in parts {
+                out.push_str("<temp>");
+                // Keep the separator, drop the random name after it.
+                let mut cut = part.len();
+                let mut seen_name = false;
+                for (index, c) in part.char_indices() {
+                    let separator = c == '/' || c == '\\';
+                    if separator && !seen_name {
+                        continue;
+                    }
+                    if separator || c.is_whitespace() || "'\"`),:;".contains(c) {
+                        cut = index;
+                        break;
+                    }
+                    seen_name = true;
+                }
+                out.push_str("/*");
+                out.push_str(&part[cut..]);
+            }
+            line = out;
+        }
+    }
+    let words = fold_times(&line);
+    let words = fold_locations(&words);
+    words.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Durations, clock times and dates as `<time>`; hex addresses as `0x#`.
+fn fold_times(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        let c = chars[index];
+        let starts_word = index == 0 || !chars[index - 1].is_alphanumeric();
+        if c == '0' && starts_word && chars.get(index + 1) == Some(&'x') {
+            let mut end = index + 2;
+            while end < chars.len() && chars[end].is_ascii_hexdigit() {
+                end += 1;
+            }
+            if end > index + 2 {
+                out.push_str("0x#");
+                index = end;
+                continue;
+            }
+        }
+        if c.is_ascii_digit() && starts_word {
+            // A run of digits with `.`, `:`, `-`, `T` and `Z` between them:
+            // a number, a clock time or a date.
+            let mut end = index;
+            while end < chars.len()
+                && (chars[end].is_ascii_digit()
+                    || (matches!(chars[end], '.' | ':' | '-' | 'T' | 'Z')
+                        && chars.get(end + 1).is_some_and(char::is_ascii_digit)))
+            {
+                end += 1;
+            }
+            let number: String = chars[index..end].iter().collect();
+            // A clock time with seconds, or a date with one: `14:08:27`,
+            // `2026-11-13T10:22:33.123`, `2026-11-13 10:22:33`. Not
+            // `10:30` or `127.0.0.1:5432`, which may be values.
+            if is_clock(&number) || is_date_time(&number) {
+                out.push_str("<time>");
+                index = end;
+                continue;
+            }
+            if is_date(&number) && chars.get(end) == Some(&' ') {
+                let mut next = end + 1;
+                while next < chars.len()
+                    && (chars[next].is_ascii_digit()
+                        || (matches!(chars[next], '.' | ':')
+                            && chars.get(next + 1).is_some_and(char::is_ascii_digit)))
+                {
+                    next += 1;
+                }
+                let clock: String = chars[end + 1..next].iter().collect();
+                if is_clock(&clock) {
+                    out.push_str("<time>");
+                    index = next;
+                    continue;
+                }
+            }
+            // A number followed by a unit of time that ends the word; a
+            // one-letter unit only right after the number (`2m`, not `2 m`).
+            let spaced = chars.get(end) == Some(&' ');
+            let after = if spaced { end + 1 } else { end };
+            let mut unit_end = after;
+            while unit_end < chars.len() && chars[unit_end].is_alphabetic() {
+                unit_end += 1;
+            }
+            let unit: String = chars[after..unit_end].iter().collect();
+            let ends_word = chars.get(unit_end).is_none_or(|c| !c.is_alphanumeric());
+            let one_letter = unit.chars().count() == 1 && unit != "s";
+            if unit_end > after
+                && ends_word
+                && TIME_UNITS.contains(&unit.as_str())
+                && !(spaced && one_letter)
+                && !number.contains(':')
+                && number.matches('.').count() <= 1
+            {
+                out.push_str("<time>");
+                index = unit_end;
+                continue;
+            }
+            out.push_str(&number);
+            index = end;
+            continue;
+        }
+        out.push(c);
+        index += 1;
+    }
+    out
+}
+
+/// `14:08:27` or `14:08:27.123`: a clock time with seconds.
+fn is_clock(text: &str) -> bool {
+    let (main, fraction) = text.split_once('.').unwrap_or((text, "0"));
+    let parts: Vec<&str> = main.split(':').collect();
+    let two = |part: &str, max: u32| {
+        part.len() == 2 && part.parse::<u32>().is_ok_and(|value| value < max)
+    };
+    parts.len() == 3
+        && two(parts[0], 24)
+        && two(parts[1], 60)
+        && two(parts[2], 61)
+        && !fraction.is_empty()
+        && fraction.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `2026-11-13`.
+fn is_date(text: &str) -> bool {
+    let parts: Vec<&str> = text.split('-').collect();
+    parts.len() == 3
+        && parts[0].len() == 4
+        && parts[1].len() == 2
+        && parts[2].len() == 2
+        && parts
+            .iter()
+            .all(|part| part.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// `2026-11-13T10:22:33`, with any fraction of a second.
+fn is_date_time(text: &str) -> bool {
+    text.split_once('T')
+        .is_some_and(|(date, time)| is_date(date) && is_clock(time))
+}
+
+/// `file.ts:12:5` as `file.ts:#`, and `line 12` as `line #`: where a line
+/// is moves when code is added above it.
+fn fold_locations(line: &str) -> String {
+    let mut out = String::new();
+    for (position, word) in line.split(' ').enumerate() {
+        if position > 0 {
+            out.push(' ');
+        }
+        let previous_is_line = out.trim_end().ends_with("line") || out.trim_end().ends_with("Line");
+        if previous_is_line
+            && word
+                .trim_end_matches(',')
+                .chars()
+                .all(|c| c.is_ascii_digit())
+            && !word.is_empty()
+        {
+            out.push('#');
+            out.push_str(word.trim_start_matches(|c: char| c.is_ascii_digit()));
+            continue;
+        }
+        // A path with a file extension, then `:digits` once or twice.
+        let Some(colon) = word.find(':').filter(|at| {
+            let before = &word[..*at];
+            let ext = before.rsplit('.').next().unwrap_or("");
+            before.contains('.')
+                && !ext.is_empty()
+                && ext.chars().all(char::is_alphanumeric)
+                && ext.chars().any(char::is_alphabetic)
+                && word[*at + 1..].starts_with(|c: char| c.is_ascii_digit())
+        }) else {
+            out.push_str(word);
+            continue;
+        };
+        out.push_str(&word[..colon]);
+        out.push_str(":#");
+        let rest = word[colon + 1..].trim_start_matches(|c: char| c.is_ascii_digit() || c == ':');
+        out.push_str(rest);
+    }
+    out
 }
 
 // ------------------------------------------------------------------ JUnit
@@ -176,6 +544,27 @@ pub fn parse_junit(xml: &str) -> Option<TestResults> {
         let file = attribute(tag, "file");
         let id = pytest_id(&classname, &name, file.as_deref());
         if body.contains("<failure") || body.contains("<error") {
+            // The reason is the failure's message: pytest's
+            // `AssertionError: assert 3 == 4`, without the traceback.
+            let at = body
+                .find("<failure")
+                .or_else(|| body.find("<error"))
+                .unwrap_or(0);
+            let inner = &body[at..];
+            let tag_end = inner.find('>').unwrap_or(inner.len());
+            let message = attribute(&inner[..tag_end], "message").or_else(|| {
+                let text = inner.get(tag_end + 1..)?;
+                let text = &text[..text.find('<').unwrap_or(text.len())];
+                unescape(text)
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_owned)
+            });
+            if let Some(message) = message {
+                let lines: Vec<String> = message.lines().map(str::to_owned).collect();
+                results.add_reason(&id, &lines);
+            }
             results.failed.insert(id);
         } else if !body.contains("<skipped") {
             results.passed += 1;
@@ -183,6 +572,27 @@ pub fn parse_junit(xml: &str) -> Option<TestResults> {
         rest = &after[tag_end + 1..];
     }
     Some(results)
+}
+
+/// What pytest's JUnit report leaves out (ADR 0043): pytest-cov's
+/// `Required test coverage of 80% not reached`, a failing test of its own,
+/// and a step that ran pytest more than once (each run writes the same
+/// report, so the last one hides the others).
+fn pytest_extras(results: &mut TestResults, output: &str) {
+    let mut sessions = 0;
+    for raw in output.lines() {
+        let line = clean(raw);
+        if line.contains("test session starts") {
+            sessions += 1;
+        }
+        if line.contains("Required test coverage of") && line.contains("not reached") {
+            results.failed.insert(COVERAGE_THRESHOLD.to_owned());
+            results.append_reason(COVERAGE_THRESHOLD, &line);
+        }
+    }
+    if sessions > 1 {
+        results.partial = true;
+    }
 }
 
 // ----------------------------------------------------------- Vitest, Jest
@@ -199,14 +609,49 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
     let mut results = TestResults::default();
     let mut seen_summary = false;
     let mut in_failures = false;
+    let mut in_unhandled = false;
+    let mut summaries = 0;
+    let mut block = Block::default();
     for raw in output.lines() {
         let line = clean(raw);
         if line.contains("Failed Tests") || line.contains("Failed Suites") {
+            block.flush(&mut results);
             in_failures = true;
+            in_unhandled = false;
+            continue;
+        }
+        // Errors outside every test fail the run too (ADR 0043).
+        if line.contains("Unhandled Errors") {
+            block.flush(&mut results);
+            in_failures = false;
+            in_unhandled = true;
+            results.failed.insert(UNHANDLED_ERRORS.to_owned());
+            block.ids.push(UNHANDLED_ERRORS.to_owned());
+            continue;
+        }
+        if line.contains("does not meet") && line.contains("threshold") {
+            results.failed.insert(COVERAGE_THRESHOLD.to_owned());
+            results.append_reason(COVERAGE_THRESHOLD, &line);
             continue;
         }
         if line.starts_with("Test Files ") {
+            summaries += 1;
+        }
+        if line.starts_with("Test Files ") || line.starts_with("Tests ") {
+            block.flush(&mut results);
             in_failures = false;
+            in_unhandled = false;
+        }
+        if in_unhandled {
+            // Unhandled errors' own banners are not their reason.
+            if !line.contains("⎯⎯") {
+                block.push(&line);
+            }
+            continue;
+        }
+        if in_failures && line.contains("⎯⎯") {
+            block.flush(&mut results);
+            continue;
         }
         if let Some(rest) = line.strip_prefix("FAIL ").filter(|_| in_failures) {
             let mut id = rest.trim().replace('\\', "/");
@@ -218,8 +663,17 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
             }
             let id = id.trim().to_owned();
             if !id.is_empty() {
+                // FAIL lines one after the other share one error.
+                if !block.lines.is_empty() || block.frames {
+                    block.flush(&mut results);
+                }
+                block.ids.push(id.clone());
                 results.failed.insert(id);
             }
+            continue;
+        }
+        if in_failures {
+            block.push(&line);
         }
         if let Some(rest) = line.strip_prefix("Tests ") {
             seen_summary = true;
@@ -233,7 +687,49 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
             }
         }
     }
+    results.partial = summaries > 1;
+    block.flush(&mut results);
     (seen_summary || !results.failed.is_empty()).then_some(results)
+}
+
+/// The lines of one error in a runner's output, for the tests it belongs
+/// to: everything up to the first stack frame, without code excerpts.
+#[derive(Default)]
+struct Block {
+    ids: Vec<String>,
+    lines: Vec<String>,
+    /// True once a stack frame was seen: the rest is not the reason.
+    frames: bool,
+}
+
+impl Block {
+    fn push(&mut self, line: &str) {
+        if self.ids.is_empty() {
+            return;
+        }
+        // A second error of the same test (an `afterEach` failure, another
+        // unhandled error) is part of its reason too.
+        if self.frames && is_error_headline(line) {
+            self.frames = false;
+        }
+        if self.frames {
+            return;
+        }
+        if is_stack_frame(line) {
+            self.frames = true;
+            return;
+        }
+        if !is_code_frame(line) && !line.trim().is_empty() {
+            self.lines.push(line.to_owned());
+        }
+    }
+
+    fn flush(&mut self, results: &mut TestResults) {
+        for id in &self.ids {
+            results.add_reason(id, &self.lines);
+        }
+        *self = Self::default();
+    }
 }
 
 /// Reads Jest's default reporter: a `FAIL path` line per failing file and a
@@ -243,8 +739,30 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
     let mut results = TestResults::default();
     let mut seen_summary = false;
     let mut file: Option<String> = None;
+    let mut summaries = 0;
+    let mut block = Block::default();
     for raw in output.lines() {
         let line = clean(raw);
+        if line.starts_with("Jest: ") && line.contains("coverage threshold") {
+            block.flush(&mut results);
+            results.failed.insert(COVERAGE_THRESHOLD.to_owned());
+            results.append_reason(COVERAGE_THRESHOLD, &line);
+            continue;
+        }
+        if line.starts_with("Test Suites:") {
+            summaries += 1;
+        }
+        let ends_block = line.starts_with("FAIL ")
+            || line.starts_with("PASS ")
+            || line.starts_with("● ")
+            || line.starts_with("Test Suites:")
+            || line.starts_with("Tests:")
+            || line.starts_with("Summary of all failing tests");
+        if ends_block {
+            block.flush(&mut results);
+        } else {
+            block.push(&line);
+        }
         if let Some(rest) = line.strip_prefix("FAIL ") {
             // `FAIL src/a.test.js`, or with a project's display name
             // first: `FAIL web src/a.test.js`. The file is the last word
@@ -275,11 +793,14 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
             if name.starts_with("Test suite failed to run") {
                 if let Some(file) = &file {
                     results.failed.insert(file.clone());
+                    block.ids.push(file.clone());
                 }
                 continue;
             }
             if let Some(file) = &file {
-                results.failed.insert(format!("{file} › {}", name.trim()));
+                let id = format!("{file} › {}", name.trim());
+                block.ids.push(id.clone());
+                results.failed.insert(id);
             }
         }
         if let Some(rest) = line.strip_prefix("Tests:") {
@@ -294,6 +815,8 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
             }
         }
     }
+    results.partial = summaries > 1;
+    block.flush(&mut results);
     (seen_summary || !results.failed.is_empty()).then_some(results)
 }
 
@@ -334,7 +857,9 @@ pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
     let together = binaries.is_empty();
     let mut results = TestResults::default();
     let mut binary = String::new();
-    let mut block = 0;
+    let mut block_index = 0;
+    let mut results_seen = 0;
+    let mut block = Block::default();
     let mut seen = false;
     for raw in stdout.lines() {
         let line = clean(raw);
@@ -346,12 +871,41 @@ pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
         } else if line.starts_with("running ")
             && (line.ends_with(" test") || line.ends_with(" tests"))
         {
-            binary = binaries.get(block).cloned().unwrap_or_default();
-            block += 1;
+            block.flush(&mut results);
+            binary = binaries.get(block_index).cloned().unwrap_or_default();
+            block_index += 1;
             continue;
         }
         if line.starts_with("test result:") {
+            block.flush(&mut results);
+            results_seen += 1;
             seen = true;
+            continue;
+        }
+        // `---- tests::a stdout ----` starts a failing test's output.
+        if let Some(name) = line
+            .strip_prefix("---- ")
+            .and_then(|rest| rest.strip_suffix(" stdout ----"))
+        {
+            block.flush(&mut results);
+            let name = name.trim();
+            block.ids.push(if binary.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{binary}::{name}")
+            });
+            continue;
+        }
+        if line == "failures:" {
+            block.flush(&mut results);
+            continue;
+        }
+        if !block.ids.is_empty() {
+            // The thread line names the test and where it panicked; the
+            // note about backtraces is the same for every failure.
+            if !line.starts_with("note: ") {
+                block.push(&line);
+            }
             continue;
         }
         let Some(rest) = line.strip_prefix("test ") else {
@@ -379,6 +933,9 @@ pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
             _ => {}
         }
     }
+    // A test binary that crashed printed no `test result:` line.
+    results.partial = !together && results_seen < binaries.len();
+    block.flush(&mut results);
     (seen || !results.failed.is_empty()).then_some(results)
 }
 
@@ -582,6 +1139,223 @@ mod tests {
             ]
         );
         assert!(parse_junit("not xml").is_none());
+    }
+
+    #[test]
+    fn a_reason_leaves_out_what_changes_between_runs_and_keeps_values() {
+        let roots = vec!["/home/me/repo".to_owned(), "C:\\Users\\me\\repo".to_owned()];
+        let same = |a: &str, b: &str| {
+            assert_eq!(
+                normalise_reason_line(a, &roots),
+                normalise_reason_line(b, &roots),
+                "{a} | {b}"
+            );
+        };
+        let differ = |a: &str, b: &str| {
+            assert_ne!(
+                normalise_reason_line(a, &roots),
+                normalise_reason_line(b, &roots)
+            );
+        };
+        same("took 12ms", "took 1.5 s");
+        same(
+            "at 14:08:27 on 2026-11-13T10:22:33Z",
+            "at 09:01:02 on 2026-11-14T08:00:01Z",
+        );
+        same(
+            "logged 2026-11-13 10:22:33.120",
+            "logged 2026-11-14 08:00:01.5",
+        );
+        differ(
+            "expected '10:30' to be '10:00'",
+            "expected '25:99' to be '10:00'",
+        );
+        differ("connect 127.0.0.1:5432", "connect 127.0.0.1:6379");
+        differ("call 555-123-4567", "call 555-123-9999");
+        differ("found 2 h1", "found 3 h1");
+        differ("expected 2026-11-13", "expected 2026-11-14");
+        same(
+            "open 'C:\\\\Users\\\\me\\\\repo\\\\x.json'",
+            "open 'C:\\Users\\me\\repo\\x.json'",
+        );
+        same(
+            "open '/home/me/repo/data.json'",
+            "open 'c:\\users\\me\\repo/data.json'",
+        );
+        same("src/a.test.ts:5:15 failed", "src/a.test.ts:12:3 failed");
+        same("File x.py, line 12", "File x.py, line 120");
+        same("object at 0x7f3a2b", "object at 0x10ff00");
+        let temp = std::env::temp_dir();
+        same(
+            &format!(
+                "open '{}'",
+                temp.join("vitest-abc123").join("g.json").display()
+            ),
+            &format!(
+                "open '{}'",
+                temp.join("vitest-zzz9").join("g.json").display()
+            ),
+        );
+        differ("expected 3 to be 4", "expected 5 to be 4");
+        differ(
+            "TypeError: x is not a function",
+            "AssertionError: expected 3 to be 4",
+        );
+        differ("{ a: 1 }", "{ a: 2 }");
+    }
+
+    #[test]
+    fn each_runner_gives_each_failing_test_its_reason() {
+        let vitest = "\
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/math.test.ts > math > adds
+ FAIL  src/math.test.ts > math > adds again
+AssertionError: expected 3 to be 4
+ ❯ src/math.test.ts:5:15
+      5|     expect(x).toBe(4);
+⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+ FAIL  src/math.test.ts > math > divides
+TypeError: x is not a function
+      3| let x;
+ Test Files  1 failed (1)
+      Tests  3 failed | 1 passed (4)
+";
+        let mut results = parse_vitest(vitest).unwrap();
+        assert_eq!(
+            results.reasons["src/math.test.ts > math > adds"],
+            vec!["AssertionError: expected 3 to be 4".to_owned()]
+        );
+        assert_eq!(
+            results.reasons["src/math.test.ts > math > adds again"],
+            results.reasons["src/math.test.ts > math > adds"]
+        );
+        assert_eq!(
+            results.reasons["src/math.test.ts > math > divides"],
+            vec!["TypeError: x is not a function".to_owned()]
+        );
+        results.hash_reasons(&[]);
+        assert!(results
+            .reasons
+            .values()
+            .flatten()
+            .all(|line| line.len() == 16));
+
+        let unhandled = "\
+⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯
+Vitest caught 1 unhandled error during the test run.
+Error: boom
+ ❯ src/a.ts:1:1
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+";
+        let results = parse_vitest(unhandled).unwrap();
+        assert!(results.failed.contains(UNHANDLED_ERRORS));
+        assert_eq!(
+            results.reasons[UNHANDLED_ERRORS],
+            vec![
+                "Vitest caught 1 unhandled error during the test run.".to_owned(),
+                "Error: boom".to_owned()
+            ]
+        );
+        // A second error, after the first one's stack, is part of the reason.
+        let two = unhandled.replace(
+            " Test Files",
+            "TypeError: x is not a function\n ❯ src/b.ts:2:2\n Test Files",
+        );
+        assert!(parse_vitest(&two).unwrap().reasons[UNHANDLED_ERRORS]
+            .contains(&"TypeError: x is not a function".to_owned()));
+        // Every coverage line counts, and two runs in one step are partial.
+        let coverage = "ERROR: Coverage for lines (50%) does not meet global threshold (80%)\nERROR: Coverage for functions (40%) does not meet global threshold (80%)\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n";
+        let results = parse_vitest(coverage).unwrap();
+        assert_eq!(results.reasons[COVERAGE_THRESHOLD].len(), 2);
+        assert!(results.partial);
+        assert!(!parse_vitest(vitest).unwrap().partial);
+        let jest = "\
+FAIL src/math.test.js
+  ● math › adds
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 4
+    Received: 3
+
+      3 | test('adds', () => {
+    > 4 |   expect(1 + 2).toBe(4);
+        |                 ^
+
+      at Object.toBe (src/math.test.js:4:17)
+
+Tests:       1 failed, 3 passed, 4 total
+Jest: \"global\" coverage threshold for lines (80%) not met: 50%
+";
+        let results = parse_jest(jest).unwrap();
+        assert_eq!(
+            results.reasons["src/math.test.js › math › adds"],
+            vec![
+                "expect(received).toBe(expected) // Object.is equality".to_owned(),
+                "Expected: 4".to_owned(),
+                "Received: 3".to_owned(),
+            ]
+        );
+        assert!(results.failed.contains(COVERAGE_THRESHOLD));
+
+        let junit = r#"<testsuite><testcase classname="tests.test_a" name="test_x" file="tests/test_a.py"><failure message="AssertionError: assert 3 == 4">trace</failure></testcase></testsuite>"#;
+        let results = TestRunner::Pytest
+            .read(
+                "==== test session starts ====\nFAIL Required test coverage of 80% not reached. Total coverage: 61.20%\n",
+                "",
+                Some(junit),
+            )
+            .unwrap();
+        assert!(results.failed.contains(COVERAGE_THRESHOLD));
+        assert!(!results.partial);
+        let twice = TestRunner::Pytest
+            .read(
+                "== test session starts ==\n== test session starts ==\n",
+                "",
+                Some(junit),
+            )
+            .unwrap();
+        assert!(twice.partial);
+        assert_eq!(
+            results.reasons["tests/test_a.py::test_x"],
+            vec!["AssertionError: assert 3 == 4".to_owned()]
+        );
+
+        let cargo_out = "\
+running 1 test
+test tests::a ... FAILED
+
+failures:
+
+---- tests::a stdout ----
+
+thread 'tests::a' panicked at src/lib.rs:10:5:
+assertion failed: 1 == 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::a
+
+test result: FAILED. 0 passed; 1 failed
+";
+        let cargo_err = "     Running unittests src/lib.rs (target/debug/deps/core-1a2b)\n";
+        // A second binary that crashed before its results: partial.
+        let crashed = format!(
+            "{cargo_err}     Running tests/api.rs (target/debug/deps/api-9f8e)\nerror: test failed, to rerun pass `--test api`\n\nCaused by:\n  process didn't exit successfully (signal: 11, SIGSEGV: invalid memory reference)\n"
+        );
+        assert!(parse_cargo(cargo_out, &crashed).unwrap().partial);
+        let results = parse_cargo(cargo_out, cargo_err).unwrap();
+        assert!(!results.partial);
+        assert_eq!(
+            results.reasons["core::tests::a"],
+            vec![
+                "thread 'tests::a' panicked at src/lib.rs:10:5:".to_owned(),
+                "assertion failed: 1 == 2".to_owned(),
+            ]
+        );
     }
 
     #[test]

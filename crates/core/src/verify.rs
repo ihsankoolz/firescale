@@ -23,7 +23,7 @@ use crate::graph::{project_id, Affected, Graph};
 use crate::process::{run_tree, Ending, Watch};
 use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT};
 use crate::runs::{RunRecord, RunningStep};
-use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
+use crate::setup::{locked_install, refused_service, service_down, setup_problem, SetupProblem};
 use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
 
 /// Version of the `fscale verify --json` format.
@@ -42,7 +42,12 @@ pub const DOCTOR_HINT: &str =
     "Run `fscale doctor` to check this machine's tools, env variables, dependencies and services in one go.";
 
 /// How long a step may run when the config sets no limit (ADR 0024).
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// How long a step may print nothing new before it is stopped, unless the
+/// config says otherwise (ADR 0043): a step that keeps reporting results
+/// runs on, up to [`DEFAULT_TIMEOUT`].
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// How long the base run of blame-aware verify may take in all, when the
 /// config sets no budget (ADR 0037).
@@ -102,9 +107,17 @@ pub struct VerifyConfig {
     pub fail_on_skipped: bool,
     /// Settings per project, keyed by the project's folder.
     pub projects: BTreeMap<String, ProjectOverride>,
-    /// `verify.timeout`: the limit of every step, unless a more specific
-    /// one is set. [`DEFAULT_TIMEOUT`] when absent.
+    /// `verify.timeout`: the overall limit of every step, unless a more
+    /// specific one is set. [`DEFAULT_TIMEOUT`] when absent.
     pub timeout: Option<Limit>,
+    /// `verify.idleTimeout`: how long a step may print nothing new before it
+    /// is stopped (ADR 0043). [`DEFAULT_IDLE_TIMEOUT`] when absent. Not used
+    /// for a step whose own limit is set by step or by project.
+    pub idle_timeout: Option<Limit>,
+    /// `verify.labelFixed: true`: a step that passes on the head also runs
+    /// on the base commit, so it can be labelled `fixed` (ADR 0040). Off by
+    /// default: only steps that did not pass run on the base (ADR 0043).
+    pub label_fixed: bool,
     /// `verify.<step>.timeout`: the limit of that step, at the root and in
     /// every project.
     pub step_timeouts: BTreeMap<String, Limit>,
@@ -141,6 +154,25 @@ impl VerifyConfig {
             None => Some(DEFAULT_ERRORS_BEFORE_STOP),
             Some(0) => None,
             Some(count) => Some(count),
+        }
+    }
+
+    /// How long a step may print nothing new before it is stopped, or
+    /// `None` for no such limit. A limit set for the step or its project
+    /// wins: then that limit is the only one, as in ADR 0024 (ADR 0043).
+    #[must_use]
+    pub fn idle_for(&self, project: Option<&str>, step: &str) -> Option<Duration> {
+        let project_settings = project.and_then(|folder| self.project_timeouts.get(folder));
+        let own = project_settings
+            .is_some_and(|settings| settings.steps.contains_key(step) || settings.all.is_some())
+            || self.step_timeouts.contains_key(step);
+        if own {
+            return None;
+        }
+        match self.idle_timeout {
+            None => Some(DEFAULT_IDLE_TIMEOUT),
+            Some(Limit::After(limit)) => Some(limit),
+            Some(Limit::Off) => None,
         }
     }
 
@@ -192,7 +224,8 @@ pub struct ProjectPlan {
     pub kind: Option<String>,
     pub steps: Vec<(String, Planned)>,
     /// The command that installs the project's dependencies, named when a
-    /// step fails because the environment is not set up.
+    /// step fails because the environment is not set up. With a lockfile it
+    /// is the form that does not rewrite it (`npm ci`, `setup::locked_install`).
     pub install: Option<String>,
     /// True for a Python project for which no virtual environment was
     /// found, so its commands use `python` from the PATH (ADR 0022).
@@ -211,7 +244,8 @@ pub struct VerifyPlan {
     pub projects: Vec<ProjectPlan>,
     /// From `verify.failOnSkipped`.
     pub fail_on_skipped: bool,
-    /// The command that installs the root's dependencies, if known.
+    /// The command that installs the root's dependencies, if known, in the
+    /// form that does not rewrite a lockfile (`setup::locked_install`).
     pub install: Option<String>,
     /// True when the root is a Python project with no virtual environment.
     pub python_from_path: bool,
@@ -486,7 +520,12 @@ fn runs_by_itself(project: &Project, covered: &str) -> bool {
 /// The steps of the projects that run by themselves, and of any other folder
 /// named under `verify.projects`. `covered` is the kind of project the
 /// root's own commands run.
-fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec<ProjectPlan> {
+fn plan_projects(
+    root: &Path,
+    facts: &RepoFacts,
+    config: &VerifyConfig,
+    covered: &str,
+) -> Vec<ProjectPlan> {
     let mut plans: Vec<ProjectPlan> = Vec::new();
     let mut discovered: Vec<&Project> = facts
         .projects
@@ -538,7 +577,9 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                 root: project.root.clone(),
                 kind: Some(project.kind.clone()),
                 steps,
-                install: project.commands.install.clone(),
+                install: project.commands.install.as_deref().map(|install| {
+                    locked_install(install, root, &project_dir(root, &project.root))
+                }),
                 python_from_path: detected_runs && from_path(project),
             });
         }
@@ -691,7 +732,7 @@ pub fn plan_verify(
         "cargo" => "rust",
         other => other,
     };
-    let projects = plan_projects(facts, config, covered);
+    let projects = plan_projects(root, facts, config, covered);
     // With no commands of its own, the root only lists what the config sets
     // for it, as long as a project has a step that runs or is named as
     // skipped. Projects that are all turned off do not make the root silent.
@@ -718,7 +759,9 @@ pub fn plan_verify(
         .projects
         .iter()
         .find(|project| project.root == "." && project.kind == covered);
-    let install = covering.and_then(|project| project.commands.install.clone());
+    let install = covering
+        .and_then(|project| project.commands.install.as_deref())
+        .map(|install| locked_install(install, root, root));
     let python_from_path = covering.is_some_and(from_path);
     VerifyPlan {
         runner: if all_from_config {
@@ -848,6 +891,15 @@ pub struct StepReport {
     /// the shared cache's record (ADR 0041). Not in JSON.
     #[serde(skip)]
     pub output_digest: Option<String>,
+    /// For a step that passed now: why its pass was not kept for the next
+    /// run, or could not be looked up (ADR 0043). Shown without
+    /// `FSCALE_LOG`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_cached: Option<String>,
+    /// For a step that timed out and printed a percent done: how far it
+    /// got and about how long it had left (ADR 0043). Not in JSON.
+    #[serde(skip)]
+    pub estimate: Option<String>,
     /// The failure's signature: one short hash per normalised line of its
     /// output (ADR 0037). A failure is `pre-existing` only when its
     /// signature on the head is contained in the base's. Not in JSON.
@@ -1400,18 +1452,27 @@ struct Unit<'a> {
     install: Option<&'a str>,
     /// False when `--affected` found that no change reaches this unit.
     runs: bool,
+    /// For a step of the base run: the head's root, which the head's
+    /// linked dependency folders resolve to, so it is normalised in test
+    /// reasons too (ADR 0043).
+    head_root: Option<&'a Path>,
 }
 
 /// The next step when the environment is not set up: the command that
 /// starts the services, the install command, or nothing when the summary
 /// can only say what to install by hand.
-fn setup_fix(problem: &crate::setup::SetupProblem, install: Option<&str>) -> Option<String> {
+fn setup_fix(
+    problem: &crate::setup::SetupProblem,
+    install: Option<&str>,
+    root: &Path,
+    dir: &Path,
+) -> Option<String> {
     if problem.missing_service.is_some() {
         return problem.start_services.clone();
     }
     match (&problem.missing_program, install) {
         (Some(_), _) | (None, None) => None,
-        (None, Some(install)) => Some(install.to_owned()),
+        (None, Some(install)) => Some(crate::setup::install_for(problem, install, root, dir)),
     }
 }
 
@@ -1779,6 +1840,12 @@ fn environment(command: &mut Command, config: &VerifyConfig, base_run: bool) {
         command.env("FSCALE_BASE_RUN", "1");
     }
     command.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+    // Python holds output in a buffer when it writes to a pipe, so a suite
+    // that is making progress would look silent to the idle limit
+    // (ADR 0043). A value the environment already has is kept.
+    if std::env::var_os("PYTHONUNBUFFERED").is_none() {
+        command.env("PYTHONUNBUFFERED", "1");
+    }
     let ci_set = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
     if !config.no_ci_variable && !ci_set {
         command.env("CI", "1");
@@ -1811,6 +1878,9 @@ fn run_step(
         }
         None => timeout,
     };
+    // A step that keeps printing runs on; one that goes quiet for this
+    // long is stopped (ADR 0043).
+    let idle = options.config.idle_for(project, name);
     options.say(&format!("{place}: started: {command}"));
     let mut shell = shell(command);
     shell.current_dir(&dir);
@@ -1831,11 +1901,15 @@ fn run_step(
         shell.env("PYTEST_ADDOPTS", crate::pertest::addopts(&own, junit));
     }
     let spawned = Mutex::new(None);
-    let heartbeat = |elapsed: Duration, last: Option<&str>| {
-        // `last output: ...`, or a running count of tests (ADR 0025).
+    let heartbeat = |elapsed: Duration, last: Option<&str>, percent: Option<u8>| {
+        // `last output: ...`, or a running count of tests (ADR 0025), and
+        // how much is left when the runner prints a percent (ADR 0043).
         let last = last.map_or_else(String::new, |doing| format!("; {doing}"));
+        let left = percent
+            .map(|percent| format!("; {}", progress_estimate(elapsed, percent)))
+            .unwrap_or_default();
         options.say(&format!(
-            "{place}: still running after {}{last}",
+            "{place}: still running after {}{left}{last}",
             format_duration(elapsed)
         ));
     };
@@ -1880,6 +1954,7 @@ fn run_step(
                     missing_program: None,
                     missing_service: None,
                     start_services: None,
+                    missing_package: None,
                 },
                 EarlyKind::NoPass,
             ));
@@ -1895,7 +1970,7 @@ fn run_step(
         } else {
             "the step runs on because verify.stopWhenServiceDown is false"
         };
-        let start = setup_fix(&problem, unit.install)
+        let start = setup_fix(&problem, unit.install, unit.root, &dir)
             .map_or_else(String::new, |fix| format!("; start it with: {fix}"));
         options.say(&format!(
             "{place}: {label}, seen while running: {service} is not running ({evidence}){start}; {then}"
@@ -1905,6 +1980,7 @@ fn run_step(
     };
     let watch = Watch {
         timeout,
+        idle,
         stop: options.stop,
         heartbeat: options.heartbeat,
         on_heartbeat: &heartbeat,
@@ -1951,6 +2027,8 @@ fn run_step(
         failed_tests: Vec::new(),
         test_results: None,
         output_digest: None,
+        not_cached: None,
+        estimate: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -1978,6 +2056,15 @@ fn run_step(
         let stdout = strip_ansi(&String::from_utf8_lossy(&finished.stdout));
         let stderr = strip_ansi(&String::from_utf8_lossy(&finished.stderr));
         report.test_results = runner.read(&stdout, &stderr, xml.as_deref());
+        // Each failing test's reason, as hashes of its normalised lines.
+        if let Some(results) = report.test_results.as_mut() {
+            let mut roots = crate::pertest::roots_of(unit.root);
+            if let Some(head) = unit.head_root {
+                roots.extend(crate::pertest::roots_of(head));
+                roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
+            }
+            results.hash_reasons(&roots);
+        }
         // A run that stopped at its first failure may hide a later new one:
         // never evidence for pre-existing (ADR 0039).
         if !matches!(finished.ending, Ending::Exited(Some(0)))
@@ -2039,9 +2126,10 @@ fn run_step(
         let mut again = self::shell(&probe);
         again.current_dir(&dir);
         environment(&mut again, options.config, options.base_run);
-        let quiet = |_: Duration, _: Option<&str>| {};
+        let quiet = |_: Duration, _: Option<&str>, _: Option<u8>| {};
         let watch = Watch {
             timeout: Some(FIRST_ERROR_LIMIT),
+            idle: None,
             stop: options.stop,
             heartbeat: options.heartbeat,
             on_heartbeat: &quiet,
@@ -2085,7 +2173,7 @@ fn run_step(
             report.output_tail = tail(&finished.stdout, &finished.stderr);
             match early_seen {
                 Some((problem, EarlyKind::AllErrored)) => {
-                    let start = setup_fix(&problem, unit.install)
+                    let start = setup_fix(&problem, unit.install, unit.root, &dir)
                         .map_or_else(String::new, |fix| format!(" ({fix})"));
                     let service = problem.missing_service.clone().unwrap_or_default();
                     if let Some(found) = first_error(&mut report) {
@@ -2095,7 +2183,7 @@ fn run_step(
                             "{command} (stopped early after {took}; its first error shows {})",
                             found.reason
                         );
-                        report.fix = setup_fix(&found, unit.install);
+                        report.fix = setup_fix(&found, unit.install, unit.root, &dir);
                         options.say(&format!(
                             "{place}: SETUP NEEDED after {took} (stopped early)"
                         ));
@@ -2114,7 +2202,7 @@ fn run_step(
                             "{command} (stopped early after {took}; its first error shows {})",
                             found.reason
                         );
-                        report.fix = setup_fix(&found, unit.install);
+                        report.fix = setup_fix(&found, unit.install, unit.root, &dir);
                         options.say(&format!(
                             "{place}: SETUP NEEDED after {took} (stopped early)"
                         ));
@@ -2142,7 +2230,7 @@ fn run_step(
                     report.status = StepStatus::SetupNeeded;
                     report.detail =
                         format!("{command} (stopped early after {took}): {}", problem.reason);
-                    report.fix = setup_fix(&problem, unit.install);
+                    report.fix = setup_fix(&problem, unit.install, unit.root, &dir);
                     options.say(&format!(
                         "{place}: SETUP NEEDED after {took} (stopped early)"
                     ));
@@ -2157,31 +2245,50 @@ fn run_step(
             return Ok(report);
         }
         Ending::TimedOut => {
-            let limit = timeout.map_or_else(String::new, format_limit);
+            // Stopped for printing nothing new, or at the overall limit.
+            let (what, limit, limit_ms, key) = if finished.silent {
+                let idle_text = idle.map_or_else(String::new, format_limit);
+                (
+                    format!("no new output for {idle_text}, stopped after {took}"),
+                    idle_text,
+                    idle,
+                    "verify.idleTimeout".to_owned(),
+                )
+            } else {
+                let limit = timeout.map_or_else(String::new, format_limit);
+                (
+                    format!("no result within {limit}"),
+                    limit,
+                    timeout,
+                    timeout_key,
+                )
+            };
             report.status = StepStatus::TimedOut;
-            report.detail = format!("{command} (no result within {limit})");
+            report.estimate = finished
+                .percent
+                .map(|percent| progress_estimate(finished.duration, percent));
+            let estimate = report
+                .estimate
+                .as_ref()
+                .map_or_else(String::new, |estimate| format!("; {estimate}"));
+            report.detail = format!("{command} ({what}{estimate})");
             report.output_tail = tail(&finished.stdout, &finished.stderr);
             report.timeout_ms =
-                timeout.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX));
-            report.timeout_key = Some(timeout_key);
+                limit_ms.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX));
+            report.timeout_key = Some(key);
             // A step that hangs often hangs on the environment, such as a
             // database that is not running: say so when the output shows it.
             if let Some(problem) =
                 setup_problem(&text(), None, unit.root, &dir).or_else(|| seen_early.clone())
             {
-                report.detail = format!(
-                    "{command} (no result within {limit}; the output shows {})",
-                    problem.reason
-                );
-                report.fix = setup_fix(&problem, unit.install);
+                report.detail = format!("{command} ({what}; the output shows {})", problem.reason);
+                report.fix = setup_fix(&problem, unit.install, unit.root, &dir);
             } else if let Some(found) = first_error(&mut report) {
                 // The first error names the environment: setup needed.
                 report.status = StepStatus::SetupNeeded;
-                report.detail = format!(
-                    "{command} (no result within {limit}; its first error shows {})",
-                    found.reason
-                );
-                report.fix = setup_fix(&found, unit.install);
+                report.detail =
+                    format!("{command} ({what}; its first error shows {})", found.reason);
+                report.fix = setup_fix(&found, unit.install, unit.root, &dir);
             }
             options.say(&format!("{place}: TIMED OUT after {took} (limit {limit})"));
             return Ok(report);
@@ -2212,7 +2319,7 @@ fn run_step(
         Some(problem) => {
             report.status = StepStatus::SetupNeeded;
             report.detail = format!("{command} ({exit}): {}", problem.reason);
-            report.fix = setup_fix(&problem, unit.install);
+            report.fix = setup_fix(&problem, unit.install, unit.root, &dir);
             if report.fix.is_none() {
                 if let Some(program) = &problem.missing_program {
                     report.detail.push_str(&format!(
@@ -2229,6 +2336,18 @@ fn run_step(
         }
     }
     Ok(report)
+}
+
+/// How far a step got, from the percent its runner printed: `46% done,
+/// about 10m 34s left at this pace` (ADR 0043).
+fn progress_estimate(elapsed: Duration, percent: u8) -> String {
+    match crate::activity::time_left(elapsed, percent) {
+        Some(left) => format!(
+            "{percent}% done, about {} left at this pace",
+            format_duration(left)
+        ),
+        None => format!("{percent}% done"),
+    }
 }
 
 /// How a project's folder is written in a sentence.
@@ -2297,6 +2416,8 @@ fn run_unit(
                 failed_tests: Vec::new(),
                 test_results: None,
                 output_digest: None,
+                not_cached: None,
+                estimate: None,
             })
             .collect());
     }
@@ -2325,6 +2446,8 @@ fn run_unit(
             failed_tests: Vec::new(),
             test_results: None,
             output_digest: None,
+            not_cached: None,
+            estimate: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2431,6 +2554,7 @@ pub(crate) fn run_again(
         project,
         install: project.and_then(|project| project.install.as_deref()),
         runs: true,
+        head_root: None,
     };
     run_step(&unit, name, command, &again)
 }
@@ -2440,6 +2564,7 @@ pub(crate) fn run_again(
 /// more time than is left before `deadline` (ADR 0037).
 pub(crate) fn run_base_step(
     root: &Path,
+    head_root: &Path,
     project: Option<&ProjectPlan>,
     name: &str,
     command: &str,
@@ -2463,6 +2588,7 @@ pub(crate) fn run_base_step(
         project,
         install: project.and_then(|project| project.install.as_deref()),
         runs: true,
+        head_root: Some(head_root),
     };
     run_step(&unit, name, command, &base)
 }
@@ -2489,7 +2615,11 @@ fn cached_or_run(
         Ok(key) => key,
         Err(reason) => {
             cache.note(format!("cache: not cached {place}: {reason}"));
-            return run_step(unit, name, command, options);
+            let mut report = run_step(unit, name, command, options)?;
+            if report.status == StepStatus::Passed {
+                report.not_cached = Some(reason);
+            }
+            return Ok(report);
         }
     };
     if let Some(entry) = cache.hit(&key) {
@@ -2537,16 +2667,18 @@ fn cached_or_run(
             failed_tests: Vec::new(),
             test_results: None,
                 output_digest: None,
+                not_cached: None,
+                estimate: None,
         });
     }
     let ran_at = now_secs();
-    let report = run_step(unit, name, command, options)?;
+    let mut report = run_step(unit, name, command, options)?;
     if report.status == StepStatus::Passed {
         cache.note(format!(
             "cache: miss {place}{}",
             if cache.reads() { "" } else { " (--no-cache)" }
         ));
-        cache.remember(
+        report.not_cached = cache.remember(
             folder,
             kind,
             &key,
@@ -2625,6 +2757,8 @@ pub fn run_verify_with(
         failed_tests: Vec::new(),
         test_results: None,
         output_digest: None,
+        not_cached: None,
+        estimate: None,
     }];
     let check_failed = !check.ok && !options.every_step;
 
@@ -2638,6 +2772,7 @@ pub fn run_verify_with(
                 .affected
                 .as_ref()
                 .is_none_or(|affected| affected.runs(None)),
+            head_root: None,
         },
     ))
     .chain(plan.projects.iter().map(|project| {
@@ -2651,6 +2786,7 @@ pub fn run_verify_with(
                     .affected
                     .as_ref()
                     .is_none_or(|affected| affected.runs(Some(project))),
+                head_root: None,
             },
         )
     }))
@@ -3204,6 +3340,104 @@ fn affected_intro(affected: &AffectedReport) -> String {
     }
 }
 
+/// Why a step needs setup, as its detail says it after the command:
+/// `cmd (exit 2): <reason>`, `cmd (stopped early after 3s): <reason>`, or
+/// `cmd (stopped early after 3s; its first error shows <reason>)`. Without
+/// the timings, so projects with the same problem have the same reason.
+fn setup_reason<'a>(detail: &'a str, command: &str) -> Option<&'a str> {
+    let rest = detail.strip_prefix(command)?.strip_prefix(" (")?;
+    let close = rest.find(')')?;
+    if let Some(reason) = rest[close..].strip_prefix("): ") {
+        return Some(reason).filter(|reason| !reason.is_empty());
+    }
+    let inside = &rest[..close];
+    for marker in ["; its first error shows ", "; the output shows "] {
+        if let Some(at) = inside.find(marker) {
+            // The reason itself can hold brackets: up to the detail's last one.
+            let reason = rest[at + marker.len()..].strip_suffix(')')?;
+            return Some(reason).filter(|reason| !reason.is_empty());
+        }
+    }
+    None
+}
+
+/// The setup-needed steps that share their reason with another one, as
+/// groups of indexes into `report.steps`, in step order (ADR 0022's text,
+/// printed once per reason).
+fn shared_setup_reasons(report: &VerifyReport) -> Vec<(&str, Vec<usize>)> {
+    let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (index, step) in report.steps.iter().enumerate() {
+        if step.status != StepStatus::SetupNeeded || step.label.is_some() {
+            continue;
+        }
+        let Some(reason) = step
+            .command
+            .as_deref()
+            .and_then(|command| setup_reason(&step.detail, command))
+        else {
+            continue;
+        };
+        match groups.iter_mut().find(|(shared, _)| *shared == reason) {
+            Some((_, members)) => members.push(index),
+            None => groups.push((reason, vec![index])),
+        }
+    }
+    groups.retain(|(_, members)| members.len() > 1);
+    groups
+}
+
+/// One block for several steps that need the same setup: the reason once,
+/// then each step with its own setup command and the command to run again.
+/// Only the first step's last lines are shown; `--json` has every step's.
+fn format_setup_group(out: &mut String, report: &VerifyReport, reason: &str, members: &[usize]) {
+    let steps: Vec<&StepReport> = members.iter().map(|&index| &report.steps[index]).collect();
+    let place = |step: &StepReport| {
+        step.project.as_ref().map_or_else(String::new, |project| {
+            format!(" in {}", place_name(project))
+        })
+    };
+    let first = steps[0];
+    let note = format!(
+        " (the first of {} with this reason; `fscale verify --json` has the output of each)",
+        steps.len()
+    );
+    if !first.output_tail.is_empty() {
+        out.push_str(&format!(
+            "\nLast lines of {}{}{note}:\n",
+            first.name,
+            place(first)
+        ));
+        for line in &first.output_tail {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    if !first.first_error.is_empty() {
+        out.push_str(&format!(
+            "\nFirst error of {}{}{note}:\n",
+            first.name,
+            place(first)
+        ));
+        for line in &first.first_error {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    out.push_str(&format!(
+        "\nSetup needed for {} steps, all for one reason: {reason}. The environment is not ready, so this is not a problem in the code. Do not change code for it.\n",
+        steps.len()
+    ));
+    for step in steps {
+        let place = place(step);
+        out.push_str(&format!("- {}{place}\n", step.name));
+        match &step.fix {
+            Some(fix) => out.push_str(&format!("  Set it up{place}: {fix}\n")),
+            None => out.push_str("  Set up what the reason names, or ask a person to.\n"),
+        }
+        if let Some(command) = &step.command {
+            out.push_str(&format!("  Then run again{place}: {command}\n"));
+        }
+    }
+}
+
 /// Renders the compact summary. No durations, so the text is stable.
 #[must_use]
 pub fn format_verify_human(report: &VerifyReport) -> String {
@@ -3276,7 +3510,22 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         .and_then(|base| base.commit.as_deref())
         .map(|commit| commit[..commit.len().min(7)].to_owned())
         .unwrap_or_default();
-    for failure in report.steps.iter().filter(|step| blocks(step.status)) {
+    let shared = shared_setup_reasons(report);
+    for (index, failure) in report
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| blocks(step.status))
+    {
+        // Several steps with the same setup problem: one block, where the
+        // first of them is.
+        if let Some((reason, members)) = shared.iter().find(|(_, members)| members.contains(&index))
+        {
+            if members[0] == index {
+                format_setup_group(&mut out, report, reason, members);
+            }
+            continue;
+        }
         let place = failure
             .project
             .as_ref()
@@ -3380,10 +3629,22 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             let limit = failure
                 .timeout_ms
                 .map_or_else(String::new, |ms| format_limit(Duration::from_millis(ms)));
-            out.push_str(&format!(
-                "\nTimed out: {}{place} gave no result within {limit}, so it was stopped with every process it started.\n",
-                failure.name
-            ));
+            let silent = failure.timeout_key.as_deref() == Some("verify.idleTimeout");
+            let estimate = failure
+                .estimate
+                .as_ref()
+                .map_or_else(String::new, |estimate| format!(" It was {estimate}."));
+            if silent {
+                out.push_str(&format!(
+                    "\nTimed out: {}{place} printed nothing new for {limit}, so it was stopped with every process it started.{estimate}\n",
+                    failure.name
+                ));
+            } else {
+                out.push_str(&format!(
+                    "\nTimed out: {}{place} gave no result within {limit}, so it was stopped with every process it started.{estimate}\n",
+                    failure.name
+                ));
+            }
             if let Some(fix) = &failure.fix {
                 out.push_str(&format!(
                     "Its output shows the environment is not ready. Set it up{place}: {fix}\n"
@@ -3497,6 +3758,26 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             format_duration(Duration::from_millis(cache.saved_ms)),
             if cache.hits == 1 { "it" } else { "they" },
         ));
+    }
+    // A pass that the next run cannot reuse, and why (ADR 0043).
+    let not_cached: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|step| step.status == StepStatus::Passed)
+        .filter_map(|step| {
+            step.not_cached.as_ref().map(|why| {
+                format!(
+                    "Not cached: {} passed, but the next run cannot reuse it: {why}.\n",
+                    step_place(step)
+                )
+            })
+        })
+        .collect();
+    if !not_cached.is_empty() {
+        out.push('\n');
+        for line in not_cached {
+            out.push_str(&line);
+        }
     }
     if report.result == VerifyResult::Stopped {
         out.push_str("\nStopped: verify was interrupted (Ctrl+C or a termination signal), and every command it had started was stopped. Steps marked STOPPED or not run did not finish; run fscale verify again to check them.\n");
@@ -4763,6 +5044,81 @@ mod tests {
     }
 
     #[test]
+    fn projects_with_the_same_setup_problem_share_one_block() {
+        let fixture = Fixture::new(
+            &[
+                ("a/x.txt", ""),
+                ("b/x.txt", ""),
+                ("c/x.txt", ""),
+                ("d/x.txt", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let jwt = say_and_exit("E   ModuleNotFoundError: No module named 'jwt'", 2);
+        let flask = say_and_exit("E   ModuleNotFoundError: No module named 'flask'", 2);
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                project("a", &[("test", &jwt)], Some("pip install -r a.txt")),
+                project("b", &[("test", &flask)], Some("pip install -r b.txt")),
+                project("c", &[("test", &jwt)], Some("pip install -r c.txt")),
+                project("d", &[("test", &jwt)], None),
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.result, VerifyResult::SetupNeeded);
+        let text = format_verify_human(&report);
+        // The reason once, then each project with its own commands.
+        let group = format!(
+            "\nSetup needed for 3 steps, all for one reason: the Python module 'jwt' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.\n- test in a\n  Set it up in a: pip install -r a.txt\n  Then run again in a: {jwt}\n- test in c\n  Set it up in c: pip install -r c.txt\n  Then run again in c: {jwt}\n- test in d\n  Set up what the reason names, or ask a person to.\n  Then run again in d: {jwt}\n"
+        );
+        assert!(text.contains(&group), "{text}");
+        assert_eq!(
+            text.matches("the Python module 'jwt' is not installed. The")
+                .count(),
+            1
+        );
+        // The last lines of the first one only.
+        assert!(
+            text.contains("\nLast lines of test in a (the first of 3 with this reason; `fscale verify --json` has the output of each):\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Last lines of test in c"), "{text}");
+        // A project with its own reason keeps today's layout.
+        assert!(
+            text.contains("\nSetup needed for test in b: the environment is not ready, so this is not a problem in the code. Do not change code for it.\nSet it up in b: pip install -r b.txt\nThen run again in b: "),
+            "{text}"
+        );
+        assert!(text.contains("Last lines of test in b:\n"), "{text}");
+        // The block comes where the first of its steps is: before b's.
+        assert!(text.find("- test in a").unwrap() < text.find("for test in b:").unwrap());
+        // The JSON still has every step with its own detail and fix.
+        let json = format_verify_json(&report);
+        assert_eq!(
+            json.matches("\"status\": \"setup-needed\"").count(),
+            4,
+            "{json}"
+        );
+        assert!(json.contains("\"fix\": \"pip install -r c.txt\""), "{json}");
+    }
+
+    #[test]
+    fn the_reason_of_a_setup_step_leaves_out_its_timings() {
+        for (detail, reason) in [
+            ("pytest -q (exit 2): the Python module 'jwt' is not installed", Some("the Python module 'jwt' is not installed")),
+            ("pytest -q (stopped early after 12s): could not connect to Redis on localhost:6379; the service is probably not running, so start it", Some("could not connect to Redis on localhost:6379; the service is probably not running, so start it")),
+            ("pytest -q (stopped early after 3m 2s; its first error shows could not log in to MySQL on localhost: password authentication failed (x))", Some("could not log in to MySQL on localhost: password authentication failed (x)")),
+            ("pytest -q (no result within 5m; its first error shows the package 'zod' is not installed)", Some("the package 'zod' is not installed")),
+            ("pytest -q (exit 2)", None),
+            ("other (exit 2): x", None),
+        ] {
+            assert_eq!(setup_reason(detail, "pytest -q"), reason, "{detail}");
+        }
+    }
+
+    #[test]
     fn plans_carry_each_projects_install_command() {
         let (fixture, facts) = course_facts();
         let plan = plan_verify(
@@ -4778,8 +5134,62 @@ mod tests {
             audit.install.as_deref(),
             Some("python -m pip install -r requirements-dev.txt")
         );
+        // The frontend has a package-lock.json: `npm install` would rewrite
+        // it, `npm ci` installs exactly what it says.
+        let frontend = plan.projects.last().unwrap();
+        assert_eq!(frontend.install.as_deref(), Some("npm ci"));
+        // Without the lockfile, the plain install.
+        std::fs::remove_file(fixture.root().join("frontend").join("package-lock.json")).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
         let frontend = plan.projects.last().unwrap();
         assert_eq!(frontend.install.as_deref(), Some("npm install"));
+    }
+
+    #[test]
+    fn the_setup_text_names_the_install_that_keeps_the_lockfile() {
+        // A pnpm project and a uv project, each with its lockfile.
+        let fixture = Fixture::new(
+            &[
+                ("web/package.json", r#"{"name":"web","scripts":{"lint":"eslint ."}}"#),
+                ("web/pnpm-lock.yaml", "lockfileVersion: '9.0'\n"),
+                (
+                    "api/pyproject.toml",
+                    "[project]\nname = \"api\"\nversion = \"0.1.0\"\n[dependency-groups]\ndev = [\"pytest\"]\n",
+                ),
+                ("api/uv.lock", "version = 1\n"),
+                ("api/tests/test_x.py", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        let install = |root: &str| {
+            plan.projects
+                .iter()
+                .find(|project| project.root == root)
+                .and_then(|project| project.install.clone())
+        };
+        assert_eq!(
+            install("web").as_deref(),
+            Some("pnpm install --frozen-lockfile")
+        );
+        assert_eq!(install("api").as_deref(), Some("uv sync --locked"));
+        // What facts records, and the rules write into AGENTS.md, is unchanged.
+        let web = facts.projects.iter().find(|p| p.root == "web").unwrap();
+        assert_eq!(web.commands.install.as_deref(), Some("pnpm install"));
     }
 
     #[test]

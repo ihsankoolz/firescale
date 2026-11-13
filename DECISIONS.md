@@ -27,6 +27,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 - **(M22) Laptops do not read the shared cache** (ADR 0041, PLAN "Later").
 - **(M22) The generated workflow runs `--jobs 2`**: edit it if your projects share a test database.
 - **(M22) I added `docs.github.com` to your Default cloud environment's allowed hosts** to read GitHub's docs. Remove it in the environment settings if you prefer.
+- **(0.4.0) Per-test results now decide `pre-existing` on their own** (ADR 0043), reversing ADR 0038's rule at your request. A failure beside the tests that the runner does not name as a test (other than Vitest's unhandled errors and coverage thresholds) could hide behind old test failures.
+- **(0.4.0) `fixed` is off unless `verify.labelFixed` is true**, since base runs of passing steps are gone by default. Say if you want it on for new repos.
+- **(0.4.0) A limit set for a step or a project turns the idle limit off for it** ("a per-project timeout still wins"). Say if you want both.
 - **(0.3.0) `fixed` costs a run in a worktree of the head**, in the same run as the base, and the pairing is kept (ADR 0040). A `fixed` label now appears only after a base run that a failure needed. A step that fails in any worktree (this repo's `pnpm test` without its build) is never `fixed`; say if you would rather drop the label than pay for the run.
 - **(M21) The stop hook judges only failures on the base**: a passing step never runs there in the hook, so `fixed` labels appear only in a full `fscale verify` (ADR 0039).
 - **(M21) A timed-out step is not run again** before it blocks: a second timeout would double the wait.
@@ -116,6 +119,32 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## 0.4.0 — fixes after running 0.3.0 on the course project
+
+**Built** (ADR 0043, `docs/verify.md`): the ten fixes listed under "Fixes in 0.4.0" in `PLAN.md`. In short: per-test labels decide first, with each failing test's reason compared after normalising what changes between runs; tool versions on Windows read as `cmd` starts the step, and a `Not cached:` line for every pass the next run cannot reuse; the head's `.env` files copied into the worktrees, never written anywhere; base runs only for steps that did not pass; time limits that follow progress (10 minutes quiet, 60 minutes in all); lint and typecheck on a missing package are setup needed; `npm ci` and the other frozen-lockfile installs in doctor and setup text; unowned images, documents, archives and media run no project and are in no project's cache key; one block per shared setup reason; each pass stored in the cache as soon as its step finishes, with one note when a config change alters every key. The version is 0.4.0 (`node scripts/bump-version.mjs 0.4.0`). No tag pushed.
+
+**Decided on your behalf** (all in ADR 0043):
+
+- **"Different reason"** means: both runs give the test a reason (its error's lines up to the first stack frame, without code excerpts) and the sorted hashes of the normalised lines differ. Normalised away: the run's folder and the worktree's, the temp folder and the random name in it, durations, clock times with seconds and date-times (not `10:30`, plain dates or addresses), doubled backslashes, line and column numbers after a file name, `line N`, memory addresses, spacing and order. Other numbers stay, so `expected 3 to be 4` and `expected 5 to be 4` differ. A reason missing on one side is not counted as different. Vitest's unhandled errors and an unmet coverage threshold count as failing tests of their own.
+- **`fixed` is off by default**, since item 5 takes away the base runs of passing steps that it needs. `verify.labelFixed: true` brings it back as ADR 0040 had it.
+- **Config keys for the time limits**: `verify.timeout` stays the overall limit (default now 60 minutes), and `verify.idleTimeout` is new (default 10 minutes). A limit set for a step or a project is that step's only limit, as before.
+- **Env files are copied, not linked**, though the request said link: the review showed a link lets a base step overwrite your real `.env`, which git cannot restore. The copies go with the worktree. Only a hash of their bytes enters the base result's key.
+- **Per-test results decide only when they cover the whole run** (one runner session, every cargo test binary reported); otherwise the M19 output guard applies. pytest-cov's threshold counts as a failing test.
+- **`npm ci` only for a package the lockfile already names**; a package just added gets `npm install` (and likewise for pnpm, Yarn, bun), since the frozen install refuses an out-of-date lockfile.
+- **A missing package or module never hides another type error**, and mypy's import-not-found is setup needed only for a module a dependency list names.
+- **Steps get `PYTHONUNBUFFERED=1`** (unless already set), so Python progress is not mistaken for silence.
+- **Each pass is stored as its step finishes**; a config change says so once, the first run after it.
+- **Lint setup detection** checks that the missing package is not installed and that some `package.json` lists it; mypy's import-not-found is setup needed too (it was not in your list; it is the typecheck of the Python services).
+- **Lockfile installs**: `uv sync --locked` (not `--frozen`), `pipenv sync --dev`, and `yarn install --immutable` for Yarn 2+; `poetry install` unchanged. The npm, pnpm, bun, uv and pipenv docs sites were blocked from this environment; the flags were checked against the installed tools' help.
+- **Not code or config**: images, PDFs and office documents, archives, video and audio, by extension (the list is in ADR 0043). `svg`, spreadsheets, `csv`, fonts, `key` and a bare `.gz` still run everything. In the step cache key only such files directly in the repo root, and the root's Markdown and licence, are left out; deeper ones stay in, since tests may read them by path. A requirements list is never inert.
+- **Grouped setup blocks** show only the first step's last lines; `--json` has every step's output.
+
+**Tests changed on purpose, none weakened:** the tests of ADR 0040's `fixed` set `labelFixed: true`; "makes no base run the second time..." and "counts a changed requirements list in the kept base result" count one base run fewer (lint passes on the head, so it no longer runs on the base; what they prove is unchanged); "never turns the old failures of a renamed test file into new ones" now expects `pre-existing` and exit 0, the behaviour item 1 asks for (the same test failing for the same reason); "blocks a failure introduced on the head ... labels a repaired one fixed" sets `labelFixed`, beside a new test for the default; the error for an unknown verify key lists the two new keys; `plans_carry_each_projects_install_command` expects `npm ci` for the course frontend (it has a `package-lock.json`); doctor's `bun install` became `bun install --frozen-lockfile` (its fixture has `bun.lock`). Snapshots gained the `Not cached:` lines and `notCached` fields where the stand-ins do not answer `--version`.
+
+**Independent review** before the pull request found nine problems, all fixed with tests (ADR 0043, "After the review"): per-test results could hide a failure outside the tests (two pytest runs in one step, a crashed cargo binary, pytest-cov), only the first error counted, the normaliser folded values such as `10:30` and IP addresses, a missing package hid type errors, a linked `.env` could be overwritten, Windows doubled backslashes and linked `node_modules` paths read as different, `npm ci` was suggested for a package the lockfile lacks, the cache exclusion was too wide, and Python output buffering looked like silence. The `npm ci` lint test's fixture now names the package in its lockfile, with a new case expecting `npm install` without it; one mypy test that this PR had added now uses a fixture with a requirements list.
+
+**Proof**: listed per item in ADR 0043; every "Done when" line of the request has a named test there.
 
 ## M23 — Tamper guard: design and the first language
 

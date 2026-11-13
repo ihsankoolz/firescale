@@ -350,7 +350,7 @@ pub fn renames_since(root: &Path, base: &BaseCommit) -> BTreeMap<String, String>
 
 // ------------------------------------------------------------ the store
 
-const STORE_FORMAT: u32 = 4;
+const STORE_FORMAT: u32 = 5;
 
 /// A base result kept for a later run with the same base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +369,12 @@ struct StoredBase {
     failed_tests: Option<Vec<String>>,
     #[serde(default)]
     passed_tests: u64,
+    /// Why each failing test failed: hashes of its error's normalised
+    /// lines, never the text (ADR 0043).
+    #[serde(default)]
+    failure_reasons: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    partial_tests: bool,
 }
 
 fn store_dir(root: &Path) -> PathBuf {
@@ -380,9 +386,12 @@ fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<Tes
     let stored: StoredBase = serde_json::from_str(&text).ok()?;
     let fresh = now_secs().saturating_sub(stored.ran_at) <= crate::stepcache::MAX_AGE.as_secs();
     (stored.format == STORE_FORMAT && stored.key == key && fresh).then(|| {
+        let reasons = stored.failure_reasons;
         let tests = stored.failed_tests.map(|failed| TestResults {
             failed: failed.into_iter().collect(),
             passed: stored.passed_tests,
+            reasons,
+            partial: stored.partial_tests,
         });
         (stored.status, stored.signature, tests)
     })
@@ -415,6 +424,8 @@ fn keep(
         signature: signature.to_vec(),
         failed_tests: tests.map(|tests| tests.failed.iter().cloned().collect()),
         passed_tests: tests.map_or(0, |tests| tests.passed),
+        failure_reasons: tests.map(|tests| tests.reasons.clone()).unwrap_or_default(),
+        partial_tests: tests.is_some_and(|tests| tests.partial),
     };
     let Ok(text) = serde_json::to_string_pretty(&stored) else {
         return;
@@ -435,6 +446,9 @@ pub struct Worktree {
     /// The links to the head's dependency folders, removed before the
     /// worktree so nothing can delete through them.
     links: std::sync::Mutex<Vec<PathBuf>>,
+    /// The head's env files copied in (ADR 0043), removed before the
+    /// worktree.
+    files: std::sync::Mutex<Vec<PathBuf>>,
     /// The firescale root inside it.
     pub root: PathBuf,
 }
@@ -484,6 +498,7 @@ impl Worktree {
             top,
             root: inner,
             links: std::sync::Mutex::new(Vec::new()),
+            files: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -498,10 +513,30 @@ impl Worktree {
         }
         made
     }
+
+    /// Copies the head's file `target` in at `link`, and remembers it.
+    fn copy_file(&self, target: &Path, link: &Path) -> bool {
+        let made = copy_file_in(target, link);
+        if made {
+            self.files
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(link.to_path_buf());
+        }
+        made
+    }
 }
 
 impl Drop for Worktree {
     fn drop(&mut self) {
+        for file in self
+            .files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
+            let _ = fs::remove_file(file);
+        }
         for link in self
             .links
             .lock()
@@ -616,6 +651,57 @@ fn link_dir(target: &Path, link: &Path) -> bool {
             .status()
             .is_ok_and(|status| status.success())
     }
+}
+
+/// Puts a copy of a file of the head into a worktree, removed with it. A
+/// copy, not a link: a base step that writes the file (`cp .env.example
+/// .env`, a test that saves a setting) must never change the head's own,
+/// which git cannot restore (ADR 0043). Its contents are never read here.
+fn copy_file_in(target: &Path, link: &Path) -> bool {
+    if link.exists() || fs::symlink_metadata(link).is_ok() || !target.is_file() {
+        return false;
+    }
+    if link.parent().is_none_or(|parent| !parent.is_dir()) {
+        return false;
+    }
+    fs::copy(target, link).is_ok()
+}
+
+/// The env files of the head that are copied into a worktree (ADR 0043).
+const ENV_FILES: [&str; 2] = [".env", ".env.local"];
+
+/// The head's env files (`.env`, `.env.local`) at the root and in each
+/// project's folder, by repo-relative path, with a hash of each one's
+/// bytes. Git ignores them, so a worktree has none, and tests that read
+/// one fail there for a reason of the worktree. Only the hash goes into a
+/// kept result's key; the contents are never logged, kept or shown.
+fn env_files(root: &Path, plan: &VerifyPlan) -> Vec<(String, String)> {
+    let mut folders: BTreeSet<String> = BTreeSet::new();
+    folders.insert(".".to_owned());
+    for project in &plan.projects {
+        folders.insert(project.root.clone());
+    }
+    let mut found = Vec::new();
+    for folder in folders {
+        for name in ENV_FILES {
+            let path = folder_of(root, Some(&folder)).join(name);
+            // A link to elsewhere is not followed.
+            let plain = fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+            if !plain {
+                continue;
+            }
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            let rel = if folder == "." {
+                name.to_owned()
+            } else {
+                format!("{folder}/{name}")
+            };
+            found.push((rel, blake3::hash(&bytes).to_hex()[..16].to_owned()));
+        }
+    }
+    found
 }
 
 /// Removes a link made by [`link_dir`], never what it points to.
@@ -831,9 +917,19 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     } else {
         dependency_folders(run.root)
     };
+    let envs = env_files(run.root, run.plan);
+    let env_part = envs
+        .iter()
+        .map(|(path, hash)| format!("{path}:{hash}"))
+        .collect::<Vec<_>>()
+        .join(",");
     let environment = match &run.options.config.base_install {
-        Some(install) => format!("install={install}"),
-        None => format!("links={}", links.join(",")),
+        Some(install) => format!("install={install};env={env_part}"),
+        None => format!("links={};env={env_part}", links.join(",")),
+    };
+    let links = WorktreeSetup {
+        folders: links,
+        env_files: envs.into_iter().map(|(path, _)| path).collect(),
     };
 
     // 1. What each step's base result is, where it is known without a run.
@@ -1063,6 +1159,35 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             }
             _ => None,
         };
+        // Tests that fail on both, for a different reason (ADR 0043): both
+        // runs say why, and the reasons differ once what changes between
+        // runs is taken out.
+        let other_reason: BTreeSet<String> = match (&head_tests, &outcome.tests) {
+            (Some(head), Some(base)) if per_test.is_some() => {
+                let mut base_reasons: BTreeMap<String, &Vec<String>> = BTreeMap::new();
+                for (id, lines) in &base.reasons {
+                    let single: BTreeSet<String> = std::iter::once(id.clone()).collect();
+                    for renamed in follow_renames(&single, &renames, &prefix) {
+                        base_reasons.insert(renamed, lines);
+                    }
+                }
+                head.failed
+                    .iter()
+                    .filter(|id| match (head.reasons.get(*id), base_reasons.get(*id)) {
+                        (Some(on_head), Some(on_base)) => on_head != *on_base,
+                        _ => false,
+                    })
+                    .cloned()
+                    .collect()
+            }
+            _ => BTreeSet::new(),
+        };
+        // Only when the head's per-test results cover the whole run (one
+        // run of the runner, every test binary reported): a failure outside
+        // them would otherwise hide behind old ones (ADR 0043).
+        let head_failed_any = head_tests
+            .as_ref()
+            .is_some_and(|head| !head.failed.is_empty() && !head.partial);
         if failed
             && outcome.status == BaseStatus::Failed
             && (head_tests.is_none() || outcome.tests.is_none())
@@ -1098,6 +1223,25 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
                     )),
                 ),
                 Some((new_tests, false, _)) if !new_tests.is_empty() => (Some(Label::New), None),
+                // Per-test results decide first (ADR 0043): every test that
+                // fails on the head fails on the base too, for the same
+                // reason.
+                Some((_, false, _)) if head_failed_any && other_reason.is_empty() => {
+                    (Some(Label::PreExisting), None)
+                }
+                Some((_, false, _)) if head_failed_any => {
+                    let shown: Vec<&str> = other_reason.iter().take(3).map(String::as_str).collect();
+                    let more = other_reason.len().saturating_sub(shown.len());
+                    (
+                        None,
+                        Some(format!(
+                            "{} on the base commit {short} too, but for a different reason: {}{}",
+                            if other_reason.len() == 1 { "this test fails" } else { "these tests fail" },
+                            shown.join(", "),
+                            if more > 0 { format!(" and {more} more") } else { String::new() }
+                        )),
+                    )
+                }
                 _ if signature_within(&signature, &outcome.signature) => {
                     (Some(Label::PreExisting), None)
                 }
@@ -1160,11 +1304,15 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         step.label = label;
         if let Some(base_failed) = base_failed {
             for test in &mut step.failed_tests {
-                test.label = Some(if base_failed.contains(&test.id) {
-                    Label::PreExisting
+                test.label = if other_reason.contains(&test.id) {
+                    // Failing on both for another reason: not pre-existing,
+                    // and not new either.
+                    None
+                } else if base_failed.contains(&test.id) {
+                    Some(Label::PreExisting)
                 } else {
-                    Label::New
-                });
+                    Some(Label::New)
+                };
             }
         }
     }
@@ -1207,6 +1355,13 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     settle(report, stopped);
 }
 
+/// What a worktree is given from the head: its dependency folders (none
+/// with `verify.baseInstall`) and its env files.
+struct WorktreeSetup {
+    folders: Vec<String>,
+    env_files: Vec<String>,
+}
+
 /// Gives a worktree its dependencies: the head's dependency folders linked
 /// in, or `verify.baseInstall` run at its root. `which` names it in notes
 /// (`base`, or `head` for the control run of ADR 0040). Returns why the
@@ -1214,7 +1369,7 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
 fn prepare_worktree(
     run: &BaseRun<'_>,
     worktree: &Worktree,
-    links: &[String],
+    links: &WorktreeSetup,
     deadline: Option<Instant>,
     say: &dyn Fn(&str),
     which: &str,
@@ -1223,7 +1378,7 @@ fn prepare_worktree(
     // into a shared interpreter (ADR 0037). A link that cannot be made
     // means the base cannot be judged.
     let mut not_judged: Option<String> = None;
-    for folder in links {
+    for folder in &links.folders {
         let made = worktree.link(
             &folder_of(run.root, Some(folder)),
             &folder_of(&worktree.root, Some(folder)),
@@ -1233,6 +1388,15 @@ fn prepare_worktree(
                 "the head's {folder} could not be linked into the {which} worktree"
             ));
         }
+    }
+    // The head's ignored env files, which tests read (ADR 0043). Where the
+    // worktree has the file already (tracked there) or lacks the folder,
+    // nothing is linked; that is no reason not to judge.
+    for file in &links.env_files {
+        let _ = worktree.copy_file(
+            &folder_of(run.root, Some(file)),
+            &folder_of(&worktree.root, Some(file)),
+        );
     }
     if let Some(install) = run
         .options
@@ -1244,6 +1408,7 @@ fn prepare_worktree(
         say(&format!("installing: {install}"));
         match run_base_step(
             &worktree.root,
+            run.root,
             None,
             "install",
             install,
@@ -1275,7 +1440,7 @@ fn run_in_worktree(
     worktree: &Worktree,
     to_run: &[Pending],
     check_failed: bool,
-    links: &[String],
+    links: &WorktreeSetup,
     deadline: Option<Instant>,
     summary: &mut BaseReport,
     say: &dyn Fn(&str),
@@ -1320,6 +1485,7 @@ fn run_in_worktree(
             let ran = if dir.is_dir() {
                 run_base_step(
                     &worktree.root,
+                    run.root,
                     project,
                     &step.name,
                     &command,
@@ -1440,7 +1606,7 @@ fn confirm_fixed(
     report: &VerifyReport,
     run: &BaseRun<'_>,
     environment: &str,
-    links: &[String],
+    links: &WorktreeSetup,
     to_run: &[Pending],
     confirmed: &BTreeSet<usize>,
     deadline: Option<Instant>,
@@ -1569,6 +1735,7 @@ fn confirm_fixed(
             let command = step.command.clone().unwrap_or_default();
             match run_base_step(
                 &worktree.root,
+                run.root,
                 plan_of(run.plan, step),
                 &step.name,
                 &command,

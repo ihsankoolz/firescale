@@ -298,6 +298,8 @@ exports[`fscale verify --affected > runs only the service that changed, and says
   in backend/realtime_service: not affected
   in frontend: not affected
 
+Not cached: test in backend/audit_service passed, but the next run cannot reuse it: the version of python could not be read.
+
 Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
   backend/audit_service: changed: backend/audit_service/main.py
 

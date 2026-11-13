@@ -238,6 +238,8 @@ pub struct Activity {
     recent: VecDeque<String>,
     /// Goes up each time output arrives.
     generation: u64,
+    /// The last percent done the runner printed (pytest's `[ 46%]`).
+    percent: Option<u8>,
 }
 
 impl Activity {
@@ -254,6 +256,7 @@ impl Activity {
             markers_last: false,
             recent: VecDeque::new(),
             generation: 0,
+            percent: None,
         }
     }
 
@@ -267,6 +270,13 @@ impl Activity {
     #[must_use]
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// The last percent done the runner printed, such as pytest's `[ 46%]`
+    /// at the end of a line of markers (ADR 0043).
+    #[must_use]
+    pub fn percent(&self) -> Option<u8> {
+        self.percent
     }
 
     /// The tests counted so far, finished lines and unfinished ones.
@@ -318,6 +328,9 @@ impl Activity {
         let unfinished = lines.pop().unwrap_or_default().to_owned();
         for line in lines {
             let line = strip_ansi(line);
+            if let Some(percent) = percent_done(&line) {
+                self.percent = Some(percent);
+            }
             if self.runner.is_none() && line.contains("test session starts") {
                 self.runner = Some(Runner::Pytest);
             }
@@ -346,6 +359,9 @@ impl Activity {
         }
         self.partial_tally[stream] = Tally::default();
         let shown = strip_ansi(&unfinished);
+        if let Some(percent) = percent_done(&shown) {
+            self.percent = Some(percent);
+        }
         match self.classify(&shown) {
             Kind::Markers(tally, file) => {
                 self.partial_tally[stream] = tally;
@@ -395,9 +411,59 @@ impl Activity {
     }
 }
 
+/// The percent done at the end of a line, as pytest prints it after each
+/// file's markers: `tests/test_a.py ..F.  [ 46%]`. Nothing else counts: a
+/// percent inside a message is not progress.
+fn percent_done(line: &str) -> Option<u8> {
+    let inner = line.trim_end().strip_suffix("%]")?;
+    let open = inner.rfind('[')?;
+    let number = inner[open + 1..].trim();
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    number.parse::<u8>().ok().filter(|percent| *percent <= 100)
+}
+
+/// About how long a step has left, from the time so far and the percent
+/// done it printed: `None` before 1% or at 100%.
+#[must_use]
+pub fn time_left(elapsed: std::time::Duration, percent: u8) -> Option<std::time::Duration> {
+    if percent == 0 || percent >= 100 {
+        return None;
+    }
+    let done = f64::from(percent) / 100.0;
+    Some(elapsed.mul_f64((1.0 - done) / done))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_percent_done_is_read_from_the_end_of_pytest_lines() {
+        let activity = fed(
+            "python -m pytest",
+            &[
+                "collected 60 items\n\n",
+                "tests/test_auth.py ....  [  8%]\ntests/test_orders.py ..",
+                ".. [ 46%]",
+            ],
+        );
+        assert_eq!(activity.percent(), Some(46));
+        assert_eq!(percent_done("coverage: 80% [see report]"), None);
+        assert_eq!(percent_done("tests/test_a.py .. [100%]"), Some(100));
+        assert_eq!(percent_done("[ 120%]"), None);
+        assert_eq!(fed("pytest", &["no percent here\n"]).percent(), None);
+    }
+
+    #[test]
+    fn time_left_follows_the_percent_done() {
+        let ten = std::time::Duration::from_secs(600);
+        assert_eq!(time_left(ten, 50), Some(ten));
+        assert_eq!(time_left(ten, 8).map(|left| left.as_secs() / 60), Some(115));
+        assert_eq!(time_left(ten, 0), None);
+        assert_eq!(time_left(ten, 100), None);
+    }
 
     fn fed(command: &str, chunks: &[&str]) -> Activity {
         let mut activity = Activity::new(command);

@@ -36,6 +36,7 @@ use crate::facts::{
 };
 use crate::process::{run_tree, Ending, Watch};
 use crate::services::{folders_up, listening, services_with_local_env, ENV_EXAMPLE, PROBE_TIMEOUT};
+use crate::setup::locked_install;
 
 /// How long a version command may take.
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -145,9 +146,10 @@ impl Machine for ThisMachine {
         let never = AtomicBool::new(false);
         let watch = Watch {
             timeout: Some(VERSION_TIMEOUT),
+            idle: None,
             stop: &never,
             heartbeat: Duration::ZERO,
-            on_heartbeat: &|_, _| {},
+            on_heartbeat: &|_, _, _| {},
             command: "",
             on_output: &|_| false,
             on_spawn: &|_| {},
@@ -879,7 +881,12 @@ impl Doctor<'_> {
         for project in projects {
             let dir = dir_of(self.root, &project.root);
             let folder = project.root.clone();
-            let install = project.commands.install.clone();
+            // With a lockfile, the form that does not rewrite it (`uv sync --locked`).
+            let install = project
+                .commands
+                .install
+                .as_deref()
+                .map(|install| locked_install(install, self.root, &dir));
             let source = project
                 .interpreter
                 .as_ref()
@@ -1278,16 +1285,19 @@ impl Doctor<'_> {
             .projects
             .iter()
             .find(|p| p.root == ".")
-            .and_then(|p| p.commands.install.clone());
+            .and_then(|p| p.commands.install.as_deref())
+            .map(|install| locked_install(install, self.root, self.root));
         for project in projects {
             let dir = dir_of(self.root, &project.root);
             let Some(json) = read_json(&dir.join("package.json")) else {
                 continue;
             };
+            // With a lockfile, the form that does not rewrite it (`npm ci`).
             let install = project
                 .commands
                 .install
-                .clone()
+                .as_deref()
+                .map(|install| locked_install(install, self.root, &dir))
                 .or_else(|| root_install.clone());
             let fix = install.as_ref().map(|install| {
                 if project.commands.install.is_some() && project.root != "." {

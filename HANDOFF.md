@@ -4,12 +4,11 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Nothing is half-finished. This session built M23, the tamper guard for JavaScript and TypeScript (ADR 0042), and stopped there as asked. **The version is unchanged (0.3.0) and no tag has been pushed.**
+Nothing is half-finished. This session finished the 0.4.0 fixes (ADR 0043): the ten items, the nine review fixes, and passes stored as each step finishes. The version is 0.4.0. **No tag has been pushed.**
 
-- **Branch:** `claude/vibrant-ramanujan-1ymxis` (the cloud session may push only to this branch; it is restarted from `main` after each merge).
+- **Branch:** `claude/course-project-0.4.0-release-c543az`, merged through its pull request.
 - **Next:** M24 (the tamper guard for Rust and Python, and its policy keys). Not started.
-- **0.3.0 is ready to tag**, with M22 and M23 in it (`RELEASING.md`). After it is on npm: M22's manual check (below, under "Left for the owner").
-- The `v0.2.0` tag exists and 0.2.0 is on npm.
+- **0.4.0 is ready to tag** (`RELEASING.md`). Check whether `v0.3.0` was ever tagged first.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
@@ -24,6 +23,7 @@ Nothing is half-finished. This session built M23, the tamper guard for JavaScrip
 - **Done in the session of 2026-11-12/13:** the plan update (ADR 0031) and M17, the project graph and affected verify (ADR 0032, ADR 0033).
 - **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036); M19 to M21, blame-aware verify (ADR 0037 to 0039, verify schema 6).
 - **Done in the session of 2026-11-13 (afternoon):** the base run fixes and 0.3.0 (ADR 0040), M22 (ADR 0041), M23 (ADR 0042).
+- **Done in the session of 2026-11-13 (evening):** the 0.4.0 fixes from running 0.3.0 on the course project (ADR 0043).
 - **Not started, in order:** M24 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
 
 ## How to resume
@@ -32,6 +32,17 @@ Nothing is half-finished. This session built M23, the tamper guard for JavaScrip
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on 0.4.0, for whoever touches blame, the step cache or time limits (ADR 0043):
+
+- Per-test reasons: parsers in `crates/core/src/pertest.rs` fill `TestResults.reasons` with text (`Block` cuts at the first stack frame and drops code excerpts); `run_step` replaces it at once with hashes (`hash_reasons`, `normalise_reason_line`). Never keep the text. `blame::compare` decides with `other_reason` before the M19 `signature_within` guard, which still covers steps without per-test results and heads with no failing test.
+- `verify.labelFixed` sets `judge_passes` (`crates/cli/src/main.rs`); by default no passing step runs on the base or in the head-check worktree.
+- Env files: `blame::env_files` (`.env`, `.env.local`, root and each planned project), copied (never linked) by `Worktree::copy_file`, removed in `Drop`. Only a 16-digit hash goes into `environment`, which is only ever hashed. A test greps every output, `.firescale/` and the run records for the secret.
+- Windows program lookup is `stepcache::windows_candidates` (PATHEXT extensions only, never the bare name). `StepReport.not_cached` carries the reason a pass is not reusable. `StepCache::remember` stores a pass as soon as its step finishes (returning why not, if not); `finish` only cleans. `config_note` keeps the config's digest in `.firescale/step-cache-config.digest`.
+- Per-test results with `TestResults.partial` (two runner sessions, a cargo binary with no results) never decide `pre-existing`; `setup::install_for` names the plain install for a package the lockfile lacks.
+- Time limits: `VerifyConfig::idle_for` (none when a step or project limit is set) and `Watch.idle` in `process.rs`; `Finished.silent` and `Finished.percent`; `Activity::percent` reads only a trailing `[ NN%]`.
+- Setup: `setup::locked_install` maps installs to their frozen form for doctor and verify's plan only; `Commands.install` in facts is unchanged on purpose (AGENTS.md blocks). Node package checks are `node_package_problem`.
+- Inert unowned files: `graph::is_document_or_media` with ADR 0034's `cannot_affect_builds`, used by `graph::affected` and `stepcache::covers`.
 
 Notes on M23, for whoever builds M24 or touches the tamper guard (ADR 0042):
 
@@ -172,7 +183,7 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Tag `v0.3.0` on `main` after M22 is merged, and push the tag when you are ready to release (`RELEASING.md`). `v0.2.0` is tagged and 0.2.0 is on npm; `v0.2.1` was never tagged.
+- Tag `v0.4.0` on `main` after the 0.4.0 pull request is merged, and push the tag when you are ready to release (`RELEASING.md`). Check whether `v0.3.0` was ever tagged. `v0.2.0` is tagged and 0.2.0 is on npm; `v0.2.1` was never tagged.
 - After 0.3.0 is on npm: M22's manual check (see "In progress").
 - Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
 - Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
