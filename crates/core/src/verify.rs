@@ -2029,6 +2029,10 @@ fn run_step(
         let stdout = strip_ansi(&String::from_utf8_lossy(&finished.stdout));
         let stderr = strip_ansi(&String::from_utf8_lossy(&finished.stderr));
         report.test_results = runner.read(&stdout, &stderr, xml.as_deref());
+        // Each failing test's reason, as hashes of its normalised lines.
+        if let Some(results) = report.test_results.as_mut() {
+            results.hash_reasons(&crate::pertest::roots_of(unit.root));
+        }
         // A run that stopped at its first failure may hide a later new one:
         // never evidence for pre-existing (ADR 0039).
         if !matches!(finished.ending, Ending::Exited(Some(0)))

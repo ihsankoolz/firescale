@@ -350,7 +350,7 @@ pub fn renames_since(root: &Path, base: &BaseCommit) -> BTreeMap<String, String>
 
 // ------------------------------------------------------------ the store
 
-const STORE_FORMAT: u32 = 4;
+const STORE_FORMAT: u32 = 5;
 
 /// A base result kept for a later run with the same base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,6 +369,10 @@ struct StoredBase {
     failed_tests: Option<Vec<String>>,
     #[serde(default)]
     passed_tests: u64,
+    /// Why each failing test failed: hashes of its error's normalised
+    /// lines, never the text (ADR 0043).
+    #[serde(default)]
+    failure_reasons: BTreeMap<String, Vec<String>>,
 }
 
 fn store_dir(root: &Path) -> PathBuf {
@@ -380,9 +384,11 @@ fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<Tes
     let stored: StoredBase = serde_json::from_str(&text).ok()?;
     let fresh = now_secs().saturating_sub(stored.ran_at) <= crate::stepcache::MAX_AGE.as_secs();
     (stored.format == STORE_FORMAT && stored.key == key && fresh).then(|| {
+        let reasons = stored.failure_reasons;
         let tests = stored.failed_tests.map(|failed| TestResults {
             failed: failed.into_iter().collect(),
             passed: stored.passed_tests,
+            reasons,
         });
         (stored.status, stored.signature, tests)
     })
@@ -415,6 +421,7 @@ fn keep(
         signature: signature.to_vec(),
         failed_tests: tests.map(|tests| tests.failed.iter().cloned().collect()),
         passed_tests: tests.map_or(0, |tests| tests.passed),
+        failure_reasons: tests.map(|tests| tests.reasons.clone()).unwrap_or_default(),
     };
     let Ok(text) = serde_json::to_string_pretty(&stored) else {
         return;
@@ -1151,6 +1158,32 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             }
             _ => None,
         };
+        // Tests that fail on both, for a different reason (ADR 0043): both
+        // runs say why, and the reasons differ once what changes between
+        // runs is taken out.
+        let other_reason: BTreeSet<String> = match (&head_tests, &outcome.tests) {
+            (Some(head), Some(base)) if per_test.is_some() => {
+                let mut base_reasons: BTreeMap<String, &Vec<String>> = BTreeMap::new();
+                for (id, lines) in &base.reasons {
+                    let single: BTreeSet<String> = std::iter::once(id.clone()).collect();
+                    for renamed in follow_renames(&single, &renames, &prefix) {
+                        base_reasons.insert(renamed, lines);
+                    }
+                }
+                head.failed
+                    .iter()
+                    .filter(|id| match (head.reasons.get(*id), base_reasons.get(*id)) {
+                        (Some(on_head), Some(on_base)) => on_head != *on_base,
+                        _ => false,
+                    })
+                    .cloned()
+                    .collect()
+            }
+            _ => BTreeSet::new(),
+        };
+        let head_failed_any = head_tests
+            .as_ref()
+            .is_some_and(|head| !head.failed.is_empty());
         if failed
             && outcome.status == BaseStatus::Failed
             && (head_tests.is_none() || outcome.tests.is_none())
@@ -1186,6 +1219,25 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
                     )),
                 ),
                 Some((new_tests, false, _)) if !new_tests.is_empty() => (Some(Label::New), None),
+                // Per-test results decide first (ADR 0043): every test that
+                // fails on the head fails on the base too, for the same
+                // reason.
+                Some((_, false, _)) if head_failed_any && other_reason.is_empty() => {
+                    (Some(Label::PreExisting), None)
+                }
+                Some((_, false, _)) if head_failed_any => {
+                    let shown: Vec<&str> = other_reason.iter().take(3).map(String::as_str).collect();
+                    let more = other_reason.len().saturating_sub(shown.len());
+                    (
+                        None,
+                        Some(format!(
+                            "{} on the base commit {short} too, but for a different reason: {}{}",
+                            if other_reason.len() == 1 { "this test fails" } else { "these tests fail" },
+                            shown.join(", "),
+                            if more > 0 { format!(" and {more} more") } else { String::new() }
+                        )),
+                    )
+                }
                 _ if signature_within(&signature, &outcome.signature) => {
                     (Some(Label::PreExisting), None)
                 }
@@ -1248,11 +1300,15 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         step.label = label;
         if let Some(base_failed) = base_failed {
             for test in &mut step.failed_tests {
-                test.label = Some(if base_failed.contains(&test.id) {
-                    Label::PreExisting
+                test.label = if other_reason.contains(&test.id) {
+                    // Failing on both for another reason: not pre-existing,
+                    // and not new either.
+                    None
+                } else if base_failed.contains(&test.id) {
+                    Some(Label::PreExisting)
                 } else {
-                    Label::New
-                });
+                    Some(Label::New)
+                };
             }
         }
     }

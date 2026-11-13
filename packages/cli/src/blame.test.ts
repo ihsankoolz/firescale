@@ -583,6 +583,49 @@ const FAKE_VITEST = [
   '',
 ].join('\n');
 
+/**
+ * A stand-in for Vitest's default reporter as it prints on a real run: its
+ * folder in the header and stack frames, a duration on every line, a random
+ * temp folder in one error, and the failing tests in a random order. Each
+ * entry of failing.txt is a test name, or `name=value` for the value it
+ * received (3 by default).
+ */
+const REAL_VITEST = [
+  "const fs = require('fs');",
+  "const os = require('os');",
+  "const path = require('path');",
+  "const entries = fs.readFileSync('failing.txt', 'utf8').split(',').map((s) => s.trim()).filter(Boolean);",
+  "const failing = entries.map((e) => { const [name, value] = e.split('='); return { name, value: value || '3' }; });",
+  'failing.sort(() => Math.random() - 0.5);',
+  "const names = ['adds', 'multiplies', 'divides', 'reads'];",
+  "const ms = () => Math.floor(Math.random() * 900) + 's'.replace('s', 'ms');",
+  'const cwd = process.cwd();',
+  "console.log(' RUN  v3.2.4 ' + cwd + '\\n');",
+  "console.log(' ❯ src/math.test.ts (' + names.length + ' tests | ' + failing.length + ' failed) ' + ms());",
+  "for (const f of failing) console.log('   × math > ' + f.name + ' ' + ms());",
+  "if (failing.length > 0) console.log('\\n⎯⎯⎯⎯⎯⎯⎯ Failed Tests ' + failing.length + ' ⎯⎯⎯⎯⎯⎯⎯\\n');",
+  'failing.forEach((f, i) => {',
+  "  console.log(' FAIL  src/math.test.ts > math > ' + f.name);",
+  "  if (f.name === 'reads') {",
+  "    const tmp = path.join(os.tmpdir(), 'vitest-' + Math.random().toString(36).slice(2));",
+  '    console.log("Error: ENOENT: no such file or directory, open \'" + path.join(tmp, \'grades.json\') + "\'");',
+  '  } else {',
+  "    console.log('AssertionError: expected ' + f.value + ' to be 4 // Object.is equality\\n\\n- Expected\\n+ Received\\n\\n- 4\\n+ ' + f.value + '\\n');",
+  '  }',
+  "  console.log(' ❯ ' + path.join(cwd, 'src', 'math.test.ts') + ':' + (5 + i) + ':15');",
+  "  console.log('      ' + (4 + i) + '|   it(\\'' + f.name + '\\', () => {');",
+  "  console.log('      ' + (5 + i) + '|     expect(x).toBe(4);');",
+  "  console.log('       |               ^');",
+  "  console.log('\\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[' + (i + 1) + '/' + failing.length + ']⎯\\n');",
+  '});',
+  "console.log(' Test Files  ' + (failing.length ? '1 failed' : '1 passed') + ' (1)');",
+  "console.log('      Tests  ' + failing.length + ' failed | ' + (names.length - failing.length) + ' passed (' + names.length + ')');",
+  "console.log('   Start at  ' + new Date().toTimeString().slice(0, 8));",
+  "console.log('   Duration  ' + (Math.random() * 3).toFixed(2) + 's (transform ' + ms() + ', setup 0ms, collect ' + ms() + ', tests ' + ms() + ')');",
+  'process.exit(failing.length > 0 ? 1 : 0);',
+  '',
+].join('\n');
+
 async function runnerRepo(script: string, file: string, failing: string) {
   const repo = await fixtures.create({
     files: {
@@ -654,6 +697,59 @@ describe('per-test labels', () => {
     expect(old.result).toBe('pre-existing');
   });
 
+  it('labels the same failing Vitest tests pre-existing despite other durations, paths and order, and blocks a new one beside them (ADR 0043)', async () => {
+    const { root, write } = await runnerRepo(REAL_VITEST, 'vitest.js', 'adds, reads');
+    // Something else changes; the same two tests fail as on the base.
+    await write('tests/note.txt', 'a change\n');
+    const result = await runCli(['verify', '--json'], root);
+    const json = await report(result.stdout);
+    expect(result.code).toBe(EXIT_OK);
+    expect(json.result).toBe('pre-existing');
+    expect(step(json, 'test').label).toBe('pre-existing');
+    expect(step(json, 'test').base?.source).toBe('ran');
+    expect(failedTests(json)).toEqual([
+      { id: 'src/math.test.ts > math > adds', label: 'pre-existing' },
+      { id: 'src/math.test.ts > math > reads', label: 'pre-existing' },
+    ]);
+    const human = await runCli(['verify'], root);
+    expect(human.code).toBe(EXIT_OK);
+    expect(human.stdout.split('\n')[0]).toMatch(/^verify: OK - no new failures; pre-existing/);
+
+    // A new failing test beside them: `new`, named, and it blocks.
+    await write('failing.txt', 'adds, reads, divides\n');
+    const added = await runCli(['verify', '--json'], root);
+    expect(added.code).toBe(EXIT_VIOLATIONS);
+    const withNew = await report(added.stdout);
+    expect(step(withNew, 'test').label).toBe('new');
+    expect(failedTests(withNew)).toEqual([
+      { id: 'src/math.test.ts > math > adds', label: 'pre-existing' },
+      { id: 'src/math.test.ts > math > divides', label: 'new' },
+      { id: 'src/math.test.ts > math > reads', label: 'pre-existing' },
+    ]);
+    const blocked = await runCli(['verify'], root);
+    expect(blocked.code).toBe(EXIT_VIOLATIONS);
+    expect(blocked.stdout).toContain('New failing tests:\n  src/math.test.ts > math > divides\n');
+  });
+
+  it('blocks a test that fails on the base too, but for a clearly different reason (ADR 0043)', async () => {
+    const { root, write } = await runnerRepo(REAL_VITEST, 'vitest.js', 'adds');
+    // On the base `adds` received 3; on the head it receives 5.
+    await write('failing.txt', 'adds=5\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    const test = step(json, 'test');
+    expect(test.label).toBeUndefined();
+    expect(test.base?.note).toMatch(
+      /^this test fails on the base commit [0-9a-f]{7} too, but for a different reason: src\/math\.test\.ts > math > adds, so this failure blocks as it would without a base$/,
+    );
+    expect(failedTests(json)).toEqual([{ id: 'src/math.test.ts > math > adds' }]);
+    // The same value again: pre-existing.
+    await write('failing.txt', 'adds=3\n');
+    const same = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(same, 'test').label).toBe('pre-existing');
+  });
+
   it('falls back to step labels, with a note, for a runner without per-test results', async () => {
     const plain = [
       "const fs = require('fs');",
@@ -678,11 +774,11 @@ describe('per-test labels', () => {
     const result = await runCli(['verify', '--json'], root);
     const json = await report(result.stdout);
     // The same test, by git's rename: never new. Its output names the new
-    // file, so it is not proven the same failure either: it blocks, saying so.
+    // file, but per-test results decide first (ADR 0043): it fails for the
+    // same reason as on the base, so it is pre-existing.
     expect(failedTests(json)).toEqual([{ id: 'tests/test_new.py::test_a', label: 'pre-existing' }]);
-    expect(step(json, 'test').label).toBeUndefined();
-    expect(step(json, 'test').base?.note).toContain('the same tests fail on the base commit');
-    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(step(json, 'test').label).toBe('pre-existing');
+    expect(result.code).toBe(EXIT_OK);
   });
 
   it('keeps per-test labels when the temp folder has a space in its name', async () => {
