@@ -3825,4 +3825,185 @@ mod tests {
             "{lines}"
         );
     }
+
+    // ------------------------------------------------- --affected (M17)
+
+    mod affected_runs {
+        use super::*;
+        use crate::affected::Changed;
+        use crate::facts::detect_facts_with;
+        use crate::graph::{affected, build_graph};
+        use crate::testing::{course_project, COURSE_SERVICES, COURSE_SHARED_USERS};
+
+        /// The units of the course project's plan that a change runs.
+        fn running(files: &[&str]) -> Vec<String> {
+            let fixture = course_project().unwrap();
+            let facts = detect_facts_with(fixture.root(), None).unwrap();
+            let graph = build_graph(fixture.root(), &facts);
+            let mut plan =
+                plan_verify(fixture.root(), &facts, &VerifyConfig::default(), true, None);
+            let changed = Changed::Files(files.iter().map(|file| (*file).to_owned()).collect());
+            limit_to_affected(&mut plan, &facts, &graph, &affected(&graph, &changed), None);
+            let units = &plan.affected.as_ref().unwrap().units;
+            assert_eq!(units.len(), 6, "five services and the frontend: {units:?}");
+            units
+                .iter()
+                .filter(|unit| unit.affected)
+                .map(|unit| unit.project.clone().unwrap_or_default())
+                .collect()
+        }
+
+        fn services(names: &[&str]) -> Vec<String> {
+            names.iter().map(|name| format!("backend/{name}")).collect()
+        }
+
+        #[test]
+        fn a_change_in_the_shared_folder_runs_every_service_that_imports_it() {
+            assert_eq!(
+                running(&["backend/shared/db.py"]),
+                services(&COURSE_SHARED_USERS)
+            );
+        }
+
+        #[test]
+        fn a_change_in_one_service_runs_only_that_service() {
+            for service in COURSE_SERVICES {
+                let file = format!("backend/{service}/unit_test/conftest.py");
+                assert_eq!(running(&[&file]), services(&[service]));
+            }
+        }
+
+        #[test]
+        fn a_frontend_change_runs_only_the_frontend() {
+            assert_eq!(running(&["frontend/src/main.ts"]), ["frontend"]);
+        }
+
+        #[test]
+        fn a_change_to_the_root_compose_file_runs_everything() {
+            assert_eq!(running(&["docker-compose.yml"]).len(), 6);
+        }
+
+        fn two_projects(first_runs: bool) -> VerifyPlan {
+            let project = |root: &str| ProjectPlan {
+                root: root.to_owned(),
+                kind: Some("python".to_owned()),
+                steps: vec![
+                    ("lint".to_owned(), Planned::Skipped("no linter".to_owned())),
+                    ("test".to_owned(), Planned::Command("echo fine".to_owned())),
+                ],
+                install: None,
+                python_from_path: false,
+            };
+            let unit = |root: &str, affected: bool| AffectedUnit {
+                project: Some(root.to_owned()),
+                kind: Some("python".to_owned()),
+                affected,
+                reason: if affected {
+                    "changed: a/x.py".to_owned()
+                } else {
+                    "no change reaches this project".to_owned()
+                },
+            };
+            VerifyPlan {
+                runner: "projects".to_owned(),
+                projects: vec![project("a"), project("b")],
+                affected: Some(AffectedPlan {
+                    changed_files: 1,
+                    units: vec![unit("a", first_runs), unit("b", false)],
+                    ..AffectedPlan::default()
+                }),
+                ..VerifyPlan::default()
+            }
+        }
+
+        #[test]
+        fn left_out_projects_are_not_affected_and_the_headline_counts_projects() {
+            let fixture = Fixture::new(&[("a/x.py", ""), ("b/y.py", "")], Track::NoGit).unwrap();
+            let report = run_verify(
+                fixture.root(),
+                "0.0.0",
+                passing_check(),
+                &two_projects(true),
+            )
+            .unwrap();
+            let text = format_verify_human(&report);
+            assert!(
+                text.starts_with("verify: PARTIAL (affected only) - 1 of 2 projects ran, 1 not affected; 2 of 3 steps ran, 1 skipped\n"),
+                "{text}"
+            );
+            assert!(text.contains("  in b: not affected\n"), "{text}");
+            assert!(text.contains("  a: changed: a/x.py\n"), "{text}");
+            let b: Vec<StepStatus> = report
+                .steps
+                .iter()
+                .filter(|step| step.project.as_deref() == Some("b"))
+                .map(|step| step.status)
+                .collect();
+            assert_eq!(b, [StepStatus::NotAffected, StepStatus::NotAffected]);
+            // Not affected is not skipped: no warning names b.
+            assert_eq!(report.skipped.len(), 1);
+            assert!(
+                !report.warnings[0].contains(" in b"),
+                "{:?}",
+                report.warnings
+            );
+            assert_eq!(report.scope, Scope::Affected);
+            let json = format_verify_json(&report);
+            assert!(json.contains("\"status\": \"not-affected\""), "{json}");
+            assert!(json.contains("\"scope\": \"affected\""), "{json}");
+            assert!(json.contains("\"projectsRun\": 1"), "{json}");
+        }
+
+        #[test]
+        fn an_affected_run_never_reads_as_a_plain_ok() {
+            let fixture = Fixture::new(&[("a/x.py", ""), ("b/y.py", "")], Track::NoGit).unwrap();
+            for first_runs in [true, false] {
+                let mut plan = two_projects(first_runs);
+                for project in &mut plan.projects {
+                    project.steps.remove(0);
+                }
+                let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+                let text = format_verify_human(&report);
+                let first = text.lines().next().unwrap_or_default();
+                assert_eq!(report.result, VerifyResult::Ok);
+                assert_ne!(first, "verify: OK", "{text}");
+                let ran = usize::from(first_runs);
+                assert_eq!(
+                    first,
+                    format!(
+                        "verify: OK (affected only) - {ran} of 2 projects ran, {} not affected",
+                        2 - ran
+                    )
+                );
+            }
+        }
+
+        #[test]
+        fn a_failure_in_an_affected_run_says_what_ran() {
+            let fixture = Fixture::new(&[("a/x.py", ""), ("b/y.py", "")], Track::NoGit).unwrap();
+            let mut plan = two_projects(true);
+            let fail = if cfg!(windows) { "exit /b 3" } else { "exit 3" };
+            plan.projects[0].steps = vec![("test".to_owned(), Planned::Command(fail.to_owned()))];
+            let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+            let text = format_verify_human(&report);
+            assert!(
+                text.starts_with("verify: FAILED at test in a (affected only: 1 of 2 projects ran, 1 not affected)\n"),
+                "{text}"
+            );
+        }
+
+        #[test]
+        fn the_dry_run_lists_what_would_run_and_why() {
+            let text = format_verify_plan(&two_projects(true), "fscale check --affected");
+            assert!(
+                text.starts_with("verify --affected (dry run): 1 of 2 projects would run, 1 not affected. Nothing was run.\n"),
+                "{text}"
+            );
+            assert!(
+                text.contains("    test       would run  echo fine\n"),
+                "{text}"
+            );
+            assert!(text.contains("  in b: not affected\n"), "{text}");
+        }
+    }
 }

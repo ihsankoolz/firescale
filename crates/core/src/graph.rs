@@ -50,8 +50,9 @@ const MAX_SOURCE_DEPTH: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Source {
-    /// A dependency on a workspace member, by name (`package.json`, `Cargo.toml`).
-    Workspace,
+    /// A dependency on another project of the repo by its name
+    /// (`package.json`, `Cargo.toml`), as `dependsOn` in `fscale facts` lists it.
+    Dependency,
     /// A local path in a requirements file: `-e ../x`, `../x`, `-r ../x.txt`.
     Requirements,
     /// A path source in `pyproject.toml`.
@@ -81,7 +82,7 @@ impl Source {
     #[must_use]
     pub fn tier(self) -> u8 {
         match self {
-            Self::Workspace
+            Self::Dependency
             | Self::Requirements
             | Self::Pyproject
             | Self::PackageJson
@@ -96,7 +97,7 @@ impl Source {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Workspace => "workspace dependency",
+            Self::Dependency => "dependency by name",
             Self::Requirements => "requirements file",
             Self::Pyproject => "pyproject.toml",
             Self::PackageJson => "package.json",
@@ -427,7 +428,7 @@ impl<'a> Builder<'a> {
     /// The nodes `importer` depends on when it uses `target` (a
     /// repo-relative path): nothing when the target is its own, the projects
     /// that own the target, or else a shared node.
-    fn targets(&mut self, importer: &Importer, target: &str) -> Vec<String> {
+    fn targets(&mut self, importer: &Importer, target: &str, source: Source) -> Vec<String> {
         let owners: Vec<String> = self
             .owners(target)
             .into_iter()
@@ -449,7 +450,15 @@ impl<'a> Builder<'a> {
             // Owned by the importer itself (another kind in the same folder).
             return Vec::new();
         }
-        let path = reach(&importer.root, target);
+        // A path a manifest, Dockerfile or Compose file names is the node
+        // itself. An imported file stands for the package it is part of:
+        // the folder below the deepest folder the two sides share.
+        let is_import = matches!(source, Source::PythonImport | Source::JsImport);
+        let path = if is_import && !is_dir(self.root, target) {
+            reach(&importer.root, target)
+        } else {
+            target.to_owned()
+        };
         let is_folder = is_dir(self.root, &path);
         self.shared.entry(path.clone()).or_insert(is_folder);
         vec![shared_id(&path)]
@@ -488,7 +497,7 @@ impl<'a> Builder<'a> {
         line: Option<usize>,
         detail: &str,
     ) {
-        for to in self.targets(importer, target) {
+        for to in self.targets(importer, target, source) {
             self.add(&importer.id, &to, source, file, line, detail.to_owned());
         }
     }
@@ -514,10 +523,10 @@ impl<'a> Builder<'a> {
                     self.add(
                         &from,
                         &to,
-                        Source::Workspace,
+                        Source::Dependency,
                         &join(&project.root, manifest),
                         None,
-                        format!("depends on the workspace member {name}"),
+                        format!("depends on {name}, a project of this repo"),
                     );
                 }
             }
@@ -2031,11 +2040,10 @@ mod tests {
         let graph = graph_of(&fixture);
         assert_eq!(
             sources(edge(&graph, "packages/a", "packages/b")),
-            [Source::Workspace, Source::PackageJson]
+            [Source::Dependency, Source::PackageJson]
         );
-        // With a Node workspace, web, ui and kit are not projects: the
-        // workspace decides. They are shared folders of the root project? No:
-        // the root project holds them, so nothing to link.
+        // Without a workspace file the three are discovered projects; the
+        // names in `dependencies` match too, so both sources are listed.
         let fixture = self::fixture(&[
             (
                 "web/package.json",
@@ -2045,8 +2053,14 @@ mod tests {
             ("kit/package.json", r#"{"name":"kit"}"#),
         ]);
         let graph = graph_of(&fixture);
-        assert_eq!(sources(edge(&graph, "web", "ui")), [Source::PackageJson]);
-        assert_eq!(sources(edge(&graph, "web", "kit")), [Source::PackageJson]);
+        assert_eq!(
+            sources(edge(&graph, "web", "ui")),
+            [Source::Dependency, Source::PackageJson]
+        );
+        assert_eq!(
+            sources(edge(&graph, "web", "kit")),
+            [Source::Dependency, Source::PackageJson]
+        );
     }
 
     #[test]
@@ -2059,7 +2073,10 @@ mod tests {
             ("engine/Cargo.toml", "[package]\nname = \"engine\"\n"),
         ]);
         let graph = graph_of(&fixture);
-        assert_eq!(sources(edge(&graph, "cli", "engine")), [Source::Cargo]);
+        assert_eq!(
+            sources(edge(&graph, "cli", "engine")),
+            [Source::Dependency, Source::Cargo]
+        );
     }
 
     // ------------------------------------------- tier 2: Docker, Compose
@@ -2113,10 +2130,9 @@ mod tests {
         ));
         let fixture = owned(&files);
         let graph = graph_of(&fixture);
-        eprintln!("{}", format_graph_human(&graph, true));
         assert_eq!(
             sources(edge(&graph, "api", "libs/proto")),
-            [Source::ComposeBuild, Source::Dockerfile]
+            [Source::Dockerfile, Source::ComposeBuild]
         );
         assert_eq!(
             sources(edge(&graph, "api", "worker")),
