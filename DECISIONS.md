@@ -22,6 +22,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M21) The stop hook judges only failures on the base**: a passing step never runs there in the hook, so `fixed` labels appear only in a full `fscale verify` (ADR 0039).
+- **(M21) A timed-out step is not run again** before it blocks: a second timeout would double the wait.
+
 - **(M20) Vitest and Jest results come from their default reporters' text**, not their JSON reporters (ADR 0038): the JSON reporters need flags on your command, which verify does not edit. A custom reporter gives no per-test results, and the step is compared as a whole.
 - **(M20) Per-test results can make a failure `new`, never `pre-existing` on their own**: the output evidence of M19 still has to hold. So an old failure in a renamed test file, whose output names the new path, blocks with a note instead of passing.
 
@@ -106,6 +109,19 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M21 — Blame-aware verify: reruns and the stop hook
+
+**Built** (ADR 0039, `docs/verify.md` "The stop hook"):
+
+1. A `new` failure runs once more before it blocks; a pass the second time is `flaky` and does not block (with per-test results: every new test passed, and what still fails is the base's own failure by the output evidence). Nothing about it is written: no history, no cache entry.
+2. The stop hook runs only the projects the change reaches, measured from the base commit (so an agent's commits on its branch count), through M17's graph, shared-source nodes included; it runs the base only for failures, within the budget. An agent may stop when every failure is `pre-existing` or `flaky`.
+3. `cargo test` per-test labels from its text output: `<crate>::<test path>`.
+4. Latency in `bench/RESULTS.md` (`bench/blame-bench.mjs`).
+
+**Proof** (`stop-hook-blame.test.ts`, `pertest::tests`): a test that fails on its first run only is `flaky` and does not block; nothing about it is written under `.firescale/`, and its second pass is not cached; a failure that fails again stays `new`; the stop hook lets an agent stop on a pre-existing failure and blocks on a new one; on the course project a change in one service runs that service's steps only, and only its failing step runs on the base; the `cargo test` reader.
+
+**Test changed on purpose:** `runners_are_found_in_commands_and_scripts` expected `cargo test` to have no reader; M21 adds one, so it now checks `cargo build`.
 
 ## M20 — Blame-aware verify: per-test labels
 

@@ -2362,6 +2362,37 @@ pub fn signature_within(head: &[String], base: &[String]) -> bool {
     })
 }
 
+/// Runs a step of the head once more, as it ran the first time, with no
+/// cache: how a `new` failure is checked for flakiness before it blocks
+/// (ADR 0039). Nothing about the rerun is kept.
+pub(crate) fn run_again(
+    root: &Path,
+    project: Option<&ProjectPlan>,
+    name: &str,
+    command: &str,
+    options: &RunOptions<'_>,
+) -> Result<StepReport> {
+    let again = RunOptions {
+        stop: options.stop,
+        progress: None,
+        jobs: 1,
+        config: options.config,
+        heartbeat: options.heartbeat,
+        record: options.record,
+        cache: None,
+        every_step: true,
+        deadline: None,
+        base_run: false,
+    };
+    let unit = Unit {
+        root,
+        project,
+        install: project.and_then(|project| project.install.as_deref()),
+        runs: true,
+    };
+    run_step(&unit, name, command, &again)
+}
+
 /// Runs one step of the base run in the base commit's worktree at `root`:
 /// no cache, no progress lines of its own, `FSCALE_BASE_RUN=1`, and no
 /// more time than is left before `deadline` (ADR 0037).
@@ -2745,10 +2776,13 @@ pub(crate) fn settle(report: &mut VerifyReport, stopped: bool) {
     let any_failed = report.steps.iter().any(|step| {
         blocking(step) && matches!(step.status, StepStatus::Failed | StepStatus::TimedOut)
     });
-    let pre_existing = report
-        .steps
-        .iter()
-        .any(|step| blocks(step.status) && step.label == Some(crate::blame::Label::PreExisting));
+    let pre_existing = report.steps.iter().any(|step| {
+        blocks(step.status)
+            && matches!(
+                step.label,
+                Some(crate::blame::Label::PreExisting | crate::blame::Label::Flaky)
+            )
+    });
     let result = if stopped {
         VerifyResult::Stopped
     } else if any_failed || (report.fail_on_skipped && !report.skipped.is_empty()) {
@@ -2879,6 +2913,12 @@ fn whole_headline(report: &VerifyReport) -> String {
         .filter(|step| blocks(step.status) && step.label == Some(Label::PreExisting))
         .map(step_place)
         .collect();
+    let flaky: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|step| blocks(step.status) && step.label == Some(Label::Flaky))
+        .map(step_place)
+        .collect();
     let mut parts = Vec::new();
     if report.result == VerifyResult::Stopped {
         parts.push(format!(
@@ -2910,15 +2950,33 @@ fn whole_headline(report: &VerifyReport) -> String {
                 pre_existing.join(", ")
             ));
         }
+        if !flaky.is_empty() {
+            parts.push(format!(
+                "flaky (failed, then passed when run again; does not block): {}",
+                flaky.join(", ")
+            ));
+        }
         return format!("verify: {}", parts.join("; "));
     }
     match report.result {
         VerifyResult::Ok => "verify: OK".to_owned(),
         VerifyResult::Partial => format!("verify: PARTIAL - {}", ran_part(report)),
-        VerifyResult::PreExisting => format!(
-            "verify: OK - no new failures; pre-existing (fails on the base commit{base} too): {}",
-            pre_existing.join(", ")
-        ),
+        VerifyResult::PreExisting => {
+            let mut said = Vec::new();
+            if !pre_existing.is_empty() {
+                said.push(format!(
+                    "pre-existing (fails on the base commit{base} too): {}",
+                    pre_existing.join(", ")
+                ));
+            }
+            if !flaky.is_empty() {
+                said.push(format!(
+                    "flaky (failed, then passed when run again): {}",
+                    flaky.join(", ")
+                ));
+            }
+            format!("verify: OK - no new failures; {}", said.join("; "))
+        }
         VerifyResult::Failed | VerifyResult::SetupNeeded | VerifyResult::Stopped => format!(
             "verify: FAILED - {} of {} skipped, and verify.failOnSkipped is on",
             report.skipped.len(),
@@ -3129,6 +3187,13 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                 };
                 out.push_str(&format!(
                     "\nPre-existing: {}{place} fails on the base commit {base_short} too{how}, so it does not block this change.\n",
+                    failure.name
+                ));
+                continue;
+            }
+            Some(crate::blame::Label::Flaky) => {
+                out.push_str(&format!(
+                    "\nFlaky: {}{place} failed, then passed when run again, so it does not block. Nothing about it is kept.\n",
                     failure.name
                 ));
                 continue;

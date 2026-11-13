@@ -1084,6 +1084,7 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             summary.over_budget = true;
         }
     }
+    rerun_new_failures(report, run, &say);
     let notes: Vec<String> = report
         .steps
         .iter()
@@ -1304,6 +1305,76 @@ fn run_in_worktree(
             }
         };
         report.steps[pending.index].base = Some(outcome);
+    }
+}
+
+/// Runs each `new` failure once more on the head before it blocks (ADR
+/// 0039). A step that passes the second time is `flaky` and does not block.
+/// With per-test results, a step whose new tests all pass the second time
+/// is `flaky` too when what still fails is the base's own failure (the
+/// output evidence of ADR 0037); its new tests are labelled `flaky`.
+/// Nothing about a flaky result is written anywhere: no history is kept,
+/// and the second run's pass is not stored in the step cache.
+fn rerun_new_failures(report: &mut VerifyReport, run: &BaseRun<'_>, say: &dyn Fn(&str)) {
+    for index in 0..report.steps.len() {
+        if report.steps[index].label != Some(Label::New)
+            || report.steps[index].status != StepStatus::Failed
+            || run.options.stop.load(Ordering::SeqCst)
+        {
+            continue;
+        }
+        let step = &report.steps[index];
+        let Some(command) = step.command.clone() else {
+            continue;
+        };
+        let project = plan_of(run.plan, step);
+        let name = step.name.clone();
+        say(&format!(
+            "{}: a new failure; running it once more before it blocks",
+            place(step)
+        ));
+        let Ok(again) = crate::verify::run_again(run.root, project, &name, &command, run.options)
+        else {
+            continue;
+        };
+        let step = &mut report.steps[index];
+        if again.status == StepStatus::Passed {
+            step.label = Some(Label::Flaky);
+            for test in &mut step.failed_tests {
+                if test.label == Some(Label::New) {
+                    test.label = Some(Label::Flaky);
+                }
+            }
+            say(&format!("{}: passed the second time: flaky", place(step)));
+            continue;
+        }
+        let (Some(results), Some(base)) = (&again.test_results, step.base.as_ref()) else {
+            continue;
+        };
+        let new_tests: Vec<String> = step
+            .failed_tests
+            .iter()
+            .filter(|test| test.label == Some(Label::New))
+            .map(|test| test.id.clone())
+            .collect();
+        if new_tests.is_empty() || new_tests.iter().any(|id| results.failed.contains(id)) {
+            continue;
+        }
+        // Every new test passed the second time; what still fails must be
+        // the base's own failure, by the output evidence, to let it pass.
+        if base.status == BaseStatus::Failed && signature_within(&again.signature, &base.signature)
+        {
+            step.label = Some(Label::Flaky);
+            for test in &mut step.failed_tests {
+                if test.label == Some(Label::New) {
+                    test.label = Some(Label::Flaky);
+                }
+            }
+            say(&format!(
+                "{}: its new tests passed the second time: flaky",
+                place(step)
+            ));
+        }
     }
 }
 

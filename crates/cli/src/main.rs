@@ -104,7 +104,7 @@ Exit codes:
   130  verify was stopped by Ctrl+C or a termination signal
 ";
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Args {
     version: bool,
     help: bool,
@@ -957,7 +957,35 @@ fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
 
 /// Runs check and then the planned lint, typecheck and test commands.
 /// `progress` turns on the live lines on stderr.
-fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyReport, Vec<String>)> {
+/// How a verify run is used: by a person or CI, or by an agent's stop hook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyMode {
+    Full,
+    /// The stop hook (M21): only the projects the change reaches, measured
+    /// from the base commit, and a base run for failures only.
+    Hook,
+}
+
+fn verify_report(
+    root: &Path,
+    args: &Args,
+    progress: bool,
+    mode: VerifyMode,
+) -> Result<(VerifyReport, Vec<String>)> {
+    // Blame-aware verify (ADR 0037): with a base commit, every step runs and
+    // each failure is compared with the base.
+    let base = choose_base(root, args.base.as_deref())?;
+    // The stop hook runs only what the change reaches: the projects of the
+    // files changed since the base commit (or, with no base, since the last
+    // commit), and what depends on them (ADR 0039).
+    let mut hook_args = args.clone();
+    if mode == VerifyMode::Hook {
+        hook_args.affected = true;
+        if let BaseChoice::Compare(base) = &base {
+            hook_args.base = Some(base.commit.clone());
+        }
+    }
+    let args = &hook_args;
     let jobs = jobs(args)?;
     // Ctrl+C and termination signals stop the commands, not fscale at once.
     install_stop_handler();
@@ -1017,9 +1045,6 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
         violations: violation_ids(&report),
     };
     let head_violations = check.violations.clone();
-    // Blame-aware verify (ADR 0037): with a base commit, every step runs and
-    // each failure is compared with the base.
-    let base = choose_base(root, args.base.as_deref())?;
     let (plan, graph) = verify_plan(root, args, &facts, &verify_config, changed)?;
     // The step cache (ADR 0036) needs the graph only for projects below the
     // root: the root's own steps cover the whole repo.
@@ -1077,7 +1102,7 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
                         options: &options,
                         check: &base_check,
                         head_violations: &head_violations,
-                        judge_passes: true,
+                        judge_passes: mode == VerifyMode::Full,
                         shortcuts: !args.no_cache,
                     },
                 ),
@@ -1135,7 +1160,7 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let progress = args
         .progress
         .unwrap_or_else(|| std::io::stderr().is_terminal());
-    let (report, notes) = match verify_report(root, args, progress) {
+    let (report, notes) = match verify_report(root, args, progress, VerifyMode::Full) {
         Ok(done) => done,
         // Ctrl+C during the check also reaches the Node host and git, which
         // then fail: that is a stop, not an error.
@@ -1225,7 +1250,12 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             let input = parse_hook_input(&stdin);
             // A hook that cannot run verify must not trap the agent: report and let it stop.
             // An agent reads the hook's stderr: no progress unless asked for.
-            let report = match verify_report(root, args, args.progress.unwrap_or(false)) {
+            let report = match verify_report(
+                root,
+                args,
+                args.progress.unwrap_or(false),
+                VerifyMode::Hook,
+            ) {
                 Ok((report, _)) if report.result == VerifyResult::Stopped => {
                     return Ok(Output {
                         stdout: String::new(),

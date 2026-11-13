@@ -20,6 +20,8 @@ pub enum TestRunner {
     Pytest,
     Vitest,
     Jest,
+    /// `cargo test`, from its text output (ADR 0039).
+    Cargo,
 }
 
 impl TestRunner {
@@ -44,6 +46,8 @@ impl TestRunner {
             Some(Self::Vitest)
         } else if stems.contains(&"jest") {
             Some(Self::Jest)
+        } else if stems.windows(2).any(|pair| pair == ["cargo", "test"]) {
+            Some(Self::Cargo)
         } else {
             None
         }
@@ -57,6 +61,7 @@ impl TestRunner {
             Self::Pytest => junit.and_then(parse_junit),
             Self::Vitest => parse_vitest(output),
             Self::Jest => parse_jest(output),
+            Self::Cargo => parse_cargo(output),
         }
     }
 
@@ -66,6 +71,7 @@ impl TestRunner {
             Self::Pytest => "pytest",
             Self::Vitest => "Vitest",
             Self::Jest => "Jest",
+            Self::Cargo => "cargo test",
         }
     }
 }
@@ -290,6 +296,64 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
     (seen_summary || !results.failed.is_empty()).then_some(results)
 }
 
+/// Reads `cargo test`'s text output: `test path::name ... FAILED` and
+/// `... ok` lines, under the `Running ... (target/debug/deps/<crate>-<hash>)`
+/// or `Doc-tests <crate>` line of the test binary they belong to, so that
+/// the same test name in two crates is two tests:
+/// `firescale_core::verify::tests::a_test`.
+#[must_use]
+pub fn parse_cargo(output: &str) -> Option<TestResults> {
+    let mut results = TestResults::default();
+    let mut binary = String::new();
+    let mut seen = false;
+    for raw in output.lines() {
+        let line = clean(raw);
+        if let Some(rest) = line.strip_prefix("Running ") {
+            // `Running unittests src/lib.rs (target/debug/deps/core-1a2b)`.
+            if let Some(path) = rest
+                .rsplit('(')
+                .next()
+                .and_then(|tail| tail.strip_suffix(')'))
+            {
+                let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                let file = file.strip_suffix(".exe").unwrap_or(file);
+                binary = file
+                    .rsplit_once('-')
+                    .map_or(file, |(name, _)| name)
+                    .to_owned();
+            }
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("Doc-tests ") {
+            binary = format!("{} (doc)", name.trim());
+            continue;
+        }
+        if line.starts_with("test result:") {
+            seen = true;
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("test ") else {
+            continue;
+        };
+        let Some((name, outcome)) = rest.rsplit_once(" ... ") else {
+            continue;
+        };
+        let id = if binary.is_empty() {
+            name.trim().to_owned()
+        } else {
+            format!("{binary}::{}", name.trim())
+        };
+        match outcome.trim() {
+            "ok" => results.passed += 1,
+            "FAILED" => {
+                results.failed.insert(id);
+            }
+            _ => {}
+        }
+    }
+    (seen || !results.failed.is_empty()).then_some(results)
+}
+
 // ------------------------------------------------------------- comparing
 
 /// A test file renamed between the base and the head, as git reports it.
@@ -440,7 +504,7 @@ mod tests {
             TestRunner::of("pnpm run test", Some("jest --ci")),
             Some(TestRunner::Jest)
         );
-        assert_eq!(TestRunner::of("cargo test", None), None);
+        assert_eq!(TestRunner::of("cargo build", None), None);
         assert_eq!(TestRunner::of("npm test", Some("mocha")), None);
     }
 
@@ -672,6 +736,50 @@ stdout | src/math.test.ts > math > logs
         .into_iter()
         .collect();
         assert!(follow_renames(&base, &renames, "api/").contains("api/tests/test_new.py::test_a"));
+    }
+
+    #[test]
+    fn cargo_test_output_gives_ids_per_crate() {
+        let output = "\
+     Running unittests src/lib.rs (target/debug/deps/firescale_core-5992d7290be67e72)
+
+running 3 tests
+test verify::tests::a ... ok
+test verify::tests::b ... FAILED
+test verify::tests::c ... ignored
+
+failures:
+
+test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out
+
+     Running unittests src/main.rs (target/debug/deps/fscale-0a1b2c3d)
+
+running 1 test
+test verify::tests::b ... FAILED
+
+test result: FAILED. 0 passed; 1 failed
+   Doc-tests firescale_core
+
+running 1 test
+test src/lib.rs - doc (line 3) ... ok
+";
+        let results = parse_cargo(output).unwrap();
+        assert_eq!(results.passed, 2);
+        assert_eq!(
+            results.failed.into_iter().collect::<Vec<_>>(),
+            vec![
+                "firescale_core::verify::tests::b".to_owned(),
+                "fscale::verify::tests::b".to_owned()
+            ]
+        );
+        assert_eq!(
+            TestRunner::of("cargo test --workspace", None),
+            Some(TestRunner::Cargo)
+        );
+        assert_eq!(
+            TestRunner::of("npm test", Some("cargo test && vitest run")),
+            Some(TestRunner::Vitest)
+        );
     }
 
     #[test]

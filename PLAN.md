@@ -503,7 +503,9 @@ Decisions in ADR 0038. Vitest and Jest results come from their default reporters
 
 ---
 
-## M21 — Blame-aware verify: reruns and the stop hook ☐
+## M21 — Blame-aware verify: reruns and the stop hook ☑
+
+Decisions in ADR 0039. `cargo test` per-test labels are read from its text output.
 
 **Build**
 
@@ -515,11 +517,11 @@ Decisions in ADR 0038. Vitest and Jest results come from their default reporters
 
 **Done when**
 
-- ☐ A test that fails once and then passes is labelled `flaky` and does not block, proven with a fixture that fails on its first run only.
-- ☐ Nothing about past flaky results is written to disk, proven by a test.
-- ☐ The stop hook lets an agent stop when every failure is `pre-existing`, and blocks on a `new` one.
-- ☐ The stop hook runs only the projects a change touches: a change in one service runs that service's steps and no other project's, proven by a test.
-- ☐ Latency numbers are recorded.
+- ☑ A test that fails once and then passes is labelled `flaky` and does not block, proven with a fixture that fails on its first run only.
+- ☑ Nothing about past flaky results is written to disk, proven by a test.
+- ☑ The stop hook lets an agent stop when every failure is `pre-existing`, and blocks on a `new` one.
+- ☑ The stop hook runs only the projects a change touches: a change in one service runs that service's steps and no other project's, proven by a test.
+- ☑ Latency numbers are recorded.
 
 ---
 

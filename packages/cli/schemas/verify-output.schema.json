@@ -213,7 +213,7 @@
             }
           },
           "failedTests": {
-            "description": "For pytest, Vitest and Jest (ADR 0038): each failing test by its file and name, with its label when there is a base: new (does not fail on the base) or pre-existing.",
+            "description": "For pytest, Vitest and Jest (ADR 0038): each failing test by its file and name, with its label when there is a base: new (does not fail on the base), pre-existing, or flaky (new, and passed when the step ran again). Also for cargo test (ADR 0039).",
             "type": "array",
             "items": {
               "type": "object",
@@ -224,7 +224,7 @@
                   "type": "string"
                 },
                 "label": {
-                  "enum": ["new", "pre-existing"]
+                  "enum": ["new", "pre-existing", "flaky"]
                 }
               }
             }
