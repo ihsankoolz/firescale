@@ -124,6 +124,8 @@ async function github(
   };
 }
 
+const WORKFLOW = 'name: CI\non: [pull_request, push]\njobs: {}\n';
+
 /** A committed repo on main whose one test step logs each run. */
 async function sharedRepo() {
   const outside = await fixtures.create({ files: {}, track: 'no-git' });
@@ -137,7 +139,7 @@ async function sharedRepo() {
       '.gitignore': '.firescale/\n',
       'test.js': `require('fs').appendFileSync(${JSON.stringify(log)}, 'test\\n'); console.log('ok');\n`,
       'src.txt': 'one\n',
-      '.github/workflows/ci.yml': 'name: CI\non: [pull_request, push]\njobs: {}\n',
+      '.github/workflows/ci.yml': WORKFLOW,
     },
     track: 'no-git',
   });
@@ -228,7 +230,9 @@ describe('the shared cache of CI', () => {
     await writeFile(path.join(root, '.github', 'workflows', 'ci.yml'), 'name: CI 2\non: [push]\n');
     await verifyJson(root, pull);
     expect(await runs()).toBe(3);
-    await runGit(root, ['checkout', '--', '.github/workflows/ci.yml']);
+    // Its exact bytes back: a `git checkout` may write CRLF on Windows,
+    // which is another workflow file to the key.
+    await writeFile(path.join(root, '.github', 'workflows', 'ci.yml'), WORKFLOW);
     // Another file the step reads.
     await freshRunner();
     await writeFile(path.join(root, 'src.txt'), 'two\n');
