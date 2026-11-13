@@ -58,15 +58,15 @@ Proof: `stepcache::tests::a_name_without_an_extension_is_tried_as_cmd_tries_it_o
 
 ### 3. Base results, passed or failed
 
-Base results were already kept whether they passed or failed (ADR 0037), keyed by the step's M18 key with the base commit's blob ids in place of the working tree's files (`StepCache::base_key`). That stays; head results stay passes only. With item 2, a Node step on Windows now has a key, so its base result is kept. The key now also holds a hash of the env files linked in (item 4). Results that say nothing about the code (setup needed, timed out, over budget, stopped) are still not kept.
+Base results were already kept whether they passed or failed (ADR 0037), keyed by the step's M18 key with the base commit's blob ids in place of the working tree's files (`StepCache::base_key`). That stays; head results stay passes only. With item 2, a Node step on Windows now has a key, so its base result is kept. The key now also holds a hash of the env files copied in (item 4). Results that say nothing about the code (setup needed, timed out, over budget, stopped) are still not kept.
 
 Proof: `blame.test.ts` "reuses every passed step, Node steps included, and runs no base step again" (the course fixture, Python failing on both: the second run runs only the failing head steps again, and no base step).
 
 ### 4. The head's env files in the worktrees
 
-`.env` and `.env.local`, at the repo root and in each planned project's folder, are linked from the head into the base worktree and into the head-check worktree of ADR 0040, as `node_modules` and virtual environments are: a symbolic link; on Windows without the right to make one, a hard link; failing both, a copy. Each is removed before the worktree. A file the worktree already has (tracked on that commit) is left alone, and a link that cannot be made is not a reason to leave the step unjudged. Their contents are never read into a log, a record, a note or the cache: the only use of their bytes is a 16-digit hash in the base result's key (`env=<path>:<hash>`), so a kept result is not reused after a value changes.
+`.env` and `.env.local`, at the repo root and in each planned project's folder, are **copied** from the head into the base worktree and into the head-check worktree of ADR 0040, and removed before the worktree. The request said to link them as `node_modules` is linked; the review found that a link lets a base step that writes the file (`cp .env.example .env`, a test that saves a setting) overwrite the head's own `.env`, which git cannot restore, so a copy is used. A file the worktree already has (tracked on that commit) is left alone, and a file that cannot be copied is not a reason to leave the step unjudged. Their contents are never read into a log, a record, a note or the cache: the only use of their bytes is a 16-digit hash in the base result's key (`env=<path>:<hash>`), so a kept result is not reused after a value changes.
 
-Proof: `blame.test.ts` "links the head's ignored root .env into the base worktree, and keeps no value from it": the test reads `.env`; it is `pre-existing` (it fails on the code change) with the base run in the worktree, and the secret is in none of the outputs (human, JSON, progress, `FSCALE_LOG=cache`), none of the files under `.firescale/`, and none of the run records. It fails without the link.
+Proof: `blame.test.ts` "puts the head's ignored root .env into the base worktree, never writes the head's through it, and keeps no value from it": the test reads `.env`, and on the base it also writes it; it is `pre-existing` with the base run in the worktree, the head's `.env` is unchanged, and the secret is in none of the outputs (human, JSON, progress, `FSCALE_LOG=cache`), none of the files under `.firescale/`, and none of the run records. It fails without the copy, and with a link.
 
 ### 5. A base run only for a step that did not pass
 
@@ -115,7 +115,7 @@ Extends ADR 0034. A changed file that no project holds (the root's project inclu
 
 Left out on purpose, so they still run every project: `svg` (bundlers compile it and tests render it), spreadsheets and `csv` (data code reads), fonts (CSS loads them), `key` (also a TLS key), and a bare `.gz`, `.bz2` or `.xz` (often data a program loads, such as `seed.sql.gz`). Everything else no project owns still runs every project (`deploy.sh`, `setup.py`, `Makefile`, `foo.js`). A file a project holds stays that project's input, so a fixture image still runs its tests. With a root project, such a file runs that project only. The widening rules of ADR 0032 come first.
 
-The same files, and ADR 0034's, are left out of every project's step cache key (`stepcache::covers`), so plain `fscale verify`, not only `--affected`, runs nothing for them. The repo root's own steps keep the whole repo in their key.
+In the step cache key (`stepcache::covers`) the exclusion is narrower: only such a file directly in the repo root, or Markdown or a licence there (a screenshot, the README), is left out of every project's key, so plain `fscale verify`, not only `--affected`, runs nothing for them. Deeper files stay in the key, since a test may read `fixtures/sample.png` or `fixtures/words.txt` by its path, which the graph does not see. The repo root's own steps keep the whole repo in their key. A requirements list is never inert, wherever it is (`requirements/base.txt`).
 
 Proof: `graph::tests::an_unowned_root_image_affects_no_project_but_an_unowned_root_script_affects_all`, `an_image_a_project_imports_or_a_root_project_holds_is_not_inert`; `graph.test.ts` "An untracked root image runs no project; an unowned root script runs all."; `step-cache.test.ts` "runs again only the projects a change reaches" (a root image and README run nothing).
 
@@ -125,10 +125,28 @@ When two or more unlabelled setup-needed steps have the same reason (the text af
 
 Proof: `verify::tests::projects_with_the_same_setup_problem_share_one_block`; `python-env.test.ts` "prints a reason that several services share once".
 
+## After the review
+
+An independent review of the change found nine problems; all are fixed, with tests:
+
+1. **Per-test results could hide a failure outside the tests.** They decide only when they cover the whole run (`TestResults.partial`): a step that started pytest twice (both runs write the same JUnit report, so the last hides the first), two Vitest or Jest summaries, or a `cargo test` binary that ended with no `test result:` line falls back to the M19 output guard. pytest-cov's `Required test coverage of N% not reached` is a failing test of its own. Proof: `blame.test.ts` "does not let per-test results decide when one step ran pytest twice", which fails without the check.
+2. **Only the first error counted.** A new error headline after a stack frame (`TypeError: ...`, a second unhandled error, an `afterEach` failure) is part of the reason; every coverage line counts; Vitest's `Vitest caught N errors` line counts.
+3. **The normaliser folded values.** Only clock times with seconds (`14:08:27`), date-times (`2026-11-13T10:22:33Z`, `2026-11-13 10:22:33`) and durations whose unit ends the word are folded; `10:30`, `127.0.0.1:5432`, `555-123-4567`, plain dates and `2 h1` stay. A one-letter unit counts only right after the number (`2m`, not `2 m`).
+4. **A missing package hid type errors.** TS2307 or TS2688 beside any other TypeScript error, and mypy's import-not-found beside any other mypy error, are failures. mypy's message is setup needed only for a module a dependency list names (`requirements*.txt`, `pyproject.toml`, `Pipfile`, `setup.cfg`, from the project's folder up to the root), so an import typo stays a failure.
+5. **A linked env file let a base step overwrite the head's `.env`.** They are copied instead (item 4 above).
+6. **The same failure read as different on Windows and with linked dependencies.** Doubled backslashes are folded, and a base step's reasons are normalised with the head's root too (the linked `node_modules` resolve there).
+7. **`npm ci` fails for a package just added.** The lockfile-keeping install is named only when the lockfile already names the missing package (`setup::install_for`); otherwise the plain install (`npm install`, `pnpm install`, `yarn install`, `bun install`), which must update the lockfile.
+8. **The cache could serve a stale pass** after an unowned text or image file a test reads changed: the exclusion from the key is narrowed (item 9 above).
+9. **Silence where there is progress.** Python holds output in a buffer when it writes to a pipe, so steps get `PYTHONUNBUFFERED=1` unless the environment sets it. A config that raises `verify.timeout` keeps the 10-minute idle limit; only a step or project limit turns it off (as decided above).
+
+## Passes are stored as each step finishes
+
+Asked for after the review: a pass goes into the step cache as soon as its step finishes, if the files it depends on are the same then as when it started, instead of at the end of the run. A run stopped by Ctrl+C, a timeout elsewhere or a kill keeps every pass it made. A config change alters every key (the config is a file at the repo root): the first run after one says so once, from a digest kept in `.firescale/step-cache-config.digest`; with `--no-cache` nothing is said. Proof: `verify-run.test.ts` "stores each pass as its step finishes, so a run killed later keeps it" (the run is killed with `SIGKILL` while its test step runs; the next run takes lint from the cache) and `step-cache.test.ts` "says once when a change to the config means no kept pass applies".
+
 ## Consequences
 
 - An old failure that prints run-specific text no longer blocks, when its runner gives per-test results; the M19 guard still protects every other step.
 - `fixed` labels are gone from a default run; a full verify with failures costs base runs only for those failures.
 - A suite that keeps printing can run up to an hour by default; one that hangs silently is still stopped at 10 minutes.
 - The tamper guard of ADR 0042 is unchanged (`tamper.test.ts`, `bench/tamper-rates.mjs`).
-- Known limits: a failure beside the tests that the runner does not report as a test, other than unhandled errors and coverage thresholds, can hide behind old test failures; reasons are read from default reporters' text, so a custom reporter gives none and the step falls back to the M19 guard when no test is named. On Windows, without the right to make symbolic links and with the temp folder on another drive, an env file is copied into the worktree for the length of the base run.
+- Known limits: a failure beside the tests that the runner does not report as a test, other than unhandled errors and coverage thresholds, can hide behind old test failures; reasons are read from default reporters' text, so a custom reporter gives none and the step falls back to the M19 guard when no test is named. An env file is copied into the temp folder for the length of the base run; a run that is killed leaves it there until the next run sweeps the worktree (after six hours).

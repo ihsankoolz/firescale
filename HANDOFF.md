@@ -4,21 +4,12 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**Paused mid-work at the owner's request (2026-11-13).** The 0.4.0 fixes (ADR 0043) are built and committed on `claude/course-project-0.4.0-release-c543az`; the version is 0.4.0; no tag pushed; **no pull request opened yet**.
+Nothing is half-finished. This session finished the 0.4.0 fixes (ADR 0043): the ten items, the nine review fixes, and passes stored as each step finishes. The version is 0.4.0. **No tag has been pushed.**
 
-State when paused:
-
-- Items 1 to 10 of the 0.4.0 request are built, with tests; docs, ADR 0043, PLAN, DECISIONS updated. `pnpm --silent fscale verify` was OK before the review fixes below.
-- An independent review found nine issues; fixes for all nine are in the last commit ("fix: address review of 0.4.0 ..."): per-test results decide only when they cover the whole run (`TestResults.partial`: two pytest sessions, two Vitest/Jest summaries, a cargo binary with no results); pytest-cov thresholds; later errors and every coverage line count in a reason; only full clock times and date-times are folded (not `10:30`, IPs, phone numbers; one-letter units only right after the number); a missing package or module does not hide other TypeScript or mypy errors, and mypy needs the module named in a dependency list; env files are **copied** into the worktrees, not linked (a base step writing `.env` must not reach the head's); doubled backslashes and the head's root (for linked `node_modules`) are normalised in base reasons; `npm ci` (and other frozen installs) only when the lockfile already names the missing package (`setup::install_for`); the step cache leaves out only root-level media, Markdown and licence files; a requirements list is never inert; `PYTHONUNBUFFERED=1`.
-- The `npm ci` test's fixture now names the package in its lockfile, and a new case without it expects `npm install`. All tests passed when paused.
-
-To resume:
-
-1. Run `pnpm build`, `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm --silent fscale verify`.
-2. Update ADR 0043 and DECISIONS.md for the review fixes: env files are copied (not linked, a deliberate change from the request's wording, for safety); "different reason" no longer folds `HH:MM` or plain dates; per-test decides only with complete results; `install_for`; the narrower cache exclusion; `PYTHONUNBUFFERED`; raising `verify.timeout` keeps the idle limit (only step or project limits turn it off).
-3. Open one pull request (no tool footer, no co-author lines; commits stay under the owner's identity even if a hook asks to re-author), wait for Linux, macOS and Windows CI, merge on green. Do not start M24.
-
-- **Next after that:** M24. Not started.
+- **Branch:** `claude/course-project-0.4.0-release-c543az`, merged through its pull request.
+- **Next:** M24 (the tamper guard for Rust and Python, and its policy keys). Not started.
+- **0.4.0 is ready to tag** (`RELEASING.md`). Check whether `v0.3.0` was ever tagged first.
+- Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
 
@@ -46,8 +37,9 @@ Notes on 0.4.0, for whoever touches blame, the step cache or time limits (ADR 00
 
 - Per-test reasons: parsers in `crates/core/src/pertest.rs` fill `TestResults.reasons` with text (`Block` cuts at the first stack frame and drops code excerpts); `run_step` replaces it at once with hashes (`hash_reasons`, `normalise_reason_line`). Never keep the text. `blame::compare` decides with `other_reason` before the M19 `signature_within` guard, which still covers steps without per-test results and heads with no failing test.
 - `verify.labelFixed` sets `judge_passes` (`crates/cli/src/main.rs`); by default no passing step runs on the base or in the head-check worktree.
-- Env files: `blame::env_files` (`.env`, `.env.local`, root and each planned project), linked by `Worktree::link_file`, removed in `Drop`. Only a 16-digit hash goes into `environment`, which is only ever hashed. A test greps every output, `.firescale/` and the run records for the secret.
-- Windows program lookup is `stepcache::windows_candidates` (PATHEXT extensions only, never the bare name). `StepReport.not_cached` carries the reason a pass is not reusable; `StepCache::finish` returns the passes it did not store.
+- Env files: `blame::env_files` (`.env`, `.env.local`, root and each planned project), copied (never linked) by `Worktree::copy_file`, removed in `Drop`. Only a 16-digit hash goes into `environment`, which is only ever hashed. A test greps every output, `.firescale/` and the run records for the secret.
+- Windows program lookup is `stepcache::windows_candidates` (PATHEXT extensions only, never the bare name). `StepReport.not_cached` carries the reason a pass is not reusable. `StepCache::remember` stores a pass as soon as its step finishes (returning why not, if not); `finish` only cleans. `config_note` keeps the config's digest in `.firescale/step-cache-config.digest`.
+- Per-test results with `TestResults.partial` (two runner sessions, a cargo binary with no results) never decide `pre-existing`; `setup::install_for` names the plain install for a package the lockfile lacks.
 - Time limits: `VerifyConfig::idle_for` (none when a step or project limit is set) and `Watch.idle` in `process.rs`; `Finished.silent` and `Finished.percent`; `Activity::percent` reads only a trailing `[ NN%]`.
 - Setup: `setup::locked_install` maps installs to their frozen form for doctor and verify's plan only; `Commands.install` in facts is unchanged on purpose (AGENTS.md blocks). Node package checks are `node_package_problem`.
 - Inert unowned files: `graph::is_document_or_media` with ADR 0034's `cannot_affect_builds`, used by `graph::affected` and `stepcache::covers`.
