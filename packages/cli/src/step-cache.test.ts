@@ -184,6 +184,64 @@ describe('the step cache', () => {
     expect(await ran()).toHaveLength(6);
   });
 
+  it('says on every run, without FSCALE_LOG, why a passed step is not cached', async () => {
+    const { repo } = await loggingRepo({
+      '.env.example': 'DATABASE_URL=postgresql://app:secret@localhost:5432/app\n',
+    });
+    for (let run = 0; run < 2; run += 1) {
+      const result = await runCli(['verify'], repo.root, {});
+      expect(result.code).toBe(EXIT_OK);
+      expect(result.stdout).toContain(
+        'Not cached: test passed, but the next run cannot reuse it: it may need PostgreSQL on localhost:5432 (from .env.example (DATABASE_URL)), a service the repo does not start.',
+      );
+      expect(result.stdout).not.toContain('secret');
+      const json = await validate((await runCli(['verify', '--json'], repo.root, {})).stdout);
+      const test = json.steps.find((step) => step.name === 'test') as Step & { notCached?: string };
+      expect(test.notCached).toMatch(/^it may need PostgreSQL on localhost:5432/);
+    }
+  });
+
+  it('says nothing about the cache for a step that is cached', async () => {
+    const { repo } = await loggingRepo();
+    const first = await runCli(['verify'], repo.root, {});
+    expect(first.stdout).not.toContain('Not cached');
+    const json = await validate((await runCli(['verify', '--json'], repo.root, {})).stdout);
+    for (const step of json.steps) expect(step).not.toHaveProperty('notCached');
+  });
+
+  it('caches a Node step started as npm.cmd beside the shell script named npm that Node installs', async () => {
+    // On Windows, Node's folder holds `npm` (a shell script Windows cannot
+    // run) beside `npm.cmd`. The step runs through cmd, which starts
+    // npm.cmd; the version must be read the same way (ADR 0043).
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: { lint: false, typecheck: false, test: 'npm test' },
+        }),
+        'package.json': JSON.stringify({ name: 'web', scripts: { test: 'node -e ""' } }),
+        'package-lock.json': '{"lockfileVersion":3}\n',
+      },
+    });
+    const tools = await fixtures.create({ files: {}, track: 'no-git' });
+    await writeToolShims(tools.root, { versions: true });
+    if (process.platform === 'win32') {
+      await writeFile(path.join(tools.root, 'npm'), '#!/bin/sh\necho "this is not for Windows"\n');
+    }
+    const log = path.join(tools.root, 'calls.log');
+    const env = { ...shimEnv(tools.root, log), FSCALE_LOG: 'cache' };
+    const first = await runCli(['verify'], repo.root, env);
+    expect(first.code).toBe(EXIT_OK);
+    expect(first.stderr).not.toContain('could not be read');
+    expect(first.stdout).not.toContain('Not cached');
+    const second = await runCli(['verify'], repo.root, env);
+    expect(second.stdout.split('\n')[0]).toBe(
+      'verify: OK (1 of 2 steps passed from the cache, not run now)',
+    );
+    expect(second.stderr).toContain('cache: hit test');
+    expect(await stepCalls(log)).toEqual(['npm test in ' + path.basename(repo.root)]);
+  });
+
   it('caches a step whose service the repo starts with Compose', async () => {
     const { repo, ran } = await loggingRepo({
       '.env.example': 'DATABASE_URL=postgresql://app:secret@localhost:5432/app\n',

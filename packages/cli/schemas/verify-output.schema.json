@@ -171,6 +171,10 @@
               "type": "string"
             }
           },
+          "notCached": {
+            "description": "For a step that passed now: why its pass was not kept for the next run, or could not be looked up in the step cache (ADR 0043).",
+            "type": "string"
+          },
           "cache": {
             "description": "Set when the step was not run now: it passed before on the same inputs, and that pass came from the step cache (ADR 0036). Its status is passed and its durationMs is 0.",
             "type": "object",

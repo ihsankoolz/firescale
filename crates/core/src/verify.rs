@@ -848,6 +848,11 @@ pub struct StepReport {
     /// the shared cache's record (ADR 0041). Not in JSON.
     #[serde(skip)]
     pub output_digest: Option<String>,
+    /// For a step that passed now: why its pass was not kept for the next
+    /// run, or could not be looked up (ADR 0043). Shown without
+    /// `FSCALE_LOG`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_cached: Option<String>,
     /// The failure's signature: one short hash per normalised line of its
     /// output (ADR 0037). A failure is `pre-existing` only when its
     /// signature on the head is contained in the base's. Not in JSON.
@@ -1951,6 +1956,7 @@ fn run_step(
         failed_tests: Vec::new(),
         test_results: None,
         output_digest: None,
+        not_cached: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -2297,6 +2303,7 @@ fn run_unit(
                 failed_tests: Vec::new(),
                 test_results: None,
                 output_digest: None,
+                not_cached: None,
             })
             .collect());
     }
@@ -2325,6 +2332,7 @@ fn run_unit(
             failed_tests: Vec::new(),
             test_results: None,
             output_digest: None,
+            not_cached: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2489,7 +2497,11 @@ fn cached_or_run(
         Ok(key) => key,
         Err(reason) => {
             cache.note(format!("cache: not cached {place}: {reason}"));
-            return run_step(unit, name, command, options);
+            let mut report = run_step(unit, name, command, options)?;
+            if report.status == StepStatus::Passed {
+                report.not_cached = Some(reason);
+            }
+            return Ok(report);
         }
     };
     if let Some(entry) = cache.hit(&key) {
@@ -2537,6 +2549,7 @@ fn cached_or_run(
             failed_tests: Vec::new(),
             test_results: None,
                 output_digest: None,
+                not_cached: None,
         });
     }
     let ran_at = now_secs();
@@ -2625,6 +2638,7 @@ pub fn run_verify_with(
         failed_tests: Vec::new(),
         test_results: None,
         output_digest: None,
+        not_cached: None,
     }];
     let check_failed = !check.ok && !options.every_step;
 
@@ -2694,7 +2708,14 @@ pub fn run_verify_with(
         steps.extend(result?);
     }
     if let Some(cache) = options.cache {
-        cache.finish();
+        for (project, step, reason) in cache.finish() {
+            if let Some(found) = steps
+                .iter_mut()
+                .find(|found| found.name == step && found.project == project)
+            {
+                found.not_cached = Some(reason);
+            }
+        }
     }
     let stopped = options.stop.load(Ordering::SeqCst)
         || steps.iter().any(|step| step.status == StepStatus::Stopped);
@@ -3497,6 +3518,26 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             format_duration(Duration::from_millis(cache.saved_ms)),
             if cache.hits == 1 { "it" } else { "they" },
         ));
+    }
+    // A pass that the next run cannot reuse, and why (ADR 0043).
+    let not_cached: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|step| step.status == StepStatus::Passed)
+        .filter_map(|step| {
+            step.not_cached.as_ref().map(|why| {
+                format!(
+                    "Not cached: {} passed, but the next run cannot reuse it: {why}.\n",
+                    step_place(step)
+                )
+            })
+        })
+        .collect();
+    if !not_cached.is_empty() {
+        out.push('\n');
+        for line in not_cached {
+            out.push_str(&line);
+        }
     }
     if report.result == VerifyResult::Stopped {
         out.push_str("\nStopped: verify was interrupted (Ctrl+C or a termination signal), and every command it had started was stopped. Steps marked STOPPED or not run did not finish; run fscale verify again to check them.\n");

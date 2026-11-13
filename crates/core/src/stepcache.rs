@@ -605,16 +605,35 @@ fn locate(dir: &Path, program: &str) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+/// The files `path` can name as a command on Windows, in the order `cmd`
+/// tries them, which is how a step itself is started: a name without one of
+/// the `PATHEXT` extensions is tried with each of them (`npm` is `npm.cmd`),
+/// and never as it is. Node's installer puts a shell script named `npm`
+/// beside `npm.cmd`; Windows cannot run it, so its version could never be
+/// read and no Node step was ever cached (ADR 0043).
 #[cfg(windows)]
 fn candidates(path: &Path) -> Vec<PathBuf> {
-    let mut out = vec![path.to_path_buf()];
     let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
-    for ext in exts.split(';').filter(|ext| !ext.is_empty()) {
-        let mut name = path.as_os_str().to_owned();
-        name.push(ext);
-        out.push(PathBuf::from(name));
+    windows_candidates(path, &exts)
+}
+
+#[cfg(any(windows, test))]
+fn windows_candidates(path: &Path, pathext: &str) -> Vec<PathBuf> {
+    let exts: Vec<&str> = pathext.split(';').filter(|ext| !ext.is_empty()).collect();
+    let has_ext = path
+        .extension()
+        .map(|ext| format!(".{}", ext.to_string_lossy()))
+        .is_some_and(|ext| exts.iter().any(|known| known.eq_ignore_ascii_case(&ext)));
+    if has_ext {
+        return vec![path.to_path_buf()];
     }
-    out
+    exts.iter()
+        .map(|ext| {
+            let mut name = path.as_os_str().to_owned();
+            name.push(ext);
+            PathBuf::from(name)
+        })
+        .collect()
 }
 
 #[cfg(not(windows))]
@@ -1553,15 +1572,16 @@ impl<'a> StepCache<'a> {
     /// Stores the passes whose files are the same now as when they started
     /// (a step that wrote a file it depends on, or one whose files another
     /// step or a person changed while it ran, is not stored), then cleans
-    /// the folder. Returns how many were stored.
-    pub fn finish(&self) -> usize {
+    /// the folder. Returns the passes that were not stored, each with its
+    /// project, step and why.
+    pub fn finish(&self) -> Vec<(Option<String>, String, String)> {
         let pending = std::mem::take(
             &mut *self
                 .pending
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        let mut stored = 0;
+        let mut not_stored = Vec::new();
         if !pending.is_empty() {
             let now = self.fresh();
             for (scope, before, entry) in pending {
@@ -1571,9 +1591,15 @@ impl<'a> StepCache<'a> {
                 );
                 match self.digests.digest(&now, &scope) {
                     Ok(after) if after == before => {
-                        if store(&self.root, &entry).is_ok() {
-                            stored += 1;
-                            self.note(format!("cache: stored {place}"));
+                        match store(&self.root, &entry) {
+                            Ok(()) => self.note(format!("cache: stored {place}")),
+                            Err(error) => {
+                                let why = format!(
+                                    "it could not be written to .firescale/steps ({error})"
+                                );
+                                self.note(format!("cache: not stored {place}: {why}"));
+                                not_stored.push((entry.project.clone(), entry.step.clone(), why));
+                            }
                         }
                         if let Some(shared) = self.shared.as_ref().filter(|shared| shared.writes())
                         {
@@ -1589,9 +1615,11 @@ impl<'a> StepCache<'a> {
                             }
                         }
                     }
-                    _ => self.note(format!(
-                        "cache: not stored {place}: files it depends on changed while verify ran"
-                    )),
+                    _ => {
+                        let why = "files it depends on changed while verify ran".to_owned();
+                        self.note(format!("cache: not stored {place}: {why}"));
+                        not_stored.push((entry.project.clone(), entry.step.clone(), why));
+                    }
                 }
             }
         }
@@ -1604,7 +1632,7 @@ impl<'a> StepCache<'a> {
                 ));
             }
         }
-        stored
+        not_stored
     }
 
     /// The lines for `FSCALE_LOG=cache`, in the order they were noted.
@@ -2072,5 +2100,37 @@ mod tests {
         fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
         let version = ThisMachine.version(dir.path(), &tool.to_string_lossy(), &["--version"]);
         assert_eq!(version.as_deref(), Some("tool 1.2.3 --version"));
+    }
+
+    #[test]
+    fn a_name_without_an_extension_is_tried_as_cmd_tries_it_on_windows() {
+        let exts = ".COM;.EXE;.BAT;.CMD";
+        let npm = Path::new("C:/node").join("npm");
+        let names: Vec<String> = windows_candidates(&npm, exts)
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        // Never the bare `npm`: Node's installer puts a shell script there.
+        assert_eq!(names, ["npm.COM", "npm.EXE", "npm.BAT", "npm.CMD"]);
+        let given = Path::new("C:/node").join("npm.cmd");
+        assert_eq!(windows_candidates(&given, exts), vec![given.clone()]);
+        // A dot in the name that is no extension of PATHEXT is not one.
+        let dotted = Path::new("C:/py").join("python3.12");
+        assert_eq!(windows_candidates(&dotted, exts).len(), 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_version_of_npm_is_read_from_npm_cmd_beside_a_shell_script() {
+        let dir = tempfile::tempdir().unwrap();
+        // As Node's installer lays them out: a shell script and a batch file.
+        fs::write(dir.path().join("npm"), "#!/bin/sh\necho shell\n").unwrap();
+        fs::write(dir.path().join("npm.cmd"), "@echo off\r\necho 10.9.2\r\n").unwrap();
+        let program = dir.path().join("npm");
+        let found = locate(dir.path(), &program.to_string_lossy()).unwrap();
+        assert!(found.to_string_lossy().ends_with(".cmd"), "{found:?}");
+        let tools = ToolVersions::new(&ThisMachine);
+        let version = tools.version(dir.path(), &program.to_string_lossy(), &["--version"]);
+        assert!(version.is_some_and(|line| line.ends_with("10.9.2")));
     }
 }
