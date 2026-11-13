@@ -1072,6 +1072,88 @@ fn node_package_problem(
     }))
 }
 
+// --- Installing without rewriting the lockfile
+
+/// True for a Yarn 2 or later project: `packageManager` names `yarn@2` or
+/// later in `dir` or the root, or else there is a `.yarnrc.yml` from `dir` up
+/// to the root, or the lockfile has Yarn 2's `__metadata:` header.
+fn is_yarn_berry(root: &Path, dir: &Path) -> bool {
+    for folder in [dir, root] {
+        let declared = std::fs::read_to_string(folder.join("package.json"))
+            .ok()
+            .and_then(|text| {
+                serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}')).ok()
+            })
+            .and_then(|json| {
+                json.get("packageManager")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            });
+        if let Some(version) = declared.as_deref().and_then(|pm| pm.strip_prefix("yarn@")) {
+            return leading_digits(version)
+                .parse::<u32>()
+                .is_ok_and(|major| major >= 2);
+        }
+    }
+    if file_up_to_root(".yarnrc.yml", root, dir) {
+        return true;
+    }
+    std::fs::read_to_string(dir.join("yarn.lock"))
+        .is_ok_and(|lock| lock.lines().any(|line| line.trim_end() == "__metadata:"))
+}
+
+/// True when `name` is a file in `dir` or a folder above it, up to `root`.
+fn file_up_to_root(name: &str, root: &Path, dir: &Path) -> bool {
+    let mut current = Some(dir);
+    while let Some(folder) = current {
+        if folder.join(name).is_file() {
+            return true;
+        }
+        if folder == root {
+            break;
+        }
+        current = folder.parent().filter(|parent| parent.starts_with(root));
+    }
+    false
+}
+
+/// The form of a project's install command that installs exactly what its
+/// lockfile says and never rewrites the lockfile, for `doctor` and for
+/// verify's setup-needed text. `install` is the command `fscale facts`
+/// found, to be run in `dir`. With no lockfile for its package manager, or a
+/// command this does not know, `install` comes back as it is.
+///
+/// - `npm install` with `package-lock.json` or `npm-shrinkwrap.json`: `npm ci`.
+/// - `pnpm install` with `pnpm-lock.yaml`: `pnpm install --frozen-lockfile`.
+/// - `yarn install` with `yarn.lock`: `yarn install --immutable` for Yarn 2
+///   and later, `yarn install --frozen-lockfile` for Yarn 1.
+/// - `bun install` with `bun.lock` or `bun.lockb`: `bun install --frozen-lockfile`.
+/// - `uv sync` with `uv.lock` here or above (a uv workspace keeps one at
+///   its root): `uv sync --locked`.
+/// - `pipenv install --dev` with `Pipfile.lock`: `pipenv sync --dev`.
+/// - `poetry install` stays: it installs from `poetry.lock` and does not
+///   rewrite it.
+#[must_use]
+pub fn locked_install(install: &str, root: &Path, dir: &Path) -> String {
+    let has = |name: &str| dir.join(name).is_file();
+    let locked = match install {
+        "npm install" if has("package-lock.json") || has("npm-shrinkwrap.json") => "npm ci",
+        "pnpm install" if has("pnpm-lock.yaml") => "pnpm install --frozen-lockfile",
+        "yarn install" if has("yarn.lock") => {
+            if is_yarn_berry(root, dir) {
+                "yarn install --immutable"
+            } else {
+                "yarn install --frozen-lockfile"
+            }
+        }
+        "bun install" if has("bun.lock") || has("bun.lockb") => "bun install --frozen-lockfile",
+        "uv sync" if file_up_to_root("uv.lock", root, dir) => "uv sync --locked",
+        "pipenv install --dev" if has("Pipfile.lock") => "pipenv sync --dev",
+        _ => install,
+    };
+    locked.to_owned()
+}
+
 /// mypy: `error: Cannot find implementation or library stub for module named "requests"  [import-not-found]`.
 fn mypy_missing(line: &str) -> Option<&str> {
     const STUB: &str = "Cannot find implementation or library stub for module named ";
@@ -2112,6 +2194,139 @@ mod tests {
         // Installed without types is another message, and a normal failure.
         let untyped = "main.py:1: error: Skipping analyzing \"yaml\": module is installed, but missing library stubs or py.typed marker  [import-untyped]\n";
         assert_eq!(problem(untyped, 1), None);
+    }
+
+    fn locked(install: &str, files: &[(&str, &str)]) -> String {
+        let fixture = Fixture::new(files, Track::NoGit).unwrap();
+        let dir = fixture.root().join("app");
+        std::fs::create_dir_all(&dir).unwrap();
+        locked_install(install, fixture.root(), &dir)
+    }
+
+    #[test]
+    fn npm_with_a_lockfile_installs_with_npm_ci() {
+        assert_eq!(
+            locked("npm install", &[("app/package-lock.json", "{}")]),
+            "npm ci"
+        );
+        assert_eq!(
+            locked("npm install", &[("app/npm-shrinkwrap.json", "{}")]),
+            "npm ci"
+        );
+        assert_eq!(locked("npm install", &[]), "npm install");
+        // The lockfile of another folder does not count.
+        assert_eq!(
+            locked("npm install", &[("package-lock.json", "{}")]),
+            "npm install"
+        );
+    }
+
+    #[test]
+    fn pnpm_with_a_lockfile_installs_with_a_frozen_lockfile() {
+        assert_eq!(
+            locked("pnpm install", &[("app/pnpm-lock.yaml", "")]),
+            "pnpm install --frozen-lockfile"
+        );
+        assert_eq!(locked("pnpm install", &[]), "pnpm install");
+        // A lockfile of another manager does not count.
+        assert_eq!(
+            locked("pnpm install", &[("app/package-lock.json", "{}")]),
+            "pnpm install"
+        );
+    }
+
+    #[test]
+    fn yarn_with_a_lockfile_installs_with_its_versions_flag() {
+        let classic = "# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.\n# yarn lockfile v1\n";
+        assert_eq!(
+            locked("yarn install", &[("app/yarn.lock", classic)]),
+            "yarn install --frozen-lockfile"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[
+                    ("app/yarn.lock", classic),
+                    ("app/package.json", r#"{"packageManager":"yarn@1.22.22"}"#)
+                ]
+            ),
+            "yarn install --frozen-lockfile"
+        );
+        let berry = "# This file is generated by running \"yarn install\" inside your project.\n\n__metadata:\n  version: 8\n";
+        assert_eq!(
+            locked("yarn install", &[("app/yarn.lock", berry)]),
+            "yarn install --immutable"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[
+                    ("app/yarn.lock", ""),
+                    ("app/package.json", r#"{"packageManager":"yarn@4.5.0"}"#)
+                ]
+            ),
+            "yarn install --immutable"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[
+                    ("app/yarn.lock", ""),
+                    ("package.json", r#"{"packageManager":"yarn@3.8.0"}"#)
+                ]
+            ),
+            "yarn install --immutable"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[("app/yarn.lock", ""), (".yarnrc.yml", "")]
+            ),
+            "yarn install --immutable"
+        );
+        assert_eq!(locked("yarn install", &[]), "yarn install");
+    }
+
+    #[test]
+    fn bun_with_a_lockfile_installs_with_a_frozen_lockfile() {
+        assert_eq!(
+            locked("bun install", &[("app/bun.lock", "")]),
+            "bun install --frozen-lockfile"
+        );
+        assert_eq!(
+            locked("bun install", &[("app/bun.lockb", "")]),
+            "bun install --frozen-lockfile"
+        );
+        assert_eq!(locked("bun install", &[]), "bun install");
+    }
+
+    #[test]
+    fn python_managers_with_a_lockfile_install_from_it() {
+        assert_eq!(
+            locked("uv sync", &[("app/uv.lock", "")]),
+            "uv sync --locked"
+        );
+        // A uv workspace keeps its lockfile at the workspace root.
+        assert_eq!(locked("uv sync", &[("uv.lock", "")]), "uv sync --locked");
+        assert_eq!(locked("uv sync", &[]), "uv sync");
+        assert_eq!(
+            locked("pipenv install --dev", &[("app/Pipfile.lock", "{}")]),
+            "pipenv sync --dev"
+        );
+        assert_eq!(locked("pipenv install --dev", &[]), "pipenv install --dev");
+        // poetry install never rewrites an existing poetry.lock.
+        assert_eq!(
+            locked("poetry install", &[("app/poetry.lock", "")]),
+            "poetry install"
+        );
+        // pip has no lockfile of its own.
+        assert_eq!(
+            locked(
+                ".venv/bin/python -m pip install -r requirements.txt",
+                &[("app/requirements.txt", "")]
+            ),
+            ".venv/bin/python -m pip install -r requirements.txt"
+        );
     }
 
     const REFUSED: &str = "Error: connect ECONNREFUSED 127.0.0.1:5432\n";

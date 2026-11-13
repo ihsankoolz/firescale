@@ -155,7 +155,7 @@ describe('fscale doctor', () => {
       'PROBLEM  .env.example: 1 of 3 variables are not set in the environment or .env: DATABASE_URL.\n           next: add DATABASE_URL to .env',
     );
     expect(out).toContain(
-      'PROBLEM  node_modules: the dependencies of package.json are not installed.\n           next: bun install',
+      'PROBLEM  node_modules: the dependencies of package.json are not installed.\n           next: bun install --frozen-lockfile',
     );
     expect(out).toContain(
       'PROBLEM  backend packages: 1 of 2 packages in backend/requirements.txt are not installed: flask; 1 does not match its pinned version: requests 2.30.0 (wants 2.31.0).',
@@ -166,6 +166,36 @@ describe('fscale doctor', () => {
     expect(out).toContain(
       'PROBLEM  PostgreSQL on localhost:<port>: not reachable: nothing listens on port <port> (.env.example (DATABASE_URL)).\n           next: start PostgreSQL so it listens on port <port>',
     );
+  });
+
+  it('names the install that keeps the lockfile: npm ci with a package-lock.json, npm install without', async () => {
+    const manifest = JSON.stringify({ name: 'web', dependencies: { 'left-pad': '1.3.0' } });
+    const repo = await fixtures.create({
+      files: {
+        'locked/package.json': manifest,
+        'locked/package-lock.json': '{}\n',
+        'locked/index.js': '',
+        'pnpm/package.json': manifest,
+        'pnpm/pnpm-lock.yaml': "lockfileVersion: '9.0'\n",
+        'pnpm/index.js': '',
+        'plain/package.json': manifest,
+        'plain/index.js': '',
+      },
+    });
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await writeVersionTools(tools, { node: 'v22.11.0', npm: '10.9.0', pnpm: '9.12.0' });
+    const result = await runCli(['doctor', '--json'], repo.root, toolPath(tools));
+    const report = await validate(result.stdout);
+    const fixes = Object.fromEntries(
+      report.checks
+        .filter((check) => check.section === 'dependencies')
+        .map((check) => [check.project, check.fix]),
+    );
+    expect(fixes).toEqual({
+      locked: 'in locked: npm ci',
+      plain: 'in plain: npm install',
+      pnpm: 'in pnpm: pnpm install --frozen-lockfile',
+    });
   });
 
   it('never prints the value of an env variable, a password or a connection string', async () => {

@@ -23,7 +23,7 @@ use crate::graph::{project_id, Affected, Graph};
 use crate::process::{run_tree, Ending, Watch};
 use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT};
 use crate::runs::{RunRecord, RunningStep};
-use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
+use crate::setup::{locked_install, refused_service, service_down, setup_problem, SetupProblem};
 use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
 
 /// Version of the `fscale verify --json` format.
@@ -192,7 +192,8 @@ pub struct ProjectPlan {
     pub kind: Option<String>,
     pub steps: Vec<(String, Planned)>,
     /// The command that installs the project's dependencies, named when a
-    /// step fails because the environment is not set up.
+    /// step fails because the environment is not set up. With a lockfile it
+    /// is the form that does not rewrite it (`npm ci`, `setup::locked_install`).
     pub install: Option<String>,
     /// True for a Python project for which no virtual environment was
     /// found, so its commands use `python` from the PATH (ADR 0022).
@@ -211,7 +212,8 @@ pub struct VerifyPlan {
     pub projects: Vec<ProjectPlan>,
     /// From `verify.failOnSkipped`.
     pub fail_on_skipped: bool,
-    /// The command that installs the root's dependencies, if known.
+    /// The command that installs the root's dependencies, if known, in the
+    /// form that does not rewrite a lockfile (`setup::locked_install`).
     pub install: Option<String>,
     /// True when the root is a Python project with no virtual environment.
     pub python_from_path: bool,
@@ -486,7 +488,12 @@ fn runs_by_itself(project: &Project, covered: &str) -> bool {
 /// The steps of the projects that run by themselves, and of any other folder
 /// named under `verify.projects`. `covered` is the kind of project the
 /// root's own commands run.
-fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec<ProjectPlan> {
+fn plan_projects(
+    root: &Path,
+    facts: &RepoFacts,
+    config: &VerifyConfig,
+    covered: &str,
+) -> Vec<ProjectPlan> {
     let mut plans: Vec<ProjectPlan> = Vec::new();
     let mut discovered: Vec<&Project> = facts
         .projects
@@ -538,7 +545,9 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                 root: project.root.clone(),
                 kind: Some(project.kind.clone()),
                 steps,
-                install: project.commands.install.clone(),
+                install: project.commands.install.as_deref().map(|install| {
+                    locked_install(install, root, &project_dir(root, &project.root))
+                }),
                 python_from_path: detected_runs && from_path(project),
             });
         }
@@ -691,7 +700,7 @@ pub fn plan_verify(
         "cargo" => "rust",
         other => other,
     };
-    let projects = plan_projects(facts, config, covered);
+    let projects = plan_projects(root, facts, config, covered);
     // With no commands of its own, the root only lists what the config sets
     // for it, as long as a project has a step that runs or is named as
     // skipped. Projects that are all turned off do not make the root silent.
@@ -718,7 +727,9 @@ pub fn plan_verify(
         .projects
         .iter()
         .find(|project| project.root == "." && project.kind == covered);
-    let install = covering.and_then(|project| project.commands.install.clone());
+    let install = covering
+        .and_then(|project| project.commands.install.as_deref())
+        .map(|install| locked_install(install, root, root));
     let python_from_path = covering.is_some_and(from_path);
     VerifyPlan {
         runner: if all_from_config {
@@ -4778,8 +4789,62 @@ mod tests {
             audit.install.as_deref(),
             Some("python -m pip install -r requirements-dev.txt")
         );
+        // The frontend has a package-lock.json: `npm install` would rewrite
+        // it, `npm ci` installs exactly what it says.
+        let frontend = plan.projects.last().unwrap();
+        assert_eq!(frontend.install.as_deref(), Some("npm ci"));
+        // Without the lockfile, the plain install.
+        std::fs::remove_file(fixture.root().join("frontend").join("package-lock.json")).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
         let frontend = plan.projects.last().unwrap();
         assert_eq!(frontend.install.as_deref(), Some("npm install"));
+    }
+
+    #[test]
+    fn the_setup_text_names_the_install_that_keeps_the_lockfile() {
+        // A pnpm project and a uv project, each with its lockfile.
+        let fixture = Fixture::new(
+            &[
+                ("web/package.json", r#"{"name":"web","scripts":{"lint":"eslint ."}}"#),
+                ("web/pnpm-lock.yaml", "lockfileVersion: '9.0'\n"),
+                (
+                    "api/pyproject.toml",
+                    "[project]\nname = \"api\"\nversion = \"0.1.0\"\n[dependency-groups]\ndev = [\"pytest\"]\n",
+                ),
+                ("api/uv.lock", "version = 1\n"),
+                ("api/tests/test_x.py", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        let install = |root: &str| {
+            plan.projects
+                .iter()
+                .find(|project| project.root == root)
+                .and_then(|project| project.install.clone())
+        };
+        assert_eq!(
+            install("web").as_deref(),
+            Some("pnpm install --frozen-lockfile")
+        );
+        assert_eq!(install("api").as_deref(), Some("uv sync --locked"));
+        // What facts records, and the rules write into AGENTS.md, is unchanged.
+        let web = facts.projects.iter().find(|p| p.root == "web").unwrap();
+        assert_eq!(web.commands.install.as_deref(), Some("pnpm install"));
     }
 
     #[test]
