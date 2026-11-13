@@ -225,6 +225,68 @@ describe('blame-aware verify', () => {
     expect((await runs()).filter((run) => run.startsWith('base '))).toEqual([]);
   });
 
+  it("links the head's ignored root .env into the base worktree, and keeps no value from it (ADR 0043)", async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    const secret = 'sk-test-9f8e7d6c5b4a-never-shown';
+    // The test reads the ignored .env, as the course project's tests do.
+    await write(
+      'test.js',
+      [
+        "const fs = require('fs');",
+        "const where = process.cwd().includes('firescale-base-') ? 'base' : 'head';",
+        `fs.appendFileSync(${JSON.stringify(path.join(root, '..', `${path.basename(root)}-env.log`))}, where + ' test\\n');`,
+        "if (!fs.existsSync('.env')) { console.log('KeyError: API_KEY (no .env file)'); process.exit(1); }",
+        "if (!fs.readFileSync('.env', 'utf8').includes('API_KEY=')) process.exit(2);",
+        "console.log('AssertionError: expected 2 to equal 3');",
+        "process.exit(fs.readFileSync('test.txt', 'utf8').includes('fail') ? 1 : 0);",
+        '',
+      ].join('\n'),
+    );
+    await write('.gitignore', '.firescale/\n.env\n');
+    await commitAll(root, 'the test reads .env');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    await write('.env', `API_KEY=${secret}\n`);
+    await write('lint.txt', 'ok, changed\n');
+    const human = await runCli(['verify', '--progress'], root, { FSCALE_LOG: 'cache' });
+    expect(human.code).toBe(EXIT_OK);
+    expect(human.stdout.split('\n')[0]).toMatch(/^verify: OK - no new failures; pre-existing/);
+    const json = await runCli(['verify', '--json', '--no-cache'], root);
+    const data = await report(json.stdout);
+    expect(step(data, 'test').label).toBe('pre-existing');
+    expect(step(data, 'test').base?.source).toBe('ran');
+    const envLog = await readFile(path.join(root, '..', `${path.basename(root)}-env.log`), 'utf8');
+    expect(envLog.split(/\r?\n/).filter((line) => line === 'base test').length).toBe(2);
+    // No value from .env in any output or stored file.
+    for (const text of [human.stdout, human.stderr, json.stdout, json.stderr]) {
+      expect(text).not.toContain(secret);
+    }
+    const { readdir, stat } = await import('node:fs/promises');
+    const os = await import('node:os');
+    const walk = async (dir: string): Promise<string[]> => {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      const files: string[] = [];
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) files.push(...(await walk(full)));
+        else if (entry.isFile()) files.push(full);
+      }
+      return files;
+    };
+    const stored = [
+      ...(await walk(path.join(root, '.firescale'))),
+      ...(await walk(path.join(os.tmpdir(), 'firescale-runs'))),
+    ];
+    expect(stored.length).toBeGreaterThan(0);
+    for (const file of stored) {
+      expect(await readFile(file, 'utf8'), file).not.toContain(secret);
+    }
+    // The head's .env is untouched, and no worktree is left with a link to it.
+    expect(await readFile(path.join(root, '.env'), 'utf8')).toBe(`API_KEY=${secret}\n`);
+    expect((await stat(path.join(root, '.env'))).isFile()).toBe(true);
+    expect((await runGit(root, ['worktree', 'list'])).stdout.trim().split('\n')).toHaveLength(1);
+    expect((await runs()).filter((run) => run === 'base lint')).toEqual([]);
+  });
+
   it('never touches the working tree or the index', async () => {
     const { root, write } = await blameRepo('ok', 'fail');
     await write('lint.txt', 'fail\n');

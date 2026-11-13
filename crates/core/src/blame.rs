@@ -435,6 +435,9 @@ pub struct Worktree {
     /// The links to the head's dependency folders, removed before the
     /// worktree so nothing can delete through them.
     links: std::sync::Mutex<Vec<PathBuf>>,
+    /// The head's env files linked in (ADR 0043), removed before the
+    /// worktree.
+    files: std::sync::Mutex<Vec<PathBuf>>,
     /// The firescale root inside it.
     pub root: PathBuf,
 }
@@ -484,6 +487,7 @@ impl Worktree {
             top,
             root: inner,
             links: std::sync::Mutex::new(Vec::new()),
+            files: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -498,10 +502,30 @@ impl Worktree {
         }
         made
     }
+
+    /// Links the head's file `target` in at `link`, and remembers it.
+    fn link_file(&self, target: &Path, link: &Path) -> bool {
+        let made = link_file(target, link);
+        if made {
+            self.files
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(link.to_path_buf());
+        }
+        made
+    }
 }
 
 impl Drop for Worktree {
     fn drop(&mut self) {
+        for file in self
+            .files
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+        {
+            let _ = fs::remove_file(file);
+        }
         for link in self
             .links
             .lock()
@@ -616,6 +640,60 @@ fn link_dir(target: &Path, link: &Path) -> bool {
             .status()
             .is_ok_and(|status| status.success())
     }
+}
+
+/// Links a file of the head into a worktree: a symbolic link, else (on
+/// Windows without the right to make one) a hard link, else a copy, which
+/// is removed with the worktree. Its contents are never read here.
+fn link_file(target: &Path, link: &Path) -> bool {
+    if link.exists() || fs::symlink_metadata(link).is_ok() || !target.is_file() {
+        return false;
+    }
+    if link.parent().is_none_or(|parent| !parent.is_dir()) {
+        return false;
+    }
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(target, link).is_ok();
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(target, link).is_ok();
+    linked || fs::hard_link(target, link).is_ok() || fs::copy(target, link).is_ok()
+}
+
+/// The env files of the head that are linked into a worktree (ADR 0043).
+const ENV_FILES: [&str; 2] = [".env", ".env.local"];
+
+/// The head's env files (`.env`, `.env.local`) at the root and in each
+/// project's folder, by repo-relative path, with a hash of each one's
+/// bytes. Git ignores them, so a worktree has none, and tests that read
+/// one fail there for a reason of the worktree. Only the hash goes into a
+/// kept result's key; the contents are never logged, kept or shown.
+fn env_files(root: &Path, plan: &VerifyPlan) -> Vec<(String, String)> {
+    let mut folders: BTreeSet<String> = BTreeSet::new();
+    folders.insert(".".to_owned());
+    for project in &plan.projects {
+        folders.insert(project.root.clone());
+    }
+    let mut found = Vec::new();
+    for folder in folders {
+        for name in ENV_FILES {
+            let path = folder_of(root, Some(&folder)).join(name);
+            // A link to elsewhere is not followed.
+            let plain = fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
+            if !plain {
+                continue;
+            }
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            let rel = if folder == "." {
+                name.to_owned()
+            } else {
+                format!("{folder}/{name}")
+            };
+            found.push((rel, blake3::hash(&bytes).to_hex()[..16].to_owned()));
+        }
+    }
+    found
 }
 
 /// Removes a link made by [`link_dir`], never what it points to.
@@ -831,9 +909,19 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     } else {
         dependency_folders(run.root)
     };
+    let envs = env_files(run.root, run.plan);
+    let env_part = envs
+        .iter()
+        .map(|(path, hash)| format!("{path}:{hash}"))
+        .collect::<Vec<_>>()
+        .join(",");
     let environment = match &run.options.config.base_install {
-        Some(install) => format!("install={install}"),
-        None => format!("links={}", links.join(",")),
+        Some(install) => format!("install={install};env={env_part}"),
+        None => format!("links={};env={env_part}", links.join(",")),
+    };
+    let links = WorktreeSetup {
+        folders: links,
+        env_files: envs.into_iter().map(|(path, _)| path).collect(),
     };
 
     // 1. What each step's base result is, where it is known without a run.
@@ -1207,6 +1295,13 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     settle(report, stopped);
 }
 
+/// What a worktree is given from the head: its dependency folders (none
+/// with `verify.baseInstall`) and its env files.
+struct WorktreeSetup {
+    folders: Vec<String>,
+    env_files: Vec<String>,
+}
+
 /// Gives a worktree its dependencies: the head's dependency folders linked
 /// in, or `verify.baseInstall` run at its root. `which` names it in notes
 /// (`base`, or `head` for the control run of ADR 0040). Returns why the
@@ -1214,7 +1309,7 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
 fn prepare_worktree(
     run: &BaseRun<'_>,
     worktree: &Worktree,
-    links: &[String],
+    links: &WorktreeSetup,
     deadline: Option<Instant>,
     say: &dyn Fn(&str),
     which: &str,
@@ -1223,7 +1318,7 @@ fn prepare_worktree(
     // into a shared interpreter (ADR 0037). A link that cannot be made
     // means the base cannot be judged.
     let mut not_judged: Option<String> = None;
-    for folder in links {
+    for folder in &links.folders {
         let made = worktree.link(
             &folder_of(run.root, Some(folder)),
             &folder_of(&worktree.root, Some(folder)),
@@ -1233,6 +1328,15 @@ fn prepare_worktree(
                 "the head's {folder} could not be linked into the {which} worktree"
             ));
         }
+    }
+    // The head's ignored env files, which tests read (ADR 0043). Where the
+    // worktree has the file already (tracked there) or lacks the folder,
+    // nothing is linked; that is no reason not to judge.
+    for file in &links.env_files {
+        let _ = worktree.link_file(
+            &folder_of(run.root, Some(file)),
+            &folder_of(&worktree.root, Some(file)),
+        );
     }
     if let Some(install) = run
         .options
@@ -1275,7 +1379,7 @@ fn run_in_worktree(
     worktree: &Worktree,
     to_run: &[Pending],
     check_failed: bool,
-    links: &[String],
+    links: &WorktreeSetup,
     deadline: Option<Instant>,
     summary: &mut BaseReport,
     say: &dyn Fn(&str),
@@ -1440,7 +1544,7 @@ fn confirm_fixed(
     report: &VerifyReport,
     run: &BaseRun<'_>,
     environment: &str,
-    links: &[String],
+    links: &WorktreeSetup,
     to_run: &[Pending],
     confirmed: &BTreeSet<usize>,
     deadline: Option<Instant>,
