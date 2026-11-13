@@ -39,6 +39,7 @@ interface Step {
   status: string;
   timeoutMs?: number;
   timeoutKey?: string;
+  detail?: string;
   outputTail?: string[];
 }
 
