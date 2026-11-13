@@ -64,9 +64,77 @@ pub fn run_git(cwd: &Path, args: &[&str]) -> Result<GitOutput> {
     run_git_env(cwd, args, &[])
 }
 
+/// The git subcommand of `args`: the first word after the `-c <name=value>`
+/// pairs and other options.
+fn subcommand<'a>(args: &[&'a str]) -> Option<&'a str> {
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match *word {
+            "-c" | "-C" => {
+                words.next();
+            }
+            option if option.starts_with('-') => {}
+            command => return Some(command),
+        }
+    }
+    None
+}
+
+/// A private copy of the repo's index, removed when dropped.
+struct IndexCopy(PathBuf);
+
+impl IndexCopy {
+    /// Copies the index of the repo at `cwd`, if it has one.
+    fn of(cwd: &Path) -> Option<Self> {
+        let out = git_command()
+            .args(["rev-parse", "--git-path", "index"])
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        let index = if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        };
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+        let copy =
+            std::env::temp_dir().join(format!("firescale-index-{}-{nanos}", std::process::id()));
+        std::fs::copy(&index, &copy).ok()?;
+        Some(Self(copy))
+    }
+}
+
+impl Drop for IndexCopy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        let mut lock = self.0.clone().into_os_string();
+        lock.push(".lock");
+        let _ = std::fs::remove_file(lock);
+    }
+}
+
 /// [`run_git`] with extra environment variables for this one command.
+///
+/// `git diff` refreshes the index and writes it back whenever a file's
+/// stat data is stale, `GIT_OPTIONAL_LOCKS=0` or not. So a `diff` runs
+/// against a private copy of the index: the user's `.git/index` is never
+/// written (ADR 0037).
 pub fn run_git_env(cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<GitOutput> {
     let mut command = git_command();
+    let private = (subcommand(args) == Some("diff")
+        && !env.iter().any(|(name, _)| *name == "GIT_INDEX_FILE"))
+    .then(|| IndexCopy::of(cwd))
+    .flatten();
+    if let Some(copy) = &private {
+        command.env("GIT_INDEX_FILE", &copy.0);
+    }
     for (name, value) in env {
         command.env(name, value);
     }
@@ -238,5 +306,59 @@ impl Git {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{Fixture, Track};
+
+    #[test]
+    fn the_subcommand_is_found_after_config_pairs() {
+        assert_eq!(
+            subcommand(&["-c", "core.quotepath=off", "diff", "HEAD"]),
+            Some("diff")
+        );
+        assert_eq!(subcommand(&["--no-pager", "status"]), Some("status"));
+        assert_eq!(subcommand(&["-c", "x=diff", "ls-files"]), Some("ls-files"));
+    }
+
+    #[test]
+    fn git_diff_never_writes_the_index_even_when_a_file_s_time_changed() {
+        let fixture = Fixture::new(&[("a.txt", "one\n"), ("b.txt", "two\n")], Track::All).unwrap();
+        let root = fixture.root();
+        let out = run_git(
+            root,
+            &[
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "-m",
+                "base",
+            ],
+        )
+        .unwrap();
+        assert_eq!(out.code, 0, "{}", out.stderr);
+        // Same content, a later time: git diff would refresh the index.
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(30);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(root.join("a.txt"))
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let index = root.join(".git").join("index");
+        let before = std::fs::read(&index).unwrap();
+        let out = run_git(root, &["diff", "--name-only", "-z", "HEAD"]).unwrap();
+        assert_eq!(out.code, 0);
+        assert_eq!(out.stdout, "", "the content is the same");
+        assert_eq!(std::fs::read(&index).unwrap(), before);
     }
 }
