@@ -28,6 +28,7 @@ interface Step {
   status: string;
   label?: string;
   base?: { status: string; source: string; note?: string };
+  cache?: { durationMs: number };
 }
 
 interface Report {
@@ -503,6 +504,43 @@ describe('blame-aware verify on the course project', () => {
     }
     expect(step(json, 'test', 'backend/audit_service').base?.source).toBe('ran');
     expect((await stepCalls(log)).length).toBeGreaterThan(0);
+  });
+});
+
+describe('a second verify with no change (ADR 0043)', () => {
+  it('reuses every passed step, Node steps included, and runs no base step again', async () => {
+    const repo: FixtureRepo = await fixtures.create({ files: courseProjectFiles() });
+    await commitAll(repo.root, 'initial');
+    expect((await runGit(repo.root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    const tools = await fixtures.create({ files: {}, track: 'no-git' });
+    await writeToolShims(tools.root, { versions: true });
+    const log = path.join(tools.root, 'calls.log');
+    // Every Python step fails, on the head and on the base; Node steps pass.
+    const env = shimEnv(tools.root, log, 'python');
+    // A root file every project reads: no step has the same inputs as on the base.
+    await repo.write('ruff.toml', 'line-length = 90\n');
+    const first = await runCli(['verify'], repo.root, env);
+    expect(first.code).toBe(EXIT_OK);
+    const base = await baseCalls(log);
+    expect(base.length).toBeGreaterThan(0);
+    // Only steps that did not pass on the head ran on the base.
+    expect(base.every((call) => call.startsWith('python '))).toBe(true);
+    const ranFirst = await stepCalls(log);
+    expect(ranFirst.some((call) => !call.startsWith('python '))).toBe(true);
+    await writeFile(log, '');
+    const second = await runCli(['verify', '--json'], repo.root, env);
+    expect(second.code).toBe(EXIT_OK);
+    const json = await report(second.stdout);
+    // Failures run again on the head; every pass comes from the cache.
+    const again = await stepCalls(log);
+    expect(again.length).toBeGreaterThan(0);
+    expect(again.every((call) => call.startsWith('python '))).toBe(true);
+    for (const passed of json.steps.filter((s) => s.status === 'passed' && s.name !== 'check')) {
+      expect(passed.cache, `${passed.name} in ${passed.project ?? 'the root'}`).toBeDefined();
+    }
+    expect(await baseCalls(log)).toEqual([]);
+    expect(json.base).toMatchObject({ ran: 0 });
+    expect(second.stdout).not.toContain('Not cached');
   });
 });
 
