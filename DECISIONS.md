@@ -136,6 +136,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 **Tests changed on purpose, none weakened:** `core::ci_exists::tests` asserted the old starter's exact text; they now assert the new workflow's install, cache and job lines (the old text is kept as the "legacy" starter that `sync` recognises, with its own tests). `fix-loop.test.ts` looks for the new verify line. The `init` snapshots show the new workflow, with the push branch and the digest line normalised, since git's own settings choose a new repo's branch.
 
+**Found by CI on this pull request, and fixed:** the private copy of the index that 0.3.0 gives `git diff` (so it never writes yours) had a fresh time, which turned off git's "racily clean" check: a file rewritten, same size, in the same second as the last commit read as unchanged on a git that compares whole seconds (the Linux runner's). The copy now keeps the index's own time. Proof: `git::tests::git_diff_still_sees_a_racily_clean_change`, which fails without the fix.
+
 **Not done:** the last box of M22 (a fixture repo on GitHub, run by hand) needs a firescale with `--shared-cache` on npm. 0.3.0 is not published (npm's latest is 0.2.0). After M22 merges, tagging `v0.3.0` on `main` publishes it with M22 inside.
 
 ## 0.3.0 — two fixes to the base run, after M21
