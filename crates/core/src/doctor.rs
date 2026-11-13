@@ -145,9 +145,10 @@ impl Machine for ThisMachine {
         let never = AtomicBool::new(false);
         let watch = Watch {
             timeout: Some(VERSION_TIMEOUT),
+            idle: None,
             stop: &never,
             heartbeat: Duration::ZERO,
-            on_heartbeat: &|_, _| {},
+            on_heartbeat: &|_, _, _| {},
             command: "",
             on_output: &|_| false,
             on_spawn: &|_| {},

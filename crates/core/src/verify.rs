@@ -42,7 +42,12 @@ pub const DOCTOR_HINT: &str =
     "Run `fscale doctor` to check this machine's tools, env variables, dependencies and services in one go.";
 
 /// How long a step may run when the config sets no limit (ADR 0024).
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+/// How long a step may print nothing new before it is stopped, unless the
+/// config says otherwise (ADR 0043): a step that keeps reporting results
+/// runs on, up to [`DEFAULT_TIMEOUT`].
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 /// How long the base run of blame-aware verify may take in all, when the
 /// config sets no budget (ADR 0037).
@@ -102,9 +107,17 @@ pub struct VerifyConfig {
     pub fail_on_skipped: bool,
     /// Settings per project, keyed by the project's folder.
     pub projects: BTreeMap<String, ProjectOverride>,
-    /// `verify.timeout`: the limit of every step, unless a more specific
-    /// one is set. [`DEFAULT_TIMEOUT`] when absent.
+    /// `verify.timeout`: the overall limit of every step, unless a more
+    /// specific one is set. [`DEFAULT_TIMEOUT`] when absent.
     pub timeout: Option<Limit>,
+    /// `verify.idleTimeout`: how long a step may print nothing new before it
+    /// is stopped (ADR 0043). [`DEFAULT_IDLE_TIMEOUT`] when absent. Not used
+    /// for a step whose own limit is set by step or by project.
+    pub idle_timeout: Option<Limit>,
+    /// `verify.labelFixed: true`: a step that passes on the head also runs
+    /// on the base commit, so it can be labelled `fixed` (ADR 0040). Off by
+    /// default: only steps that did not pass run on the base (ADR 0043).
+    pub label_fixed: bool,
     /// `verify.<step>.timeout`: the limit of that step, at the root and in
     /// every project.
     pub step_timeouts: BTreeMap<String, Limit>,
@@ -141,6 +154,25 @@ impl VerifyConfig {
             None => Some(DEFAULT_ERRORS_BEFORE_STOP),
             Some(0) => None,
             Some(count) => Some(count),
+        }
+    }
+
+    /// How long a step may print nothing new before it is stopped, or
+    /// `None` for no such limit. A limit set for the step or its project
+    /// wins: then that limit is the only one, as in ADR 0024 (ADR 0043).
+    #[must_use]
+    pub fn idle_for(&self, project: Option<&str>, step: &str) -> Option<Duration> {
+        let project_settings = project.and_then(|folder| self.project_timeouts.get(folder));
+        let own = project_settings
+            .is_some_and(|settings| settings.steps.contains_key(step) || settings.all.is_some())
+            || self.step_timeouts.contains_key(step);
+        if own {
+            return None;
+        }
+        match self.idle_timeout {
+            None => Some(DEFAULT_IDLE_TIMEOUT),
+            Some(Limit::After(limit)) => Some(limit),
+            Some(Limit::Off) => None,
         }
     }
 
@@ -853,6 +885,10 @@ pub struct StepReport {
     /// `FSCALE_LOG`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_cached: Option<String>,
+    /// For a step that timed out and printed a percent done: how far it
+    /// got and about how long it had left (ADR 0043). Not in JSON.
+    #[serde(skip)]
+    pub estimate: Option<String>,
     /// The failure's signature: one short hash per normalised line of its
     /// output (ADR 0037). A failure is `pre-existing` only when its
     /// signature on the head is contained in the base's. Not in JSON.
@@ -1816,6 +1852,9 @@ fn run_step(
         }
         None => timeout,
     };
+    // A step that keeps printing runs on; one that goes quiet for this
+    // long is stopped (ADR 0043).
+    let idle = options.config.idle_for(project, name);
     options.say(&format!("{place}: started: {command}"));
     let mut shell = shell(command);
     shell.current_dir(&dir);
@@ -1836,11 +1875,15 @@ fn run_step(
         shell.env("PYTEST_ADDOPTS", crate::pertest::addopts(&own, junit));
     }
     let spawned = Mutex::new(None);
-    let heartbeat = |elapsed: Duration, last: Option<&str>| {
-        // `last output: ...`, or a running count of tests (ADR 0025).
+    let heartbeat = |elapsed: Duration, last: Option<&str>, percent: Option<u8>| {
+        // `last output: ...`, or a running count of tests (ADR 0025), and
+        // how much is left when the runner prints a percent (ADR 0043).
         let last = last.map_or_else(String::new, |doing| format!("; {doing}"));
+        let left = percent
+            .map(|percent| format!("; {}", progress_estimate(elapsed, percent)))
+            .unwrap_or_default();
         options.say(&format!(
-            "{place}: still running after {}{last}",
+            "{place}: still running after {}{left}{last}",
             format_duration(elapsed)
         ));
     };
@@ -1910,6 +1953,7 @@ fn run_step(
     };
     let watch = Watch {
         timeout,
+        idle,
         stop: options.stop,
         heartbeat: options.heartbeat,
         on_heartbeat: &heartbeat,
@@ -1957,6 +2001,7 @@ fn run_step(
         test_results: None,
         output_digest: None,
         not_cached: None,
+        estimate: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -2045,9 +2090,10 @@ fn run_step(
         let mut again = self::shell(&probe);
         again.current_dir(&dir);
         environment(&mut again, options.config, options.base_run);
-        let quiet = |_: Duration, _: Option<&str>| {};
+        let quiet = |_: Duration, _: Option<&str>, _: Option<u8>| {};
         let watch = Watch {
             timeout: Some(FIRST_ERROR_LIMIT),
+            idle: None,
             stop: options.stop,
             heartbeat: options.heartbeat,
             on_heartbeat: &quiet,
@@ -2163,30 +2209,49 @@ fn run_step(
             return Ok(report);
         }
         Ending::TimedOut => {
-            let limit = timeout.map_or_else(String::new, format_limit);
+            // Stopped for printing nothing new, or at the overall limit.
+            let (what, limit, limit_ms, key) = if finished.silent {
+                let idle_text = idle.map_or_else(String::new, format_limit);
+                (
+                    format!("no new output for {idle_text}, stopped after {took}"),
+                    idle_text,
+                    idle,
+                    "verify.idleTimeout".to_owned(),
+                )
+            } else {
+                let limit = timeout.map_or_else(String::new, format_limit);
+                (
+                    format!("no result within {limit}"),
+                    limit,
+                    timeout,
+                    timeout_key,
+                )
+            };
             report.status = StepStatus::TimedOut;
-            report.detail = format!("{command} (no result within {limit})");
+            report.estimate = finished
+                .percent
+                .map(|percent| progress_estimate(finished.duration, percent));
+            let estimate = report
+                .estimate
+                .as_ref()
+                .map_or_else(String::new, |estimate| format!("; {estimate}"));
+            report.detail = format!("{command} ({what}{estimate})");
             report.output_tail = tail(&finished.stdout, &finished.stderr);
             report.timeout_ms =
-                timeout.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX));
-            report.timeout_key = Some(timeout_key);
+                limit_ms.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX));
+            report.timeout_key = Some(key);
             // A step that hangs often hangs on the environment, such as a
             // database that is not running: say so when the output shows it.
             if let Some(problem) =
                 setup_problem(&text(), None, unit.root, &dir).or_else(|| seen_early.clone())
             {
-                report.detail = format!(
-                    "{command} (no result within {limit}; the output shows {})",
-                    problem.reason
-                );
+                report.detail = format!("{command} ({what}; the output shows {})", problem.reason);
                 report.fix = setup_fix(&problem, unit.install);
             } else if let Some(found) = first_error(&mut report) {
                 // The first error names the environment: setup needed.
                 report.status = StepStatus::SetupNeeded;
-                report.detail = format!(
-                    "{command} (no result within {limit}; its first error shows {})",
-                    found.reason
-                );
+                report.detail =
+                    format!("{command} ({what}; its first error shows {})", found.reason);
                 report.fix = setup_fix(&found, unit.install);
             }
             options.say(&format!("{place}: TIMED OUT after {took} (limit {limit})"));
@@ -2235,6 +2300,18 @@ fn run_step(
         }
     }
     Ok(report)
+}
+
+/// How far a step got, from the percent its runner printed: `46% done,
+/// about 10m 34s left at this pace` (ADR 0043).
+fn progress_estimate(elapsed: Duration, percent: u8) -> String {
+    match crate::activity::time_left(elapsed, percent) {
+        Some(left) => format!(
+            "{percent}% done, about {} left at this pace",
+            format_duration(left)
+        ),
+        None => format!("{percent}% done"),
+    }
 }
 
 /// How a project's folder is written in a sentence.
@@ -2304,6 +2381,7 @@ fn run_unit(
                 test_results: None,
                 output_digest: None,
                 not_cached: None,
+                estimate: None,
             })
             .collect());
     }
@@ -2333,6 +2411,7 @@ fn run_unit(
             test_results: None,
             output_digest: None,
             not_cached: None,
+            estimate: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2550,6 +2629,7 @@ fn cached_or_run(
             test_results: None,
                 output_digest: None,
                 not_cached: None,
+                estimate: None,
         });
     }
     let ran_at = now_secs();
@@ -2639,6 +2719,7 @@ pub fn run_verify_with(
         test_results: None,
         output_digest: None,
         not_cached: None,
+        estimate: None,
     }];
     let check_failed = !check.ok && !options.every_step;
 
@@ -3401,10 +3482,22 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             let limit = failure
                 .timeout_ms
                 .map_or_else(String::new, |ms| format_limit(Duration::from_millis(ms)));
-            out.push_str(&format!(
-                "\nTimed out: {}{place} gave no result within {limit}, so it was stopped with every process it started.\n",
-                failure.name
-            ));
+            let silent = failure.timeout_key.as_deref() == Some("verify.idleTimeout");
+            let estimate = failure
+                .estimate
+                .as_ref()
+                .map_or_else(String::new, |estimate| format!(" It was {estimate}."));
+            if silent {
+                out.push_str(&format!(
+                    "\nTimed out: {}{place} printed nothing new for {limit}, so it was stopped with every process it started.{estimate}\n",
+                    failure.name
+                ));
+            } else {
+                out.push_str(&format!(
+                    "\nTimed out: {}{place} gave no result within {limit}, so it was stopped with every process it started.{estimate}\n",
+                    failure.name
+                ));
+            }
             if let Some(fix) = &failure.fix {
                 out.push_str(&format!(
                     "Its output shows the environment is not ready. Set it up{place}: {fix}\n"
