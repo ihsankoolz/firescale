@@ -2,6 +2,22 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## M21: blame-aware verify and the stop hook
+
+Release build, Linux x64 local container (4 vCPUs), Node 22, 2026-11-13, `bench/blame-bench.mjs --runs 30`. Each repo is on a `feature` branch off `main`, with one change. "Cold" empties the base store (`.firescale/base/`) before each run, so the base commit is checked out in a worktree and the step runs there; "warm" keeps it, so the base result is read back.
+
+| Scenario                                               |      p50 |      p99 |      max |
+| ------------------------------------------------------ | -------: | -------: | -------: |
+| no failure: `fscale verify`, no base run               |  80.8 ms |  88.7 ms |  88.7 ms |
+| pre-existing failure, cold base cache: `fscale verify` | 222.7 ms | 242.1 ms | 242.1 ms |
+| pre-existing failure, warm base cache: `fscale verify` | 124.5 ms | 165.3 ms | 165.3 ms |
+| stop hook, one of 6 projects changed, cold base cache  | 142.6 ms | 147.6 ms | 147.6 ms |
+| stop hook, one of 6 projects changed, warm base cache  |  98.6 ms | 131.6 ms | 131.6 ms |
+
+- The base run adds about 100 ms cold (the worktree, and the step run there) and about 45 ms warm over the same failure without a base. The steps here are `node -e` one-liners: a real base run costs what the project's own step costs on the base, within `verify.baseBudget`.
+- The stop hook runs on a course-project shape (five Python services and a frontend, stand-ins for `python` and `npx`): with one service changed, it runs that service's steps only, and the base run only for its failing test.
+- Not measured: macOS and Windows, where `git worktree add` is slower.
+
 ## M18: the step cache, cold and warm
 
 Release build, Linux x64 local container (4 vCPUs), Node 22, 2026-11-13. `bench/verify-bench.mjs --runs 100`, in the same small repo as the M7 rows below. The cold row runs `--no-cache`: every step runs, and verify also hashes the repo twice (before, and before storing), asks `node --version` and stores three entries. The warm row serves all three steps from the cache: what is left is the check, the hashing and the one `node --version`.

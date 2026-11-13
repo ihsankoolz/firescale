@@ -20,6 +20,8 @@ pub enum TestRunner {
     Pytest,
     Vitest,
     Jest,
+    /// `cargo test`, from its text output (ADR 0039).
+    Cargo,
 }
 
 impl TestRunner {
@@ -44,6 +46,8 @@ impl TestRunner {
             Some(Self::Vitest)
         } else if stems.contains(&"jest") {
             Some(Self::Jest)
+        } else if stems.windows(2).any(|pair| pair == ["cargo", "test"]) {
+            Some(Self::Cargo)
         } else {
             None
         }
@@ -52,11 +56,13 @@ impl TestRunner {
     /// Reads this runner's results from a finished step: the JUnit report
     /// for pytest, the output for Vitest and Jest.
     #[must_use]
-    pub fn read(self, output: &str, junit: Option<&str>) -> Option<TestResults> {
+    pub fn read(self, stdout: &str, stderr: &str, junit: Option<&str>) -> Option<TestResults> {
+        let output = || format!("{stdout}\n{stderr}");
         match self {
             Self::Pytest => junit.and_then(parse_junit),
-            Self::Vitest => parse_vitest(output),
-            Self::Jest => parse_jest(output),
+            Self::Vitest => parse_vitest(&output()),
+            Self::Jest => parse_jest(&output()),
+            Self::Cargo => parse_cargo(stdout, stderr),
         }
     }
 
@@ -66,6 +72,7 @@ impl TestRunner {
             Self::Pytest => "pytest",
             Self::Vitest => "Vitest",
             Self::Jest => "Jest",
+            Self::Cargo => "cargo test",
         }
     }
 }
@@ -290,6 +297,118 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
     (seen_summary || !results.failed.is_empty()).then_some(results)
 }
 
+/// The test binary a cargo progress line names: `Running unittests
+/// src/lib.rs (target/debug/deps/core-1a2b)` or the older `Running
+/// target/debug/deps/core-1a2b` give `core`; `Doc-tests core` gives
+/// `core (doc)`.
+fn cargo_binary(line: &str) -> Option<String> {
+    if let Some(name) = line.strip_prefix("Doc-tests ") {
+        return Some(format!("{} (doc)", name.trim()));
+    }
+    let rest = line.strip_prefix("Running ")?;
+    let path = rest.split_whitespace().last()?;
+    let path = path.trim_start_matches('(').trim_end_matches(')');
+    let file = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let file = file.strip_suffix(".exe").unwrap_or(file);
+    Some(
+        file.rsplit_once('-')
+            .map_or(file, |(name, _)| name)
+            .to_owned(),
+    )
+}
+
+/// Reads `cargo test`'s text output: `test path ... ok` and `... FAILED`
+/// lines, each under the test binary it belongs to, so that the same test
+/// name in two crates is two tests: `firescale_core::verify::tests::a_test`.
+/// Cargo prints a binary's `Running ...` or `Doc-tests ...` line on stderr
+/// and its tests on stdout, so the k-th `running N tests` block of stdout
+/// is the k-th binary of stderr. A doc test's `(line N)` is left out of its
+/// id, since lines move.
+#[must_use]
+pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
+    let binaries: Vec<String> = stderr
+        .lines()
+        .filter_map(|line| cargo_binary(&clean(line)))
+        .collect();
+    // One stream holding both (or a cargo that prints both on stdout).
+    let together = binaries.is_empty();
+    let mut results = TestResults::default();
+    let mut binary = String::new();
+    let mut block = 0;
+    let mut seen = false;
+    for raw in stdout.lines() {
+        let line = clean(raw);
+        if together {
+            if let Some(name) = cargo_binary(&line) {
+                binary = name;
+                continue;
+            }
+        } else if line.starts_with("running ")
+            && (line.ends_with(" test") || line.ends_with(" tests"))
+        {
+            binary = binaries.get(block).cloned().unwrap_or_default();
+            block += 1;
+            continue;
+        }
+        if line.starts_with("test result:") {
+            seen = true;
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("test ") else {
+            continue;
+        };
+        let Some((name, outcome)) = rest.rsplit_once(" ... ") else {
+            continue;
+        };
+        let mut name = name.trim().to_owned();
+        if name.ends_with(')') {
+            if let Some(cut) = name.rfind(" (line ") {
+                name.truncate(cut);
+            }
+        }
+        let id = if binary.is_empty() {
+            name
+        } else {
+            format!("{binary}::{name}")
+        };
+        match outcome.trim() {
+            "ok" => results.passed += 1,
+            "FAILED" => {
+                results.failed.insert(id);
+            }
+            _ => {}
+        }
+    }
+    (seen || !results.failed.is_empty()).then_some(results)
+}
+
+/// True when a test run stopped at its first failure, so a later new
+/// failure cannot be ruled out: `cargo test` without `--no-fail-fast`
+/// (one failed binary, and `error: test failed, to rerun pass ...`), pytest
+/// with `-x`, `--exitfirst` or `--maxfail`, Jest or Vitest with `--bail`.
+#[must_use]
+pub fn stopped_at_first_failure(
+    runner: TestRunner,
+    command: &str,
+    script: Option<&str>,
+    output: &str,
+) -> bool {
+    let text = format!("{command} {}", script.unwrap_or(""));
+    let words: Vec<&str> = text.split_whitespace().collect();
+    match runner {
+        TestRunner::Cargo => {
+            output.contains("error: test failed, to rerun pass")
+                && !output.contains("targets failed")
+        }
+        TestRunner::Pytest => words
+            .iter()
+            .any(|word| *word == "-x" || *word == "--exitfirst" || word.starts_with("--maxfail")),
+        TestRunner::Vitest | TestRunner::Jest => {
+            words.iter().any(|word| word.starts_with("--bail"))
+        }
+    }
+}
+
 // ------------------------------------------------------------- comparing
 
 /// A test file renamed between the base and the head, as git reports it.
@@ -440,7 +559,7 @@ mod tests {
             TestRunner::of("pnpm run test", Some("jest --ci")),
             Some(TestRunner::Jest)
         );
-        assert_eq!(TestRunner::of("cargo test", None), None);
+        assert_eq!(TestRunner::of("cargo build", None), None);
         assert_eq!(TestRunner::of("npm test", Some("mocha")), None);
     }
 
@@ -675,6 +794,50 @@ stdout | src/math.test.ts > math > logs
     }
 
     #[test]
+    fn cargo_test_output_gives_ids_per_crate() {
+        let output = "\
+     Running unittests src/lib.rs (target/debug/deps/firescale_core-5992d7290be67e72)
+
+running 3 tests
+test verify::tests::a ... ok
+test verify::tests::b ... FAILED
+test verify::tests::c ... ignored
+
+failures:
+
+test result: FAILED. 1 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out
+
+     Running unittests src/main.rs (target/debug/deps/fscale-0a1b2c3d)
+
+running 1 test
+test verify::tests::b ... FAILED
+
+test result: FAILED. 0 passed; 1 failed
+   Doc-tests firescale_core
+
+running 1 test
+test src/lib.rs - doc (line 3) ... ok
+";
+        let results = parse_cargo(output, "").unwrap();
+        assert_eq!(results.passed, 2);
+        assert_eq!(
+            results.failed.into_iter().collect::<Vec<_>>(),
+            vec![
+                "firescale_core::verify::tests::b".to_owned(),
+                "fscale::verify::tests::b".to_owned()
+            ]
+        );
+        assert_eq!(
+            TestRunner::of("cargo test --workspace", None),
+            Some(TestRunner::Cargo)
+        );
+        assert_eq!(
+            TestRunner::of("npm test", Some("cargo test && vitest run")),
+            Some(TestRunner::Vitest)
+        );
+    }
+
+    #[test]
     fn a_renamed_file_keeps_its_tests() {
         let base: BTreeSet<String> = [
             "tests/test_old.py::test_a".to_owned(),
@@ -691,5 +854,66 @@ stdout | src/math.test.ts > math > logs
         let moved = follow_renames(&base, &renames, "api/");
         assert!(moved.contains("tests/test_new.py::test_a"));
         assert!(moved.contains("tests/test_x.py::test_b"));
+    }
+
+    #[test]
+    fn cargo_streams_are_paired_and_doc_test_lines_left_out() {
+        let stderr = "\
+   Compiling a v0.1.0
+     Running unittests src/lib.rs (target/debug/deps/a-1111)
+     Running unittests src/lib.rs (target/debug/deps/b-2222)
+   Doc-tests a
+error: test failed, to rerun pass `-p b --lib`
+";
+        let stdout = "running 1 test
+test tests::same ... ok
+
+test result: ok. 1 passed; 0 failed
+
+running 1 test
+test tests::same ... FAILED
+
+test result: FAILED. 0 passed; 1 failed
+
+running 1 test
+test src/lib.rs - f (line 10) ... FAILED
+";
+        let results = parse_cargo(stdout, stderr).unwrap();
+        assert_eq!(results.passed, 1);
+        assert_eq!(
+            results.failed.into_iter().collect::<Vec<_>>(),
+            vec![
+                "a (doc)::src/lib.rs - f".to_owned(),
+                "b::tests::same".to_owned()
+            ]
+        );
+        assert!(stopped_at_first_failure(
+            TestRunner::Cargo,
+            "cargo test",
+            None,
+            stderr
+        ));
+        assert!(!stopped_at_first_failure(
+            TestRunner::Cargo,
+            "cargo test --no-fail-fast",
+            None,
+            "error: 2 targets failed:\n error: test failed, to rerun pass"
+        ));
+        assert!(stopped_at_first_failure(
+            TestRunner::Pytest,
+            "pytest -x",
+            None,
+            ""
+        ));
+        assert!(stopped_at_first_failure(
+            TestRunner::Jest,
+            "npm test",
+            Some("jest --bail"),
+            ""
+        ));
+        assert_eq!(
+            cargo_binary("Running target/debug/deps/old_style-abcd"),
+            Some("old_style".to_owned())
+        );
     }
 }

@@ -1958,7 +1958,21 @@ fn run_step(
                 crate::pertest::junit_path().to_string_lossy()
             ));
         }
-        report.test_results = runner.read(&text(), xml.as_deref());
+        let stdout = strip_ansi(&String::from_utf8_lossy(&finished.stdout));
+        let stderr = strip_ansi(&String::from_utf8_lossy(&finished.stderr));
+        report.test_results = runner.read(&stdout, &stderr, xml.as_deref());
+        // A run that stopped at its first failure may hide a later new one:
+        // never evidence for pre-existing (ADR 0039).
+        if !matches!(finished.ending, Ending::Exited(Some(0)))
+            && crate::pertest::stopped_at_first_failure(
+                runner,
+                command,
+                crate::pertest::script_text(&dir, command).as_deref(),
+                &text(),
+            )
+        {
+            report.signature.push(FAIL_FAST.to_owned());
+        }
         report.failed_tests = report
             .test_results
             .as_ref()
@@ -2305,6 +2319,9 @@ fn run_unit(
     Ok(steps)
 }
 
+/// The signature line of a test run that stopped at its first failure.
+pub const FAIL_FAST: &str = "<stopped at its first failure>";
+
 /// The most lines of output a signature keeps.
 const SIGNATURE_LINES: usize = 5000;
 
@@ -2360,6 +2377,38 @@ pub fn signature_within(head: &[String], base: &[String]) -> bool {
         }
         _ => false,
     })
+}
+
+/// Runs a step of the head once more, as it ran the first time, with no
+/// cache: how a `new` failure is checked for flakiness before it blocks
+/// (ADR 0039). Nothing about the rerun is kept.
+pub(crate) fn run_again(
+    root: &Path,
+    project: Option<&ProjectPlan>,
+    name: &str,
+    command: &str,
+    options: &RunOptions<'_>,
+    deadline: Option<Instant>,
+) -> Result<StepReport> {
+    let again = RunOptions {
+        stop: options.stop,
+        progress: None,
+        jobs: 1,
+        config: options.config,
+        heartbeat: options.heartbeat,
+        record: options.record,
+        cache: None,
+        every_step: true,
+        deadline,
+        base_run: false,
+    };
+    let unit = Unit {
+        root,
+        project,
+        install: project.and_then(|project| project.install.as_deref()),
+        runs: true,
+    };
+    run_step(&unit, name, command, &again)
 }
 
 /// Runs one step of the base run in the base commit's worktree at `root`:
@@ -2745,10 +2794,13 @@ pub(crate) fn settle(report: &mut VerifyReport, stopped: bool) {
     let any_failed = report.steps.iter().any(|step| {
         blocking(step) && matches!(step.status, StepStatus::Failed | StepStatus::TimedOut)
     });
-    let pre_existing = report
-        .steps
-        .iter()
-        .any(|step| blocks(step.status) && step.label == Some(crate::blame::Label::PreExisting));
+    let pre_existing = report.steps.iter().any(|step| {
+        blocks(step.status)
+            && matches!(
+                step.label,
+                Some(crate::blame::Label::PreExisting | crate::blame::Label::Flaky)
+            )
+    });
     let result = if stopped {
         VerifyResult::Stopped
     } else if any_failed || (report.fail_on_skipped && !report.skipped.is_empty()) {
@@ -2879,6 +2931,12 @@ fn whole_headline(report: &VerifyReport) -> String {
         .filter(|step| blocks(step.status) && step.label == Some(Label::PreExisting))
         .map(step_place)
         .collect();
+    let flaky: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|step| blocks(step.status) && step.label == Some(Label::Flaky))
+        .map(step_place)
+        .collect();
     let mut parts = Vec::new();
     if report.result == VerifyResult::Stopped {
         parts.push(format!(
@@ -2910,15 +2968,33 @@ fn whole_headline(report: &VerifyReport) -> String {
                 pre_existing.join(", ")
             ));
         }
+        if !flaky.is_empty() {
+            parts.push(format!(
+                "flaky (failed, then passed when run again; does not block): {}",
+                flaky.join(", ")
+            ));
+        }
         return format!("verify: {}", parts.join("; "));
     }
     match report.result {
         VerifyResult::Ok => "verify: OK".to_owned(),
         VerifyResult::Partial => format!("verify: PARTIAL - {}", ran_part(report)),
-        VerifyResult::PreExisting => format!(
-            "verify: OK - no new failures; pre-existing (fails on the base commit{base} too): {}",
-            pre_existing.join(", ")
-        ),
+        VerifyResult::PreExisting => {
+            let mut said = Vec::new();
+            if !pre_existing.is_empty() {
+                said.push(format!(
+                    "pre-existing (fails on the base commit{base} too): {}",
+                    pre_existing.join(", ")
+                ));
+            }
+            if !flaky.is_empty() {
+                said.push(format!(
+                    "flaky (failed, then passed when run again): {}",
+                    flaky.join(", ")
+                ));
+            }
+            format!("verify: OK - no new failures; {}", said.join("; "))
+        }
         VerifyResult::Failed | VerifyResult::SetupNeeded | VerifyResult::Stopped => format!(
             "verify: FAILED - {} of {} skipped, and verify.failOnSkipped is on",
             report.skipped.len(),
@@ -3131,6 +3207,24 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                     "\nPre-existing: {}{place} fails on the base commit {base_short} too{how}, so it does not block this change.\n",
                     failure.name
                 ));
+                continue;
+            }
+            Some(crate::blame::Label::Flaky) => {
+                let still_old = failure
+                    .failed_tests
+                    .iter()
+                    .any(|test| test.label == Some(crate::blame::Label::PreExisting));
+                if still_old {
+                    out.push_str(&format!(
+                        "\nFlaky: the new failing tests of {}{place} passed when run again, and what still fails also fails on the base commit {base_short} the same way, so it does not block. Nothing about it is kept.\n",
+                        failure.name
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "\nFlaky: {}{place} failed, then passed when run again, so it does not block. Nothing about it is kept.\n",
+                        failure.name
+                    ));
+                }
                 continue;
             }
             Some(crate::blame::Label::New) => {

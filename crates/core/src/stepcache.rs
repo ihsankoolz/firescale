@@ -1098,6 +1098,9 @@ pub struct StepCache<'a> {
     /// did not change), so a step that an earlier step's writes reach is
     /// never served from the cache under the old content.
     snapshot: std::sync::Mutex<Snapshot>,
+    /// The working tree as it was when verify started, kept to tell whether
+    /// a step's files changed during the run (ADR 0039).
+    first: Snapshot,
     digests: UnitDigests,
     tools: ToolVersions<'a>,
     read_env: &'a (dyn Fn(&str) -> Option<String> + Sync),
@@ -1130,6 +1133,16 @@ impl<'a> StepCache<'a> {
     /// graph; without one, every step's key covers the whole repo.
     #[must_use]
     pub fn new(root: &Path, graph: Option<Graph>, settings: &CacheSettings<'a>) -> Self {
+        let mut cache = Self::empty(root, graph, settings);
+        cache.first = cache
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        cache
+    }
+
+    fn empty(root: &Path, graph: Option<Graph>, settings: &CacheSettings<'a>) -> Self {
         Self {
             root: root.to_path_buf(),
             version: settings.version.to_owned(),
@@ -1138,6 +1151,7 @@ impl<'a> StepCache<'a> {
             digests: UnitDigests::new(graph.as_ref()),
             graph,
             snapshot: std::sync::Mutex::new(Snapshot::capture(root)),
+            first: Snapshot::default(),
             tools: ToolVersions::new(settings.machine),
             read_env: settings.read_env,
             scopes: std::sync::Mutex::new(HashMap::new()),
@@ -1398,6 +1412,29 @@ impl<'a> StepCache<'a> {
             .collect();
         *cached = Some((commit.to_owned(), tree.clone()));
         Ok(tree)
+    }
+
+    /// True when a file the step's key covers (the whole repo when the step
+    /// is not cached) differs now from when verify started: a step that
+    /// wrote its own inputs, or another step that did. Then a pass on a
+    /// second run says nothing about flakiness (ADR 0039).
+    #[must_use]
+    pub fn changed_during_run(&self, folder: Option<&str>, kind: Option<&str>, dir: &Path) -> bool {
+        let now = self.fresh();
+        if now.problem.is_some() || self.first.problem.is_some() {
+            return true;
+        }
+        let scope = self
+            .scope(folder, kind, dir, &now)
+            .unwrap_or_else(|_| Scope::whole_repo());
+        let owned = &self.digests.owned;
+        match (
+            files_digest(&self.first, &scope, owned),
+            files_digest(&now, &scope, owned),
+        ) {
+            (Ok(before), Ok(after)) => before != after,
+            _ => true,
+        }
     }
 
     /// Adds a line for `FSCALE_LOG=cache`.
