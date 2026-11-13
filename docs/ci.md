@@ -4,15 +4,16 @@
 
 ## What it does
 
-| Job              | Runs on                       | Verifies                                                       | Caches                                       |
-| ---------------- | ----------------------------- | -------------------------------------------------------------- | -------------------------------------------- |
-| `pull-request`   | every pull request            | `--affected --base origin/<base branch>`: only what it reaches | restores; can never save                     |
-| `default-branch` | pushes to `main` and `master` | everything                                                     | restores; saves from the default branch only |
+| Job              | Runs on                      | Verifies                                                       | Caches                                       |
+| ---------------- | ---------------------------- | -------------------------------------------------------------- | -------------------------------------------- |
+| `pull-request`   | every pull request           | `--affected --base origin/<base branch>`: only what it reaches | restores; can never save                     |
+| `default-branch` | pushes to the default branch | everything                                                     | restores; saves from the default branch only |
 
 - **Only what a pull request reaches.** `fscale verify --affected --base "origin/$BASE_REF"` runs the projects the change can affect ([affected.md](affected.md)) and judges each failure against the base branch ([verify.md](verify.md)): only new failures block.
 - **Full history.** Both jobs check out with `fetch-depth: 0`, so the merge base is in the clone. In a shallow clone that lacks it, verify runs every project and says to fetch the history.
 - **`--jobs 2`** runs two projects at once. If your projects share something that cannot be shared (one test database), edit the workflow.
-- **A superseded run is cancelled.** A new push to a pull request cancels its run in progress. Pushes to a branch are never cancelled.
+- **A superseded run is cancelled.** A new push to a pull request cancels its run in progress. Each push to the default branch has a concurrency group of its own, so its run is never cancelled.
+- **The push trigger** names your default branch (from `origin/HEAD`, or the branch of a new repo), else `main` and `master`.
 - **Download caches.** npm, pnpm and pip keep their download folders in the GitHub Actions cache, keyed on the lockfile or requirements lists. Not `node_modules`.
 - **Every action is pinned** to a commit, with its tag in a comment.
 
@@ -28,6 +29,8 @@ A lint, typecheck or test step that passed on the default branch, and whose inpu
 - The pull request job has `cache-mode: read`: its token cannot save any cache. It also has no save step at all, only `actions/cache/restore`, and the setup actions' own caches (which save in a post step) are off there.
 - GitHub scopes a cache saved by a pull request to its merge ref; the default branch never restores it.
 - firescale writes records only on a push to the default branch, and uses only records whose writer is the default branch. A run that writes never takes a pass from the machine's own step cache, so a runner kept between jobs cannot carry a pull request's pass into a record.
+- The writer field is a label, not a proof: the guarantee is GitHub's scoping and the read-only token. A pull request that adds its own workflow could save into its own merge ref and fool only its own check, in plain sight in its diff.
+- `--shared-cache` removes only record files, never folders or other files, and refuses the repo, a folder above it and firescale's other folders.
 - The workflow never uses `pull_request_target`.
 
 ### What it does not do
