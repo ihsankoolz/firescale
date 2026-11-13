@@ -4,11 +4,12 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**M20, per-test labels, is done in its pull request; M21 (reruns and the stop hook) is next** (this session started 2026-11-13 07:06 UTC; it builds M18 to M21, one pull request each, and stops after M21).
+Nothing is half-finished. This session (2026-11-13, from 07:06 UTC) built M18 to M21, one pull request each, and stopped after M21 as asked. **No tag has been pushed and the version is unchanged (0.2.1).**
 
 - **Branch:** `claude/amazing-planck-g1745y` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
-- **Done in this session:** M18, the local step cache (#28, ADR 0036); M19, the base run (#29, ADR 0037); M20, per-test labels (ADR 0038).
-- **Done before this session:** M17 (#25), the M17 follow-up (#26) and the 0.2.1 fixes (#27, ADR 0034, 0035); the version is 0.2.1. The `v0.2.0` tag exists and 0.2.0 is on npm. `v0.2.1` has not been tagged.
+- **Done in this session:** M18, the local step cache (#28, ADR 0036); M19, the base run (#29, ADR 0037); M20, per-test labels (ADR 0038); M21, reruns and the stop hook (ADR 0039).
+- **Next, in order:** M22 (faster generated CI and a shared cache); before it, the owner may want to tag `v0.2.1` or a later version (`RELEASING.md`).
+- The `v0.2.0` tag exists and 0.2.0 is on npm. `v0.2.1` has not been tagged.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
@@ -21,8 +22,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. **0.1.3 was released on 2026-11-12** and run on the course project on Windows: progress lines, setup detection, parallel projects and Ctrl+C worked, and no process was left behind.
 - **Done in the session of 2026-11-12 (evening):** M12 `doctor` and the two fixes from the 0.1.3 run (ADR 0025, 0026), M13 agent files (ADR 0027), M14 generators (ADR 0028), M15 Next.js pack (ADR 0029), M16 Python pack (ADR 0030), and the 0.2.0 version.
 - **Done in the session of 2026-11-12/13:** the plan update (ADR 0031) and M17, the project graph and affected verify (ADR 0032, ADR 0033).
-- **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036); M19 and M20, blame-aware verify's base run and per-test labels (ADR 0037, 0038, verify schema 6).
-- **Not started, in order:** M21 reruns and the stop hook, M22 faster generated CI and a shared cache, M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
+- **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036); M19 to M21, blame-aware verify (ADR 0037 to 0039, verify schema 6).
+- **Not started, in order:** M22 faster generated CI and a shared cache, M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
 
 ## How to resume
 
@@ -31,10 +32,12 @@ Current state of the project, so a new session can resume cold. Updated in every
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
 
-Notes on M20, for whoever touches per-test labels (ADR 0038):
+Notes on M20 and M21, for whoever touches per-test labels, reruns or the stop hook (ADR 0038, 0039):
 
-- `crates/core/src/pertest.rs`: `TestRunner::of` (the command, or the package script behind it), `parse_junit`, `parse_vitest` (only its `Failed Tests`/`Failed Suites` sections), `parse_jest` (only inside a failing file, no notices), `follow_renames`, `junit_path`, `addopts` (quoted for pytest's shell-like splitting: keep it so), `user_asks_for_junit`.
-- In `blame::compare`, per-test results may make a step `new`; `pre-existing` still needs `signature_within`.
+- Per-test results are `crates/core/src/pertest.rs`: `TestRunner::of` (command, or the package script behind it), `parse_junit`, `parse_vitest`, `parse_jest`, `parse_cargo`, `follow_renames`. `run_step` sets `PYTEST_ADDOPTS=--junitxml=<temp file>` for pytest and reads the file after.
+- In `blame::compare`, per-test results may make a step `new`; `pre-existing` still needs `signature_within`. Keep it that way.
+- `rerun_new_failures` runs a `new` failure once more through `verify::run_again` (no cache): never write anything about a flaky result.
+- The stop hook is `verify_report(.., VerifyMode::Hook)` in `crates/cli/src/main.rs`: affected projects measured from the base commit, `judge_passes: false`.
 
 Notes on M19, for whoever touches blame-aware verify (ADR 0037):
 
