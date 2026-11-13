@@ -25,7 +25,13 @@ The summary, each rule's violation count, `ok` and the exit code all describe th
 - **`--base` without `--affected`:** a usage error.
 - **Deleted files** count as changed for their project, so the project's other findings are reported.
 
+## `fscale verify --affected`
+
+`verify --affected` uses the same changed files and narrows the `check` step the same way. For lint, typecheck and test it goes further and uses the full project graph ([graph.md](graph.md)): only the projects a change reaches run, and the rest are reported as `not affected`. When unsure it runs more: a file no project owns, a root lockfile, a CI file, a Compose file or the firescale config affects every project, and so does a clean tree with no `--base`. See "Affected only" in [verify.md](verify.md).
+
+`fscale check --affected` still keeps the rules of this page: its project graph is the one of `dependsOn` (workspace members by name), and a clean tree reports nothing. Its job is to hide findings in untouched code, where reporting too little costs nothing.
+
 ## Limits
 
-- The project graph is the simple one built from workspace files. Nx's own graph is not read yet.
+- `check --affected` uses the simple graph built from workspace files; `verify --affected` uses the full one. Nx's own graph is not read by either.
 - Rules are not skipped for unaffected projects, so `--affected` changes what is reported, not how long the check takes. The cache already makes unchanged rules cheap.

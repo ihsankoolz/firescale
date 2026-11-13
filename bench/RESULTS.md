@@ -2,6 +2,18 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## M17: tree-sitter and the project graph
+
+Release build of `fscale` on the build machine (Linux x64, 4 vCPUs), 2026-11-13, before and after M17 added tree-sitter with its Python and TypeScript grammars (ADR 0033):
+
+| Measure                                        | 0.2.0       | M17         |
+| ---------------------------------------------- | ----------- | ----------- |
+| Binary size                                    | 3,908,688 B | 8,213,104 B |
+| Clean `cargo build --release -p firescale-cli` | 51 s        | 69 s        |
+| `fscale --version`, p50 of 30 runs             | —           | 2.8 ms      |
+
+`fscale graph --explain`, release build, one run each on the real repos of DECISIONS.md: `fastapi/full-stack-fastapi-template` 51 ms, `vercel/commerce` 20 ms, `GoogleCloudPlatform/microservices-demo` 27 ms. The graph parses every source file once, on all cores.
+
 ## `fscale verify` latency (M7)
 
 `fscale verify` runs inside agent stop hooks, so what firescale itself adds must stay small. Measured with `bench/verify-bench.mjs`: a small git repo (two files, the eight core rules), 200 runs per row after 3 warm-ups, release build.
