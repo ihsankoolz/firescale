@@ -65,16 +65,20 @@ A lint, typecheck or test step that **passed** is remembered on this machine, in
 The key of a pass is a hash of the firescale version, the step, its folder and command, and:
 
 - **The bytes of the files it can read, as they are now.** Its project's folder, the projects and shared folders it depends on in the project graph ([graph.md](graph.md)), the files directly in each folder above those, and every file that belongs to no project. The files are the tracked ones (uncommitted changes included) and the untracked ones git does not ignore. Bytes, not text: a CRLF checkout is a different key, never a wrong hit. The repo root's own steps cover the whole repo.
-- **The tools and what is installed.** The version of the program the command starts when it is a known tool (Node and its package managers, Python and its managers, Cargo, Go) and of the runtime behind it, the package manager's marker in `node_modules`, and the packages of the project's `.venv`. A script of the repo is never run with `--version`.
-- **The OS, the CPU architecture, and the values of a fixed list of environment variables** (`CI`, `NODE_ENV`, `NODE_OPTIONS`, `TZ`, `LANG`, `LC_ALL`, `PYTHONPATH`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `PYENV_VERSION`, `RUSTFLAGS`, `RUSTUP_TOOLCHAIN`, `CARGO_BUILD_TARGET`, `GOFLAGS`, `GOOS`, `GOARCH`, `CGO_ENABLED`, `GOTOOLCHAIN`, `JAVA_HOME`). Their values are hashed and never written down. No other variable is read.
+- **The tools and what is installed.** The program the command starts (found on the PATH, by its path, size and time, without running it), the version of known tools by their exact name (Node and its package managers, Python and its managers, Cargo, Go) and of the runtime behind them, the package manager's marker in `node_modules`, and the `pyvenv.cfg` and packages of a `.venv`. A script of the repo is never run for a version.
+- **The OS, the CPU architecture, and the values of a fixed list of environment variables** (`CI`, `NODE_PATH`, `PYTEST_ADDOPTS`, `NODE_ENV`, `NODE_OPTIONS`, `TZ`, `LANG`, `LC_ALL`, `PYTHONPATH`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `PYENV_VERSION`, `RUSTFLAGS`, `RUSTUP_TOOLCHAIN`, `CARGO_BUILD_TARGET`, `GOFLAGS`, `GOOS`, `GOARCH`, `CGO_ENABLED`, `GOTOOLCHAIN`, `JAVA_HOME`). Their values are hashed and never written down. No other variable is read.
+
+Each step is keyed on the files as they are when it starts, so a step whose files an earlier step rewrote runs again.
 
 A step is **never cached** when:
 
-- its folder, or a folder above it, has an `.env.example` naming a service (a database, a cache, a queue) that no Compose file in the repo starts: its result depends on something outside the repo;
-- its project, or one it depends on, has a dynamic import (`importlib.import_module`, `__import__`): the graph cannot see what it loads;
-- an input could not be read: a file, the list of files, or a tool's version.
+- an `.env.example` it covers (for the repo root's own steps, any in the repo), or one in a folder above it, names a service (a database, a cache, a queue) that no Compose file in the repo starts: its result depends on something outside the repo;
+- its project, or one it depends on, has a dynamic import (`importlib.import_module`, `__import__`), or a tsconfig with `paths`: the graph cannot see what it loads;
+- its command picks what to run from git history (`nx affected`, `turbo run --affected`);
+- the repo root is a folder inside a larger git repository;
+- an input could not be read: a file, a link to a folder, a submodule or nested repository, the list of files, the program, or a tool's version.
 
-A pass is stored only if the files it depends on are the same at the end of the run as at the start, so a step that writes one of its own inputs is never stored. Entries older than 30 days, and the least recently used beyond 500, are removed at the end of each run; deleting `.firescale/steps/` is always safe.
+A pass is stored only if the files it depends on are the same at the end of the run as at the start, so a step that writes one of its own inputs is never stored. An entry older than 30 days is never served; such entries, and the least recently used beyond 500, are removed at the end of each run; deleting `.firescale/steps/` is always safe.
 
 A step from the cache says so. Its status column reads `cached`, and its line says how long it took and when it passed:
 

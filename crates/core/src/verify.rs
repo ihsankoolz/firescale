@@ -2232,9 +2232,10 @@ fn cached_or_run(
         cache.remember(
             folder,
             kind,
+            &key,
             Entry {
                 format: 0,
-                key,
+                key: String::new(),
                 step: name.to_owned(),
                 project: folder.map(str::to_owned),
                 command: command.to_owned(),
@@ -2602,7 +2603,7 @@ fn whole_headline(report: &VerifyReport) -> String {
     if report.result == VerifyResult::Stopped {
         parts.push(format!(
             "STOPPED - interrupted after {} of {} ran",
-            report.steps_run,
+            report.steps_run - report.cache.as_ref().map_or(0, |cache| cache.hits),
             plural_steps(report.steps_total)
         ));
     }

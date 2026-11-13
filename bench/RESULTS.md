@@ -23,6 +23,8 @@ On the real repos of DECISIONS.md, copied, with every step replaced by `node -e 
 | `vercel/commerce`                        |     1 | 209 ms | 45 ms | 3 of 4 steps         |
 | `GoogleCloudPlatform/microservices-demo` |    12 | 555 ms | 79 ms | 33 of 34 steps       |
 
+On this repo itself (`pnpm --silent fscale verify`: ESLint, Prettier, clippy, `tsc`, `cargo test` and Vitest), the run that stores the passes took 2 min 07 s of steps; the next run, with no change, took 0.65 s in all.
+
 After a new file in `src/checkoutservice` of `microservices-demo`, only that service's steps and the repo root's own steps (which cover the whole repo) ran again: 27 of 34 steps came from the cache.
 
 ## M17: tree-sitter and the project graph

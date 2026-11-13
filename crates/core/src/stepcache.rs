@@ -33,8 +33,8 @@ use serde::{Deserialize, Serialize};
 use crate::doctor::{Machine, ThisMachine};
 use crate::git::run_git;
 use crate::graph::{project_id, Graph, NodeType, Source};
-use crate::services::services_for_folder;
-use crate::walk::walk_files;
+use crate::services::services_in;
+use crate::walk::{walk_entries, EntryKind};
 
 /// Bumped when the entry format or the key recipe changes, so old entries
 /// are never read.
@@ -51,8 +51,10 @@ pub const MAX_ENTRIES: usize = 500;
 
 /// The environment variables whose values are part of a key. Their values
 /// are hashed and never written down. No other variable is read.
-pub const ENV_ALLOWLIST: [&str; 19] = [
+pub const ENV_ALLOWLIST: [&str; 21] = [
     "CI",
+    "NODE_PATH",
+    "PYTEST_ADDOPTS",
     "NODE_ENV",
     "NODE_OPTIONS",
     "TZ",
@@ -76,27 +78,34 @@ pub const ENV_ALLOWLIST: [&str; 19] = [
 /// One file of the working tree, as the key sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FileState {
-    /// The blake3 hash of its bytes.
+    /// The blake3 hash of its bytes, and on Unix whether it is executable.
     Bytes(String),
-    /// A symbolic link, by its target.
+    /// A symbolic link to a file: its target, and the hash of the bytes it
+    /// points to.
     Link(String),
-    /// Tracked but deleted, or a folder entry such as a submodule.
+    /// Tracked but deleted.
     Absent,
-    /// It exists and could not be read.
-    Unreadable,
+    /// It exists and could not be read: a permission error, a path git
+    /// gave that is not valid UTF-8, a link to a folder or out of reach.
+    Unreadable(String),
+    /// A git submodule or a nested repository: its files are not hashed.
+    Opaque,
 }
 
 /// The size and modification time of a file, so a second capture in the
 /// same run can reuse a hash. Never kept across runs.
 type Stamp = (u64, Option<SystemTime>);
 
-/// The files of a working tree and their contents, captured once per run.
+/// The files of a working tree and their contents.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     /// Repo-relative paths with forward slashes, sorted.
     files: BTreeMap<String, (FileState, Option<Stamp>)>,
     /// Set when the list of files could not be read: nothing is cached.
     problem: Option<String>,
+    /// When it was taken. A hash is reused only for a file last changed
+    /// well before this (git's "racily clean" rule).
+    taken: Option<SystemTime>,
 }
 
 fn abs(root: &Path, rel: &str) -> PathBuf {
@@ -111,39 +120,96 @@ fn stamp(meta: &fs::Metadata) -> Stamp {
     (meta.len(), meta.modified().ok())
 }
 
+#[cfg(unix)]
+fn executable(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn executable(_: &fs::Metadata) -> bool {
+    false
+}
+
 fn read_state(path: &Path) -> (FileState, Option<Stamp>) {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return (FileState::Absent, None);
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (FileState::Absent, None)
+        }
+        Err(error) => return (FileState::Unreadable(error.to_string()), None),
     };
     if meta.file_type().is_symlink() {
-        return match fs::read_link(path) {
-            Ok(target) => (
-                FileState::Link(target.to_string_lossy().replace('\\', "/")),
-                Some(stamp(&meta)),
+        // A link counts by its target and by what it points to.
+        let Ok(target) = fs::read_link(path) else {
+            return (
+                FileState::Unreadable("a link that cannot be read".to_owned()),
+                None,
+            );
+        };
+        let target = target.to_string_lossy().replace('\\', "/");
+        return match fs::metadata(path) {
+            Ok(pointed) if pointed.is_dir() => (
+                FileState::Unreadable(format!(
+                    "a link to the folder {target}, whose files are not hashed"
+                )),
+                None,
             ),
-            Err(_) => (FileState::Unreadable, None),
+            Ok(_) => match fs::read(path) {
+                Ok(bytes) => (
+                    FileState::Link(format!("{target}\0{}", blake3::hash(&bytes).to_hex())),
+                    None,
+                ),
+                Err(error) => (FileState::Unreadable(error.to_string()), None),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                (FileState::Link(format!("{target}\0dangling")), None)
+            }
+            Err(error) => (FileState::Unreadable(error.to_string()), None),
         };
     }
     if meta.is_dir() {
-        return (FileState::Absent, None);
+        return (FileState::Opaque, None);
     }
     match fs::read(path) {
-        Ok(bytes) => (
-            FileState::Bytes(blake3::hash(&bytes).to_hex().to_string()),
-            Some(stamp(&meta)),
-        ),
-        Err(_) => (FileState::Unreadable, None),
+        Ok(bytes) => {
+            let mode = if executable(&meta) { "x" } else { "-" };
+            (
+                FileState::Bytes(format!("{}{mode}", blake3::hash(&bytes).to_hex())),
+                Some(stamp(&meta)),
+            )
+        }
+        Err(error) => (FileState::Unreadable(error.to_string()), None),
     }
 }
 
 /// The files git lists for the working tree: tracked files and untracked
-/// files it does not ignore. Outside git, every file the walk finds.
+/// files it does not ignore. Outside git, every file and link the walk finds.
 fn list_files(root: &Path) -> Result<Vec<String>, String> {
-    let inside = run_git(root, &["rev-parse", "--is-inside-work-tree"])
-        .map(|out| out.code == 0 && out.stdout.trim() == "true")
-        .unwrap_or(false);
-    if !inside {
-        return walk_files(root).map_err(|error| error.message().to_owned());
+    let top = run_git(root, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .filter(|out| out.code == 0)
+        .map(|out| PathBuf::from(out.stdout.trim()));
+    let Some(top) = top else {
+        return walk_entries(root)
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .filter(|(_, kind)| *kind != EntryKind::Folder)
+                    .map(|(path, _)| path)
+                    .collect()
+            })
+            .map_err(|error| error.message().to_owned());
+    };
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if !same(&top, root) {
+        return Err(
+            "the repo root is a folder inside a larger git repository, whose files above it are not hashed"
+                .to_owned(),
+        );
     }
     let out = run_git(
         root,
@@ -168,11 +234,16 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
         .stdout
         .split('\0')
         .filter(|path| !path.is_empty())
-        .map(|path| path.replace('\\', "/"))
+        // A nested repository is listed as `folder/`.
+        .map(|path| path.replace('\\', "/").trim_end_matches('/').to_owned())
         .collect();
     files.retain(|path| !path.starts_with(".firescale/") && !path.starts_with(".git/"));
     Ok(files.into_iter().collect())
 }
+
+/// Files changed within this long before a snapshot are hashed again, as
+/// file systems with coarse times can hide a change.
+const RACY: Duration = Duration::from_secs(2);
 
 impl Snapshot {
     /// Lists and hashes the working tree under `root`.
@@ -182,15 +253,18 @@ impl Snapshot {
     }
 
     /// Like [`Snapshot::capture`], reusing the hash of a file whose size
-    /// and modification time are the same as in `earlier`.
+    /// and modification time are the same as in `earlier`, and were older
+    /// than `earlier` by a margin.
     #[must_use]
     pub fn capture_reusing(root: &Path, earlier: Option<&Self>) -> Self {
+        let taken = SystemTime::now();
         let paths = match list_files(root) {
             Ok(paths) => paths,
             Err(problem) => {
                 return Self {
                     files: BTreeMap::new(),
                     problem: Some(problem),
+                    taken: Some(taken),
                 }
             }
         };
@@ -206,13 +280,30 @@ impl Snapshot {
                         part.iter()
                             .map(|rel| {
                                 let path = abs(root, rel);
-                                let reused = earlier
-                                    .and_then(|snapshot| snapshot.files.get(rel))
-                                    .and_then(|(state, old)| {
-                                        let now = fs::symlink_metadata(&path).ok()?;
-                                        (old.is_some() && *old == Some(stamp(&now)))
-                                            .then(|| (state.clone(), *old))
-                                    });
+                                if rel.contains('\u{fffd}') {
+                                    return (
+                                        rel.clone(),
+                                        (
+                                            FileState::Unreadable(
+                                                "its name is not valid UTF-8".to_owned(),
+                                            ),
+                                            None,
+                                        ),
+                                    );
+                                }
+                                let reused = earlier.and_then(|snapshot| {
+                                    let (state, old) = snapshot.files.get(rel)?;
+                                    let (_, Some(modified)) = (*old)? else {
+                                        return None;
+                                    };
+                                    let settled = snapshot
+                                        .taken
+                                        .and_then(|taken| taken.checked_sub(RACY))
+                                        .is_some_and(|line| modified < line);
+                                    let now = fs::symlink_metadata(&path).ok()?;
+                                    (settled && *old == Some(stamp(&now)))
+                                        .then(|| (state.clone(), *old))
+                                });
                                 (rel.clone(), reused.unwrap_or_else(|| read_state(&path)))
                             })
                             .collect::<Vec<_>>()
@@ -228,11 +319,13 @@ impl Snapshot {
             return Self {
                 files: BTreeMap::new(),
                 problem: Some("the files could not all be hashed".to_owned()),
+                taken: Some(taken),
             };
         }
         Self {
             files: hashed.into_iter().collect(),
             problem: None,
+            taken: Some(taken),
         }
     }
 
@@ -396,7 +489,12 @@ fn files_digest(snapshot: &Snapshot, scope: &Scope, owned: &[String]) -> Result<
             FileState::Bytes(hash) => hash.as_str(),
             FileState::Link(target) => target.as_str(),
             FileState::Absent => "-",
-            FileState::Unreadable => return Err(format!("{path} could not be read")),
+            FileState::Unreadable(why) => return Err(format!("{path} could not be read ({why})")),
+            FileState::Opaque => {
+                return Err(format!(
+                    "{path} is a git submodule or a nested repository, whose files are not hashed"
+                ))
+            }
         };
         let marker = match state {
             FileState::Link(_) => "link",
@@ -418,9 +516,12 @@ fn program_of(command: &str) -> Option<String> {
     (!word.is_empty()).then_some(word)
 }
 
+fn file_name(program: &str) -> &str {
+    program.rsplit(['/', '\\']).next().unwrap_or(program)
+}
+
 fn file_stem(program: &str) -> String {
-    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let name = name.to_ascii_lowercase();
+    let name = file_name(program).to_ascii_lowercase();
     for suffix in [".exe", ".cmd", ".bat"] {
         if let Some(stem) = name.strip_suffix(suffix) {
             return stem.to_owned();
@@ -429,25 +530,46 @@ fn file_stem(program: &str) -> String {
     name
 }
 
+/// `python`, `python3` or `python3.12`.
+fn is_python_name(stem: &str) -> bool {
+    stem == "py"
+        || stem.strip_prefix("python").is_some_and(|rest| {
+            rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit() || c == '.')
+        })
+}
+
+/// True for the interpreter of a virtual environment: `.venv/bin/python`,
+/// `venv\Scripts\python.exe`.
+fn is_venv_interpreter(program: &str) -> bool {
+    let parts: Vec<&str> = program.split(['/', '\\']).collect();
+    parts.len() >= 3
+        && matches!(parts[parts.len() - 2], "bin" | "Scripts")
+        && is_python_name(&file_stem(program))
+}
+
 /// The version probes for a command: the program itself when it is a known
-/// tool, and the runtime it starts. Unknown programs (a script of the repo,
-/// `make`) are never run with `--version`: that could run the script.
+/// tool by its exact name, and the runtime it starts. Anything else (a
+/// script of the repo, a path, `make`, Yarn, which runs the release the
+/// repo pins) is never run: it is keyed by where it is and its size and
+/// time (see [`program_identity`]).
 fn probes(command: &str) -> Vec<(String, Vec<&'static str>)> {
     let Some(program) = program_of(command) else {
         return Vec::new();
     };
     let stem = file_stem(&program);
+    let path = program.contains(['/', '\\']);
+    if path && !is_venv_interpreter(&program) {
+        return Vec::new();
+    }
     let mut out: Vec<(String, Vec<&'static str>)> = Vec::new();
-    let node_tools = [
-        "npm", "npx", "pnpm", "yarn", "bun", "deno", "node", "corepack",
-    ];
+    let node_tools = ["npm", "npx", "pnpm", "bun", "deno", "node"];
     let python_tools = ["uv", "poetry", "pipenv", "pdm", "hatch", "tox", "nox"];
     if node_tools.contains(&stem.as_str()) {
         out.push((program.clone(), vec!["--version"]));
         if stem != "node" && stem != "bun" && stem != "deno" {
             out.push(("node".to_owned(), vec!["--version"]));
         }
-    } else if stem.starts_with("python") || stem == "py" || python_tools.contains(&stem.as_str()) {
+    } else if is_python_name(&stem) || python_tools.contains(&stem.as_str()) {
         out.push((program.clone(), vec!["--version"]));
     } else if stem == "cargo" {
         out.push((program.clone(), vec!["--version"]));
@@ -456,6 +578,67 @@ fn probes(command: &str) -> Vec<(String, Vec<&'static str>)> {
         out.push((program.clone(), vec!["version"]));
     }
     out
+}
+
+/// Finds `program` on the PATH (never in the current folder), or, for a
+/// path, relative to `dir`.
+fn locate(dir: &Path, program: &str) -> Option<PathBuf> {
+    if program.contains(['/', '\\']) {
+        let path = if Path::new(program).is_absolute() {
+            PathBuf::from(program)
+        } else {
+            dir.join(program)
+        };
+        return candidates(&path).into_iter().find(|path| path.is_file());
+    }
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .filter(|folder| folder.is_absolute())
+        .flat_map(|folder| candidates(&folder.join(program)))
+        .find(|path| path.is_file())
+}
+
+#[cfg(windows)]
+fn candidates(path: &Path) -> Vec<PathBuf> {
+    let mut out = vec![path.to_path_buf()];
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+    for ext in exts.split(';').filter(|ext| !ext.is_empty()) {
+        let mut name = path.as_os_str().to_owned();
+        name.push(ext);
+        out.push(PathBuf::from(name));
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn candidates(path: &Path) -> Vec<PathBuf> {
+    vec![path.to_path_buf()]
+}
+
+/// Where the command's program is, with its size and modification time,
+/// read without running it.
+///
+/// # Errors
+///
+/// When the program cannot be found.
+fn program_identity(dir: &Path, command: &str) -> Result<String, String> {
+    let Some(program) = program_of(command) else {
+        return Err("the command is empty".to_owned());
+    };
+    let Some(path) = locate(dir, &program) else {
+        return Err(format!("{program} was not found on the PATH"));
+    };
+    let meta = fs::metadata(&path).map_err(|error| format!("{program}: {error}"))?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos());
+    Ok(format!(
+        "{}\0{}\0{modified}",
+        path.to_string_lossy(),
+        meta.len()
+    ))
 }
 
 /// Asks tools for their versions, once per program and folder in a run.
@@ -473,14 +656,12 @@ impl<'a> ToolVersions<'a> {
         }
     }
 
+    /// The version `program` gives in `dir`. Version managers (asdf, mise,
+    /// pyenv, volta, rustup, corepack) answer per folder, so the folder is
+    /// part of the memo. The program is found on the PATH first and run by
+    /// its full path, with no shell, so nothing in the repo's folder runs.
     fn version(&self, dir: &Path, program: &str, args: &[&str]) -> Option<String> {
-        // A relative program path (`.venv/bin/python`) depends on the folder.
-        let place = if program.contains(['/', '\\']) {
-            dir.to_path_buf()
-        } else {
-            PathBuf::new()
-        };
-        let slot = (place, format!("{program} {}", args.join(" ")));
+        let slot = (dir.to_path_buf(), format!("{program} {}", args.join(" ")));
         if let Some(found) = self
             .seen
             .lock()
@@ -489,7 +670,11 @@ impl<'a> ToolVersions<'a> {
         {
             return found.clone();
         }
-        let found = self.machine.version(dir, program, args);
+        let found = locate(dir, program).and_then(|path| {
+            self.machine
+                .version(dir, &path.to_string_lossy(), args)
+                .map(|version| format!("{}\0{version}", path.to_string_lossy()))
+        });
         self.seen
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -499,8 +684,8 @@ impl<'a> ToolVersions<'a> {
 }
 
 /// What is installed for a step in `dir`: the package manager's marker
-/// files in `node_modules` from `dir` up to the root, and the packages of
-/// the virtual environments in `dir`.
+/// files in `node_modules`, and the packages and `pyvenv.cfg` of the
+/// virtual environments, from `dir` up to the root.
 fn installed(root: &Path, dir: &Path) -> Vec<String> {
     let mut lines = Vec::new();
     let markers = [
@@ -510,38 +695,37 @@ fn installed(root: &Path, dir: &Path) -> Vec<String> {
         ".yarn-state.yml",
         ".bun-tag",
     ];
+    let hash_file = |path: &Path, lines: &mut Vec<String>| {
+        if let Ok(bytes) = fs::read(path) {
+            lines.push(format!(
+                "installed\0{}\0{}",
+                relative(root, path),
+                blake3::hash(&bytes).to_hex()
+            ));
+        }
+    };
     let mut at = Some(dir);
     while let Some(folder) = at {
         for marker in markers {
-            let path = folder.join("node_modules").join(marker);
-            if let Ok(bytes) = fs::read(&path) {
-                lines.push(format!(
-                    "installed\0{}\0{}",
-                    relative(root, &path),
-                    blake3::hash(&bytes).to_hex()
-                ));
-            }
+            hash_file(&folder.join("node_modules").join(marker), &mut lines);
         }
-        let pnp = folder.join(".yarn").join("install-state.gz");
-        if let Ok(bytes) = fs::read(&pnp) {
-            lines.push(format!(
-                "installed\0{}\0{}",
-                relative(root, &pnp),
-                blake3::hash(&bytes).to_hex()
-            ));
+        hash_file(&folder.join(".yarn").join("install-state.gz"), &mut lines);
+        for venv in [".venv", "venv"] {
+            let path = folder.join(venv);
+            if path.is_dir() {
+                hash_file(&path.join("pyvenv.cfg"), &mut lines);
+                for (package, version) in crate::doctor::installed_python_packages(&path) {
+                    lines.push(format!(
+                        "venv\0{}\0{package}\0{version}",
+                        relative(root, &path)
+                    ));
+                }
+            }
         }
         if folder == root {
             break;
         }
         at = folder.parent().filter(|up| up.starts_with(root));
-    }
-    for venv in [".venv", "venv"] {
-        let path = dir.join(venv);
-        if path.is_dir() {
-            for (package, version) in crate::doctor::installed_python_packages(&path) {
-                lines.push(format!("venv\0{venv}\0{package}\0{version}"));
-            }
-        }
     }
     lines
 }
@@ -584,6 +768,14 @@ fn environment_digest(read: &dyn Fn(&str) -> Option<String>) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// True for a command whose result depends on git history, not only on the
+/// files: `nx affected`, `turbo run --affected`.
+fn uses_history(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .any(|word| word == "affected" || word.starts_with("--affected"))
+}
+
 /// The key of one step, or why it cannot be cached.
 ///
 /// # Errors
@@ -596,15 +788,11 @@ pub fn step_key(
     tools: &ToolVersions<'_>,
     read_env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
-    let outside: Vec<String> = services_for_folder(root, inputs.dir)
-        .into_iter()
-        .filter(|service| service.start.is_none())
-        .map(|service| format!("{} (from {})", service.describe(), service.source))
-        .collect();
-    if let Some(first) = outside.first() {
-        return Err(format!(
-            "it may need {first}, a service the repo does not start"
-        ));
+    if uses_history(inputs.command) {
+        return Err(
+            "its command picks what to run from git history, which the key does not hold"
+                .to_owned(),
+        );
     }
     let mut hasher = blake3::Hasher::new();
     hasher.update(format!("firescale-step-cache\0{FORMAT}\0{}\n", inputs.version).as_bytes());
@@ -628,6 +816,13 @@ pub fn step_key(
         .as_bytes(),
     );
     hasher.update(format!("env\0{}\n", environment_digest(read_env)).as_bytes());
+    hasher.update(
+        format!(
+            "program\0{}\n",
+            program_identity(inputs.dir, inputs.command)?
+        )
+        .as_bytes(),
+    );
     for (program, args) in probes(inputs.command) {
         let Some(version) = tools.version(inputs.dir, &program, &args) else {
             return Err(format!("the version of {program} could not be read"));
@@ -640,6 +835,68 @@ pub fn step_key(
     }
     hasher.update(format!("files\0{files}\n").as_bytes());
     Ok(hasher.finalize().to_hex().to_string())
+}
+
+const COMPOSE_NAMES: [&str; 4] = [
+    "compose.yaml",
+    "compose.yml",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+];
+
+/// Why a unit may need a service that the repo does not start, if it may.
+/// Every `.env.example` the unit's files cover is read, with the folders
+/// above the step's folder and every Compose file of the repo.
+fn outside_service(snapshot: &Snapshot, scope: &Scope, root: &Path, dir: &Path) -> Option<String> {
+    let mut folders: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut at = Some(dir);
+    while let Some(folder) = at {
+        folders.insert(folder.to_path_buf());
+        if folder == root {
+            break;
+        }
+        at = folder.parent().filter(|up| up.starts_with(root));
+    }
+    for path in snapshot.files.keys() {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let covered = scope.folders.iter().any(|folder| inside(path, folder))
+            || scope.above.contains(parent(path));
+        if (name == ".env.example" && covered) || COMPOSE_NAMES.contains(&name) {
+            folders.insert(abs(root, parent(path)));
+        }
+    }
+    let folders: Vec<PathBuf> = folders.into_iter().collect();
+    services_in(root, &folders)
+        .into_iter()
+        .find(|service| service.start.is_none())
+        .map(|service| {
+            format!(
+                "it may need {} (from {}), a service the repo does not start",
+                service.describe(),
+                service.source
+            )
+        })
+}
+
+/// Why a Node unit's imports may reach files the graph does not see:
+/// a tsconfig with `paths` in its folders or above.
+fn path_aliases(snapshot: &Snapshot, scope: &Scope, root: &Path) -> Option<String> {
+    snapshot.files.keys().find_map(|path| {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let tsconfig = name.starts_with("tsconfig") || name == "jsconfig.json";
+        if !tsconfig || !name.ends_with(".json") {
+            return None;
+        }
+        let covered = scope.folders.iter().any(|folder| inside(path, folder))
+            || scope.above.contains(parent(path));
+        if !covered {
+            return None;
+        }
+        let text = fs::read_to_string(abs(root, path)).ok()?;
+        text.contains("\"paths\"").then(|| {
+            format!("{path} maps import paths (\"paths\"), which the project graph does not follow")
+        })
+    })
 }
 
 /// The file digest of each unit, computed from one snapshot.
@@ -706,6 +963,11 @@ pub fn lookup(root: &Path, key: &str) -> Option<Entry> {
     let text = fs::read_to_string(&path).ok()?;
     let entry: Entry = serde_json::from_str(&text).ok()?;
     if entry.format != FORMAT || entry.key != key {
+        return None;
+    }
+    // A pass older than the age limit is not served, even before the
+    // folder is cleaned.
+    if now_secs().saturating_sub(entry.ran_at) > MAX_AGE.as_secs() {
         return None;
     }
     if let Ok(file) = fs::OpenOptions::new().append(true).open(&path) {
@@ -802,9 +1064,6 @@ pub fn format_iso(secs: u64) -> String {
 
 type UnitSlot = (Option<String>, Option<String>);
 
-/// A unit's scope and the digest of its files, or why it is not cached.
-type UnitFiles = Result<(Scope, String), String>;
-
 /// The step cache of one verify run: the snapshot of the working tree it
 /// started from, and the passes it will store at the end.
 pub struct StepCache<'a> {
@@ -813,13 +1072,24 @@ pub struct StepCache<'a> {
     read: bool,
     sets_ci: bool,
     graph: Option<Graph>,
-    snapshot: Snapshot,
+    /// The latest snapshot of the working tree. Each step takes a new one
+    /// before it is keyed (reusing the hashes of files whose size and time
+    /// did not change), so a step that an earlier step's writes reach is
+    /// never served from the cache under the old content.
+    snapshot: std::sync::Mutex<Snapshot>,
     digests: UnitDigests,
     tools: ToolVersions<'a>,
     read_env: &'a (dyn Fn(&str) -> Option<String> + Sync),
-    units: std::sync::Mutex<HashMap<UnitSlot, UnitFiles>>,
+    scopes: std::sync::Mutex<HashMap<UnitSlot, UnitScope>>,
     log: std::sync::Mutex<Vec<String>>,
     pending: std::sync::Mutex<Vec<(Scope, String, Entry)>>,
+}
+
+/// A step's key, and the digest of its files when it was made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheKey {
+    pub key: String,
+    files: String,
 }
 
 /// How a step's run uses the cache.
@@ -845,10 +1115,10 @@ impl<'a> StepCache<'a> {
             sets_ci: settings.sets_ci,
             digests: UnitDigests::new(graph.as_ref()),
             graph,
-            snapshot: Snapshot::capture(root),
+            snapshot: std::sync::Mutex::new(Snapshot::capture(root)),
             tools: ToolVersions::new(settings.machine),
             read_env: settings.read_env,
-            units: std::sync::Mutex::new(HashMap::new()),
+            scopes: std::sync::Mutex::new(HashMap::new()),
             log: std::sync::Mutex::new(Vec::new()),
             pending: std::sync::Mutex::new(Vec::new()),
         }
@@ -860,23 +1130,51 @@ impl<'a> StepCache<'a> {
         self.read
     }
 
-    fn unit(&self, folder: Option<&str>, kind: Option<&str>) -> Result<(Scope, String), String> {
+    /// A new snapshot of the working tree, reusing what did not change.
+    fn fresh(&self) -> Snapshot {
+        let earlier = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let now = Snapshot::capture_reusing(&self.root, Some(&earlier));
+        *self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = now.clone();
+        now
+    }
+
+    /// What the unit's steps read, or why they are not cached.
+    fn scope(
+        &self,
+        folder: Option<&str>,
+        kind: Option<&str>,
+        dir: &Path,
+        snapshot: &Snapshot,
+    ) -> UnitScope {
         let slot = (folder.map(str::to_owned), kind.map(str::to_owned));
-        let mut units = self
-            .units
+        let mut scopes = self
+            .scopes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        units
+        scopes
             .entry(slot)
             .or_insert_with(|| {
                 let scope = unit_scope(self.graph.as_ref(), folder, kind)?;
-                let digest = self.digests.digest(&self.snapshot, &scope)?;
-                Ok((scope, digest))
+                if let Some(reason) = outside_service(snapshot, &scope, &self.root, dir) {
+                    return Err(reason);
+                }
+                if let Some(reason) = path_aliases(snapshot, &scope, &self.root) {
+                    return Err(reason);
+                }
+                Ok(scope)
             })
             .clone()
     }
 
-    /// The key of a step, or why it is not cached.
+    /// The key of a step, made from the working tree as it is now, or why
+    /// it is not cached.
     ///
     /// # Errors
     ///
@@ -888,9 +1186,11 @@ impl<'a> StepCache<'a> {
         step: &str,
         command: &str,
         dir: &Path,
-    ) -> Result<String, String> {
-        let (_, files) = self.unit(folder, kind)?;
-        step_key(
+    ) -> Result<CacheKey, String> {
+        let snapshot = self.fresh();
+        let scope = self.scope(folder, kind, dir, &snapshot)?;
+        let files = self.digests.digest(&snapshot, &scope)?;
+        let key = step_key(
             &self.root,
             &StepInputs {
                 version: &self.version,
@@ -904,27 +1204,42 @@ impl<'a> StepCache<'a> {
             &files,
             &self.tools,
             self.read_env,
-        )
+        )?;
+        Ok(CacheKey { key, files })
     }
 
     /// The stored pass for `key`, unless reading is off.
     #[must_use]
-    pub fn hit(&self, key: &str) -> Option<Entry> {
+    pub fn hit(&self, key: &CacheKey) -> Option<Entry> {
         if !self.read {
             return None;
         }
-        lookup(&self.root, key)
+        lookup(&self.root, &key.key)
     }
 
     /// Keeps a pass, to be stored at the end of the run if the files it
-    /// depends on did not change while verify ran.
-    pub fn remember(&self, folder: Option<&str>, kind: Option<&str>, mut entry: Entry) {
+    /// depends on are then the same as when it started.
+    pub fn remember(
+        &self,
+        folder: Option<&str>,
+        kind: Option<&str>,
+        key: &CacheKey,
+        mut entry: Entry,
+    ) {
         entry.format = FORMAT;
-        if let Ok((scope, digest)) = self.unit(folder, kind) {
+        entry.key.clone_from(&key.key);
+        let slot = (folder.map(str::to_owned), kind.map(str::to_owned));
+        let scope = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&slot)
+            .cloned();
+        if let Some(Ok(scope)) = scope {
             self.pending
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((scope, digest, entry));
+                .push((scope, key.files.clone(), entry));
         }
     }
 
@@ -936,9 +1251,10 @@ impl<'a> StepCache<'a> {
             .push(line);
     }
 
-    /// Stores the passes whose files are the same now as when the run
-    /// started (a step that wrote a file it depends on is not stored), then
-    /// cleans the folder. Returns how many were stored.
+    /// Stores the passes whose files are the same now as when they started
+    /// (a step that wrote a file it depends on, or one whose files another
+    /// step or a person changed while it ran, is not stored), then cleans
+    /// the folder. Returns how many were stored.
     pub fn finish(&self) -> usize {
         let pending = std::mem::take(
             &mut *self
@@ -946,26 +1262,25 @@ impl<'a> StepCache<'a> {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        if pending.is_empty() {
-            return 0;
-        }
-        let now = Snapshot::capture_reusing(&self.root, Some(&self.snapshot));
         let mut stored = 0;
-        for (scope, before, entry) in pending {
-            let place = entry.project.as_deref().map_or_else(
-                || entry.step.clone(),
-                |project| format!("{} in {project}", entry.step),
-            );
-            match self.digests.digest(&now, &scope) {
-                Ok(after) if after == before => {
-                    if store(&self.root, &entry).is_ok() {
-                        stored += 1;
-                        self.note(format!("cache: stored {place}"));
+        if !pending.is_empty() {
+            let now = self.fresh();
+            for (scope, before, entry) in pending {
+                let place = entry.project.as_deref().map_or_else(
+                    || entry.step.clone(),
+                    |project| format!("{} in {project}", entry.step),
+                );
+                match self.digests.digest(&now, &scope) {
+                    Ok(after) if after == before => {
+                        if store(&self.root, &entry).is_ok() {
+                            stored += 1;
+                            self.note(format!("cache: stored {place}"));
+                        }
                     }
+                    _ => self.note(format!(
+                        "cache: not stored {place}: files it depends on changed while verify ran"
+                    )),
                 }
-                _ => self.note(format!(
-                    "cache: not stored {place}: files it depends on changed while verify ran"
-                )),
             }
         }
         clean(&self.root);
@@ -1005,6 +1320,7 @@ pub fn format_time(secs: u64) -> String {
 mod tests {
     use super::*;
     use crate::facts::detect_facts_with;
+    use crate::git::run_git;
     use crate::graph::build_graph;
     use crate::testing::COURSE_SHARED_USERS;
     use crate::testing::{course_project, Fixture, Track};
@@ -1030,8 +1346,14 @@ mod tests {
     ) -> Result<String, String> {
         let snapshot = Snapshot::capture(root);
         let scope = unit_scope(graph, folder, kind)?;
-        let files = UnitDigests::new(graph).digest(&snapshot, &scope)?;
         let dir = folder.map_or_else(|| root.to_path_buf(), |f| abs(root, f));
+        if let Some(reason) = outside_service(&snapshot, &scope, root, &dir) {
+            return Err(reason);
+        }
+        if let Some(reason) = path_aliases(&snapshot, &scope, root) {
+            return Err(reason);
+        }
+        let files = UnitDigests::new(graph).digest(&snapshot, &scope)?;
         let machine = NoTools;
         let tools = ToolVersions::new(&machine);
         step_key(
@@ -1041,7 +1363,7 @@ mod tests {
                 step: "test",
                 project: folder,
                 kind,
-                command: "python -m pytest",
+                command: "node -e 0",
                 dir: &dir,
                 sets_ci: true,
             },
@@ -1159,8 +1481,12 @@ mod tests {
     #[test]
     fn an_unreadable_input_is_never_cached() {
         let snapshot = Snapshot {
-            files: BTreeMap::from([("a.py".to_owned(), (FileState::Unreadable, None))]),
+            files: BTreeMap::from([(
+                "a.py".to_owned(),
+                (FileState::Unreadable("permission denied".to_owned()), None),
+            )]),
             problem: None,
+            taken: None,
         };
         let reason = UnitDigests::new(None)
             .digest(&snapshot, &Scope::whole_repo())
@@ -1169,6 +1495,7 @@ mod tests {
         let unlisted = Snapshot {
             files: BTreeMap::new(),
             problem: Some("git ls-files failed".to_owned()),
+            taken: None,
         };
         assert!(UnitDigests::new(None)
             .digest(&unlisted, &Scope::whole_repo())
@@ -1194,7 +1521,7 @@ mod tests {
                     step: "test",
                     project: None,
                     kind: None,
-                    command: "python -m pytest",
+                    command: "node -e 0",
                     dir: root,
                     sets_ci: true,
                 },
@@ -1242,7 +1569,7 @@ mod tests {
             project: None,
             command: "true".to_owned(),
             duration_ms: 1,
-            ran_at: 0,
+            ran_at: now_secs(),
             detail: String::new(),
             tests: None,
         };
@@ -1266,5 +1593,137 @@ mod tests {
         assert!(lookup(root, "b").is_none(), "least recently used");
         assert!(lookup(root, "c").is_some());
         assert!(lookup(root, "d").is_some());
+    }
+
+    #[test]
+    fn a_root_step_sees_the_services_of_the_projects_below() {
+        let fixture = Fixture::new(
+            &[
+                ("api/main.py", "print(1)\n"),
+                (
+                    "api/.env.example",
+                    "DATABASE_URL=postgresql://u:p@localhost:5432/db\n",
+                ),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let reason = key_of(fixture.root(), None, None, None).unwrap_err();
+        assert!(reason.contains("PostgreSQL on localhost:5432"), "{reason}");
+    }
+
+    #[test]
+    fn a_submodule_or_nested_repository_is_never_cached() {
+        let fixture =
+            Fixture::new(&[("a.js", "1\n"), ("nested/n.txt", "x\n")], Track::None).unwrap();
+        let nested = fixture.root().join("nested");
+        let init = run_git(&nested, &["init", "--quiet"]).unwrap();
+        assert_eq!(init.code, 0);
+        let reason = key_of(fixture.root(), None, None, None).unwrap_err();
+        assert!(reason.contains("nested repository"), "{reason}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_counts_by_what_it_points_to() {
+        let fixture = Fixture::new(&[("a.js", "1\n")], Track::NoGit).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("data.txt");
+        fs::write(&target, "one").unwrap();
+        std::os::unix::fs::symlink(&target, fixture.root().join("data.txt")).unwrap();
+        let first = key_of(fixture.root(), None, None, None).unwrap();
+        fs::write(&target, "two").unwrap();
+        assert_ne!(first, key_of(fixture.root(), None, None, None).unwrap());
+        std::os::unix::fs::symlink(outside.path(), fixture.root().join("folder")).unwrap();
+        let reason = key_of(fixture.root(), None, None, None).unwrap_err();
+        assert!(reason.contains("a link to the folder"), "{reason}");
+    }
+
+    #[test]
+    fn a_root_inside_a_larger_repository_is_never_cached() {
+        let fixture =
+            Fixture::new(&[("sub/a.js", "1\n"), ("shared.txt", "x\n")], Track::None).unwrap();
+        let reason = key_of(&fixture.root().join("sub"), None, None, None).unwrap_err();
+        assert!(
+            reason.contains("inside a larger git repository"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_repo_script_is_never_run_for_its_version() {
+        for command in [
+            "scripts/python-tests.sh",
+            "./node test.js",
+            "./python3 -m pytest",
+            "python-tests.sh",
+            "yarn test",
+            "make test",
+            "bin/pytest",
+        ] {
+            assert!(probes(command).is_empty(), "{command} would be run");
+        }
+        assert_eq!(probes(".venv/bin/python -m pytest").len(), 1);
+        assert_eq!(probes("venv\\Scripts\\python.exe -m pytest").len(), 1);
+        assert_eq!(probes("python3.12 -m pytest").len(), 1);
+        assert_eq!(probes("pnpm test").len(), 2);
+    }
+
+    #[test]
+    fn a_program_that_is_not_found_is_never_cached() {
+        let fixture = Fixture::new(&[("a.js", "1\n")], Track::NoGit).unwrap();
+        let reason = program_identity(fixture.root(), "no-such-program-firescale --x").unwrap_err();
+        assert!(reason.contains("was not found"), "{reason}");
+    }
+
+    #[test]
+    fn import_path_aliases_and_history_turn_the_cache_off() {
+        let fixture = Fixture::new(
+            &[
+                ("a.js", "1\n"),
+                (
+                    "tsconfig.json",
+                    "{ \"compilerOptions\": { \"paths\": { \"@x/*\": [\"libs/x/*\"] } } }\n",
+                ),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let reason = key_of(fixture.root(), None, None, None).unwrap_err();
+        assert!(reason.contains("\"paths\""), "{reason}");
+        assert!(uses_history("pnpm exec nx affected -t test --base=main"));
+        assert!(uses_history("pnpm exec turbo run test --affected"));
+        assert!(!uses_history("pnpm test"));
+    }
+
+    #[test]
+    fn a_stale_entry_is_not_served() {
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let entry = Entry {
+            format: FORMAT,
+            key: "k".to_owned(),
+            step: "test".to_owned(),
+            project: None,
+            command: "true".to_owned(),
+            duration_ms: 1,
+            ran_at: now_secs() - MAX_AGE.as_secs() - 10,
+            detail: String::new(),
+            tests: None,
+        };
+        store(fixture.root(), &entry).unwrap();
+        assert!(lookup(fixture.root(), "k").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_launcher_with_no_shebang_line_gives_its_version() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("tool");
+        // pnpm's own launcher under `pnpm exec` is such a script.
+        fs::write(&tool, "echo \"tool 1.2.3 $1\"\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let version = ThisMachine.version(dir.path(), &tool.to_string_lossy(), &["--version"]);
+        assert_eq!(version.as_deref(), Some("tool 1.2.3 --version"));
     }
 }

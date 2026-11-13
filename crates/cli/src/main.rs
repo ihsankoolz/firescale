@@ -1187,9 +1187,13 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             // clean pass: say which steps verified nothing.
             if report.result == VerifyResult::Partial {
                 notes.push(format!(
-                    "fscale: verify was only partial, so this is not a clean pass. {} of {} steps ran; skipped: {}. Run `fscale verify` for the details, or set verify.failOnSkipped to true to make skipped steps block.",
-                    report.steps_run,
+                    "fscale: verify was only partial, so this is not a clean pass. {} of {} steps ran{}; skipped: {}. Run `fscale verify` for the details, or set verify.failOnSkipped to true to make skipped steps block.",
+                    report.steps_run - report.cache.as_ref().map_or(0, |cache| cache.hits),
                     report.steps_total,
+                    match report.cache.as_ref().map_or(0, |cache| cache.hits) {
+                        0 => String::new(),
+                        hits => format!(", {hits} passed from the cache"),
+                    },
                     report
                         .skipped
                         .iter()

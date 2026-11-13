@@ -297,3 +297,40 @@ describe('the step cache on the course project', () => {
     expect(projectsIn(await calls())).toEqual(everything);
   });
 });
+
+describe('the step cache keys a step on the files as they are when it starts', () => {
+  it('runs a step again when an earlier step changed its files', async () => {
+    const rewrite = `node -e "const fs = require('fs'); if (fs.existsSync('c/trigger.txt')) fs.writeFileSync('b/a.txt', 'broken')"`;
+    const check = `node -e "process.exit(require('fs').readFileSync('a.txt', 'utf8').includes('broken') ? 1 : 0)"`;
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: {
+            lint: rewrite,
+            typecheck: false,
+            test: false,
+            projects: {
+              b: { lint: false, typecheck: false, test: check },
+              c: { lint: false, typecheck: false, test: false },
+            },
+          },
+        }),
+        'b/package.json': '{"name":"b"}\n',
+        'b/a.txt': 'ok\n',
+        'c/package.json': '{"name":"c"}\n',
+        'c/index.js': 'export {};\n',
+      },
+    });
+    expect((await runCli(['verify'], repo.root)).code).toBe(EXIT_OK);
+    const warm = await runCli(['verify'], repo.root);
+    expect(warm.stdout.split('\n')[0]).toContain('passed from the cache');
+    // The root's lint runs again (a file changed in c) and rewrites b/a.txt:
+    // b's test must run on the new content, not come from the cache.
+    await repo.write('c/trigger.txt', 'go\n');
+    const after = await runCli(['verify'], repo.root, { FSCALE_LOG: 'cache' });
+    expect(after.stdout.split('\n')[0]).toContain('FAILED at test in b');
+    expect(after.stderr).toContain('cache: miss test in b; not stored, because it did not pass');
+    expect(after.code).toBe(EXIT_VIOLATIONS);
+  });
+});

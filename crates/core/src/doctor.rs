@@ -117,10 +117,10 @@ impl Machine for ThisMachine {
     fn run(&self, dir: &Path, program: &str, args: &[&str]) -> Option<String> {
         let mut command = if Path::new(program).is_absolute() {
             // An interpreter path is run as it is, with no shell to read
-            // `$`, `&` or quotes in it.
-            let mut direct = Command::new(program);
-            direct.args(args);
-            direct
+            // `$`, `&` or quotes in it. On Unix it goes through `exec` in
+            // `sh`, with the path as an argument, so a launcher script with
+            // no `#!` line (as some package managers install) still runs.
+            direct(program, args)
         } else {
             // A tool name goes through the shell, so `pnpm.cmd` and the
             // like are found on Windows.
@@ -137,7 +137,11 @@ impl Machine for ThisMachine {
             // go.mod names.
             .env("COREPACK_ENABLE_NETWORK", "0")
             .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0")
-            .env("GOTOOLCHAIN", "local");
+            .env("GOTOOLCHAIN", "local")
+            // Nor install a Rust toolchain that rust-toolchain.toml names,
+            // and on Windows never look for the program in the folder.
+            .env("RUSTUP_AUTO_INSTALL", "0")
+            .env("NoDefaultCurrentDirectoryInExePath", "1");
         let never = AtomicBool::new(false);
         let watch = Watch {
             timeout: Some(VERSION_TIMEOUT),
@@ -168,6 +172,22 @@ impl Machine for ThisMachine {
     fn listening(&self, host: &str, port: u16) -> bool {
         listening(host, port, PROBE_TIMEOUT)
     }
+}
+
+#[cfg(unix)]
+fn direct(program: &str, args: &[&str]) -> Command {
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", "exec \"$0\" \"$@\"", program])
+        .args(args);
+    command
+}
+
+#[cfg(not(unix))]
+fn direct(program: &str, args: &[&str]) -> Command {
+    let mut command = Command::new(program);
+    command.args(args);
+    command
 }
 
 #[cfg(windows)]
