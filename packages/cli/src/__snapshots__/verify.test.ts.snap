@@ -59,6 +59,11 @@ warning: 1 step was skipped because no command was found: lint. Set verify.lint 
 
 exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
 {
+  "cache": {
+    "hits": 0,
+    "read": true,
+    "savedMs": 0,
+  },
   "failOnSkipped": false,
   "failedStep": "test",
   "ok": false,
@@ -161,6 +166,11 @@ note: no virtual environment was found for backend/audit_service, backend/auth_s
 
 exports[`fscale verify in a repo with projects in subfolders > runs the backend's and the frontend's steps, each in its own folder, and names every skipped step 2`] = `
 {
+  "cache": {
+    "hits": 0,
+    "read": true,
+    "savedMs": 0,
+  },
   "failOnSkipped": false,
   "notes": [
     "no virtual environment was found for backend/audit_service, backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.",

@@ -21,7 +21,7 @@ use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json}
 use firescale_core::fixloop::{
     plan_order, run_fix_loop, LoopFailure, LoopReport, LoopRule, MAX_PASSES,
 };
-use firescale_core::graph::{affected, build_graph, format_graph_human, format_graph_json};
+use firescale_core::graph::{affected, build_graph, format_graph_human, format_graph_json, Graph};
 use firescale_core::hooks::{
     block_summary, decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent,
     AGENTS,
@@ -36,6 +36,7 @@ use firescale_core::runs::RunRecord;
 use firescale_core::sarif::format_sarif;
 use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
+use firescale_core::stepcache::{CacheSettings, StepCache};
 use firescale_core::verify::{
     check_project_folders, format_verify_human, format_verify_json, format_verify_plan,
     limit_to_affected, plan_verify, run_verify_with, CheckStep, RunOptions, VerifyPlan,
@@ -863,11 +864,11 @@ fn verify_plan(
     facts: &firescale_core::facts::RepoFacts,
     verify_config: &firescale_core::verify::VerifyConfig,
     changed: Option<Changed>,
-) -> Result<VerifyPlan> {
+) -> Result<(VerifyPlan, Option<Graph>)> {
     let base = args.base.as_deref();
     let mut plan = plan_verify(root, facts, verify_config, args.affected, base);
     if !args.affected {
-        return Ok(plan);
+        return Ok((plan, None));
     }
     let changed = match changed {
         Some(changed) => changed,
@@ -915,7 +916,7 @@ fn verify_plan(
     if let Some(affected) = plan.affected.as_mut() {
         affected.notes = notes;
     }
-    Ok(plan)
+    Ok((plan, Some(graph)))
 }
 
 /// `fscale verify --dry-run`: prints the plan and runs nothing, not even the
@@ -924,7 +925,7 @@ fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
     let verify_config = load_verify_config(root)?;
     check_project_folders(root, &verify_config)?;
     let facts = detect_facts(root)?;
-    let plan = verify_plan(root, args, &facts, &verify_config, None)?;
+    let (plan, _) = verify_plan(root, args, &facts, &verify_config, None)?;
     let check_command = if args.affected {
         "fscale check --affected"
     } else {
@@ -993,7 +994,27 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         command: check_command.to_owned(),
     };
-    let plan = verify_plan(root, args, &facts, &verify_config, changed)?;
+    let (plan, graph) = verify_plan(root, args, &facts, &verify_config, changed)?;
+    // The step cache (ADR 0036) needs the graph only for projects below the
+    // root: the root's own steps cover the whole repo.
+    let graph = graph.or_else(|| {
+        plan.projects
+            .iter()
+            .any(|project| project.kind.is_some() && project.root != ".")
+            .then(|| build_graph(root, &facts))
+    });
+    let read_env = |name: &str| firescale_core::stepcache::process_env(name);
+    let cache = StepCache::new(
+        root,
+        graph,
+        &CacheSettings {
+            version: version(),
+            read: !args.no_cache,
+            sets_ci: !verify_config.no_ci_variable,
+            machine: firescale_core::stepcache::this_machine(),
+            read_env: &read_env,
+        },
+    );
     let options = RunOptions {
         stop: &STOP,
         progress: progress.as_ref(),
@@ -1001,12 +1022,18 @@ fn verify_report(root: &Path, args: &Args, progress: bool) -> Result<(VerifyRepo
         config: &verify_config,
         heartbeat: heartbeat_from_env(),
         record: record.as_ref(),
+        cache: Some(&cache),
     };
     let verify = run_verify_with(root, version(), check, &plan, &options)?;
     if verify.result == VerifyResult::Stopped {
         say("stopped: every command verify started has been stopped");
     }
-    Ok((verify, outcome.warnings))
+    let mut notes = outcome.warnings;
+    // FSCALE_LOG=cache shows, per step, whether its result came from the cache.
+    if env::var("FSCALE_LOG").is_ok_and(|value| value.split(',').any(|part| part == "cache")) {
+        notes.extend(cache.log());
+    }
+    Ok((verify, notes))
 }
 
 /// `fscale verify`: the one command that says whether the work is done.

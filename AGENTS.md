@@ -36,7 +36,7 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - Rust only: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
 - Startup benchmark: `node bench/startup.mjs --runs 50 -- target/release/fscale --version`
 - 50k-file benchmark: `node bench/generate-fixture.mjs <dir> --files 50000`, then `node bench/check-bench.mjs --bin target/release/fscale --fixture <dir>`
-- See cache hits and misses: `FSCALE_LOG=cache pnpm fscale check`
+- See cache hits and misses: `FSCALE_LOG=cache pnpm fscale check`; for verify's step cache, `FSCALE_LOG=cache pnpm fscale verify` (`--no-cache` runs every step)
 - Build npm tarballs for this platform: `cargo build --release -p firescale-cli`, `pnpm -r run build`, `node scripts/pack-npm.mjs`
 - Set the version everywhere it is recorded: `node scripts/bump-version.mjs <version>`. Check it: `node scripts/bump-version.mjs --check`. Releasing is in `RELEASING.md`; never push a version tag unless the owner asks.
 - See what a release would publish, from downloaded workflow artifacts: `node scripts/publish-npm.mjs --dir <folder> --version <version> --dry-run`

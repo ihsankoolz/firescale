@@ -45,7 +45,7 @@
       "minimum": 1
     },
     "stepsRun": {
-      "description": "Steps that did run: passed, failed or needs setup.",
+      "description": "Steps with a result: passed (now or from the cache), failed or needs setup.",
       "type": "integer",
       "minimum": 0
     },
@@ -170,6 +170,23 @@
             "items": {
               "type": "string"
             }
+          },
+          "cache": {
+            "description": "Set when the step was not run now: it passed before on the same inputs, and that pass came from the step cache (ADR 0036). Its status is passed and its durationMs is 0.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["durationMs", "ranAt"],
+            "properties": {
+              "durationMs": {
+                "description": "How long the step took when it ran.",
+                "type": "integer",
+                "minimum": 0
+              },
+              "ranAt": {
+                "description": "When it ran, in UTC: 2026-11-13T07:06:00Z.",
+                "type": "string"
+              }
+            }
           }
         }
       }
@@ -274,6 +291,28 @@
               }
             }
           }
+        }
+      }
+    },
+    "cache": {
+      "description": "What the step cache did (ADR 0036). Absent when it was not used.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["read", "hits", "savedMs"],
+      "properties": {
+        "read": {
+          "description": "false with --no-cache: every step ran, and passes were still stored.",
+          "type": "boolean"
+        },
+        "hits": {
+          "description": "Steps whose pass came from the cache instead of running now.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "savedMs": {
+          "description": "What those steps took when they last ran, in milliseconds.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     }

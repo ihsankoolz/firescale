@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -156,3 +157,15 @@ export function onlyEnvRule(
 }
 
 export const ENFORCED_CONFIG = onlyEnvRule('enforced');
+
+/**
+ * The commands a tool stand-in logged, without the `--version` probes that
+ * verify's step cache makes to key a step (ADR 0036): only the commands of
+ * the steps themselves. `stepcache.rs` and `verify.test.ts` test the probes.
+ */
+export async function stepCalls(log: string): Promise<string[]> {
+  return (await readFile(log, 'utf8').catch(() => ''))
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .filter((call) => !/^\S+ (--version|version)( in |$)/.test(call));
+}

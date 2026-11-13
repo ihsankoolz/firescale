@@ -1611,7 +1611,7 @@ fn same_python_version(have: &str, want: &str) -> bool {
 
 /// The packages installed in a virtual environment, by normalised name,
 /// with their versions, read from the `.dist-info` folders.
-fn installed_python_packages(venv: &Path) -> BTreeMap<String, String> {
+pub(crate) fn installed_python_packages(venv: &Path) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     let mut site_dirs = vec![venv.join("Lib").join("site-packages")];
     for lib in ["lib", "lib64"] {
