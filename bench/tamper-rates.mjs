@@ -53,7 +53,7 @@ function put(root, files) {
   }
 }
 
-const kinds = ['test-deleted', 'test-skipped', 'assertion-removed'];
+const kinds = ['test-deleted', 'test-skipped', 'assertion-removed', 'not-checked'];
 const tally = Object.fromEntries(kinds.map((kind) => [kind, { cases: 0, caught: 0, missed: 0 }]));
 let cleanCases = 0;
 let falsePositives = 0;

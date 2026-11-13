@@ -489,8 +489,8 @@
             "required": ["kind", "file", "line", "onBase", "what"],
             "properties": {
               "kind": {
-                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, or a new .only), assertion-removed (fewer assertions).",
-                "enum": ["test-deleted", "test-skipped", "assertion-removed"]
+                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, or a new .only), assertion-removed (fewer assertions), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
+                "enum": ["test-deleted", "test-skipped", "assertion-removed", "not-checked"]
               },
               "file": {
                 "type": "string"
@@ -504,7 +504,7 @@
                 "type": "boolean"
               },
               "what": {
-                "description": "The test's describe path and title, or the assertion without white space.",
+                "description": "The test's describe path and title, or the assertion's source with white space squeezed.",
                 "type": "string"
               }
             }

@@ -3544,7 +3544,7 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
             _ => "report only; verify.tamper on the base commit decides, and \"enforced\" makes this fail",
         };
         out.push_str(&format!(
-            "\nTamper guard ({how}): this change takes away tests or assertions that the base commit {base} has.\n"
+            "\nTamper guard ({how}): compared with the base commit {base}, this change takes away tests or assertions, or changes test files it cannot read.\n"
         ));
         for finding in &tamper.findings {
             let place = if finding.on_base {
@@ -3573,12 +3573,6 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
                 }
             ));
         }
-    }
-    if !tamper.not_checked.is_empty() {
-        out.push_str(&format!(
-            "\nTamper guard: not checked, because tree-sitter found syntax errors in them on the base or now: {}\n",
-            tamper.not_checked.join(", ")
-        ));
     }
     out
 }

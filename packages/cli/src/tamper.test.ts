@@ -99,7 +99,7 @@ const kinds = (report?: Tamper): string[] =>
 
 describe('the tamper guard on the labelled corpus', () => {
   it('has a caught case and a not-a-finding case for every kind, in JavaScript and TypeScript', () => {
-    for (const kind of ['test-deleted', 'test-skipped', 'assertion-removed']) {
+    for (const kind of ['test-deleted', 'test-skipped', 'assertion-removed', 'not-checked']) {
       const caught = corpus.cases.filter((c) => c.expect.includes(kind));
       expect(
         caught.some((c) => c.name.startsWith('ts:')),
@@ -121,7 +121,9 @@ describe('the tamper guard on the labelled corpus', () => {
       const { code, tamper: report } = await tamper(root);
       expect(code).toBe(EXIT_OK);
       expect(report?.policy).toBe('evaluated');
-      expect(report?.notChecked ?? []).toEqual([]);
+      if (!labelled.expect.includes('not-checked')) {
+        expect(report?.notChecked ?? []).toEqual([]);
+      }
       expect(kinds(report)).toEqual([...labelled.expect].sort());
     });
   }
@@ -159,7 +161,7 @@ describe('what a finding says', () => {
         file: 'src/math.test.ts',
         line: 10,
         onBase: true,
-        what: 'expect(sub(3,1)).toBe(2)',
+        what: 'expect(sub(3, 1)).toBe(2)',
       },
     ]);
     const human = await runCli(['verify', '--no-cache'], root);
@@ -169,22 +171,29 @@ describe('what a finding says', () => {
     );
     expect(human.stdout).toContain('  test skipped: src/math.test.ts:4: math > adds\n');
     expect(human.stdout).toContain(
-      '  assertion removed: src/math.test.ts:10 (on the base commit): expect(sub(3,1)).toBe(2)\n',
+      '  assertion removed: src/math.test.ts:10 (on the base commit): expect(sub(3, 1)).toBe(2)\n',
     );
   });
 
-  it('marks a file it cannot parse as not checked, never as clean', async () => {
+  it('makes a file it cannot parse a finding of its own, which blocks when enforced', async () => {
     const labelled = corpus.cases.find((c) => c.name === 'ts: a test deleted');
     if (!labelled) throw new Error('corpus case missing');
-    const root = await caseRepo(labelled.base, {
-      'src/math.test.ts': 'it("adds", () => { expect(1).toBe(1) ',
-    });
-    const { tamper: report } = await tamper(root);
+    const head = { 'src/math.test.ts': 'it("adds", () => { expect(1).toBe(1) ' };
+    const { tamper: report } = await tamper(await caseRepo(labelled.base, head));
     expect(report?.notChecked).toEqual(['src/math.test.ts']);
-    expect(report?.findings).toEqual([]);
-    expect((await runCli(['verify'], root)).stdout).toContain(
-      'Tamper guard: not checked, because tree-sitter found syntax errors in them on the base or now: src/math.test.ts',
-    );
+    expect(report?.findings).toEqual([
+      {
+        kind: 'not-checked',
+        file: 'src/math.test.ts',
+        line: 1,
+        onBase: false,
+        what: 'tree-sitter cannot read this file, so its tests and assertions were not compared',
+      },
+    ]);
+    const enforced = await caseRepo(labelled.base, head, { base: 'enforced' });
+    const blocked = await runCli(['verify', '--no-cache'], enforced);
+    expect(blocked.code).toBe(EXIT_VIOLATIONS);
+    expect(blocked.stdout.split('\n')[0]).toBe('verify: FAILED at the tamper guard (1 finding)');
   });
 });
 
@@ -219,6 +228,19 @@ describe('the policy comes from the base commit', () => {
     const { code, tamper: report } = await tamper(await caseRepo(base, head, { head: 'enforced' }));
     expect(code).toBe(EXIT_OK);
     expect(report?.policy).toBe('evaluated');
+  });
+
+  it('reads an enforced policy from a base config saved with a byte order mark', async () => {
+    const { base, head } = deleted();
+    const root = await caseRepo(base, {});
+    await runGit(root, ['checkout', '--quiet', 'main']);
+    await writeFile(path.join(root, 'firescale.config.json'), `\uFEFF${config('enforced')}`);
+    await commitAll(root, 'enforce, from an editor that writes a BOM');
+    await runGit(root, ['checkout', '--quiet', '-b', 'later']);
+    await put(root, head);
+    const { code, tamper: report } = await tamper(root);
+    expect(report?.policy).toBe('enforced');
+    expect(code).toBe(EXIT_VIOLATIONS);
   });
 
   it('is off when the base turns it off', async () => {

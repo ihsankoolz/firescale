@@ -79,14 +79,22 @@ pub struct TestCase {
     pub focused: bool,
     /// The identifiers its arguments use: what it tests.
     pub uses: BTreeSet<String>,
+    /// How many tests it stands for: the rows of an `each` table that is an
+    /// array literal (its own and its suites'), else 1.
+    pub weight: usize,
 }
 
 /// One assertion: an `expect(…)` or `assert…(…)` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assertion {
     pub line: usize,
-    /// The whole chained call (`expect(a).toBe(1)`), without white space.
+    /// The whole chained call (`expect(a).toBe(1)`), without white space:
+    /// what is compared.
     pub shape: String,
+    /// The same, with white space squeezed to single spaces: what is shown.
+    pub text: String,
+    /// How many times it runs: the weight of the test it is in.
+    pub weight: usize,
     /// The index of the test it is in, if any.
     pub test: Option<usize>,
 }
@@ -100,6 +108,8 @@ pub struct TestFile {
     pub imports: BTreeMap<String, String>,
     /// tree-sitter found syntax errors, so the counts cannot be trusted.
     pub has_errors: bool,
+    /// The line of the first one.
+    pub error_line: Option<usize>,
 }
 
 const TEST_NAMES: [&str; 5] = ["it", "test", "xit", "xtest", "fit"];
@@ -111,21 +121,72 @@ const SUITE_NAMES: [&str; 6] = [
     "context",
     "xcontext",
 ];
-const SKIP_MODIFIERS: [&str; 4] = ["skip", "todo", "skipIf", "fixme"];
+/// Modifiers that make a test not run, run only sometimes, or pass when it
+/// fails (`it.fails`, Playwright's `test.fail`).
+const SKIP_MODIFIERS: [&str; 7] = ["skip", "todo", "skipIf", "runIf", "fixme", "fails", "fail"];
+
+/// Members of `test` in Playwright that are not tests: hooks, steps and
+/// settings. `test.describe` is a suite.
+const NOT_TESTS: [&str; 11] = [
+    "beforeEach",
+    "afterEach",
+    "beforeAll",
+    "afterAll",
+    "step",
+    "use",
+    "extend",
+    "info",
+    "setTimeout",
+    "slow",
+    "expect",
+];
+
+/// How deep a callee or an assertion chain is followed: real test code
+/// never comes near it, and it keeps a chain of thousands of calls linear.
+const MAX_CHAIN: usize = 32;
 
 /// The dotted name a call's function is called by (`it`, `it.skip`,
 /// `test.each` for `test.each(table)(…)`), or `None` for anything else.
+/// A loop, not recursion, and at most [`MAX_CHAIN`] steps deep.
 fn callee(node: Node<'_>, src: &[u8]) -> Option<Vec<String>> {
-    match node.kind() {
-        "identifier" => Some(vec![text(node, src).to_owned()]),
-        "member_expression" => {
-            let mut path = callee(node.child_by_field_name("object")?, src)?;
-            path.push(text(node.child_by_field_name("property")?, src).to_owned());
-            Some(path)
+    let mut path: Vec<String> = Vec::new();
+    let mut at = node;
+    for _ in 0..MAX_CHAIN {
+        match at.kind() {
+            "identifier" => {
+                path.push(text(at, src).to_owned());
+                path.reverse();
+                return Some(path);
+            }
+            "member_expression" => {
+                path.push(text(at.child_by_field_name("property")?, src).to_owned());
+                at = at.child_by_field_name("object")?;
+            }
+            // `it.each(table)("adds %i", …)` and `test.skipIf(cond)("…", …)`.
+            "call_expression" => at = at.child_by_field_name("function")?,
+            _ => return None,
         }
-        // `it.each(table)("adds %i", …)` and `test.skipIf(cond)("…", …)`.
-        "call_expression" => callee(node.child_by_field_name("function")?, src),
-        _ => None,
+    }
+    None
+}
+
+/// For `it.each([…])(…)` and `describe.each([…])(…)`: the number of rows of
+/// the table when it is an array literal, else 1.
+fn table_rows(function: Node<'_>) -> usize {
+    if function.kind() != "call_expression" {
+        return 1;
+    }
+    let Some(arguments) = function.child_by_field_name("arguments") else {
+        return 1;
+    };
+    let mut cursor = arguments.walk();
+    let first = arguments.named_children(&mut cursor).next();
+    match first {
+        Some(array) if array.kind() == "array" => {
+            let mut cursor = array.walk();
+            array.named_children(&mut cursor).count().max(1)
+        }
+        _ => 1,
     }
 }
 
@@ -160,13 +221,28 @@ fn marks(path: &[String]) -> (bool, bool) {
 }
 
 /// True for the function of an assertion call: `expect(…)`, `assert(…)`,
-/// `assert.equal(…)`.
+/// `assert.equal(…)`, and `expect.soft(…)`, `expect.poll(…)`,
+/// `expect.assertions(…)`, `expect.hasAssertions()`.
 fn is_assertion(function: Node<'_>, src: &[u8]) -> bool {
     match function.kind() {
         "identifier" => matches!(text(function, src), "expect" | "assert"),
-        "member_expression" => function
-            .child_by_field_name("object")
-            .is_some_and(|object| object.kind() == "identifier" && text(object, src) == "assert"),
+        "member_expression" => {
+            let property = function
+                .child_by_field_name("property")
+                .map_or("", |property| text(property, src));
+            function
+                .child_by_field_name("object")
+                .is_some_and(|object| {
+                    object.kind() == "identifier"
+                        && match text(object, src) {
+                            "assert" => true,
+                            "expect" => {
+                                matches!(property, "soft" | "poll" | "assertions" | "hasAssertions")
+                            }
+                            _ => false,
+                        }
+                })
+        }
         _ => false,
     }
 }
@@ -175,7 +251,10 @@ fn is_assertion(function: Node<'_>, src: &[u8]) -> bool {
 /// (`expect(a)` → `expect(a).not.toBe(1)`).
 fn chain(node: Node<'_>) -> Node<'_> {
     let mut top = node;
-    while let Some(parent) = top.parent() {
+    for _ in 0..MAX_CHAIN {
+        let Some(parent) = top.parent() else {
+            break;
+        };
         let continues = match parent.kind() {
             "member_expression" => parent.child_by_field_name("object") == Some(top),
             "call_expression" => parent.child_by_field_name("function") == Some(top),
@@ -269,6 +348,14 @@ pub fn read_test_file(source: &str, dialect: JsDialect) -> TestFile {
         has_errors: root.has_error(),
         ..TestFile::default()
     };
+    if file.has_errors {
+        walk(root, |node| {
+            if file.error_line.is_none() && (node.is_error() || node.is_missing()) {
+                file.error_line = Some(node.start_position().row + 1);
+            }
+            file.error_line.is_none() && node.has_error()
+        });
+    }
     // Each suite and test call, with the byte range it covers.
     struct Block {
         end: usize,
@@ -276,6 +363,8 @@ pub fn read_test_file(source: &str, dialect: JsDialect) -> TestFile {
         skipped: bool,
         focused: bool,
         test: Option<usize>,
+        /// The rows of its `each` table times its suites'.
+        weight: usize,
     }
     let mut open: Vec<Block> = Vec::new();
     walk(root, |node| {
@@ -293,10 +382,16 @@ pub fn read_test_file(source: &str, dialect: JsDialect) -> TestFile {
         };
         if is_assertion(function, src) {
             let whole = chain(node);
+            let inside = open.iter().rev().find(|block| block.test.is_some());
             file.assertions.push(Assertion {
                 line: node.start_position().row + 1,
                 shape: text(whole, src).split_whitespace().collect(),
-                test: open.iter().rev().find_map(|block| block.test),
+                text: text(whole, src)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                test: inside.and_then(|block| block.test),
+                weight: inside.map_or(1, |block| block.weight),
             });
             return true;
         }
@@ -304,8 +399,13 @@ pub fn read_test_file(source: &str, dialect: JsDialect) -> TestFile {
             return true;
         };
         let first = path[0].as_str();
-        let is_test = TEST_NAMES.contains(&first);
-        let is_suite = SUITE_NAMES.contains(&first);
+        let second = path.get(1).map(String::as_str);
+        // Playwright: `test.describe(…)` is a suite; `test.beforeEach`,
+        // `test.step` and the like are not tests.
+        let playwright_suite = first == "test" && second == Some("describe");
+        let not_a_test = first == "test" && second.is_some_and(|name| NOT_TESTS.contains(&name));
+        let is_test = TEST_NAMES.contains(&first) && !playwright_suite && !not_a_test;
+        let is_suite = SUITE_NAMES.contains(&first) || playwright_suite;
         // `it.each(table)` alone is the inner call of `it.each(table)(…)`;
         // only the outer call is the test.
         let inner_of_table = node.parent().is_some_and(|parent| {
@@ -319,6 +419,12 @@ pub fn read_test_file(source: &str, dialect: JsDialect) -> TestFile {
         let skipped = own_skip || open.iter().any(|block| block.skipped);
         let focused = own_focus || open.iter().any(|block| block.focused);
         let own_title = title(node, src);
+        let rows = if path.iter().any(|part| part == "each") {
+            table_rows(function)
+        } else {
+            1
+        };
+        let weight = rows.saturating_mul(open.last().map_or(1, |block| block.weight));
         let mut test = None;
         if is_test {
             let id = open
@@ -343,6 +449,7 @@ pub fn read_test_file(source: &str, dialect: JsDialect) -> TestFile {
                 skipped,
                 focused,
                 uses,
+                weight,
             });
         }
         open.push(Block {
@@ -351,6 +458,7 @@ pub fn read_test_file(source: &str, dialect: JsDialect) -> TestFile {
             skipped,
             focused,
             test,
+            weight,
         });
         true
     });
@@ -390,6 +498,9 @@ pub enum Kind {
     TestSkipped,
     /// Fewer assertions than on the base.
     AssertionRemoved,
+    /// A changed test file tree-sitter cannot read, on the base or now: its
+    /// tests and assertions could not be compared.
+    NotChecked,
 }
 
 impl Kind {
@@ -399,6 +510,7 @@ impl Kind {
             Self::TestDeleted => "test deleted",
             Self::TestSkipped => "test skipped",
             Self::AssertionRemoved => "assertion removed",
+            Self::NotChecked => "not checked",
         }
     }
 }
@@ -463,7 +575,9 @@ impl TamperReport {
 #[must_use]
 pub fn base_policy(root: &Path, base: &BaseCommit) -> Policy {
     show(root, &base.commit, "firescale.config.json")
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|text| {
+            serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}')).ok()
+        })
         .and_then(|config| {
             config
                 .get("verify")?
@@ -533,26 +647,67 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
         path.split('/')
             .fold(root.to_path_buf(), |dir, part| dir.join(part))
     };
-    // What the change deleted: on the base, gone from the working tree.
+    // What the change deleted: on the base, gone from the working tree, and
+    // not the old side of a rename git sees.
+    let renamed: BTreeSet<String> = crate::blame::renames_since(root, base)
+        .into_keys()
+        .collect();
     let deleted: BTreeSet<&String> = changed
         .iter()
-        .filter(|path| !on_disk(path).exists())
+        .filter(|path| !on_disk(path).exists() && !renamed.contains(*path))
         .collect();
+    // Every identifier in the JS/TS files of the change that still exist:
+    // a name a deleted test used is "deleted with it" only if it is in none
+    // of them (a module renamed without git seeing it keeps its names).
+    let mut surviving: BTreeSet<String> = BTreeSet::new();
+    for path in changed.iter().filter(|path| js_dialect(path).is_some()) {
+        if let Ok(bytes) = fs::read(on_disk(path)) {
+            for word in String::from_utf8_lossy(&bytes)
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                .filter(|word| !word.is_empty())
+            {
+                surviving.insert(word.to_owned());
+            }
+        }
+    }
+    let mut not_checked: Vec<Finding> = Vec::new();
     let mut pairs: Vec<(String, Option<TestFile>, Option<TestFile>)> = Vec::new();
     for path in changed.iter().filter(|path| is_test_path(path)) {
         let Some(dialect) = js_dialect(path) else {
             continue;
         };
         let base_file = show(root, &base.commit, path).map(|text| read_test_file(&text, dialect));
-        let head_file = fs::read_to_string(on_disk(path))
-            .ok()
-            .map(|text| read_test_file(&text, dialect));
+        // Bytes, decoded leniently: a stray Latin-1 byte in a comment must
+        // not make a file read as deleted.
+        let head_file = match fs::read(on_disk(path)) {
+            Ok(bytes) => Some(read_test_file(&String::from_utf8_lossy(&bytes), dialect)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => Some(TestFile {
+                has_errors: true,
+                ..TestFile::default()
+            }),
+        };
         if base_file.is_none() && head_file.is_none() {
             continue;
         }
-        let broken = |file: &Option<TestFile>| file.as_ref().is_some_and(|file| file.has_errors);
-        if broken(&base_file) || broken(&head_file) {
+        // A file tree-sitter cannot read is never taken as clean: it is a
+        // finding of its own, which counts and blocks like the others.
+        let broken = [(&head_file, false), (&base_file, true)]
+            .into_iter()
+            .find_map(|(file, on_base)| {
+                file.as_ref()
+                    .filter(|file| file.has_errors)
+                    .map(|file| (file.error_line.unwrap_or(1), on_base))
+            });
+        if let Some((line, on_base)) = broken {
             report.not_checked.push(path.clone());
+            not_checked.push(Finding {
+                kind: Kind::NotChecked,
+                file: path.clone(),
+                line,
+                on_base,
+                what: "tree-sitter cannot read this file, so its tests and assertions were not compared".to_owned(),
+            });
             continue;
         }
         pairs.push((path.clone(), base_file, head_file));
@@ -560,25 +715,35 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     report.files = pairs.len();
 
     // A test whose subject the change deleted: it uses names imported from
-    // modules of the repo, and every such module is deleted.
-    let existed_on_base = |path: &str| deleted.contains(&path.to_owned()) || on_disk(path).exists();
+    // modules of the repo, every such module is deleted, and none of those
+    // names is left in the change.
+    let existed_on_base =
+        |path: &str| deleted.contains(&path.to_owned()) || on_disk(path).is_file();
     let excused = |path: &str, file: &TestFile, test: &TestCase| -> bool {
-        let modules: BTreeSet<String> = test
-            .uses
-            .iter()
-            .filter_map(|name| file.imports.get(name))
-            .filter_map(|spec| resolve(path, spec, &existed_on_base))
-            .collect();
-        !modules.is_empty() && modules.iter().all(|module| deleted.contains(module))
+        let mut modules: BTreeSet<String> = BTreeSet::new();
+        let mut names: Vec<&String> = Vec::new();
+        for name in &test.uses {
+            if let Some(module) = file
+                .imports
+                .get(name)
+                .and_then(|spec| resolve(path, spec, &existed_on_base))
+            {
+                modules.insert(module);
+                names.push(name);
+            }
+        }
+        !modules.is_empty()
+            && modules.iter().all(|module| deleted.contains(module))
+            && names.iter().all(|name| !surviving.contains(*name))
     };
 
     let mut base_ids: Vec<(String, String, usize)> = Vec::new();
     let mut head_ids: BTreeMap<String, usize> = BTreeMap::new();
     let mut base_skipped_ids: BTreeSet<String> = BTreeSet::new();
     let mut head_skips: Vec<(String, usize, String)> = Vec::new();
-    let mut base_focus = 0;
+    let mut base_focus: BTreeSet<String> = BTreeSet::new();
     let mut head_focus: Vec<(String, usize, String)> = Vec::new();
-    let mut base_shapes: Vec<(String, String, usize)> = Vec::new();
+    let mut base_shapes: Vec<(String, String, String, usize)> = Vec::new();
     let mut head_shapes: BTreeMap<String, usize> = BTreeMap::new();
     let counts = &mut report.counts;
     for (path, base_file, head_file) in &pairs {
@@ -591,51 +756,60 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             for (index, test) in file.tests.iter().enumerate() {
                 if !head_has.contains(test.id.as_str()) && excused(path, file, test) {
                     excused_tests.insert(index);
-                    counts.excused_tests += 1;
+                    counts.excused_tests += test.weight;
                     continue;
                 }
-                counts.base_tests += 1;
+                counts.base_tests += test.weight;
                 if test.skipped {
-                    counts.base_skipped += 1;
+                    counts.base_skipped += test.weight;
                     base_skipped_ids.insert(test.id.clone());
                 }
                 if test.focused {
-                    base_focus += 1;
+                    base_focus.insert(test.id.clone());
                 }
-                base_ids.push((test.id.clone(), path.clone(), test.line));
+                for _ in 0..test.weight {
+                    base_ids.push((test.id.clone(), path.clone(), test.line));
+                }
             }
             for assertion in &file.assertions {
                 if assertion
                     .test
                     .is_some_and(|test| excused_tests.contains(&test))
                 {
-                    counts.excused_assertions += 1;
+                    counts.excused_assertions += assertion.weight;
                     continue;
                 }
-                counts.base_assertions += 1;
-                base_shapes.push((assertion.shape.clone(), path.clone(), assertion.line));
+                counts.base_assertions += assertion.weight;
+                for _ in 0..assertion.weight {
+                    base_shapes.push((
+                        assertion.shape.clone(),
+                        assertion.text.clone(),
+                        path.clone(),
+                        assertion.line,
+                    ));
+                }
             }
         }
         if let Some(file) = head_file {
             for test in &file.tests {
-                counts.head_tests += 1;
-                *head_ids.entry(test.id.clone()).or_default() += 1;
+                counts.head_tests += test.weight;
+                *head_ids.entry(test.id.clone()).or_default() += test.weight;
                 if test.skipped {
-                    counts.head_skipped += 1;
+                    counts.head_skipped += test.weight;
                     head_skips.push((path.clone(), test.line, test.id.clone()));
                 }
                 if test.focused {
                     head_focus.push((path.clone(), test.line, test.id.clone()));
                 }
             }
-            counts.head_assertions += file.assertions.len();
             for assertion in &file.assertions {
-                *head_shapes.entry(assertion.shape.clone()).or_default() += 1;
+                counts.head_assertions += assertion.weight;
+                *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
             }
         }
     }
 
-    let mut findings = Vec::new();
+    let mut findings = not_checked;
     // Fewer tests: name those whose id is gone, up to the shortfall.
     if counts.head_tests < counts.base_tests {
         let mut left = head_ids.clone();
@@ -647,23 +821,25 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             }
         }
         let shortfall = counts.base_tests - counts.head_tests;
+        let mut named: BTreeSet<(&String, &String, usize)> = BTreeSet::new();
         for (id, file, line) in missing.into_iter().take(shortfall) {
-            findings.push(Finding {
-                kind: Kind::TestDeleted,
-                file: file.clone(),
-                line: *line,
-                on_base: true,
-                what: id.clone(),
-            });
+            if named.insert((id, file, *line)) {
+                findings.push(Finding {
+                    kind: Kind::TestDeleted,
+                    file: file.clone(),
+                    line: *line,
+                    on_base: true,
+                    what: id.clone(),
+                });
+            }
         }
     }
-    // More skipped tests, or a new focus.
+    // More skipped tests.
     if counts.head_skipped > counts.base_skipped {
-        let extra = counts.head_skipped - counts.base_skipped;
         for (file, line, id) in head_skips
             .iter()
             .filter(|(_, _, id)| !base_skipped_ids.contains(id))
-            .take(extra)
+            .take(counts.head_skipped - counts.base_skipped)
         {
             findings.push(Finding {
                 kind: Kind::TestSkipped,
@@ -674,21 +850,23 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             });
         }
     }
-    if head_focus.len() > base_focus {
-        for (file, line, id) in head_focus.iter().take(head_focus.len() - base_focus) {
-            findings.push(Finding {
-                kind: Kind::TestSkipped,
-                file: file.clone(),
-                line: *line,
-                on_base: false,
-                what: format!("{id} (.only: the file's other tests do not run)"),
-            });
-        }
+    // A new focus: `.only` on a test that did not have it.
+    for (file, line, id) in head_focus
+        .iter()
+        .filter(|(_, _, id)| !base_focus.contains(id))
+    {
+        findings.push(Finding {
+            kind: Kind::TestSkipped,
+            file: file.clone(),
+            line: *line,
+            on_base: false,
+            what: format!("{id} (.only: the file's other tests do not run)"),
+        });
     }
     // Fewer assertions: name those whose text is gone, up to the shortfall.
     if counts.head_assertions < counts.base_assertions {
         let mut left = head_shapes;
-        let mut missing: Vec<&(String, String, usize)> = Vec::new();
+        let mut missing: Vec<&(String, String, String, usize)> = Vec::new();
         for entry in &base_shapes {
             match left.get_mut(&entry.0) {
                 Some(count) if *count > 0 => *count -= 1,
@@ -696,14 +874,17 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             }
         }
         let shortfall = counts.base_assertions - counts.head_assertions;
-        for (shape, file, line) in missing.into_iter().take(shortfall) {
-            findings.push(Finding {
-                kind: Kind::AssertionRemoved,
-                file: file.clone(),
-                line: *line,
-                on_base: true,
-                what: shape.clone(),
-            });
+        let mut named: BTreeSet<(&String, usize)> = BTreeSet::new();
+        for (_, shown, file, line) in missing.into_iter().take(shortfall) {
+            if named.insert((file, *line)) {
+                findings.push(Finding {
+                    kind: Kind::AssertionRemoved,
+                    file: file.clone(),
+                    line: *line,
+                    on_base: true,
+                    what: shown.clone(),
+                });
+            }
         }
     }
     findings.sort_by(|a, b| (a.kind, &a.file, a.line).cmp(&(b.kind, &b.file, b.line)));
@@ -779,6 +960,36 @@ describe("math", () => {
         let file = ts("// it('no', () => {})\nconst s = \"it('no')\";\n");
         assert!(file.tests.is_empty());
         assert!(file.assertions.is_empty());
+    }
+
+    #[test]
+    fn a_very_long_call_chain_is_read_without_deep_recursion() {
+        let chain = ".then(f)".repeat(20_000);
+        let source = format!("it(\"t\", () => {{ expect(p{chain}).toBe(1); }});\n");
+        let started = std::time::Instant::now();
+        let file = ts(&source);
+        assert_eq!(file.tests.len(), 1);
+        assert_eq!(file.assertions.len(), 1);
+        // Linear: far below what a quadratic walk of 20,000 calls takes.
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    }
+
+    #[test]
+    fn table_rows_weigh_their_tests_and_assertions() {
+        let file = ts("describe.each([[1], [2]])(\"s\", () => {\n  it.each([[1], [2], [3]])(\"t\", () => { expect(1).toBe(1); });\n});\n");
+        assert_eq!(file.tests[0].weight, 6);
+        assert_eq!(file.assertions[0].weight, 6);
+    }
+
+    #[test]
+    fn playwright_hooks_and_steps_are_not_tests() {
+        let file = ts("test.describe(\"home\", () => {\n  test.beforeEach(async () => {});\n  test(\"a\", async () => { await test.step(\"s\", async () => {}); });\n  test.describe.skip(\"off\", () => { test(\"b\", () => {}); });\n});\n");
+        let ids: Vec<(&str, bool)> = file
+            .tests
+            .iter()
+            .map(|t| (t.id.as_str(), t.skipped))
+            .collect();
+        assert_eq!(ids, [("home > a", false), ("home > off > b", true)]);
     }
 
     #[test]
