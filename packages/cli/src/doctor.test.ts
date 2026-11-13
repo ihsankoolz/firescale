@@ -170,13 +170,70 @@ describe('fscale doctor', () => {
 
   it('never prints the value of an env variable, a password or a connection string', async () => {
     const { repo, env } = await brokenRepo();
+    // Local database URLs in `.env` and `.env.local`, which doctor reads
+    // for the host and port only.
+    const envPort = await closedPort();
+    const localUrls = [
+      `postgresql+asyncpg://envuser:EnvPassw0rd@localhost:${envPort}/env_test_db`,
+      'redis://localuser:L0calPassw0rd@127.0.0.1:6399/7',
+    ];
+    await writeFile(
+      path.join(repo.root, '.env'),
+      `API_KEY=super-secret-value-123\nTEST_DATABASE_URL=${localUrls[0]}\n`,
+    );
+    await writeFile(path.join(repo.root, '.env.local'), `CACHE_URL="${localUrls[1]}"\n`);
+    const secrets = [
+      ...SECRETS,
+      ...localUrls,
+      'envuser',
+      'EnvPassw0rd',
+      'env_test_db',
+      'localuser',
+      'L0calPassw0rd',
+    ];
     for (const argv of [['doctor'], ['doctor', '--json']]) {
       const result = await runCli(argv, repo.root, env);
-      for (const secret of SECRETS) {
+      // The services were read, so the test looks where they are printed.
+      expect(result.stdout).toContain(`PostgreSQL on localhost:${envPort}`);
+      expect(result.stdout).toContain('Redis on 127.0.0.1:6399');
+      for (const secret of secrets) {
         expect(result.stdout + result.stderr, `${argv.join(' ')}: ${secret}`).not.toContain(secret);
       }
-      expect(result.stdout).not.toContain('postgresql://');
+      for (const scheme of ['postgresql://', 'postgresql+asyncpg://', 'redis://']) {
+        expect(result.stdout).not.toContain(scheme);
+      }
     }
+  });
+
+  it('checks a local database that only .env names, and ignores a remote one', async () => {
+    const port = await closedPort();
+    const repo = await fixtures.create({
+      files: {
+        'backend/main.py': '',
+        'backend/requirements.txt': 'requests==2.31.0\n',
+        'backend/.env': [
+          `TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:${port}/test`,
+          'PROD_DATABASE_URL=postgresql://user:pass@db.example.com:5432/prod',
+          '',
+        ].join('\n'),
+      },
+    });
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await writeVersionTools(tools, {});
+    const result = await runCli(['doctor', '--json'], repo.root, toolPath(tools));
+    const report = await validate(result.stdout);
+    const services = report.checks.filter((c) => c.section === 'services');
+    expect(services).toEqual([
+      {
+        section: 'services',
+        subject: `PostgreSQL on localhost:${port}`,
+        status: 'problem',
+        detail: `not reachable: nothing listens on port ${port} (backend/.env (TEST_DATABASE_URL)).`,
+        fix: expect.stringContaining(`start PostgreSQL so it listens on port ${port}`),
+      },
+    ]);
+    expect(result.stdout).not.toContain('db.example.com');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
   });
 
   it('prints JSON that matches its schema', async () => {
