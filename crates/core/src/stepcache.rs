@@ -1156,7 +1156,6 @@ pub struct StepCache<'a> {
     salt: Option<String>,
     base_tree: std::sync::Mutex<Option<(String, BaseTree)>>,
     log: std::sync::Mutex<Vec<String>>,
-    pending: std::sync::Mutex<Vec<(Scope, String, Entry)>>,
 }
 
 /// A step's key, and the digest of its files when it was made.
@@ -1208,7 +1207,6 @@ impl<'a> StepCache<'a> {
             salt: None,
             base_tree: std::sync::Mutex::new(None),
             log: std::sync::Mutex::new(Vec::new()),
-            pending: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -1361,15 +1359,18 @@ impl<'a> StepCache<'a> {
         }
     }
 
-    /// Keeps a pass, to be stored at the end of the run if the files it
-    /// depends on are then the same as when it started.
+    /// Stores a pass as soon as its step finishes, so a run that is stopped
+    /// later keeps it (ADR 0043), if the files it depends on are the same
+    /// now as when it started: a step that wrote a file it depends on, or
+    /// one whose files another step or a person changed while it ran, is
+    /// not stored. Returns why it was not stored, if it was not.
     pub fn remember(
         &self,
         folder: Option<&str>,
         kind: Option<&str>,
         key: &CacheKey,
         mut entry: Entry,
-    ) {
+    ) -> Option<String> {
         entry.format = FORMAT;
         entry.key.clone_from(&key.key);
         let slot = (folder.map(str::to_owned), kind.map(str::to_owned));
@@ -1379,12 +1380,41 @@ impl<'a> StepCache<'a> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&slot)
             .cloned();
-        if let Some(Ok(scope)) = scope {
-            self.pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((scope, key.files.clone(), entry));
+        let Some(Ok(scope)) = scope else {
+            return None;
+        };
+        let place = entry.project.as_deref().map_or_else(
+            || entry.step.clone(),
+            |project| format!("{} in {project}", entry.step),
+        );
+        let now = self.fresh();
+        match self.digests.digest(&now, &scope) {
+            Ok(after) if after == key.files => {}
+            _ => {
+                let why = "files it depends on changed while verify ran".to_owned();
+                self.note(format!("cache: not stored {place}: {why}"));
+                return Some(why);
+            }
         }
+        let mut not_stored = None;
+        match store(&self.root, &entry) {
+            Ok(()) => self.note(format!("cache: stored {place}")),
+            Err(error) => {
+                let why = format!("it could not be written to .firescale/steps ({error})");
+                self.note(format!("cache: not stored {place}: {why}"));
+                not_stored = Some(why);
+            }
+        }
+        if let Some(shared) = self.shared.as_ref().filter(|shared| shared.writes()) {
+            let digest = entry.output_digest.as_deref().unwrap_or("");
+            match shared.write(&entry.key, entry.ran_at, entry.duration_ms, digest) {
+                Ok(()) => self.note(format!("cache: shared record written for {place}")),
+                Err(error) => self.note(format!(
+                    "cache: shared record not written for {place}: {error}"
+                )),
+            }
+        }
+        not_stored
     }
 
     /// True when the step's key is the same on the base commit and the
@@ -1584,60 +1614,56 @@ impl<'a> StepCache<'a> {
             .push(line);
     }
 
-    /// Stores the passes whose files are the same now as when they started
-    /// (a step that wrote a file it depends on, or one whose files another
-    /// step or a person changed while it ran, is not stored), then cleans
-    /// the folder. Returns the passes that were not stored, each with its
-    /// project, step and why.
-    pub fn finish(&self) -> Vec<(Option<String>, String, String)> {
-        let pending = std::mem::take(
-            &mut *self
-                .pending
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        let mut not_stored = Vec::new();
-        if !pending.is_empty() {
-            let now = self.fresh();
-            for (scope, before, entry) in pending {
-                let place = entry.project.as_deref().map_or_else(
-                    || entry.step.clone(),
-                    |project| format!("{} in {project}", entry.step),
-                );
-                match self.digests.digest(&now, &scope) {
-                    Ok(after) if after == before => {
-                        match store(&self.root, &entry) {
-                            Ok(()) => self.note(format!("cache: stored {place}")),
-                            Err(error) => {
-                                let why = format!(
-                                    "it could not be written to .firescale/steps ({error})"
-                                );
-                                self.note(format!("cache: not stored {place}: {why}"));
-                                not_stored.push((entry.project.clone(), entry.step.clone(), why));
-                            }
-                        }
-                        if let Some(shared) = self.shared.as_ref().filter(|shared| shared.writes())
-                        {
-                            let digest = entry.output_digest.as_deref().unwrap_or("");
-                            match shared.write(&entry.key, entry.ran_at, entry.duration_ms, digest)
-                            {
-                                Ok(()) => {
-                                    self.note(format!("cache: shared record written for {place}"))
-                                }
-                                Err(error) => self.note(format!(
-                                    "cache: shared record not written for {place}: {error}"
-                                )),
-                            }
-                        }
-                    }
-                    _ => {
-                        let why = "files it depends on changed while verify ran".to_owned();
-                        self.note(format!("cache: not stored {place}: {why}"));
-                        not_stored.push((entry.project.clone(), entry.step.clone(), why));
-                    }
-                }
+    /// One line when the firescale config changed since the last run that
+    /// used this cache: the config is in every step's key (a file at the
+    /// repo root), so no kept pass applies any more (ADR 0043). Said once,
+    /// on the first run after the change; the config's digest is kept in
+    /// `.firescale/step-cache-config.digest`, beside the cache's folder.
+    #[must_use]
+    pub fn config_note(&self) -> Option<String> {
+        let mut hasher = blake3::Hasher::new();
+        let mut names = Vec::new();
+        for name in [crate::config::JSON_CONFIG, crate::config::TS_CONFIG] {
+            if let Ok(bytes) = fs::read(self.root.join(name)) {
+                hasher.update(name.as_bytes());
+                hasher.update(b"\0");
+                hasher.update(&bytes);
+                names.push(name);
             }
         }
+        let digest = hasher.finalize().to_hex().to_string();
+        let dir = cache_dir(&self.root);
+        let file = self
+            .root
+            .join(".firescale")
+            .join("step-cache-config.digest");
+        let before = fs::read_to_string(&file).ok();
+        if before.as_deref().map(str::trim) == Some(digest.as_str()) {
+            return None;
+        }
+        let had_passes = fs::read_dir(&dir).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
+        });
+        if file
+            .parent()
+            .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
+        {
+            ignore_firescale_folder(&self.root);
+            let _ = fs::write(&file, &digest);
+        }
+        let name = names.first().copied().unwrap_or(crate::config::JSON_CONFIG);
+        (before.is_some() && had_passes).then(|| {
+            format!(
+                "{name} changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time."
+            )
+        })
+    }
+
+    /// Ends the run: cleans the cache folder (passes were stored as their
+    /// steps finished) and prunes the shared cache.
+    pub fn finish(&self) {
         clean(&self.root);
         if let Some(shared) = &self.shared {
             let removed = shared.prune();
@@ -1647,7 +1673,6 @@ impl<'a> StepCache<'a> {
                 ));
             }
         }
-        not_stored
     }
 
     /// The lines for `FSCALE_LOG=cache`, in the order they were noted.

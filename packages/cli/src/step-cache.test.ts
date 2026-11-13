@@ -242,6 +242,26 @@ describe('the step cache', () => {
     expect(await stepCalls(log)).toEqual(['npm test in ' + path.basename(repo.root)]);
   });
 
+  it('says once when a change to the config means no kept pass applies (ADR 0043)', async () => {
+    const { repo, ran } = await loggingRepo();
+    await runCli(['verify'], repo.root, {});
+    const same = await runCli(['verify'], repo.root, {});
+    expect(same.stdout).not.toContain('changed since the last run');
+    const config = JSON.parse(
+      await readFile(path.join(repo.root, 'firescale.config.json'), 'utf8'),
+    );
+    config.verify.failOnSkipped = false;
+    await repo.write('firescale.config.json', JSON.stringify(config));
+    const changed = await runCli(['verify'], repo.root, {});
+    const note =
+      "firescale.config.json changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.";
+    expect(changed.stdout.split(note)).toHaveLength(2);
+    expect(await ran()).toHaveLength(6);
+    const after = await runCli(['verify'], repo.root, {});
+    expect(after.stdout).not.toContain(note);
+    expect(await ran()).toHaveLength(6);
+  });
+
   it('caches a step whose service the repo starts with Compose', async () => {
     const { repo, ran } = await loggingRepo({
       '.env.example': 'DATABASE_URL=postgresql://app:secret@localhost:5432/app\n',

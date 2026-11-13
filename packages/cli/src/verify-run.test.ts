@@ -131,6 +131,37 @@ function startVerify(cwd: string, args: string[] = []) {
   return { child, exited, out: () => ({ stdout, stderr }) };
 }
 
+describe('the step cache and a run that is stopped (ADR 0043)', () => {
+  it('stores each pass as its step finishes, so a run killed later keeps it', async () => {
+    const repo = await repoWith(
+      { lint: nodeScript('lint.js'), typecheck: false, test: nodeScript('test.js') },
+      {
+        '.gitignore': 'hang.flag\nran.log\n',
+        'lint.js': "require('fs').appendFileSync('ran.log', 'lint\\n');\n",
+        'test.js':
+          "const fs = require('fs');\nfs.appendFileSync('ran.log', 'test\\n');\nif (fs.existsSync('hang.flag')) setTimeout(() => {}, 15000);\n",
+      },
+    );
+    await writeFile(path.join(repo.root, 'hang.flag'), '');
+    const ran = async () =>
+      (await readFile(path.join(repo.root, 'ran.log'), 'utf8').catch(() => ''))
+        .split(/\r?\n/)
+        .filter(Boolean);
+    const run = startVerify(repo.root);
+    await until(async () => (await ran()).includes('test'));
+    // Killed outright: nothing at the end of the run gets a chance to run.
+    run.child.kill('SIGKILL');
+    await run.exited;
+    const { rm } = await import('node:fs/promises');
+    await rm(path.join(repo.root, 'hang.flag'));
+    const again = await runCli(['verify'], repo.root);
+    expect(again.code).toBe(EXIT_OK);
+    expect(again.stdout).toMatch(/ {2}lint +cached +from the cache/);
+    expect(again.stdout).toMatch(/ {2}test +passed /);
+    expect(await ran()).toEqual(['lint', 'test', 'test']);
+  });
+});
+
 describe('stopping verify stops every process it started', () => {
   it.skipIf(WINDOWS).each(['SIGINT', 'SIGTERM'] as const)(
     'on %s, stops the whole tree and prints the summary of what finished',

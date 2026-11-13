@@ -1124,6 +1124,8 @@ fn verify_report(
         },
     )
     .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
+    // A config change alters every key: say so once (ADR 0043).
+    let config_note = cache.config_note().filter(|_| !args.no_cache);
     let options = RunOptions {
         stop: &STOP,
         progress: progress.as_ref(),
@@ -1198,6 +1200,7 @@ fn verify_report(
     }
     let mut notes = outcome.warnings;
     verify.notes.extend(shared_note);
+    verify.notes.extend(config_note);
     // FSCALE_LOG=cache shows, per step, whether its result came from the cache.
     if env::var("FSCALE_LOG").is_ok_and(|value| value.split(',').any(|part| part == "cache")) {
         notes.extend(cache.log());

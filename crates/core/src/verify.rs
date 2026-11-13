@@ -2672,13 +2672,13 @@ fn cached_or_run(
         });
     }
     let ran_at = now_secs();
-    let report = run_step(unit, name, command, options)?;
+    let mut report = run_step(unit, name, command, options)?;
     if report.status == StepStatus::Passed {
         cache.note(format!(
             "cache: miss {place}{}",
             if cache.reads() { "" } else { " (--no-cache)" }
         ));
-        cache.remember(
+        report.not_cached = cache.remember(
             folder,
             kind,
             &key,
@@ -2830,14 +2830,7 @@ pub fn run_verify_with(
         steps.extend(result?);
     }
     if let Some(cache) = options.cache {
-        for (project, step, reason) in cache.finish() {
-            if let Some(found) = steps
-                .iter_mut()
-                .find(|found| found.name == step && found.project == project)
-            {
-                found.not_cached = Some(reason);
-            }
-        }
+        cache.finish();
     }
     let stopped = options.stop.load(Ordering::SeqCst)
         || steps.iter().any(|step| step.status == StepStatus::Stopped);
