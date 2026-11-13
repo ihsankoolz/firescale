@@ -67,7 +67,7 @@ Each agent now runs \`fscale hooks run --agent <name>\` before it stops, and kee
 exports[`fscale hooks run (the stop hook) > blocks Claude Code with exit code 2 and the verify summary on stderr 1`] = `
 "fscale verify failed, so the work is not done yet (attempt 1 of 3).
 
-verify: FAILED at test
+verify: FAILED at test (affected only: 1 of 1 project ran)
   check      passed   8 rules, no enforced violations
   lint       off      turned off in your firescale config
   typecheck  off      turned off in your firescale config
@@ -79,5 +79,10 @@ Last lines of test:
 Fix the failure, then run again: node test.js
 
 No base commit to compare with (this is not a git repo, or it has no commit yet), so every failure blocks.
+
+Affected only (uncommitted and untracked changes; 0 changed files). Why each ran:
+  the repo root's own steps: there is no commit to compare with
+
+note: --affected found no commit to compare with (not a git repo, or no commit yet), so every project ran.
 "
 `;

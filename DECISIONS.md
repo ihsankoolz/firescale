@@ -121,7 +121,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 **Proof** (`stop-hook-blame.test.ts`, `pertest::tests`): a test that fails on its first run only is `flaky` and does not block; nothing about it is written under `.firescale/`, and its second pass is not cached; a failure that fails again stays `new`; the stop hook lets an agent stop on a pre-existing failure and blocks on a new one; on the course project a change in one service runs that service's steps only, and only its failing step runs on the base; the `cargo test` reader.
 
-**Test changed on purpose:** `runners_are_found_in_commands_and_scripts` expected `cargo test` to have no reader; M21 adds one, so it now checks `cargo build`.
+**Tests changed on purpose:** `runners_are_found_in_commands_and_scripts` expected `cargo test` to have no reader; M21 adds one, so it now checks `cargo build`. The stop hook's snapshot (`hooks.test.ts`) now shows an affected-only run, since the hook runs only what the change reaches.
 
 ## M20 — Blame-aware verify: per-test labels
 
