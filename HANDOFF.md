@@ -4,15 +4,13 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**Paused by the owner on 2026-11-13 (about 00:45 UTC), to resume later the same day.** The plan update (ADR 0031) and M17 (ADR 0032, 0033) are done, reviewed (review findings fixed) and pushed on `claude/dreamy-hopper-8aih76`; the M17 pull request is open and waits for green CI on Linux, macOS and Windows. **No tag has been pushed.**
+Resumed on 2026-11-13 (about 06:00 UTC). M17 is merged (#25). This session's remaining pull requests, in order, each from `main` on `claude/dreamy-hopper-8aih76`:
 
-To resume:
-
-1. Check the M17 pull request's CI. If a job failed, fix it on the same branch. When all three OSes are green, merge it.
-2. Then restart the branch from `main` and do the 0.2.1 fixes as a second pull request (the owner's list, in the session's request: name a service as the cause only with evidence from the output; stop early as likely setup with no pass, N errors and no failure, with a config key; show the first error's text after an early stop or a timeout, e.g. a short extra `--maxfail=1` run; passes plus errors that all name an unreachable service are setup needed; a timeout with mostly errors must not say "raise the timeout"; a refused local connection or "password authentication failed" in the first error makes the step setup needed and names host and port; docs/doctor.md says "reachable" means the port answers). One ADR, version 0.2.1 with `scripts/bump-version.mjs`, no tag. Then stop.
+1. **M17 follow-up** (this pull request): a changed file that no project owns and that cannot affect a build or a test (Markdown, text, a licence, `docs/`) affects no project (ADR 0034); the cross-compiled release builds were proven to compile tree-sitter by a hand-started Release run.
+2. **The 0.2.1 fixes** (ADR 0035), then the version 0.2.1 with `scripts/bump-version.mjs`. No tag. Then stop.
 
 - **Branch:** `claude/dreamy-hopper-8aih76` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
-- **Next, in order:** the 0.2.1 fixes (second pull request of this session); tag `v0.2.0` or `v0.2.1` when ready (`RELEASING.md`); then M18, the local step-result cache (PLAN.md, ADR 0031).
+- **Next, in order:** the 0.2.1 fixes (the last pull request of this session); tag `v0.2.1` when ready (`RELEASING.md`); then M18, the local step-result cache (PLAN.md, ADR 0031).
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
