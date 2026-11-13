@@ -4,13 +4,11 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**0.3.0 is ready to tag, and should be tagged after M22 merges.** `main` holds version 0.3.0 (pull request #32 merged the base run fixes and the version). No tag has been pushed. Tag `v0.3.0` on `main` once M22 is merged, so the published 0.3.0 has `--shared-cache`, which the workflow `fscale init` now writes calls (`RELEASING.md`). `v0.2.1` was never tagged; 0.3.0 includes everything since 0.2.0.
+Nothing is half-finished. This session built M23, the tamper guard for JavaScript and TypeScript (ADR 0042), and stopped there as asked. **The version is unchanged (0.3.0) and no tag has been pushed.**
 
 - **Branch:** `claude/vibrant-ramanujan-1ymxis` (the cloud session may push only to this branch; it is restarted from `main` after each merge).
-- **Done in this session (2026-11-13, afternoon):** the base run fixes and 0.3.0 (#32, ADR 0040), then M22 (ADR 0041).
-- **M22's last box is open:** a pull request in a fixture repo on GitHub, run by hand, needs a firescale with `--shared-cache` on npm. After `v0.3.0` is published: make a repo with `npx firescale@0.3.0 init`, push it to GitHub, let `main` run once, open a pull request that touches one project, and check that only that project ran and its unchanged steps say `passed from the shared cache of CI`.
-- **Next:** M23 (tamper guard). Not started.
-- `docs.github.com` was added to the Default cloud environment's allowed hosts (approved by you), to read GitHub's docs.
+- **Next:** M24 (the tamper guard for Rust and Python, and its policy keys). Not started.
+- **0.3.0 is ready to tag**, with M22 and M23 in it (`RELEASING.md`). After it is on npm: M22's manual check (below, under "Left for the owner").
 - The `v0.2.0` tag exists and 0.2.0 is on npm.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
@@ -25,8 +23,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Done in the session of 2026-11-12 (evening):** M12 `doctor` and the two fixes from the 0.1.3 run (ADR 0025, 0026), M13 agent files (ADR 0027), M14 generators (ADR 0028), M15 Next.js pack (ADR 0029), M16 Python pack (ADR 0030), and the 0.2.0 version.
 - **Done in the session of 2026-11-12/13:** the plan update (ADR 0031) and M17, the project graph and affected verify (ADR 0032, ADR 0033).
 - **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036); M19 to M21, blame-aware verify (ADR 0037 to 0039, verify schema 6).
-- **Done in the session of 2026-11-13 (afternoon):** the base run fixes and 0.3.0 (ADR 0040), M22 (ADR 0041).
-- **Not started, in order:** M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
+- **Done in the session of 2026-11-13 (afternoon):** the base run fixes and 0.3.0 (ADR 0040), M22 (ADR 0041), M23 (ADR 0042).
+- **Not started, in order:** M24 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
 
 ## How to resume
 
@@ -34,6 +32,13 @@ Current state of the project, so a new session can resume cold. Updated in every
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on M23, for whoever builds M24 or touches the tamper guard (ADR 0042):
+
+- The guard is `crates/core/src/tamper.rs`: `read_test_file` (one tree walk: tests with their `describe` path, skips, focus, assertions with the test they are in, imports), `guard` (net counts over the changed test files, findings with file and line), `base_policy` (`verify.tamper` from the base commit only). It is called from `verify_report` in `crates/cli/src/main.rs`, right after `blame::compare`, with the same base and changed files; `verify::add_tamper` applies an `enforced` policy.
+- M24 adds Python and Rust: give `read_test_file` a reader per language with the same `TestFile` shape (pytest `def test_*`, `@pytest.mark.skip`, `assert`; Rust `#[test]`, `#[ignore]`, `assert!`/`assert_eq!`), widen `is_test_path`, and add their cases to `bench/tamper-corpus.json` (the Vitest test runs every case). M24 also adds the Rust grammar: measure size and build time again.
+- Never read the policy, or the list of what counts as a test, from the working tree: a change must not be able to loosen its own guard.
+- `bench/tamper-rates.mjs` prints the counts that go in `bench/RESULTS.md`.
 
 Notes on M22, for whoever touches CI or the shared cache (ADR 0041):
 

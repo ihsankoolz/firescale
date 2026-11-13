@@ -261,7 +261,7 @@ describe('fscale verify', () => {
     const result = await runCli(['verify'], bad.root);
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toBe(
-      'fscale: firescale.config.json: unknown verify step "tests". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, projects.\n',
+      'fscale: firescale.config.json: unknown verify step "tests". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, tamper, projects.\n',
     );
   });
 

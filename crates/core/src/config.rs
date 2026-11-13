@@ -472,6 +472,18 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     }
                 };
             }
+            "tamper" => {
+                verify.tamper = Some(
+                    value
+                        .as_str()
+                        .and_then(crate::tamper::Policy::parse)
+                        .ok_or_else(|| {
+                            Error::user(format!(
+                                "{name}: verify.tamper must be \"off\", \"evaluated\" (report only, the default) or \"enforced\" (findings fail verify). It is read from the base commit, so a change to it takes effect once it is merged."
+                            ))
+                        })?,
+                );
+            }
             "projects" => {
                 let Value::Object(projects) = value else {
                     return Err(Error::user(format!(
@@ -555,6 +567,8 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     Some("baseBudget")
                 } else if lower.contains("install") {
                     Some("baseInstall")
+                } else if lower.contains("tamper") {
+                    Some("tamper")
                 } else {
                     None
                 };
@@ -563,7 +577,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                         "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
                     ),
                     None => format!(
-                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, projects."
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, tamper, projects."
                     ),
                 }));
             }

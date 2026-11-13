@@ -1,0 +1,460 @@
+{
+  "about": "Labelled changes for the tamper guard (ADR 0042). expect lists the kinds of finding a case must give; an empty list means none. Each case is a git repo whose main branch has base and whose working tree on a branch has head (null deletes a file).",
+  "cases": [
+    {
+      "name": "ts: a test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "The test and its assertion are gone; sub still exists.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "Node's assert, in __tests__.",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a whole test file deleted, its subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "math.ts stays, so the tests were not deleted with their subject.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": null
+      }
+    },
+    {
+      "name": "ts: a test skipped with it.skip",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it.skip(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a test skipped with test.skip",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest.skip(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a suite skipped with describe.skip",
+      "expect": ["test-skipped"],
+      "note": "Both tests inside are skipped.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe.skip(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a test skipped with xit",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "test/math.spec.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math.js\");\n\nit(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\nit(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "test/math.spec.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math.js\");\n\nit(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\nxit(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test focused with it.only",
+      "expect": ["test-skipped"],
+      "note": ".only makes the file's other tests not run.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it.only(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test turned into test.todo",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The body and its assertion are gone too.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it.todo(\"subtracts\");\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: an assertion removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion commented out",
+      "expect": ["assertion-removed"],
+      "note": "A comment is not in the syntax tree's count.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    // expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion turned into a string",
+      "expect": ["assertion-removed"],
+      "note": "Text that only looks like an assertion is not one.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    const note = \"expect(add(0, 0)).toBe(0)\";\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts one number from another\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a suite renamed",
+      "expect": [],
+      "note": "Every id changes; the counts do not.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"arithmetic\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test moved to another file",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n});\n",
+        "src/sub.test.ts": "import { sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a test file renamed",
+      "expect": [],
+      "note": "Git shows a delete and an add; the counts are equal.",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": null,
+        "__tests__/arithmetic.test.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test split in two",
+      "expect": [],
+      "note": "One more test, the same assertions.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it(\"adds zeros\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion replaced by a stricter one",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toStrictEqual(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a loose assertion replaced by a strict one",
+      "expect": [],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.strictEqual(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a file reformatted",
+      "expect": [],
+      "note": "Quotes, indentation and line breaks change; the tree's counts do not.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from './math';\n\ndescribe('math', () =>\n  {\n    it('adds', () =>\n  {\n        expect(add(1, 2)).toBe(3);\n        expect(add(0, 0)).toBe(0);\n    });\n\n    it('subtracts', () =>\n  {\n        expect(sub(3, 1)).toBe(2);\n    });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion moved into a helper in the same file",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\nfunction sums(a: number, b: number, c: number) {\n  expect(add(a, b)).toBe(c);\n}\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    sums(1, 2, 3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: tests deleted with the module they test",
+      "expect": [],
+      "note": "The subject went with them.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n",
+        "src/old.ts": "export const legacy = () => 1;\n",
+        "src/old.test.ts": "import { legacy } from \"./old\";\n\nit(\"legacy\", () => {\n  expect(legacy()).toBe(1);\n});\n"
+      },
+      "head": {
+        "src/old.ts": null,
+        "src/old.test.ts": null
+      }
+    },
+    {
+      "name": "ts: one test deleted with the function it tests, file kept",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n",
+        "src/both.test.ts": "import { add } from \"./math\";\nimport { legacy } from \"./old\";\n\nit(\"adds\", () => {\n  expect(add(1, 1)).toBe(2);\n});\n\nit(\"legacy\", () => {\n  expect(legacy()).toBe(1);\n});\n",
+        "src/old.ts": "export const legacy = () => 1;\n"
+      },
+      "head": {
+        "src/old.ts": null,
+        "src/both.test.ts": "import { add } from \"./math\";\n\nit(\"adds\", () => {\n  expect(add(1, 1)).toBe(2);\n});\n"
+      }
+    },
+    {
+      "name": "js: tests added",
+      "expect": [],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n\ntest(\"adds negatives\", () => {\n  assert.equal(add(-1, -1), -2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a skipped test turned back on",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it.skip(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: only code outside tests changed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\nexport const mul = (a: number, b: number): number => a * b;\n"
+      }
+    },
+    {
+      "name": "ts: a test turned into it.fails",
+      "expect": ["test-skipped"],
+      "note": "it.fails passes when the test fails.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it.fails(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test made conditional with it.runIf",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it.runIf(process.env.CI)(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test deleted and its subject renamed without git seeing it",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "math.ts is gone, but its names live on in arith.ts: the subject was renamed, not deleted.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.ts": null,
+        "src/arith.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./arith\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: expect.assertions removed",
+      "expect": ["assertion-removed"],
+      "note": "The check that a test made its assertions is an assertion too.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect.assertions(2);\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a syntax tree-sitter cannot read, and a test deleted",
+      "expect": ["not-checked"],
+      "note": "Valid TypeScript 4.7 that this grammar cannot parse: the file is a finding of its own, never clean.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "interface Box<in out T> { v: T }\nimport { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a test file with a syntax error",
+      "expect": ["not-checked"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {{\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: three tests turned into an it.each table",
+      "expect": [],
+      "note": "A table of three rows is three tests, each with its assertion.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe(\"add\", () => {\n  it(\"1 + 1\", () => {\n    expect(add(1, 1)).toBe(2);\n  });\n  it(\"2 + 2\", () => {\n    expect(add(2, 2)).toBe(4);\n  });\n  it(\"0 + 0\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe(\"add\", () => {\n  it.each([\n    [1, 1, 2],\n    [2, 2, 4],\n    [0, 0, 0],\n  ])(\"%i + %i\", (a, b, sum) => {\n    expect(add(a, b)).toBe(sum);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a subject renamed and its tests updated",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.ts": null,
+        "src/arith.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./arith\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: Playwright hooks folded into the test",
+      "expect": [],
+      "note": "test.beforeEach and test.step are not tests.",
+      "base": {
+        "e2e/home.spec.ts": "import { test, expect } from \"@playwright/test\";\n\ntest.describe(\"home\", () => {\n  test.beforeEach(async ({ page }) => {\n    await page.goto(\"/\");\n  });\n\n  test(\"has a title\", async ({ page }) => {\n    await expect(page).toHaveTitle(/Home/);\n  });\n});\n"
+      },
+      "head": {
+        "e2e/home.spec.ts": "import { test, expect } from \"@playwright/test\";\n\ntest.describe(\"home\", () => {\n  test(\"has a title\", async ({ page }) => {\n    await test.step(\"open\", async () => {\n      await page.goto(\"/\");\n    });\n    await expect(page).toHaveTitle(/Home/);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: expect replaced by expect.soft",
+      "expect": [],
+      "note": "Still an assertion: it fails the test.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect.soft(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    }
+  ]
+}

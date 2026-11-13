@@ -221,7 +221,7 @@ pub fn js_imports(source: &str, dialect: JsDialect) -> JsImports {
 
 /// Parses `source`, or `None` when the grammar cannot be loaded (a language
 /// version mismatch) or the parser gives up.
-fn parse(source: &str, language: &Language) -> Option<Tree> {
+pub(crate) fn parse(source: &str, language: &Language) -> Option<Tree> {
     let mut parser = Parser::new();
     parser.set_language(language).ok()?;
     parser.parse(source, None)
@@ -230,7 +230,7 @@ fn parse(source: &str, language: &Language) -> Option<Tree> {
 /// Visits every node under `root` (included) in source order, without
 /// recursion so deeply nested input cannot overflow the stack. `visit`
 /// returns whether to descend into the node's children.
-fn walk<'t>(root: Node<'t>, mut visit: impl FnMut(Node<'t>) -> bool) {
+pub(crate) fn walk<'t>(root: Node<'t>, mut visit: impl FnMut(Node<'t>) -> bool) {
     let mut cursor = root.walk();
     loop {
         if visit(cursor.node()) && cursor.goto_first_child() {
@@ -249,7 +249,7 @@ fn walk<'t>(root: Node<'t>, mut visit: impl FnMut(Node<'t>) -> bool) {
 
 /// The source text of a node, or `""` if it is not valid UTF-8 (it always
 /// is for `&str` input).
-fn text<'s>(node: Node<'_>, src: &'s [u8]) -> &'s str {
+pub(crate) fn text<'s>(node: Node<'_>, src: &'s [u8]) -> &'s str {
     node.utf8_text(src).unwrap_or("")
 }
 
@@ -497,7 +497,7 @@ fn js_call(node: Node<'_>, src: &[u8]) -> Option<(String, &'static str)> {
 
 /// The value of a string literal, or of a template string with no
 /// substitutions; `None` for anything else.
-fn js_string(node: Node<'_>, src: &[u8]) -> Option<String> {
+pub(crate) fn js_string(node: Node<'_>, src: &[u8]) -> Option<String> {
     if node.kind() != "string" && node.kind() != "template_string" {
         return None;
     }

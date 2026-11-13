@@ -126,6 +126,10 @@ pub struct VerifyConfig {
     /// `verify.baseInstall`: a command that installs dependencies in the
     /// base commit's worktree, run at its root before the base steps.
     pub base_install: Option<String>,
+    /// `verify.tamper` as the working tree's config says. Checked, but never
+    /// used: the tamper guard reads its policy from the base commit's config
+    /// (ADR 0042).
+    pub tamper: Option<crate::tamper::Policy>,
 }
 
 impl VerifyConfig {
@@ -988,6 +992,10 @@ pub struct VerifyReport {
     /// Blame-aware verify: the base commit, or why there is none (ADR 0037).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<crate::blame::BaseReport>,
+    /// The tamper guard: tests and assertions the change took away, compared
+    /// with the base commit (ADR 0042). Absent without a base.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tamper: Option<crate::tamper::TamperReport>,
 }
 
 /// What a verify run covered.
@@ -2802,6 +2810,7 @@ pub fn run_verify_with(
         affected: affected_report(plan),
         cache,
         base: None,
+        tamper: None,
     };
     settle(&mut report, stopped);
     Ok(report)
@@ -2855,6 +2864,29 @@ pub(crate) fn settle(report: &mut VerifyReport, stopped: bool) {
     report.result = result;
 }
 
+/// Adds the tamper guard's report. When the base commit's policy is
+/// `enforced` and there are findings, a run that would pass fails, "at the
+/// tamper guard" (ADR 0042).
+pub fn add_tamper(report: &mut VerifyReport, tamper: crate::tamper::TamperReport) {
+    let blocks = tamper.blocks();
+    report.tamper = Some(tamper);
+    if blocks
+        && matches!(
+            report.result,
+            VerifyResult::Ok | VerifyResult::Partial | VerifyResult::PreExisting
+        )
+    {
+        report.result = VerifyResult::Failed;
+        report.ok = false;
+        report
+            .failed_step
+            .get_or_insert_with(|| TAMPER_STEP.to_owned());
+    }
+}
+
+/// What a failure of the tamper guard is called where a step's name goes.
+pub const TAMPER_STEP: &str = "the tamper guard";
+
 /// `test in backend/auth`, or `test` for a step of the repo root.
 fn step_place(step: &StepReport) -> String {
     match &step.project {
@@ -2867,6 +2899,24 @@ fn step_place(step: &StepReport) -> String {
 /// step ran and passed, and it names every step that failed, timed out or
 /// needs setup.
 fn headline(report: &VerifyReport) -> String {
+    let line = cache_headline(report);
+    // Findings that do not block are still in the headline: a run with
+    // them never reads as a plain OK.
+    match report
+        .tamper
+        .as_ref()
+        .filter(|tamper| !tamper.blocks() && !tamper.findings.is_empty())
+    {
+        Some(tamper) => format!(
+            "{line} - tamper guard: {} report-only finding{}",
+            tamper.findings.len(),
+            if tamper.findings.len() == 1 { "" } else { "s" }
+        ),
+        None => line,
+    }
+}
+
+fn cache_headline(report: &VerifyReport) -> String {
     let base = scoped_headline(report);
     let hits = report.cache.as_ref().map_or(0, |cache| cache.hits);
     if hits == 0 || report.result == VerifyResult::Partial {
@@ -2984,6 +3034,13 @@ fn whole_headline(report: &VerifyReport) -> String {
     }
     if !setup.is_empty() {
         parts.push(format!("SETUP NEEDED for {}", setup.join(", ")));
+    }
+    if let Some(tamper) = report.tamper.as_ref().filter(|tamper| tamper.blocks()) {
+        let findings = tamper.findings.len();
+        parts.push(format!(
+            "FAILED at {TAMPER_STEP} ({findings} finding{})",
+            if findings == 1 { "" } else { "s" }
+        ));
     }
     let base = report
         .base
@@ -3428,6 +3485,9 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             }
         }
     }
+    if let Some(tamper) = &report.tamper {
+        out.push_str(&tamper_section(tamper));
+    }
     if let Some(cache) = report.cache.as_ref().filter(|cache| cache.hits > 0) {
         out.push_str(&format!(
             "\nFrom the cache: {} passed before on the same inputs, so {} not run again; {} took {} when {} last ran. Run fscale verify --no-cache to run every step.\n",
@@ -3464,6 +3524,54 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         out.push('\n');
         for note in &report.notes {
             out.push_str(&format!("note: {note}\n"));
+        }
+    }
+    out
+}
+
+/// The tamper guard's part of the summary: nothing when it found nothing,
+/// checked nothing and was not off.
+fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
+    use crate::tamper::Policy;
+    let base = &tamper.base[..tamper.base.len().min(7)];
+    let mut out = String::new();
+    if tamper.policy == Policy::Off {
+        return out;
+    }
+    if !tamper.findings.is_empty() {
+        let how = match tamper.policy {
+            Policy::Enforced => "fails verify: verify.tamper is \"enforced\" on the base commit",
+            _ => "report only; verify.tamper on the base commit decides, and \"enforced\" makes this fail",
+        };
+        out.push_str(&format!(
+            "\nTamper guard ({how}): compared with the base commit {base}, this change takes away tests or assertions, or changes test files it cannot read.\n"
+        ));
+        for finding in &tamper.findings {
+            let place = if finding.on_base {
+                format!("{}:{} (on the base commit)", finding.file, finding.line)
+            } else {
+                format!("{}:{}", finding.file, finding.line)
+            };
+            out.push_str(&format!(
+                "  {}: {place}: {}\n",
+                finding.kind.as_str(),
+                finding.what
+            ));
+        }
+        let c = &tamper.counts;
+        out.push_str(&format!(
+            "  In the changed test files: {} tests on the base, {} now; {} skipped on the base, {} now; {} assertions on the base, {} now.\n",
+            c.base_tests, c.head_tests, c.base_skipped, c.head_skipped, c.base_assertions, c.head_assertions
+        ));
+        if c.excused_tests > 0 {
+            out.push_str(&format!(
+                "  Not counted: {} deleted with the code they test.\n",
+                if c.excused_tests == 1 {
+                    "1 test".to_owned()
+                } else {
+                    format!("{} tests", c.excused_tests)
+                }
+            ));
         }
     }
     out
