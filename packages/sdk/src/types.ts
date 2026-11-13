@@ -219,6 +219,17 @@ export interface VerifyConfig extends VerifySteps {
    * (ADR 0035).
    */
   stopAfterErrors?: number | false;
+  /**
+   * How long the base run of blame-aware verify may take in all; `false` for
+   * no limit. Default `"5m"` (ADR 0037).
+   */
+  baseBudget?: VerifyTimeout;
+  /**
+   * A command that installs dependencies in the base commit's worktree, run
+   * at its root before the base steps. Default: none; the head's
+   * `node_modules` and virtual environments are linked instead (ADR 0037).
+   */
+  baseInstall?: string | false;
   /** Per project, keyed by its folder: `false` turns it off, an object sets single steps. */
   projects?: Record<string, false | VerifyProjectSettings>;
 }

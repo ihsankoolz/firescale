@@ -168,7 +168,13 @@ describe('fscale verify --affected', () => {
     await repo.write('backend/audit_service/main.py', 'app = 1\n');
     const result = await runCli(['verify', '--affected'], repo.root, env);
     expect(result.code).toBe(EXIT_OK);
-    expect(result.stdout).toMatchSnapshot();
+    // The base commit's id and the default branch's name differ per run and machine.
+    expect(
+      result.stdout.replace(
+        /base commit [0-9a-f]{7} \((main|master)\)/,
+        'base commit <commit> (<default branch>)',
+      ),
+    ).toMatchSnapshot();
     expect(result.stdout.split('\n')[0]).toBe(
       'verify: PARTIAL (affected only) - 1 of 6 projects ran, 5 not affected; 2 of 4 steps ran, 2 skipped',
     );

@@ -27,7 +27,7 @@ use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
 use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
 
 /// Version of the `fscale verify --json` format.
-pub const VERIFY_SCHEMA_VERSION: u32 = 5;
+pub const VERIFY_SCHEMA_VERSION: u32 = 6;
 
 /// Errors with no test passed and none failed before a test step is stopped
 /// as likely setup, by default (ADR 0035).
@@ -43,6 +43,10 @@ pub const DOCTOR_HINT: &str =
 
 /// How long a step may run when the config sets no limit (ADR 0024).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// How long the base run of blame-aware verify may take in all, when the
+/// config sets no budget (ADR 0037).
+pub const DEFAULT_BASE_BUDGET: Duration = Duration::from_secs(5 * 60);
 
 /// The steps after `check`, in the order they run.
 pub const STEPS: [&str; 3] = ["lint", "typecheck", "test"];
@@ -116,6 +120,12 @@ pub struct VerifyConfig {
     /// with no test passed and none failed, before it is stopped as likely
     /// setup (ADR 0035). `None`: the default; `Some(0)`: `false`, never.
     pub stop_after_errors: Option<u64>,
+    /// `verify.baseBudget`: how long the base run of blame-aware verify may
+    /// take in all (ADR 0037). [`DEFAULT_BASE_BUDGET`] when absent.
+    pub base_budget: Option<Limit>,
+    /// `verify.baseInstall`: a command that installs dependencies in the
+    /// base commit's worktree, run at its root before the base steps.
+    pub base_install: Option<String>,
 }
 
 impl VerifyConfig {
@@ -816,6 +826,18 @@ pub struct StepReport {
     /// inputs, and that pass came from the step cache (ADR 0036).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheHit>,
+    /// With a base to compare with: `new`, `pre-existing`, `fixed` or
+    /// `flaky` (ADR 0037). Absent when the step has no label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<crate::blame::Label>,
+    /// With a base to compare with: how the step did on the base commit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<crate::blame::BaseOutcome>,
+    /// The failure's signature: one short hash per normalised line of its
+    /// output (ADR 0037). A failure is `pre-existing` only when its
+    /// signature on the head is contained in the base's. Not in JSON.
+    #[serde(skip)]
+    pub signature: Vec<String>,
 }
 
 /// Where a step's pass from the cache came from.
@@ -876,6 +898,9 @@ pub enum VerifyResult {
     /// Verify was stopped by Ctrl+C or a termination signal before every
     /// step finished. The steps that finished are reported.
     Stopped,
+    /// Nothing failed that the change introduced: every failure also fails
+    /// on the base commit (ADR 0037). Exit code 0.
+    PreExisting,
 }
 
 /// A step that was skipped because no command was found.
@@ -933,6 +958,9 @@ pub struct VerifyReport {
     /// What the step cache did. Absent when it was not used.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheSummary>,
+    /// Blame-aware verify: the base commit, or why there is none (ADR 0037).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base: Option<crate::blame::BaseReport>,
 }
 
 /// What a verify run covered.
@@ -974,6 +1002,9 @@ pub struct CheckStep {
     pub duration_ms: u64,
     /// The command that repeats the step.
     pub command: String,
+    /// One identity per enforced violation (rule, file, message), so the
+    /// violations can be compared with the base commit's (ADR 0037).
+    pub violations: Vec<String>,
 }
 
 /// Removes ANSI escape sequences, which only add noise for an agent.
@@ -1666,6 +1697,15 @@ pub struct RunOptions<'a> {
     pub record: Option<&'a RunRecord>,
     /// The step cache (ADR 0036). `None`: every step runs and nothing is stored.
     pub cache: Option<&'a StepCache<'a>>,
+    /// With a base to compare with (ADR 0037): a failure does not stop the
+    /// rest of its project, and a failed check stops nothing, so an old
+    /// failure cannot hide a new one.
+    pub every_step: bool,
+    /// The end of the base run's time budget: a step gets no more than
+    /// what is left of it.
+    pub deadline: Option<Instant>,
+    /// True for the steps of the base run, which get `FSCALE_BASE_RUN=1`.
+    pub base_run: bool,
 }
 
 /// Never set: the stop flag of a run that cannot be stopped from outside.
@@ -1683,6 +1723,9 @@ impl RunOptions<'_> {
             heartbeat: DEFAULT_HEARTBEAT,
             record: None,
             cache: None,
+            every_step: false,
+            deadline: None,
+            base_run: false,
         }
     }
 
@@ -1696,7 +1739,10 @@ impl RunOptions<'_> {
 /// The variables every command gets. `CI=1` makes tools that would wait for
 /// input or watch for changes run once (ADR 0024); a `CI` the environment
 /// already sets is kept.
-fn environment(command: &mut Command, config: &VerifyConfig) {
+fn environment(command: &mut Command, config: &VerifyConfig, base_run: bool) {
+    if base_run {
+        command.env("FSCALE_BASE_RUN", "1");
+    }
     command.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
     let ci_set = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
     if !config.no_ci_variable && !ci_set {
@@ -1722,10 +1768,18 @@ fn run_step(
         None => name.to_owned(),
     };
     let (timeout, timeout_key) = options.config.timeout_for(project, name);
+    // A base step gets no more than what is left of the base run's budget.
+    let timeout = match options.deadline {
+        Some(deadline) => {
+            let left = deadline.saturating_duration_since(Instant::now());
+            Some(timeout.map_or(left, |own| own.min(left)))
+        }
+        None => timeout,
+    };
     options.say(&format!("{place}: started: {command}"));
     let mut shell = shell(command);
     shell.current_dir(&dir);
-    environment(&mut shell, options.config);
+    environment(&mut shell, options.config, options.base_run);
     let spawned = Mutex::new(None);
     let heartbeat = |elapsed: Duration, last: Option<&str>| {
         // `last output: ...`, or a running count of tests (ADR 0025).
@@ -1841,6 +1895,9 @@ fn run_step(
         tests: None,
         first_error: Vec::new(),
         cache: None,
+        label: None,
+        base: None,
+        signature: Vec::new(),
     };
     let text = || {
         strip_ansi(&format!(
@@ -1849,6 +1906,9 @@ fn run_step(
             String::from_utf8_lossy(&finished.stderr)
         ))
     };
+    if !matches!(finished.ending, Ending::Exited(Some(0))) {
+        report.signature = failure_signature(&text(), unit.root);
+    }
     let early_seen = early
         .into_inner()
         .unwrap_or_else(PoisonError::into_inner)
@@ -1879,7 +1939,7 @@ fn run_step(
         ));
         let mut again = self::shell(&probe);
         again.current_dir(&dir);
-        environment(&mut again, options.config);
+        environment(&mut again, options.config, options.base_run);
         let quiet = |_: Duration, _: Option<&str>| {};
         let watch = Watch {
             timeout: Some(FIRST_ERROR_LIMIT),
@@ -2127,6 +2187,9 @@ fn run_unit(
                 tests: None,
                 first_error: Vec::new(),
                 cache: None,
+                label: None,
+                base: None,
+                signature: Vec::new(),
             })
             .collect());
     }
@@ -2149,6 +2212,9 @@ fn run_unit(
             tests: None,
             first_error: Vec::new(),
             cache: None,
+            label: None,
+            base: None,
+            signature: Vec::new(),
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2161,10 +2227,98 @@ fn run_unit(
             }
             Planned::Command(command) => cached_or_run(unit, name, command, options)?,
         };
-        failed = failed || blocks(report.status);
+        failed = !options.every_step && (failed || blocks(report.status));
         steps.push(report);
     }
     Ok(steps)
+}
+
+/// The most lines of output a signature keeps.
+const SIGNATURE_LINES: usize = 5000;
+
+/// A failure's signature (ADR 0037): one short hash per non-empty line of
+/// its output, with the run's root folder written as `<root>` (the head and
+/// the base worktree are different folders), digits folded to `#` (counts,
+/// times and line numbers change from run to run) and spaces squeezed.
+/// Only hashes are kept, never the text.
+#[must_use]
+pub fn failure_signature(output: &str, root: &Path) -> Vec<String> {
+    let mut roots: Vec<String> = Vec::new();
+    let shown = root.to_string_lossy().into_owned();
+    roots.push(shown.clone());
+    roots.push(shown.replace('\\', "/"));
+    if let Ok(real) = root.canonicalize() {
+        roots.push(real.to_string_lossy().into_owned());
+    }
+    roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
+    roots.dedup();
+    let mut lines = Vec::new();
+    for line in output.lines().take(SIGNATURE_LINES) {
+        let mut line = line.trim().to_owned();
+        if line.is_empty() {
+            continue;
+        }
+        for root in &roots {
+            if !root.is_empty() {
+                line = line.replace(root.as_str(), "<root>");
+            }
+        }
+        let folded: String = line
+            .chars()
+            .map(|c| if c.is_ascii_digit() { '#' } else { c })
+            .collect();
+        let squeezed = folded.split_whitespace().collect::<Vec<_>>().join(" ");
+        lines.push(blake3::hash(squeezed.as_bytes()).to_hex()[..16].to_owned());
+    }
+    lines
+}
+
+/// True when every line of `head` is in `base`, as often (a multiset).
+#[must_use]
+pub fn signature_within(head: &[String], base: &[String]) -> bool {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for line in base {
+        *counts.entry(line.as_str()).or_default() += 1;
+    }
+    head.iter().all(|line| match counts.get_mut(line.as_str()) {
+        Some(count) if *count > 0 => {
+            *count -= 1;
+            true
+        }
+        _ => false,
+    })
+}
+
+/// Runs one step of the base run in the base commit's worktree at `root`:
+/// no cache, no progress lines of its own, `FSCALE_BASE_RUN=1`, and no
+/// more time than is left before `deadline` (ADR 0037).
+pub(crate) fn run_base_step(
+    root: &Path,
+    project: Option<&ProjectPlan>,
+    name: &str,
+    command: &str,
+    options: &RunOptions<'_>,
+    deadline: Option<Instant>,
+) -> Result<StepReport> {
+    let base = RunOptions {
+        stop: options.stop,
+        progress: None,
+        jobs: 1,
+        config: options.config,
+        heartbeat: options.heartbeat,
+        record: None,
+        cache: None,
+        every_step: true,
+        deadline,
+        base_run: true,
+    };
+    let unit = Unit {
+        root,
+        project,
+        install: project.and_then(|project| project.install.as_deref()),
+        runs: true,
+    };
+    run_step(&unit, name, command, &base)
 }
 
 /// A step's pass from the cache when nothing it depends on changed since it
@@ -2220,6 +2374,9 @@ fn cached_or_run(
                 duration_ms: entry.duration_ms,
                 ran_at: format_iso(entry.ran_at),
             }),
+            label: None,
+            base: None,
+            signature: Vec::new(),
         });
     }
     let ran_at = now_secs();
@@ -2300,8 +2457,11 @@ pub fn run_verify_with(
         tests: None,
         first_error: Vec::new(),
         cache: None,
+        label: None,
+        base: None,
+        signature: Vec::new(),
     }];
-    let check_failed = !check.ok;
+    let check_failed = !check.ok && !options.every_step;
 
     let units: Vec<(&[(String, Planned)], Unit<'_>)> = std::iter::once((
         plan.steps.as_slice(),
@@ -2452,23 +2612,6 @@ pub fn run_verify_with(
     if let Some(affected) = &plan.affected {
         notes.extend(affected.notes.iter().cloned());
     }
-    let first_failure = steps
-        .iter()
-        .find(|step| blocks(step.status) && step.status != StepStatus::Stopped);
-    let any_failed = steps
-        .iter()
-        .any(|step| matches!(step.status, StepStatus::Failed | StepStatus::TimedOut));
-    let result = if stopped {
-        VerifyResult::Stopped
-    } else if any_failed || (plan.fail_on_skipped && !skipped.is_empty()) {
-        VerifyResult::Failed
-    } else if first_failure.is_some() {
-        VerifyResult::SetupNeeded
-    } else if skipped.is_empty() {
-        VerifyResult::Ok
-    } else {
-        VerifyResult::Partial
-    };
     let cache = options.cache.map(|cache| CacheSummary {
         read: cache.reads(),
         hits: steps.iter().filter(|step| step.cache.is_some()).count(),
@@ -2478,18 +2621,18 @@ pub fn run_verify_with(
             .map(|hit| hit.duration_ms)
             .sum(),
     });
-    Ok(VerifyReport {
+    let mut report = VerifyReport {
         schema_version: VERIFY_SCHEMA_VERSION,
         version: version.to_owned(),
-        ok: matches!(result, VerifyResult::Ok | VerifyResult::Partial),
-        result,
+        ok: false,
+        result: VerifyResult::Failed,
         runner: plan.runner.clone(),
         steps_total,
         steps_run,
         fail_on_skipped: plan.fail_on_skipped,
-        failed_step: first_failure.map(|step| step.name.clone()),
-        failed_project: first_failure.and_then(|step| step.project.clone()),
-        rerun: first_failure.and_then(|step| step.command.clone()),
+        failed_step: None,
+        failed_project: None,
+        rerun: None,
         steps,
         skipped,
         warnings,
@@ -2501,7 +2644,55 @@ pub fn run_verify_with(
         },
         affected: affected_report(plan),
         cache,
-    })
+        base: None,
+    };
+    settle(&mut report, stopped);
+    Ok(report)
+}
+
+/// True for a step whose failure blocks: failed, needs setup or timed out,
+/// and not labelled `pre-existing` or `flaky` (ADR 0037).
+fn blocking(step: &StepReport) -> bool {
+    blocks(step.status)
+        && step.status != StepStatus::Stopped
+        && !matches!(
+            step.label,
+            Some(crate::blame::Label::PreExisting | crate::blame::Label::Flaky)
+        )
+}
+
+/// Works out the result, the exit code and the first failure from the
+/// steps and their labels. `stopped`: verify was interrupted.
+pub(crate) fn settle(report: &mut VerifyReport, stopped: bool) {
+    let first_failure = report.steps.iter().find(|step| blocking(step));
+    let any_failed = report.steps.iter().any(|step| {
+        blocking(step) && matches!(step.status, StepStatus::Failed | StepStatus::TimedOut)
+    });
+    let pre_existing = report
+        .steps
+        .iter()
+        .any(|step| blocks(step.status) && step.label == Some(crate::blame::Label::PreExisting));
+    let result = if stopped {
+        VerifyResult::Stopped
+    } else if any_failed || (report.fail_on_skipped && !report.skipped.is_empty()) {
+        VerifyResult::Failed
+    } else if first_failure.is_some() {
+        VerifyResult::SetupNeeded
+    } else if pre_existing {
+        VerifyResult::PreExisting
+    } else if report.skipped.is_empty() {
+        VerifyResult::Ok
+    } else {
+        VerifyResult::Partial
+    };
+    report.failed_step = first_failure.map(|step| step.name.clone());
+    report.failed_project = first_failure.and_then(|step| step.project.clone());
+    report.rerun = first_failure.and_then(|step| step.command.clone());
+    report.ok = matches!(
+        result,
+        VerifyResult::Ok | VerifyResult::Partial | VerifyResult::PreExisting
+    );
+    report.result = result;
 }
 
 /// `test in backend/auth`, or `test` for a step of the repo root.
@@ -2588,17 +2779,29 @@ fn plural_projects(count: usize) -> String {
 
 /// The headline of a run over every project.
 fn whole_headline(report: &VerifyReport) -> String {
+    use crate::blame::Label;
+    // A failure labelled `new` says so; `pre-existing` and `flaky` ones do
+    // not block, and are named apart (ADR 0037).
     let named = |status: StepStatus| -> Vec<String> {
         report
             .steps
             .iter()
-            .filter(|step| step.status == status)
-            .map(step_place)
+            .filter(|step| step.status == status && blocking(step))
+            .map(|step| match step.label {
+                Some(Label::New) => format!("{} (new)", step_place(step)),
+                _ => step_place(step),
+            })
             .collect()
     };
     let failed = named(StepStatus::Failed);
     let timed_out = named(StepStatus::TimedOut);
     let setup = named(StepStatus::SetupNeeded);
+    let pre_existing: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|step| blocks(step.status) && step.label == Some(Label::PreExisting))
+        .map(step_place)
+        .collect();
     let mut parts = Vec::new();
     if report.result == VerifyResult::Stopped {
         parts.push(format!(
@@ -2616,12 +2819,29 @@ fn whole_headline(report: &VerifyReport) -> String {
     if !setup.is_empty() {
         parts.push(format!("SETUP NEEDED for {}", setup.join(", ")));
     }
+    let base = report
+        .base
+        .as_ref()
+        .and_then(|base| base.commit.as_deref())
+        .map_or_else(String::new, |commit| {
+            format!(" {}", &commit[..commit.len().min(7)])
+        });
     if !parts.is_empty() {
+        if !pre_existing.is_empty() {
+            parts.push(format!(
+                "pre-existing (fails on the base commit{base} too, does not block): {}",
+                pre_existing.join(", ")
+            ));
+        }
         return format!("verify: {}", parts.join("; "));
     }
     match report.result {
         VerifyResult::Ok => "verify: OK".to_owned(),
         VerifyResult::Partial => format!("verify: PARTIAL - {}", ran_part(report)),
+        VerifyResult::PreExisting => format!(
+            "verify: OK - no new failures; pre-existing (fails on the base commit{base} too): {}",
+            pre_existing.join(", ")
+        ),
         VerifyResult::Failed | VerifyResult::SetupNeeded | VerifyResult::Stopped => format!(
             "verify: FAILED - {} of {} skipped, and verify.failOnSkipped is on",
             report.skipped.len(),
@@ -2803,9 +3023,18 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             } else {
                 step.status.label()
             },
-            step.detail
+            match step.label {
+                Some(label) => format!("[{}] {}", label.as_str(), step.detail),
+                None => step.detail.clone(),
+            }
         ));
     }
+    let base_short = report
+        .base
+        .as_ref()
+        .and_then(|base| base.commit.as_deref())
+        .map(|commit| commit[..commit.len().min(7)].to_owned())
+        .unwrap_or_default();
     for failure in report.steps.iter().filter(|step| blocks(step.status)) {
         let place = failure
             .project
@@ -2813,6 +3042,26 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             .map_or_else(String::new, |project| {
                 format!(" in {}", place_name(project))
             });
+        match failure.label {
+            Some(crate::blame::Label::PreExisting) => {
+                let how = match failure.base.as_ref().map(|base| base.source) {
+                    Some(crate::blame::BaseSource::SameInputs) => {
+                        " (no file it reads differs from the base, so it was not run there again)"
+                    }
+                    _ => ", with the same output",
+                };
+                out.push_str(&format!(
+                    "\nPre-existing: {}{place} fails on the base commit {base_short} too{how}, so it does not block this change.\n",
+                    failure.name
+                ));
+                continue;
+            }
+            Some(crate::blame::Label::New) => out.push_str(&format!(
+                "\nNew: {}{place} passes on the base commit {base_short}, so this change broke it.\n",
+                failure.name
+            )),
+            _ => {}
+        }
         if !failure.output_tail.is_empty() {
             out.push_str(&format!("\nLast lines of {}{place}:\n", failure.name));
             for line in &failure.output_tail {
@@ -2892,6 +3141,59 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         .any(|step| step.status == StepStatus::SetupNeeded)
     {
         out.push_str(&format!("\n{DOCTOR_HINT}\n"));
+    }
+    let fixed: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|step| step.label == Some(crate::blame::Label::Fixed))
+        .map(step_place)
+        .collect();
+    if !fixed.is_empty() {
+        out.push_str(&format!(
+            "\nFixed by this change (it fails on the base commit {base_short}): {}\n",
+            fixed.join(", ")
+        ));
+    }
+    if let Some(base) = &report.base {
+        if base.compared {
+            let mut how = Vec::new();
+            if base.same_inputs > 0 {
+                how.push(format!(
+                    "{} with the same inputs as on the head (not run there)",
+                    plural_steps(base.same_inputs)
+                ));
+            }
+            if base.from_cache > 0 {
+                how.push(format!(
+                    "{} from an earlier base run",
+                    plural_steps(base.from_cache)
+                ));
+            }
+            if base.ran > 0 {
+                how.push(format!(
+                    "{} run in a worktree of it",
+                    plural_steps(base.ran)
+                ));
+            }
+            if !how.is_empty() || base.over_budget {
+                out.push_str(&format!(
+                    "\nCompared with the base commit {base_short} ({}): {}.{}\n",
+                    base.reference.as_deref().unwrap_or("?"),
+                    if how.is_empty() { "nothing to compare".to_owned() } else { how.join(", ") },
+                    if base.over_budget {
+                        " The base run ran out of its time budget (verify.baseBudget); failures it did not reach block as they would without a base."
+                    } else {
+                        ""
+                    }
+                ));
+            }
+        } else if report.steps.iter().any(|step| blocks(step.status)) {
+            if let Some(reason) = &base.reason {
+                out.push_str(&format!(
+                    "\nNo base commit to compare with ({reason}), so every failure blocks.\n"
+                ));
+            }
+        }
     }
     if let Some(cache) = report.cache.as_ref().filter(|cache| cache.hits > 0) {
         out.push_str(&format!(
@@ -3095,6 +3397,7 @@ mod tests {
             output: Vec::new(),
             duration_ms: 1,
             command: "fscale check".to_owned(),
+            violations: Vec::new(),
         }
     }
 
@@ -3149,6 +3452,7 @@ mod tests {
             output: vec![".env is tracked".to_owned()],
             duration_ms: 1,
             command: "fscale check".to_owned(),
+            violations: Vec::new(),
         };
         let plan = VerifyPlan {
             runner: "config".to_owned(),
@@ -4065,7 +4369,7 @@ mod tests {
         let json = format_verify_json(&report);
         assert!(json.contains("\"result\": \"setup-needed\""), "{json}");
         assert!(json.contains("\"status\": \"setup-needed\""), "{json}");
-        assert!(json.contains("\"schemaVersion\": 5"), "{json}");
+        assert!(json.contains("\"schemaVersion\": 6"), "{json}");
     }
 
     #[test]

@@ -831,6 +831,7 @@ mod tests {
             output: Vec::new(),
             duration_ms: 0,
             command: "fscale check".to_owned(),
+            violations: Vec::new(),
         };
         run_verify(fixture.root(), "0.0.0", check, &plan).unwrap()
     }
@@ -890,6 +891,7 @@ mod tests {
             output: Vec::new(),
             duration_ms: 0,
             command: "fscale check".to_owned(),
+            violations: Vec::new(),
         };
         let report = run_verify(fixture.root(), "0.0.0", check, &plan).unwrap();
         let summary = block_summary(&report);

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { runGit } from '@firescale/sdk';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -160,12 +161,45 @@ export const ENFORCED_CONFIG = onlyEnvRule('enforced');
 
 /**
  * The commands a tool stand-in logged, without the `--version` probes that
- * verify's step cache makes to key a step (ADR 0036): only the commands of
- * the steps themselves. `stepcache.rs` and `verify.test.ts` test the probes.
+ * verify's step cache makes to key a step (ADR 0036) and without the calls
+ * of the base run (ADR 0037): only the commands of the head's steps. `stepcache.rs` and `verify.test.ts` test the probes.
  */
 export async function stepCalls(log: string): Promise<string[]> {
   return (await readFile(log, 'utf8').catch(() => ''))
     .split(/\r?\n/)
     .filter(Boolean)
+    .filter((call) => !/^\S+ (--version|version)( in |$)/.test(call))
+    .filter((call) => !call.endsWith(' [base]'));
+}
+
+/** The calls the base run of blame-aware verify made (ADR 0037), without " [base]". */
+export async function baseCalls(log: string): Promise<string[]> {
+  return (await readFile(log, 'utf8').catch(() => ''))
+    .split(/\r?\n/)
+    .filter((call) => call.endsWith(' [base]'))
+    .map((call) => call.slice(0, -' [base]'.length))
     .filter((call) => !/^\S+ (--version|version)( in |$)/.test(call));
+}
+
+/** Commits every file of the repo at `root`, with a fixed identity and no hooks. */
+export async function commitAll(root: string, message: string): Promise<void> {
+  for (const args of [
+    ['add', '--all'],
+    [
+      '-c',
+      'user.name=fixture',
+      '-c',
+      'user.email=fixture@example.invalid',
+      '-c',
+      'commit.gpgsign=false',
+      'commit',
+      '--quiet',
+      '--no-verify',
+      '-m',
+      message,
+    ],
+  ]) {
+    const result = await runGit(root, args);
+    if (result.code !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  }
 }

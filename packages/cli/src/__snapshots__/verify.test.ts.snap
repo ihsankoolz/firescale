@@ -21,6 +21,8 @@ Last lines of test:
   FAIL adds two numbers: expected 4, got 5
 
 Fix the failure, then run again: node test.js
+
+No base commit to compare with (this is not a git repo, or it has no commit yet), so every failure blocks.
 "
 `;
 
@@ -59,6 +61,15 @@ warning: 1 step was skipped because no command was found: lint. Set verify.lint 
 
 exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
 {
+  "base": {
+    "compared": false,
+    "durationMs": 0,
+    "fromCache": 0,
+    "overBudget": false,
+    "ran": 0,
+    "reason": "this is not a git repo, or it has no commit yet",
+    "sameInputs": 0,
+  },
   "cache": {
     "hits": 0,
     "read": true,
@@ -70,7 +81,7 @@ exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
   "rerun": "node test.js",
   "result": "failed",
   "runner": "config",
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "scope": "all",
   "skipped": [],
   "steps": [
@@ -166,6 +177,15 @@ note: no virtual environment was found for backend/audit_service, backend/auth_s
 
 exports[`fscale verify in a repo with projects in subfolders > runs the backend's and the frontend's steps, each in its own folder, and names every skipped step 2`] = `
 {
+  "base": {
+    "compared": false,
+    "durationMs": 0,
+    "fromCache": 0,
+    "overBudget": false,
+    "ran": 0,
+    "reason": "this is not a git repo, or it has no commit yet",
+    "sameInputs": 0,
+  },
   "cache": {
     "hits": 0,
     "read": true,
@@ -178,7 +198,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
   "ok": true,
   "result": "partial",
   "runner": "projects",
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "scope": "all",
   "skipped": [
     {

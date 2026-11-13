@@ -22,6 +22,14 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M19) The base worktree links the head's dependency folders instead of installing** (ADR 0037): `node_modules`, `.venv` and `venv` wherever they are. No network, no install into a shared Python. When a lockfile or `requirements*.txt` changed, the base is not judged without `verify.baseInstall`, and failures block as before. PLAN.md said "run the repo's install command there"; say if you want an install by default.
+- **(M19) Tests that need a build output the repo does not commit** (a compiled binary, `dist/`) fail on the base worktree for want of it, and a head failure there would read as `pre-existing`. Such a repo needs its build in `verify.baseInstall`; this repo sets `"baseInstall": "pnpm install --frozen-lockfile --offline && pnpm build"`. pnpm workspaces need `verify.baseInstall` anyway: pnpm refuses a linked `node_modules` for `pnpm -r` (that base result counts as setup needed, so it never makes a failure `pre-existing`). firescale cannot tell such a failure from a code failure at step level; M20's per-test labels narrow it for Vitest, Jest and pytest.
+- **(M19) "Pre-existing" needs evidence:** the head's failing output must be contained in the base's, line by line with numbers folded (ADR 0037). This blocks some failures that really are old but print something run-specific (a temp path, a random seed). Blocking an old failure is the safe side.
+- **(M19) On a default branch with no upstream there is no base**, so every failure blocks there, as before. Work on a branch, or pass `--base`, to get labels.
+- **(M19) A run whose only failures are pre-existing exits 0** with the result `pre-existing` and the headline `verify: OK - no new failures; pre-existing (...)`. The stop hook lets an agent stop then.
+- **(M19) Passing steps run on the base only when a failure needs the worktree anyway**, so `fixed` is not always found; a clean run costs no base run.
+- **(M19) The base budget is 5 minutes** (`verify.baseBudget`).
+
 - **(M18) The step cache is on by default** (ADR 0036). A second `fscale verify` with no change runs no lint, typecheck or test command; `--no-cache` runs everything. A file git ignores (a `.env`, a generated file) is not in the key, so a change there can leave a stale pass until `--no-cache`.
 - **(M18) Files that belong to no project, Markdown and `docs/` included, are in every project's key.** `--affected` treats such a change as affecting nothing (ADR 0034), but a test may read them; the cache takes the safe side, at the cost of misses after a README edit.
 - **(M18) The environment allowlist is a fixed list of 21 variables** (`docs/verify.md`), with no config key to add one. Say if you want `verify.cacheEnv`.
@@ -95,6 +103,29 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M19 — Blame-aware verify: the base run
+
+**Built** (ADR 0037, `docs/verify.md` "Only new failures block", verify schema 6):
+
+1. **The base**: the merge base of `HEAD` with `--base <ref>` or the default branch (`origin/HEAD`, `origin/main`, `origin/master`, `main`, `master`). None outside git, before the first commit, with no default branch, or on the base with a clean tree: then every failure blocks as before. `--base` works without `--affected`.
+2. **With a base, every step runs**: a failure does not stop its project's other steps, and a failed check stops nothing.
+3. **Base results, cheapest first**: the same inputs (no file in the step's M18 cache scope differs between base and working tree, so the head result is the base result); the base store `.firescale/base/` (key: the step's cache key with the base commit's blob ids, the head's lockfiles and what the worktree gets; passed and failed only; 30 days); a run in a temporary `git worktree` of the base commit, failing steps first, within `verify.baseBudget` (default 5 min). The working tree and index are never touched.
+4. **The worktree's dependencies** are the head's `node_modules`, `.venv` and `venv`, linked (symlink, or a junction on Windows), removed before the worktree. A changed lockfile or requirements list means the base is not judged without `verify.baseInstall`. Base steps get `FSCALE_BASE_RUN=1`.
+5. **Labels** `new`, `pre-existing`, `fixed`; only `new` and unlabelled failures block. A step that needs setup on the head is never labelled. A base result that needed setup, timed out, ran over the budget or was stopped gives no label, and a note says the failure blocks as without a base.
+6. **The check** runs on the base too when it fails on the head; enforced violations are compared by rule, file and message, and marked `[new]` or `[pre-existing]`.
+7. **Output**: the result `pre-existing` (exit 0, `verify: OK - no new failures; pre-existing (...)`), `(new)` in failing headlines, `[label]` on rows, a line per new and pre-existing failure, what was fixed, and how the base results were found. JSON: a step's `label` and `base`, the report's `base`.
+8. With `verify.baseInstall`, nothing is linked. pnpm's refusal of a linked `node_modules` (`ERR_PNPM_UNSAFE_TASK_RUN_STATE_PATH`) on the base is setup needed. This repo's config sets `verify.baseInstall` to `pnpm install --frozen-lockfile --offline && pnpm build`, since its scripts use `pnpm -r` and its Vitest suite runs the built binary.
+
+**Proof** (`packages/cli/src/blame.test.ts`, `blame::tests`): a test already failing on the base passes with `pre-existing`; a failure introduced on the head, uncommitted and committed on a branch, is `new` and exits 1, and one repaired is `fixed`; a pre-existing lint failure does not hide a new test failure; a second run makes no base run, and a lockfile change runs it again (with `baseInstall`) or blocks without judging (without); the working tree, the index and the worktree list are byte-for-byte unchanged; on a clean default branch a failing test still exits 1; a base run over its budget falls back to blocking with a note; a step that needs setup on the head is never labelled; on the course project only the changed service runs on the base, the others have the same inputs.
+
+**Found on real repos** (copies with every step replaced by a node one-liner, `test` failing everywhere, one project touched): the labels are right; on `microservices-demo` 18 of 21 steps had the same inputs and only the touched service and the root's steps ran on the base, in 0.2 s; the tree, the index and the worktree list were unchanged.
+
+**Independent review before the pull request** reproduced eight ways a failure the change caused stopped blocking; all fixed with tests: one old failure hid a new one in the same step (now the head's output must be within the base's); a `node_modules` with workspace links made the base run the head's library (such folders and editable venvs are never linked); a missing build output or a nested root read as `pre-existing` (the output comparison catches it); a project new on the head errored the run and the stop hook let the agent go (now "not judged", and the run never errors); the same-inputs shortcut skipped the cache's refusals (now it needs the full key); a commit on a local `main` became the base (now the upstream, or no base); firescale's own `.firescale/` made a clean tree dirty (excluded, and it ignores itself); `baseInstall` wrote through links into the head (nothing is linked with it). Also fixed: `git status` rewrote `.git/index` (`GIT_OPTIONAL_LOCKS=0`), leaked worktrees are swept, Ctrl+C during the base run is `stopped`, worktrees are added with hooks and LFS off, the check counts repeated violations.
+
+**Test changed on purpose, none weakened:** `bridge.test.ts` "runs init, adopt and sync with built-in packs without starting node" has 60 s instead of 30 s: its six runs took 25 s on the Windows runner for M18 and 30 s for M19 (as M17 did for a scaffold test).
+
+**Found on this repo**, and fixed before the pull request: `typecheck` (`pnpm -r run typecheck`) failed on the base, first for want of `packages/cli/node_modules`, then because pnpm refuses a linked `node_modules` for recursive runs; and that failure was kept. Now every ignored `node_modules`, `.venv` and `venv` is linked, pnpm's refusal is setup needed (never a code failure), `verify.baseInstall` replaces linking, and the kept result's key holds what the worktree got.
 
 ## M18 — The local step cache
 

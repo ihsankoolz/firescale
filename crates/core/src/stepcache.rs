@@ -472,6 +472,13 @@ fn owners(graph: Option<&Graph>) -> Vec<String> {
     owned
 }
 
+/// True when the scope's key holds `path`.
+fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
+    scope.folders.iter().any(|folder| inside(path, folder))
+        || scope.above.contains(parent(path))
+        || (scope.unowned && !owned.iter().any(|folder| inside(path, folder)))
+}
+
 /// The digest of the files a scope covers, or why it cannot be made.
 fn files_digest(snapshot: &Snapshot, scope: &Scope, owned: &[String]) -> Result<String, String> {
     if let Some(problem) = &snapshot.problem {
@@ -479,10 +486,7 @@ fn files_digest(snapshot: &Snapshot, scope: &Scope, owned: &[String]) -> Result<
     }
     let mut hasher = blake3::Hasher::new();
     for (path, (state, _)) in &snapshot.files {
-        let covered = scope.folders.iter().any(|folder| inside(path, folder))
-            || scope.above.contains(parent(path))
-            || (scope.unowned && !owned.iter().any(|folder| inside(path, folder)));
-        if !covered {
+        if !covers(scope, owned, path) {
             continue;
         }
         let shown = match state {
@@ -993,12 +997,26 @@ pub fn now_secs() -> u64 {
 pub fn store(root: &Path, entry: &Entry) -> std::io::Result<()> {
     let dir = cache_dir(root);
     fs::create_dir_all(&dir)?;
+    ignore_firescale_folder(root);
     let text = serde_json::to_string_pretty(entry).map_err(std::io::Error::other)?;
     let temp = dir.join(format!(".{}.{}.tmp", entry.key, std::process::id()));
     fs::write(&temp, text)?;
     fs::rename(&temp, entry_path(root, &entry.key)).inspect_err(|_| {
         let _ = fs::remove_file(&temp);
     })
+}
+
+/// Writes `.firescale/.gitignore` (`*`) when it is missing, so firescale's
+/// own files never show up as changes in git, also when the repo's own
+/// `.gitignore` does not list `.firescale/`.
+pub fn ignore_firescale_folder(root: &Path) {
+    let ignore = root.join(".firescale").join(".gitignore");
+    if !ignore.exists() {
+        let _ = fs::write(
+            ignore,
+            "# Created by firescale. Nothing in this folder should be committed.\n*\n",
+        );
+    }
 }
 
 /// Removes entries older than [`MAX_AGE`], and the least recently used
@@ -1064,6 +1082,9 @@ pub fn format_iso(secs: u64) -> String {
 
 type UnitSlot = (Option<String>, Option<String>);
 
+/// The files of a base commit with their blob ids.
+type BaseTree = Vec<(String, String)>;
+
 /// The step cache of one verify run: the snapshot of the working tree it
 /// started from, and the passes it will store at the end.
 pub struct StepCache<'a> {
@@ -1081,6 +1102,7 @@ pub struct StepCache<'a> {
     tools: ToolVersions<'a>,
     read_env: &'a (dyn Fn(&str) -> Option<String> + Sync),
     scopes: std::sync::Mutex<HashMap<UnitSlot, UnitScope>>,
+    base_tree: std::sync::Mutex<Option<(String, BaseTree)>>,
     log: std::sync::Mutex<Vec<String>>,
     pending: std::sync::Mutex<Vec<(Scope, String, Entry)>>,
 }
@@ -1119,6 +1141,7 @@ impl<'a> StepCache<'a> {
             tools: ToolVersions::new(settings.machine),
             read_env: settings.read_env,
             scopes: std::sync::Mutex::new(HashMap::new()),
+            base_tree: std::sync::Mutex::new(None),
             log: std::sync::Mutex::new(Vec::new()),
             pending: std::sync::Mutex::new(Vec::new()),
         }
@@ -1241,6 +1264,140 @@ impl<'a> StepCache<'a> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((scope, key.files.clone(), entry));
         }
+    }
+
+    /// True when the step's key is the same on the base commit and the
+    /// working tree: the step is cached (every refusal of [`Self::key`]
+    /// holds here too) and no file its key holds differs between them
+    /// (`changed` lists the paths that do). Then its head result is its
+    /// base result (ADR 0037).
+    #[must_use]
+    pub fn same_on_base(
+        &self,
+        folder: Option<&str>,
+        kind: Option<&str>,
+        step: &str,
+        command: &str,
+        dir: &Path,
+        changed: &BTreeSet<String>,
+    ) -> bool {
+        if self.key(folder, kind, step, command, dir).is_err() {
+            return false;
+        }
+        let snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Ok(scope) = self.scope(folder, kind, dir, &snapshot) else {
+            return false;
+        };
+        let owned = &self.digests.owned;
+        !changed.iter().any(|path| covers(&scope, owned, path))
+    }
+
+    /// The key of a step's result on the base commit: the step's own key
+    /// with the base commit's files (by git's blob ids) in place of the
+    /// working tree's, the head's lockfiles, since the base run uses the
+    /// head's installed dependencies, and `environment`: what the base
+    /// worktree gets (the linked folders, the install command) (ADR 0037).
+    ///
+    /// # Errors
+    ///
+    /// Why the base result cannot be kept.
+    #[allow(clippy::too_many_arguments)]
+    pub fn base_key(
+        &self,
+        folder: Option<&str>,
+        kind: Option<&str>,
+        step: &str,
+        command: &str,
+        dir: &Path,
+        commit: &str,
+        environment: &str,
+    ) -> Result<String, String> {
+        let snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let scope = self
+            .scope(folder, kind, dir, &snapshot)
+            .unwrap_or_else(|_| Scope::whole_repo());
+        let tree = self.base_tree(commit)?;
+        let owned = &self.digests.owned;
+        let mut files = blake3::Hasher::new();
+        files.update(format!("base\0{commit}\0{environment}\n").as_bytes());
+        for (path, id) in &tree {
+            if covers(&scope, owned, path) {
+                files.update(format!("{path}\0{id}\n").as_bytes());
+            }
+        }
+        for (path, (state, _)) in &snapshot.files {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            if crate::facts::LOCKFILE_NAMES.contains(&name) {
+                files.update(format!("head-lock\0{path}\0{state:?}\n").as_bytes());
+            }
+        }
+        let files = files.finalize().to_hex().to_string();
+        step_key(
+            &self.root,
+            &StepInputs {
+                version: &self.version,
+                step,
+                project: folder,
+                kind,
+                command,
+                dir,
+                sets_ci: self.sets_ci,
+            },
+            &files,
+            &self.tools,
+            self.read_env,
+        )
+        .map(|key| format!("base-{key}"))
+    }
+
+    /// The files of the base commit under the root, with their blob ids.
+    fn base_tree(&self, commit: &str) -> Result<Vec<(String, String)>, String> {
+        let mut cached = self
+            .base_tree
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((at, tree)) = cached.as_ref() {
+            if at == commit {
+                return Ok(tree.clone());
+            }
+        }
+        let out = run_git(
+            &self.root,
+            &[
+                "-c",
+                "core.quotepath=off",
+                "ls-tree",
+                "-r",
+                "-z",
+                commit,
+                "--",
+                ".",
+            ],
+        )
+        .map_err(|error| error.message().to_owned())?;
+        if out.code != 0 {
+            return Err(format!("git ls-tree {commit} failed"));
+        }
+        let tree: Vec<(String, String)> = out
+            .stdout
+            .split('\0')
+            .filter_map(|line| {
+                let (meta, path) = line.split_once('\t')?;
+                let id = meta.split_whitespace().nth(2)?;
+                let mode = meta.split_whitespace().next()?;
+                Some((path.replace('\\', "/"), format!("{mode}:{id}")))
+            })
+            .collect();
+        *cached = Some((commit.to_owned(), tree.clone()));
+        Ok(tree)
     }
 
     /// Adds a line for `FSCALE_LOG=cache`.

@@ -457,7 +457,9 @@ Decisions in ADR 0036.
 
 ---
 
-## M19 — Blame-aware verify: the base run ☐
+## M19 — Blame-aware verify: the base run ☑
+
+Decisions in ADR 0037. The worktree gets its dependencies by linking the head's `node_modules` and virtual environments, with `verify.baseInstall` for an install or a build (ADR 0037 says why not an install by default).
 
 **Build**
 
@@ -473,13 +475,13 @@ Decisions in ADR 0036.
 
 **Done when**
 
-- ☐ In a fixture repo whose test already fails on the base commit, `fscale verify` exits 0 and labels the failure `pre-existing`.
-- ☐ A failure introduced on the head, committed or not, is labelled `new` and exits 1; one repaired on the head is labelled `fixed`.
-- ☐ A pre-existing lint failure does not hide a new test failure: both are reported, proven by a test.
-- ☐ A second run with the same base makes no base run, proven by a test; changing the lockfile invalidates the cache.
-- ☐ A project whose inputs are equal on the base and the head gets no base run, proven by a test.
-- ☐ The user's working tree and index are byte-for-byte unchanged after a run, proven by a test.
-- ☐ On the default branch with a clean tree, a failing test still exits 1.
+- ☑ In a fixture repo whose test already fails on the base commit, `fscale verify` exits 0 and labels the failure `pre-existing`.
+- ☑ A failure introduced on the head, committed or not, is labelled `new` and exits 1; one repaired on the head is labelled `fixed`.
+- ☑ A pre-existing lint failure does not hide a new test failure: both are reported, proven by a test.
+- ☑ A second run with the same base makes no base run, proven by a test; changing the lockfile invalidates the cache.
+- ☑ A project whose inputs are equal on the base and the head gets no base run, proven by a test.
+- ☑ The user's working tree and index are byte-for-byte unchanged after a run, proven by a test.
+- ☑ On the default branch with a clean tree, a failing test still exits 1.
 
 ---
 

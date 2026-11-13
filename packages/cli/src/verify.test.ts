@@ -5,6 +5,7 @@ import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
 import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
 import {
+  commitAll,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_VIOLATIONS,
@@ -247,9 +248,12 @@ describe('fscale verify', () => {
     const extra = await runCli(['verify', 'now'], repo.root);
     expect(extra.code).toBe(EXIT_USAGE);
     expect(extra.stderr).toContain('verify takes no arguments');
-    const base = await runCli(['verify', '--base', 'main'], repo.root);
+    // --base works without --affected since blame-aware verify (ADR 0037);
+    // a ref git cannot compare with is a usage error.
+    await commitAll(repo.root, 'initial');
+    const base = await runCli(['verify', '--base', 'no-such-ref'], repo.root);
     expect(base.code).toBe(EXIT_USAGE);
-    expect(base.stderr).toContain('--base only works together with --affected');
+    expect(base.stderr).toContain('--base "no-such-ref" is not a commit git can compare with HEAD');
 
     const bad = await fixtures.create({
       files: { 'firescale.config.json': JSON.stringify({ verify: { tests: 'x' } }) },
@@ -257,7 +261,7 @@ describe('fscale verify', () => {
     const result = await runCli(['verify'], bad.root);
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toBe(
-      'fscale: firescale.config.json: unknown verify step "tests". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, projects.\n',
+      'fscale: firescale.config.json: unknown verify step "tests". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, baseBudget, baseInstall, projects.\n',
     );
   });
 

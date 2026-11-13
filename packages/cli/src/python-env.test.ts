@@ -160,7 +160,7 @@ describe('projects run independently', () => {
     const result = await runCli(['verify', '--json'], repo.root, env({}, 'python'));
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const report = await validate<VerifyReport>('verify-output.schema.json', result.stdout);
-    expect(report.schemaVersion).toBe(5);
+    expect(report.schemaVersion).toBe(6);
     expect(report.result).toBe('failed');
     expect([report.failedStep, report.failedProject]).toEqual(['test', 'backend/audit_service']);
     // The frontend still ran, after five failing services.
