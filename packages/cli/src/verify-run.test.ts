@@ -428,47 +428,213 @@ async function closedPort(): Promise<number> {
   });
 }
 
-describe('a service that is not running, seen while the step runs', () => {
-  // Every test errors because the database is down; pytest prints why only
-  // at the very end (ADR 0025).
-  const erroring = {
-    'fake-pytest.js': [
-      "process.stdout.write('==== test session starts ====\\ntests/test_orders.py ');",
-      "setInterval(() => process.stdout.write('E'), 100);",
-      'setTimeout(() => process.exit(1), 30000);',
-      '',
-    ].join('\n'),
-  };
+/** A listening TCP server on localhost, closed after the test. */
+async function openPort(): Promise<{ port: number; close: () => Promise<void> }> {
+  const { createServer } = await import('node:net');
+  const server = createServer((socket) => socket.end());
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  return { port, close: () => new Promise((resolve) => server.close(() => resolve())) };
+}
 
-  it('says so once a second probe confirms it, and stops the step early by default', async () => {
+/**
+ * A stand-in for pytest. Run normally, it prints pytest's header and then
+ * `marker` every 100 ms (until `exitAfter` ms, then the `summary` lines and
+ * exit 1). Run with --maxfail=1, as verify does to find the first error, it
+ * prints `first` and exits 1.
+ */
+function fakePytest(options: {
+  marker: string;
+  first?: string[];
+  summary?: string[];
+  exitAfter?: number;
+  code?: number;
+}): string {
+  const { marker, first = [], summary = [], exitAfter = 30000, code = 1 } = options;
+  return [
+    `if (process.argv.includes('--maxfail=1')) {`,
+    `  console.log(${JSON.stringify(['==== test session starts ====', 'tests/test_a.py E', '', '==== ERRORS ====', ...first].join('\n'))});`,
+    '  process.exit(1);',
+    '}',
+    "process.stdout.write('==== test session starts ====\\ntests/test_a.py ');",
+    `const timer = setInterval(() => process.stdout.write(${JSON.stringify(marker)}), 100);`,
+    'setTimeout(() => {',
+    '  clearInterval(timer);',
+    `  console.log(${JSON.stringify(['', '==== short test summary info ====', ...summary, '==== done ===='].join('\n'))});`,
+    `  process.exit(${code});`,
+    `}, ${exitAfter});`,
+    '',
+  ].join('\n');
+}
+
+interface SetupStep extends Step {
+  detail?: string;
+  fix?: string;
+  firstError?: string[];
+  tests?: { passed: number; failed: number; errors: number };
+}
+
+function testStep(json: string): SetupStep | undefined {
+  return (JSON.parse(json) as { steps: SetupStep[] }).steps.find((s) => s.name === 'test');
+}
+
+describe('setup problems seen in a test step (ADR 0035)', () => {
+  const run = { lint: false, typecheck: false, test: nodeScript('fake-pytest.js') };
+
+  it('does not name a service that is down as the cause when the output never mentions it', async () => {
     const port = await closedPort();
-    const repo = await repoWith(
-      { lint: false, typecheck: false, test: nodeScript('fake-pytest.js') },
-      {
-        ...erroring,
-        '.env.example': `DATABASE_URL=postgresql://app:Sup3rSecret@localhost:${port}/orders_db\n`,
-      },
-    );
-    const before = Date.now();
+    const repo = await repoWith(run, {
+      'fake-pytest.js': fakePytest({
+        marker: 'E',
+        first: [
+          "E   KeyError: 'SECRET_KEY'",
+          "ERROR tests/test_a.py::test_x - KeyError: 'SECRET_KEY'",
+        ],
+      }),
+      '.env.example': `DATABASE_URL=postgresql://app:Sup3rSecret@localhost:${port}/orders_db\n`,
+    });
     const result = await runCli(['verify', '--progress', '--json'], repo.root);
-    // A second probe 10 seconds after the first confirms it (ADR 0025).
-    expect(Date.now() - before).toBeGreaterThanOrEqual(10000);
-    expect(Date.now() - before).toBeLessThan(25000);
     expect(result.code).toBe(EXIT_VIOLATIONS);
-    const report = JSON.parse(result.stdout) as Report;
-    const step = report.steps.find((s) => s.name === 'test');
-    // Every test erroring while a service is down is a likely cause, not a
-    // certain one: the step is a failure that names the service.
+    const step = testStep(result.stdout);
     expect(step?.status).toBe('failed');
-    expect(result.stderr).toMatch(
-      new RegExp(
-        `\\[verify\\] test: LIKELY SETUP, seen while running: PostgreSQL on localhost:${port} is not running \\(every test so far has errored \\(0 passed, 0 failed, \\d+ errors\\), and \\.env\\.example \\(DATABASE_URL\\) names it\\); stopping the step`,
-      ),
+    // Not the cause...
+    expect(result.stderr).not.toContain(`PostgreSQL on localhost:${port} is not running`);
+    expect(step?.detail).not.toContain('was not running; start it');
+    // ...only listed as also not running.
+    expect(step?.detail).toContain(
+      `also not running, though the output does not name it: PostgreSQL on localhost:${port}`,
     );
-    expect(result.stdout).toContain(`while PostgreSQL on localhost:${port} was not running`);
+    expect(step?.firstError).toContain("E   KeyError: 'SECRET_KEY'");
     for (const secret of ['Sup3rSecret', 'orders_db', 'postgresql://']) {
       expect(result.stdout + result.stderr).not.toContain(secret);
     }
+  }, 40_000);
+
+  it('stops a step whose every test errors as likely setup, and shows the first error, with every known service up', async () => {
+    const server = await openPort();
+    try {
+      const repo = await repoWith(run, {
+        'fake-pytest.js': fakePytest({
+          marker: 'E',
+          first: [
+            'E   RuntimeError: TEST_SETTINGS is not set; copy tests/settings.example.py',
+            'ERROR tests/test_a.py::test_x - RuntimeError: TEST_SETTINGS is not set',
+          ],
+        }),
+        '.env.example': `REDIS_URL=redis://localhost:${server.port}/0\n`,
+      });
+      const before = Date.now();
+      const result = await runCli(['verify', '--progress'], repo.root);
+      // Stopped at 10 errors, about a second in, not after 30 s.
+      expect(Date.now() - before).toBeLessThan(20_000);
+      expect(result.code).toBe(EXIT_VIOLATIONS);
+      expect(result.stderr).toContain(
+        'LIKELY SETUP, seen while running: every test so far has errored',
+      );
+      expect(result.stdout).toContain('stopped early after');
+      expect(result.stdout).toContain('which usually means the environment is not ready');
+      expect(result.stdout).toContain('First error of test');
+      expect(result.stdout).toContain(
+        '  E   RuntimeError: TEST_SETTINGS is not set; copy tests/settings.example.py\n',
+      );
+      expect(result.stdout).not.toContain('also not running');
+    } finally {
+      await server.close();
+    }
+  }, 40_000);
+
+  it('makes a refused local connection in the first error setup needed, with its host and port', async () => {
+    const port = await closedPort();
+    const repo = await repoWith(run, {
+      'fake-pytest.js': fakePytest({
+        marker: 'E',
+        first: [
+          `E   ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', ${port})`,
+          `ERROR tests/test_a.py::test_x - ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', ${port})`,
+        ],
+      }),
+    });
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const step = testStep(result.stdout);
+    expect(step?.status).toBe('setup-needed');
+    expect(step?.detail).toContain(`localhost:${port}`);
+    const human = await runCli(['verify'], repo.root);
+    expect(human.stdout).toContain('Do not change code for it.');
+  }, 40_000);
+
+  it('makes passes plus errors that all name an unreachable service setup needed', async () => {
+    const port = await closedPort();
+    const lines = [1, 2, 3].map(
+      (n) =>
+        `ERROR tests/test_cache.py::test_${n} - RuntimeError: Cannot reach the test Redis at localhost:${port}; run docker compose up -d redis`,
+    );
+    const repo = await repoWith(run, {
+      'fake-pytest.js': fakePytest({ marker: '...E', summary: lines, exitAfter: 1500 }),
+    });
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const step = testStep(result.stdout);
+    expect(step?.status).toBe('setup-needed');
+    expect(step?.detail).toContain(`every error (3) names Redis on localhost:${port}`);
+    expect(step?.tests?.passed).toBeGreaterThan(0);
+    const human = await runCli(['verify'], repo.root);
+    expect(human.stdout).toContain('Do not change code for it.');
+    expect(human.stdout).not.toContain('Fix the failure');
+  }, 40_000);
+
+  it('keeps a real code failure FAILED: assertion failures, and errors that name no service', async () => {
+    const port = await closedPort();
+    for (const summary of [
+      [
+        'FAILED tests/test_a.py::test_x - assert 1 == 2',
+        `ERROR tests/test_a.py::test_y - RuntimeError: Cannot reach the test Redis at localhost:${port}`,
+      ],
+      ["ERROR tests/test_a.py::test_y - KeyError: 'total'"],
+    ]) {
+      const repo = await repoWith(run, {
+        'fake-pytest.js': fakePytest({ marker: '.F.E', summary, exitAfter: 1000 }),
+      });
+      const result = await runCli(['verify'], repo.root);
+      expect(result.code).toBe(EXIT_VIOLATIONS);
+      expect(result.stdout).toContain('  test       FAILED');
+      expect(result.stdout).toContain('Fix the failure, then run again');
+    }
+  }, 40_000);
+
+  it('never stops a slow suite that is passing', async () => {
+    const repo = await repoWith(run, {
+      'fake-pytest.js': fakePytest({ marker: '.', exitAfter: 3000, code: 0 }),
+    });
+    const result = await runCli(['verify', '--progress', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(testStep(result.stdout)?.status).toBe('passed');
+    expect(result.stderr).not.toContain('LIKELY SETUP');
+  }, 40_000);
+
+  it('does not tell a timed-out step of errors to raise its time limit', async () => {
+    const repo = await repoWith(
+      {
+        ...run,
+        test: { command: nodeScript('fake-pytest.js'), timeout: '3s' },
+        stopAfterErrors: false,
+      },
+      {
+        'fake-pytest.js': fakePytest({
+          marker: 'E',
+          first: ["E   KeyError: 'SECRET_KEY'"],
+        }),
+      },
+    );
+    const result = await runCli(['verify'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout).toContain('TIMED OUT');
+    expect(result.stdout).toMatch(
+      /Its counts \(0 passed, 0 failed, \d+ errors\) show tests erroring/,
+    );
+    expect(result.stdout).not.toContain('If it is only slow');
+    expect(result.stdout).toContain("  E   KeyError: 'SECRET_KEY'\n");
   }, 40_000);
 });
 

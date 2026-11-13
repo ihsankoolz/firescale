@@ -139,6 +139,37 @@
           "timeoutKey": {
             "description": "For a step that timed out: the config key that sets its time limit.",
             "type": "string"
+          },
+          "tests": {
+            "description": "For a step that ran pytest or unittest: the tests its output counted (ADR 0035).",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["passed", "failed", "errors", "skipped"],
+            "properties": {
+              "passed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "errors": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "skipped": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "firstError": {
+            "description": "For a pytest step that was stopped early or timed out: the text of its first error, from one more run of its command with --maxfail=1 (ADR 0035). Connection strings' user and password are shown as ***.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

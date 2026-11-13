@@ -441,6 +441,22 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                 })?;
                 verify.keep_running_when_service_down = !stop;
             }
+            "stopAfterErrors" => {
+                verify.stop_after_errors = match value {
+                    Value::Bool(false) => Some(0),
+                    Value::Number(number) => match number.as_u64() {
+                        Some(count) if count >= 1 => Some(count),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+                .map(Some)
+                .ok_or_else(|| {
+                    Error::user(format!(
+                        "{name}: verify.stopAfterErrors must be a whole number of 1 or more (errors before a test step with no pass is stopped), or false."
+                    ))
+                })?;
+            }
             "timeout" => verify.timeout = Some(parse_limit(name, "verify.timeout", value)?),
             "projects" => {
                 let Value::Object(projects) = value else {
@@ -529,7 +545,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                         "{name}: unknown key \"{other}\" in \"verify\". Did you mean \"{meant}\"?"
                     ),
                     None => format!(
-                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, projects."
+                        "{name}: unknown verify step \"{other}\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErrors, projects."
                     ),
                 }));
             }
@@ -1033,6 +1049,19 @@ mod tests {
         .expect("valid")
         .verify;
         assert!(off.keep_running_when_service_down);
+        for (value, expected) in [(json!(25), Some(25)), (json!(false), Some(0))] {
+            let config =
+                resolve(&json!({ "verify": { "stopAfterErrors": value } }), &packs).expect("valid");
+            assert_eq!(config.verify.stop_after_errors, expected);
+        }
+        for bad in [json!(0), json!(true), json!("10"), json!(-1)] {
+            let error = resolve(&json!({ "verify": { "stopAfterErrors": bad } }), &packs)
+                .err()
+                .expect("rejected");
+            assert!(error
+                .message()
+                .contains("verify.stopAfterErrors must be a whole number"));
+        }
     }
 
     #[test]
