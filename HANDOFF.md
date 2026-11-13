@@ -7,7 +7,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 Nothing is half-finished. This session (2026-11-13, from 07:06 UTC) built M18 to M21, one pull request each, and stopped after M21 as asked. **No tag has been pushed and the version is unchanged (0.2.1).**
 
 - **Branch:** `claude/amazing-planck-g1745y` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
-- **Done in this session:** M18, the local step cache (#28, ADR 0036); M19, the base run (#29, ADR 0037); M20, per-test labels (#30, ADR 0038); M21, reruns and the stop hook (ADR 0039).
+- **Done in this session:** M18, the local step cache (#28, ADR 0036); M19, the base run (#29, ADR 0037); M20, per-test labels (#30, ADR 0038); M21, reruns and the stop hook (#31, ADR 0039).
 - **Next, in order:** M22 (faster generated CI and a shared cache); before it, the owner may want to tag `v0.2.1` or a later version (`RELEASING.md`).
 - The `v0.2.0` tag exists and 0.2.0 is on npm. `v0.2.1` has not been tagged.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
