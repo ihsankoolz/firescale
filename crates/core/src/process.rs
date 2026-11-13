@@ -86,6 +86,10 @@ pub struct Finished {
     pub percent: Option<u8>,
 }
 
+/// Called with the time so far, what the command is doing and the percent
+/// done it printed.
+pub type Heartbeat<'a> = dyn Fn(Duration, Option<&str>, Option<u8>) + Sync + 'a;
+
 /// What to watch for while a command runs.
 pub struct Watch<'a> {
     /// Stop the tree once this much time has passed. `None`: no limit.
@@ -100,7 +104,7 @@ pub struct Watch<'a> {
     /// Called every `heartbeat` with the time so far, what the command is
     /// doing, read from its output ([`Activity::heartbeat`]), if anything,
     /// and the last percent done it printed ([`Activity::percent`]).
-    pub on_heartbeat: &'a (dyn Fn(Duration, Option<&str>, Option<u8>) + Sync),
+    pub on_heartbeat: &'a Heartbeat<'a>,
     /// The command line, to know its test runner ([`Activity::new`]).
     pub command: &'a str,
     /// Called with the output so far every [`OUTPUT_CHECK`], once there is
