@@ -292,6 +292,7 @@ pub(super) fn read(source: &str) -> TestFile {
     };
     let src = source.as_bytes();
     let root = tree.root_node();
+    let dead = reach::Dead::of(root, src, &GRAMMAR);
     let mut file = TestFile {
         has_errors: root.has_error(),
         ..TestFile::default()
@@ -422,7 +423,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 let Some(name) = assertion_name(node, src) else {
                     return false;
                 };
-                if reach::unreachable(node, src, &GRAMMAR).is_some() || cannot_fail(node, name) {
+                if dead.why(node).is_some() || cannot_fail(node, name) {
                     return false;
                 }
                 // The function it is in, if that is a test.
@@ -903,9 +904,8 @@ mod tests {
 
     #[test]
     fn deep_nesting_does_not_overflow() {
-        // Kept to 1,000 blocks: finding a node's parent in tree-sitter
-        // starts from the root, so `reach::unreachable` is quadratic in the
-        // depth, which no real test comes near.
+        // Code that never runs is found in one pass from the root
+        // (`reach::Dead`), so depth costs nothing more than width.
         let source = format!(
             "#[test]\nfn t() {{ {} assert!(x); {} }}\n",
             "{ ".repeat(1_000),

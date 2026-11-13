@@ -345,6 +345,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
     };
     let src = source.as_bytes();
     let root = tree.root_node();
+    let dead = reach::Dead::of(root, src, &GRAMMAR);
     let mut file = TestFile {
         imports: imports(root, src),
         has_errors: root.has_error(),
@@ -386,7 +387,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
             let whole = chain(node);
             // Code that never runs, and an assertion that cannot fail
             // (`expect(true).toBe(true)`), are not counted (ADR 0044).
-            if reach::unreachable(node, src, &GRAMMAR).is_some() || cannot_fail(whole, src) {
+            if dead.why(node).is_some() || cannot_fail(whole, src) {
                 return true;
             }
             let inside = open.iter().rev().find(|block| block.test.is_some());
@@ -425,7 +426,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
         let (own_skip, own_focus) = marks(&path);
         // A test or suite that never runs, or a test whose body runs
         // nothing, is skipped as surely as one marked `.skip` (ADR 0044).
-        let why = reach::unreachable(node, src, &GRAMMAR).or_else(|| {
+        let why = dead.why(node).or_else(|| {
             (is_test && !own_skip)
                 .then(|| empty_body(node, src))
                 .flatten()

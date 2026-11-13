@@ -8,6 +8,8 @@
 //! the syntax tree alone is used: a literal `false` condition, a `return`
 //! earlier in the same block, an assertion with no name or call in it.
 
+use std::collections::HashMap;
+
 use tree_sitter::Node;
 
 use crate::imports::text;
@@ -35,45 +37,102 @@ pub(super) struct Grammar {
     pub noop: fn(Node<'_>, &[u8]) -> bool,
 }
 
-/// Why a node never runs, or `None` when it may.
-pub(super) fn unreachable(node: Node<'_>, src: &[u8], grammar: &Grammar) -> Option<&'static str> {
-    let mut child = node;
-    while let Some(parent) = child.parent() {
-        if grammar.hoisted.contains(&child.kind()) && child != node {
-            return None;
-        }
-        let kind = parent.kind();
-        if grammar.ifs.contains(&kind)
-            && parent.child_by_field_name("consequence") == Some(child)
-            && parent
-                .child_by_field_name("condition")
-                .is_some_and(|condition| is_false(condition, src))
-        {
-            return Some("inside if (false)");
-        }
-        if grammar.whiles.contains(&kind)
-            && parent.child_by_field_name("body") == Some(child)
-            && parent
-                .child_by_field_name("condition")
-                .is_some_and(|condition| is_false(condition, src))
-        {
-            return Some("inside while (false)");
-        }
-        if grammar.blocks.contains(&kind) {
-            let mut earlier = child.prev_named_sibling();
-            while let Some(statement) = earlier {
-                if is_return(statement, grammar) {
-                    return Some("after a return");
+/// The nodes of one tree that never run, with why, found in one pass from
+/// the root. Looking a node up is then constant time: walking up from each
+/// node with `parent()` would be quadratic, since tree-sitter finds a
+/// node's parent by descending from the root.
+pub(super) struct Dead {
+    nodes: HashMap<usize, &'static str>,
+}
+
+/// What the children of one node inherit, on the walk.
+struct Frame {
+    /// Why the children never run, when they don't.
+    state: Option<&'static str>,
+    /// The node is a block: a return among its children makes the later
+    /// ones unreachable.
+    block: bool,
+    /// Set once a return or a stop was seen among this block's children.
+    stopped: Option<&'static str>,
+    /// The one child that never runs: the consequence of `if (false)`, the
+    /// body of `while (false)`.
+    dead_child: Option<(usize, &'static str)>,
+}
+
+impl Dead {
+    /// Finds every node under `root` that never runs: inside `if (false)`
+    /// or `while (false)`, or after a return (or a stop) earlier in its
+    /// block or a block around it. A hoisted definition (a JS `function`
+    /// declaration, a Rust item) exists wherever it is written, so what is
+    /// around it does not reach inside it.
+    pub(super) fn of(root: Node<'_>, src: &[u8], grammar: &Grammar) -> Self {
+        let mut nodes = HashMap::new();
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut cursor = root.walk();
+        loop {
+            let node = cursor.node();
+            let mut own = None;
+            if let Some(frame) = stack.last_mut() {
+                own = frame.state.or(frame.stopped);
+                if let Some((id, why)) = frame.dead_child {
+                    if id == node.id() {
+                        own = own.or(Some(why));
+                    }
                 }
-                if grammar.stops.is_some_and(|stops| stops(statement, src)) {
-                    return Some("after a skip");
+                if frame.block && node.is_named() && frame.stopped.is_none() {
+                    if is_return(node, grammar) {
+                        frame.stopped = Some("after a return");
+                    } else if grammar.stops.is_some_and(|stops| stops(node, src)) {
+                        frame.stopped = Some("after a skip");
+                    }
                 }
-                earlier = statement.prev_named_sibling();
+            }
+            if let Some(why) = own {
+                nodes.insert(node.id(), why);
+            }
+            if cursor.goto_first_child() {
+                let kind = node.kind();
+                let false_condition = || {
+                    node.child_by_field_name("condition")
+                        .is_some_and(|condition| is_false(condition, src))
+                };
+                let dead_child = if grammar.ifs.contains(&kind) && false_condition() {
+                    node.child_by_field_name("consequence")
+                        .map(|child| (child.id(), "inside if (false)"))
+                } else if grammar.whiles.contains(&kind) && false_condition() {
+                    node.child_by_field_name("body")
+                        .map(|child| (child.id(), "inside while (false)"))
+                } else {
+                    None
+                };
+                stack.push(Frame {
+                    state: if grammar.hoisted.contains(&kind) {
+                        None
+                    } else {
+                        own
+                    },
+                    block: grammar.blocks.contains(&kind),
+                    stopped: None,
+                    dead_child,
+                });
+                continue;
+            }
+            loop {
+                if cursor.goto_next_sibling() {
+                    break;
+                }
+                if !cursor.goto_parent() {
+                    return Self { nodes };
+                }
+                stack.pop();
             }
         }
-        child = parent;
     }
-    None
+
+    /// Why `node` never runs, or `None` when it may.
+    pub(super) fn why(&self, node: Node<'_>) -> Option<&'static str> {
+        self.nodes.get(&node.id()).copied()
+    }
 }
 
 /// True for a literal `false` condition, in parentheses or not.

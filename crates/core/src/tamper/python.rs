@@ -428,7 +428,12 @@ fn is_test_class(class: Node<'_>, name: &str, src: &[u8]) -> bool {
 }
 
 /// Why a test function does not run when no marker says so.
-fn not_run(function: Node<'_>, src: &[u8], names: &Names) -> Option<&'static str> {
+fn not_run(
+    function: Node<'_>,
+    src: &[u8],
+    names: &Names,
+    dead: &reach::Dead,
+) -> Option<&'static str> {
     let body = function.child_by_field_name("body")?;
     let first = children(body)
         .into_iter()
@@ -439,7 +444,7 @@ fn not_run(function: Node<'_>, src: &[u8], names: &Names) -> Option<&'static str
     if reach::does_nothing(body, src, &GRAMMAR) {
         return Some("its body does nothing");
     }
-    reach::unreachable(function, src, &GRAMMAR)
+    dead.why(function)
 }
 
 /// True for `pytest.skip(…)`, `pytest.xfail(…)`, `skip(…)` imported from
@@ -506,6 +511,7 @@ pub(super) fn read(source: &str) -> TestFile {
     };
     let src = source.as_bytes();
     let root = tree.root_node();
+    let dead = reach::Dead::of(root, src, &GRAMMAR);
     let (specs, names) = imports(root, src);
     let mut file = TestFile {
         imports: specs,
@@ -616,7 +622,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     let why = if skipped {
                         None
                     } else {
-                        not_run(node, src, &names)
+                        not_run(node, src, &names, &dead)
                     };
                     skipped |= why.is_some();
                     let weight = rows
@@ -676,7 +682,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 } else {
                     call_assertion(node, src, &names)
                 };
-                if can_fail == Some(true) && reach::unreachable(node, src, &GRAMMAR).is_none() {
+                if can_fail == Some(true) && dead.why(node).is_none() {
                     let test = open.iter().rev().find_map(|(_, scope)| match scope {
                         Scope::Function { test } => *test,
                         Scope::Class { .. } => None,
