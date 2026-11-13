@@ -94,22 +94,38 @@ export function courseProjectFiles(): Record<string, string> {
  * "<tool> <arguments> in <name of the current folder>" to the file named by
  * `SHIM_LOG`, and exits 1 when `SHIM_FAIL` is the tool's name.
  */
-export async function writeToolShims(dir: string): Promise<void> {
+export async function writeToolShims(
+  dir: string,
+  options: { versions?: boolean } = {},
+): Promise<void> {
   await mkdir(dir, { recursive: true });
   for (const tool of ['python', 'npx', 'npm']) {
     if (process.platform === 'win32') {
+      // With `versions`, `--version` prints "<tool> <SHIM_VERSION or 1.0.0>",
+      // as the step cache needs a tool's version to key a step (ADR 0036).
+      const version = options.versions
+        ? [
+            'if not defined SHIM_VERSION set SHIM_VERSION=1.0.0',
+            `if "%~1"=="--version" (echo ${tool} %SHIM_VERSION%& exit /b 0)`,
+          ]
+        : [];
       const script = [
         '@echo off',
         `for %%I in (.) do echo ${tool} %* in %%~nxI>> "%SHIM_LOG%"`,
+        ...version,
         `if "%SHIM_FAIL%"=="${tool}" exit /b 1`,
         'exit /b 0',
         '',
       ].join('\r\n');
       await writeFile(path.join(dir, `${tool}.cmd`), script);
     } else {
+      const version = options.versions
+        ? [`if [ "$1" = "--version" ]; then echo "${tool} \${SHIM_VERSION:-1.0.0}"; exit 0; fi`]
+        : [];
       const script = [
         '#!/bin/sh',
         `echo "${tool} $* in $(basename "$PWD")" >> "$SHIM_LOG"`,
+        ...version,
         `if [ "$SHIM_FAIL" = "${tool}" ]; then echo "${tool} failed" >&2; exit 1; fi`,
         'exit 0',
         '',

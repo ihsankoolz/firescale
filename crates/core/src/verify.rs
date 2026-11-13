@@ -24,6 +24,7 @@ use crate::process::{run_tree, Ending, Watch};
 use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT};
 use crate::runs::{RunRecord, RunningStep};
 use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
+use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
 
 /// Version of the `fscale verify --json` format.
 pub const VERIFY_SCHEMA_VERSION: u32 = 5;
@@ -811,10 +812,36 @@ pub struct StepReport {
     /// its first error, from one more run with `--maxfail=1` (ADR 0035).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub first_error: Vec<String>,
+    /// Set when the step was not run now: it passed before on the same
+    /// inputs, and that pass came from the step cache (ADR 0036).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheHit>,
+}
+
+/// Where a step's pass from the cache came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheHit {
+    /// How long the step took when it ran.
+    pub duration_ms: u64,
+    /// When it ran, as `2026-11-13T07:06:00Z`.
+    pub ran_at: String,
+}
+
+/// What the step cache did in a run (ADR 0036).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CacheSummary {
+    /// False with `--no-cache`: every step ran, and passes were still stored.
+    pub read: bool,
+    /// Steps whose pass came from the cache instead of running now.
+    pub hits: usize,
+    /// The time those steps took when they last ran.
+    pub saved_ms: u64,
 }
 
 /// Tests a known runner reported for a step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct TestCounts {
     pub passed: u64,
     pub failed: u64,
@@ -903,6 +930,9 @@ pub struct VerifyReport {
     /// For `--affected`: which projects ran, and why.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub affected: Option<AffectedReport>,
+    /// What the step cache did. Absent when it was not used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CacheSummary>,
 }
 
 /// What a verify run covered.
@@ -1634,6 +1664,8 @@ pub struct RunOptions<'a> {
     pub heartbeat: Duration,
     /// This run's record, which names the commands it is running.
     pub record: Option<&'a RunRecord>,
+    /// The step cache (ADR 0036). `None`: every step runs and nothing is stored.
+    pub cache: Option<&'a StepCache<'a>>,
 }
 
 /// Never set: the stop flag of a run that cannot be stopped from outside.
@@ -1650,6 +1682,7 @@ impl RunOptions<'_> {
             config,
             heartbeat: DEFAULT_HEARTBEAT,
             record: None,
+            cache: None,
         }
     }
 
@@ -1807,6 +1840,7 @@ fn run_step(
         timeout_key: None,
         tests: None,
         first_error: Vec::new(),
+        cache: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -2092,6 +2126,7 @@ fn run_unit(
                 timeout_key: None,
                 tests: None,
                 first_error: Vec::new(),
+                cache: None,
             })
             .collect());
     }
@@ -2113,6 +2148,7 @@ fn run_unit(
             timeout_key: None,
             tests: None,
             first_error: Vec::new(),
+            cache: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2123,12 +2159,98 @@ fn run_unit(
             Planned::Command(command) if failed => {
                 idle(StepStatus::NotRun, Some(command), "an earlier step failed")
             }
-            Planned::Command(command) => run_step(unit, name, command, options)?,
+            Planned::Command(command) => cached_or_run(unit, name, command, options)?,
         };
         failed = failed || blocks(report.status);
         steps.push(report);
     }
     Ok(steps)
+}
+
+/// A step's pass from the cache when nothing it depends on changed since it
+/// last passed; otherwise the step runs, and a pass is kept for the cache.
+fn cached_or_run(
+    unit: &Unit<'_>,
+    name: &str,
+    command: &str,
+    options: &RunOptions<'_>,
+) -> Result<StepReport> {
+    let Some(cache) = options.cache else {
+        return run_step(unit, name, command, options);
+    };
+    let folder = unit.project.map(|project| project.root.as_str());
+    let kind = unit.project.and_then(|project| project.kind.as_deref());
+    let place = match folder {
+        Some(folder) => format!("{name} in {}", place_name(folder)),
+        None => name.to_owned(),
+    };
+    let dir = folder.map_or_else(|| unit.root.to_path_buf(), |f| project_dir(unit.root, f));
+    let key = match cache.key(folder, kind, name, command, &dir) {
+        Ok(key) => key,
+        Err(reason) => {
+            cache.note(format!("cache: not cached {place}: {reason}"));
+            return run_step(unit, name, command, options);
+        }
+    };
+    if let Some(entry) = cache.hit(&key) {
+        cache.note(format!("cache: hit {place}"));
+        let took = format_duration(Duration::from_millis(entry.duration_ms));
+        let when = format_time(entry.ran_at);
+        options.say(&format!(
+            "{place}: passed from the cache (it took {took} when it last ran, {when}); not run again"
+        ));
+        return Ok(StepReport {
+            name: name.to_owned(),
+            project: folder.map(str::to_owned),
+            kind: kind.map(str::to_owned),
+            status: StepStatus::Passed,
+            command: Some(command.to_owned()),
+            exit_code: None,
+            duration_ms: 0,
+            detail: format!(
+                "from the cache: it passed in {took} when it last ran ({when}), and nothing it depends on has changed since"
+            ),
+            output_tail: Vec::new(),
+            fix: None,
+            timeout_ms: None,
+            timeout_key: None,
+            tests: entry.tests,
+            first_error: Vec::new(),
+            cache: Some(CacheHit {
+                duration_ms: entry.duration_ms,
+                ran_at: format_iso(entry.ran_at),
+            }),
+        });
+    }
+    let ran_at = now_secs();
+    let report = run_step(unit, name, command, options)?;
+    if report.status == StepStatus::Passed {
+        cache.note(format!(
+            "cache: miss {place}{}",
+            if cache.reads() { "" } else { " (--no-cache)" }
+        ));
+        cache.remember(
+            folder,
+            kind,
+            &key,
+            Entry {
+                format: 0,
+                key: String::new(),
+                step: name.to_owned(),
+                project: folder.map(str::to_owned),
+                command: command.to_owned(),
+                duration_ms: report.duration_ms,
+                ran_at,
+                detail: report.detail.clone(),
+                tests: report.tests,
+            },
+        );
+    } else {
+        cache.note(format!(
+            "cache: miss {place}; not stored, because it did not pass"
+        ));
+    }
+    Ok(report)
 }
 
 /// Runs the plan after the check step: the root's steps, then each project's
@@ -2177,6 +2299,7 @@ pub fn run_verify_with(
         timeout_key: None,
         tests: None,
         first_error: Vec::new(),
+        cache: None,
     }];
     let check_failed = !check.ok;
 
@@ -2244,6 +2367,9 @@ pub fn run_verify_with(
     };
     for result in results {
         steps.extend(result?);
+    }
+    if let Some(cache) = options.cache {
+        cache.finish();
     }
     let stopped = options.stop.load(Ordering::SeqCst)
         || steps.iter().any(|step| step.status == StepStatus::Stopped);
@@ -2343,6 +2469,15 @@ pub fn run_verify_with(
     } else {
         VerifyResult::Partial
     };
+    let cache = options.cache.map(|cache| CacheSummary {
+        read: cache.reads(),
+        hits: steps.iter().filter(|step| step.cache.is_some()).count(),
+        saved_ms: steps
+            .iter()
+            .filter_map(|step| step.cache.as_ref())
+            .map(|hit| hit.duration_ms)
+            .sum(),
+    });
     Ok(VerifyReport {
         schema_version: VERIFY_SCHEMA_VERSION,
         version: version.to_owned(),
@@ -2365,6 +2500,7 @@ pub fn run_verify_with(
             Scope::All
         },
         affected: affected_report(plan),
+        cache,
     })
 }
 
@@ -2380,6 +2516,25 @@ fn step_place(step: &StepReport) -> String {
 /// step ran and passed, and it names every step that failed, timed out or
 /// needs setup.
 fn headline(report: &VerifyReport) -> String {
+    let base = scoped_headline(report);
+    let hits = report.cache.as_ref().map_or(0, |cache| cache.hits);
+    if hits == 0 || report.result == VerifyResult::Partial {
+        // A partial headline counts the steps from the cache itself.
+        return base;
+    }
+    // Steps from the cache did not run now: the headline says how many.
+    let from_cache = format!(
+        "{hits} of {} passed from the cache, not run now",
+        plural_steps(report.steps_total)
+    );
+    if base.ends_with(')') && report.affected.is_some() {
+        format!("{}; {from_cache})", &base[..base.len() - 1])
+    } else {
+        format!("{base} ({from_cache})")
+    }
+}
+
+fn scoped_headline(report: &VerifyReport) -> String {
     let Some(affected) = &report.affected else {
         return whole_headline(report);
     };
@@ -2397,14 +2552,34 @@ fn headline(report: &VerifyReport) -> String {
     let whole = whole_headline(report);
     match (report.result, whole.as_str()) {
         (VerifyResult::Ok, _) => format!("verify: OK (affected only) - {counts}"),
-        (VerifyResult::Partial, _) => format!(
-            "verify: PARTIAL (affected only) - {counts}; {} of {} ran, {} skipped",
+        (VerifyResult::Partial, _) => {
+            format!(
+                "verify: PARTIAL (affected only) - {counts}; {}",
+                ran_part(report)
+            )
+        }
+        _ => format!("{whole} (affected only: {counts})"),
+    }
+}
+
+/// `3 of 4 steps ran, 1 skipped`, saying how many passed from the cache
+/// instead of running now.
+fn ran_part(report: &VerifyReport) -> String {
+    let hits = report.cache.as_ref().map_or(0, |cache| cache.hits);
+    if hits == 0 {
+        return format!(
+            "{} of {} ran, {} skipped",
             report.steps_run,
             plural_steps(report.steps_total),
             report.skipped.len()
-        ),
-        _ => format!("{whole} (affected only: {counts})"),
+        );
     }
+    format!(
+        "{} of {} ran, {hits} passed from the cache, {} skipped",
+        report.steps_run.saturating_sub(hits),
+        plural_steps(report.steps_total),
+        report.skipped.len()
+    )
 }
 
 fn plural_projects(count: usize) -> String {
@@ -2428,7 +2603,7 @@ fn whole_headline(report: &VerifyReport) -> String {
     if report.result == VerifyResult::Stopped {
         parts.push(format!(
             "STOPPED - interrupted after {} of {} ran",
-            report.steps_run,
+            report.steps_run - report.cache.as_ref().map_or(0, |cache| cache.hits),
             plural_steps(report.steps_total)
         ));
     }
@@ -2446,12 +2621,7 @@ fn whole_headline(report: &VerifyReport) -> String {
     }
     match report.result {
         VerifyResult::Ok => "verify: OK".to_owned(),
-        VerifyResult::Partial => format!(
-            "verify: PARTIAL - {} of {} ran, {} skipped",
-            report.steps_run,
-            plural_steps(report.steps_total),
-            report.skipped.len()
-        ),
+        VerifyResult::Partial => format!("verify: PARTIAL - {}", ran_part(report)),
         VerifyResult::Failed | VerifyResult::SetupNeeded | VerifyResult::Stopped => format!(
             "verify: FAILED - {} of {} skipped, and verify.failOnSkipped is on",
             report.skipped.len(),
@@ -2628,7 +2798,11 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             "{}  {:<10} {:<8} {}\n",
             if project.is_some() { "  " } else { "" },
             step.name,
-            step.status.label(),
+            if step.cache.is_some() {
+                "cached"
+            } else {
+                step.status.label()
+            },
             step.detail
         ));
     }
@@ -2718,6 +2892,16 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         .any(|step| step.status == StepStatus::SetupNeeded)
     {
         out.push_str(&format!("\n{DOCTOR_HINT}\n"));
+    }
+    if let Some(cache) = report.cache.as_ref().filter(|cache| cache.hits > 0) {
+        out.push_str(&format!(
+            "\nFrom the cache: {} passed before on the same inputs, so {} not run again; {} took {} when {} last ran. Run fscale verify --no-cache to run every step.\n",
+            plural_steps(cache.hits),
+            if cache.hits == 1 { "it was" } else { "they were" },
+            if cache.hits == 1 { "it" } else { "they" },
+            format_duration(Duration::from_millis(cache.saved_ms)),
+            if cache.hits == 1 { "it" } else { "they" },
+        ));
     }
     if report.result == VerifyResult::Stopped {
         out.push_str("\nStopped: verify was interrupted (Ctrl+C or a termination signal), and every command it had started was stopped. Steps marked STOPPED or not run did not finish; run fscale verify again to check them.\n");

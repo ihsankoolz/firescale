@@ -4,10 +4,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Nothing is half-finished. On 2026-11-13 this session merged M17 (#25), the M17 follow-up (#26) and the 0.2.1 fixes, and set the version to 0.2.1 (ADR 0034, 0035). **No tag has been pushed.**
+**M18, the local step cache, is in progress** (session started 2026-11-13 07:06 UTC; this session builds M18 to M21, one pull request each, and stops after M21).
 
-- **Branch:** `claude/dreamy-hopper-8aih76` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
-- **Next, in order:** tag `v0.2.1` when ready (`RELEASING.md`); then M18, the local step-result cache (PLAN.md, ADR 0031).
+- **Branch:** `claude/amazing-planck-g1745y` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
+- **Done before this session:** M17 (#25), the M17 follow-up (#26) and the 0.2.1 fixes (#27, ADR 0034, 0035); the version is 0.2.1. The `v0.2.0` tag exists and 0.2.0 is on npm. `v0.2.1` has not been tagged.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
 ## Where things stand
@@ -127,7 +127,7 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Tag `v0.2.1` on `main` and push the tag when you are ready to release (`RELEASING.md`); 0.2.0 was never tagged, and 0.2.1 includes it.
+- Tag `v0.2.1` on `main` and push the tag when you are ready to release (`RELEASING.md`). `v0.2.0` is tagged and 0.2.0 is on npm.
 - Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
 - Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
 - Run 0.2.0 on the course project: `fscale doctor`, and `fscale adopt --dry-run` with `agent-ready` and `python` in `packs`, to see the agent files and the per-service checks on the real repo.

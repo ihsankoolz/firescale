@@ -1,6 +1,6 @@
 # fscale verify
 
-`fscale verify [--affected [--base <ref>]] [--dry-run] [--json] [--jobs <n>] [--progress | --no-progress]` is the one command that says whether work is done. People, CI and agent hooks all call it. It runs these steps in order:
+`fscale verify [--affected [--base <ref>]] [--dry-run] [--json] [--jobs <n>] [--no-cache] [--progress | --no-progress]` is the one command that says whether work is done. People, CI and agent hooks all call it. It runs these steps in order:
 
 1. `check`: the firescale rules, exactly as `fscale check` runs them. It fails when an enforced rule has violations. **When `check` fails, nothing else runs.**
 2. `lint`, `typecheck` and `test` at the repo root.
@@ -57,6 +57,46 @@ A **failed password login to a local database** is setup needed too, like a refu
 For the connection rows, a local host is `localhost`, `127.0.0.1`, `::1` or `0.0.0.0`; a refused connection to any other host is a normal failure. "Refused" is error code 111 (Linux), 61 (macOS), 10061 or 1225 (Windows); a timeout is a normal failure. The summary names the service from the client or the port: `PostgreSQL on localhost:5432`, `Redis on localhost:6379`, `MySQL on localhost:3306`, `MongoDB on localhost:27017`, else `a service on localhost:<port>`. When a Docker Compose file (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml`) is in the project's folder, or in a folder above it up to the repo root, the fix is to start it from the project's folder: `docker compose up -d`, or `docker compose -f ../../docker-compose.yml up -d` when the file is in a folder above. Without one, start the service by hand.
 
 The command that sets it up is the project's `install` command from `fscale facts`: for a Python project it installs the dependency file into the project's interpreter, for a Node project it is `<pm> install`. When the missing program is one an install does not bring (`python`, `node`, `npm`, `pnpm`, `uv`, `poetry`, `go`, `cargo` and the like), the summary says to install that program instead.
+
+## The step cache
+
+A lint, typecheck or test step that **passed** is remembered on this machine, in `.firescale/steps/`, and is not run again while nothing it depends on has changed (ADR 0036). Only passes are kept: a step that failed, needs setup, timed out, was stopped or skipped always runs again.
+
+The key of a pass is a hash of the firescale version, the step, its folder and command, and:
+
+- **The bytes of the files it can read, as they are now.** Its project's folder, the projects and shared folders it depends on in the project graph ([graph.md](graph.md)), the files directly in each folder above those, and every file that belongs to no project. The files are the tracked ones (uncommitted changes included) and the untracked ones git does not ignore. Bytes, not text: a CRLF checkout is a different key, never a wrong hit. The repo root's own steps cover the whole repo.
+- **The tools and what is installed.** The program the command starts (found on the PATH, by its path, size and time, without running it), the version of known tools by their exact name (Node and its package managers, Python and its managers, Cargo, Go) and of the runtime behind them, the package manager's marker in `node_modules`, and the `pyvenv.cfg` and packages of a `.venv`. A script of the repo is never run for a version.
+- **The OS, the CPU architecture, and the values of a fixed list of environment variables** (`CI`, `NODE_PATH`, `PYTEST_ADDOPTS`, `NODE_ENV`, `NODE_OPTIONS`, `TZ`, `LANG`, `LC_ALL`, `PYTHONPATH`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `PYENV_VERSION`, `RUSTFLAGS`, `RUSTUP_TOOLCHAIN`, `CARGO_BUILD_TARGET`, `GOFLAGS`, `GOOS`, `GOARCH`, `CGO_ENABLED`, `GOTOOLCHAIN`, `JAVA_HOME`). Their values are hashed and never written down. No other variable is read.
+
+Each step is keyed on the files as they are when it starts, so a step whose files an earlier step rewrote runs again.
+
+A step is **never cached** when:
+
+- an `.env.example` it covers (for the repo root's own steps, any in the repo), or one in a folder above it, names a service (a database, a cache, a queue) that no Compose file in the repo starts: its result depends on something outside the repo;
+- its project, or one it depends on, has a dynamic import (`importlib.import_module`, `__import__`), or a tsconfig with `paths`: the graph cannot see what it loads;
+- its command picks what to run from git history (`nx affected`, `turbo run --affected`);
+- the repo root is a folder inside a larger git repository;
+- an input could not be read: a file, a link to a folder, a submodule or nested repository, the list of files, the program, or a tool's version.
+
+A pass is stored only if the files it depends on are the same at the end of the run as at the start, so a step that writes one of its own inputs is never stored. An entry older than 30 days is never served; such entries, and the least recently used beyond 500, are removed at the end of each run; deleting `.firescale/steps/` is always safe.
+
+A step from the cache says so. Its status column reads `cached`, and its line says how long it took and when it passed:
+
+```
+verify: OK (2 of 4 steps passed from the cache, not run now)
+  check      passed   8 rules, no enforced violations
+  lint       cached   from the cache: it passed in 2.1s when it last ran (2026-11-13 07:16 UTC), and nothing it depends on has changed since
+  typecheck  passed   pnpm run typecheck
+  test       cached   from the cache: it passed in 41.3s when it last ran (2026-11-13 07:16 UTC), and nothing it depends on has changed since
+
+From the cache: 2 steps passed before on the same inputs, so they were not run again; they took 43.4s when they last ran. Run fscale verify --no-cache to run every step.
+```
+
+In `--json` such a step keeps the status `passed`, has `durationMs: 0` and a `cache` object with the `durationMs` and `ranAt` of the run that passed; the report's `cache` says whether the cache was read and how many `hits` it gave.
+
+- `--no-cache` runs every step and still stores the passes.
+- `FSCALE_LOG=cache fscale verify` prints, per step, `hit`, `miss`, `not cached` with the reason, `stored` or `not stored`.
+- A file git ignores is not in the key: a generated file or a `.env` a test reads can change without a miss. Use `--no-cache` after changing one.
 
 ## Running on slow, real projects
 
@@ -344,7 +384,7 @@ At most the last 30 non-empty lines of the failed command are kept, with colour 
 | `result`        | `ok` (every step ran and passed), `partial` (nothing failed, at least one step skipped), `failed` (a step failed or timed out, or steps were skipped with `failOnSkipped` on), `setup-needed` (nothing failed in the code, but a step needs setup) or `stopped` (Ctrl+C or a termination signal stopped the run; exit code 130). **Read this, not `ok` alone.**                                                                                                                                                      |
 | `runner`        | How the root's commands were chosen: `config` (all three steps set in the config), `nx`, `turbo`, `scripts`, `cargo`, `python`, `go`, `projects` (only the projects below the root) or `none`.                                                                                                                                                                                                                                                                                                                       |
 | `stepsTotal`    | Steps that should run: every step except those that are `off` or `not-affected`.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `stepsRun`      | Steps that ran to a result: passed, failed, timed out or needs setup.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `stepsRun`      | Steps with a result: passed (now or from the cache), failed, timed out or needs setup.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `failOnSkipped` | The config setting.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `failedStep`    | The first step that failed, timed out or needs setup. The others are in `steps` and in the headline. Absent when no step failed.                                                                                                                                                                                                                                                                                                                                                                                     |
 | `failedProject` | The folder of the project whose step failed. Absent for a root step.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -355,6 +395,7 @@ At most the last 30 non-empty lines of the failed command are kept, with colour 
 | `warnings`      | One sentence naming the skipped steps, and with `--affected` what the graph cannot see (dynamic imports). Absent when there are none.                                                                                                                                                                                                                                                                                                                                                                                |
 | `scope`         | `all`, or `affected` for `--affected`: then `result` describes the projects that ran, not the whole repo.                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `affected`      | With `--affected`: `base` (the ref, or null), `everything` and its `reason`, `changedFiles`, `projectsTotal`, `projectsRun`, and `projects`, one per unit in plan order, each with `project` (absent for the root's own steps), `kind`, `affected` and `reason`.                                                                                                                                                                                                                                                     |
+| `cache`         | What the step cache did: `read` (`false` with `--no-cache`), `hits` (steps whose pass came from the cache instead of running now) and `savedMs` (what they took when they last ran). A step from the cache has `cache` with `durationMs` and `ranAt`, and `durationMs: 0`.                                                                                                                                                                                                                                           |
 
 ## The stop hook
 

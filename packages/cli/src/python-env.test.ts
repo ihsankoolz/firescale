@@ -8,7 +8,7 @@ import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
 import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
-import { EXIT_OK, EXIT_VIOLATIONS, PYTHON_STUB, runCli } from './test-helpers.js';
+import { EXIT_OK, EXIT_VIOLATIONS, PYTHON_STUB, runCli, stepCalls } from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
@@ -77,8 +77,7 @@ async function courseProject(withVenv: string[] = []) {
   const tools = await fixtures.create({ files: {}, track: 'no-git' });
   await writeToolShims(tools.root);
   const log = path.join(tools.root, 'calls.log');
-  const calls = async (): Promise<string[]> =>
-    (await readFile(log, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
+  const calls = (): Promise<string[]> => stepCalls(log);
   const env = (extra: Record<string, string> = {}, fail = '') => ({
     ...shimEnv(tools.root, log, fail),
     FSCALE_STUB_LOG: log,

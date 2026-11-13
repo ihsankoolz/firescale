@@ -434,7 +434,9 @@ Added by the owner (ADR 0031): make verify cheap before making it fair. Decision
 
 ---
 
-## M18 — Local step-result cache and timings ☐
+## M18 — Local step-result cache and timings ☑
+
+Decisions in ADR 0036.
 
 **Build**
 
@@ -446,12 +448,12 @@ Added by the owner (ADR 0031): make verify cheap before making it fair. Decision
 
 **Done when** (each proven by a test)
 
-- ☐ A second `fscale verify` with no change runs no step again, and says so.
-- ☐ A change in a project's file, in a project or shared folder it depends on, in the lockfile, in a tool's version, or in an allowlisted variable runs that project's steps again; a change elsewhere does not.
-- ☐ A failed step is never cached.
-- ☐ A step that needs a service outside the repo is never cached.
-- ☐ No environment value outside the allowlist reaches the key or the cache folder.
-- ☐ Timings with a cold and a warm cache are recorded in `bench/RESULTS.md`.
+- ☑ A second `fscale verify` with no change runs no step again, and says so.
+- ☑ A change in a project's file, in a project or shared folder it depends on, in the lockfile, in a tool's version, or in an allowlisted variable runs that project's steps again; a change elsewhere does not.
+- ☑ A failed step is never cached.
+- ☑ A step that needs a service outside the repo is never cached.
+- ☑ No environment value outside the allowlist reaches the key or the cache folder.
+- ☑ Timings with a cold and a warm cache are recorded in `bench/RESULTS.md`.
 
 ---
 

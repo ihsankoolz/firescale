@@ -11,7 +11,7 @@ import {
   shimEnv,
   writeToolShims,
 } from './course-fixture.js';
-import { EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
+import { EXIT_OK, EXIT_USAGE, runCli, stepCalls } from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
@@ -80,8 +80,7 @@ async function courseProject() {
   const tools = await fixtures.create({ files: {}, track: 'no-git' });
   await writeToolShims(tools.root);
   const log = path.join(tools.root, 'calls.log');
-  const calls = async (): Promise<string[]> =>
-    (await readFile(log, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
+  const calls = (): Promise<string[]> => stepCalls(log);
   return { repo, calls, env: shimEnv(tools.root, log) };
 }
 

@@ -8,8 +8,11 @@
 // Scenarios, each in a small throwaway git repo:
 //   overhead   every step is turned off in the config: check, planning and output only
 //   commands   lint, typecheck and test each start `node -e ""`: adds three shells and
-//              three Node starts, the floor for any repo whose steps are Node tools
-//   stop hook  `fscale hooks run --agent claude` around the "commands" scenario
+//              three Node starts, the floor for any repo whose steps are Node tools.
+//              Measured with a cold step cache (`--no-cache`: every step runs, and its
+//              pass is hashed and stored) and a warm one (every step from the cache)
+//   stop hook  `fscale hooks run --agent claude` around the "commands" scenario,
+//              warm cache
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -78,7 +81,11 @@ const hookInput = JSON.stringify({ session_id: 'bench', stop_hook_active: false 
 
 const rows = [
   ['overhead: `fscale verify`, every step off', measure(overhead, ['verify'])],
-  ['commands: `fscale verify`, three `node -e ""` steps', measure(commands, ['verify'])],
+  [
+    'commands, cold cache: `fscale verify --no-cache`, three `node -e ""` steps',
+    measure(commands, ['verify', '--no-cache']),
+  ],
+  ['commands, warm cache: `fscale verify`, the same three steps', measure(commands, ['verify'])],
   [
     'stop hook: `fscale hooks run --agent claude`, same repo',
     measure(commands, ['hooks', 'run', '--agent', 'claude'], hookInput),

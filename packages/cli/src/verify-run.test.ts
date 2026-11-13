@@ -407,7 +407,8 @@ describe('progress', () => {
     const quiet = await runCli(['verify'], repo.root);
     expect(quiet.code).toBe(EXIT_OK);
     expect(quiet.stderr).not.toContain('[verify]');
-    const loud = await runCli(['verify', '--progress'], repo.root);
+    // --no-cache: the first run stored lint's pass, and this one must run it.
+    const loud = await runCli(['verify', '--progress', '--no-cache'], repo.root);
     expect(loud.stderr).toContain('[verify] lint: started: echo lint-ran');
     const off = await runCli(['verify', '--progress', '--no-progress'], repo.root);
     expect(off.stderr).not.toContain('[verify]');
