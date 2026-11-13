@@ -216,6 +216,28 @@ describe('fscale verify --affected', () => {
     expect(report.affected?.projectsRun).toBe(6);
   });
 
+  it('runs no project for a root README change, but everything for an unowned root script', async () => {
+    const { repo, calls, env } = await courseProject();
+    await repo.write('README.md', '# Course project\n\nMore words.\n');
+    const docs = await runCli(['verify', '--affected'], repo.root, env);
+    expect(docs.code).toBe(EXIT_OK);
+    expect(docs.stdout.split('\n')[0]).toBe(
+      'verify: OK (affected only) - 0 of 6 projects ran, 6 not affected',
+    );
+    expect(docs.stdout).toContain('  check      passed');
+    expect(docs.stdout).toContain(
+      'note: 1 changed file (README.md) belongs to no project and cannot change a build or a test',
+    );
+    expect(await calls()).toEqual([]);
+
+    await repo.write('deploy.sh', 'echo deploy\n');
+    const json = await runCli(['verify', '--affected', '--json'], repo.root, env);
+    const report = (await validate(VERIFY_SCHEMA, json.stdout)) as AffectedReport;
+    expect(report.affected?.everything).toBe(true);
+    expect(report.affected?.reason).toBe('deploy.sh belongs to no project');
+    expect(report.affected?.projectsRun).toBe(6);
+  });
+
   it('runs everything, with a note, when there is no base and the tree is clean', async () => {
     const { repo, env } = await courseProject();
     const result = await runCli(['verify', '--affected'], repo.root, env);

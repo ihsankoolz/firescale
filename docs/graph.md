@@ -47,6 +47,8 @@ Only relative specifiers (`./x`, `../x`) count; a bare package name is a depende
 
 `fscale verify --affected` marks as affected the projects and shared nodes that hold a changed file, then every node with an edge to an affected one, until nothing changes. A file in a shared folder affects that folder; a file in a folder of the repo root's project (when there is one) affects that project.
 
+A changed file that no project and no narrow shared node holds, and that cannot change a build or a test, affects **no** project (ADR 0034): Markdown (`.md`, `.markdown`), text files (`.txt`, except names with `requirements` or `constraints`, and `CMakeLists.txt`), a licence (`LICENSE*`, `LICENCE*`) and anything under the root `docs/` folder. `check` still runs.
+
 When unsure, more is affected, never less. These affect **every** project:
 
 - a root lockfile, a CI file, a Compose file anywhere, or the firescale config;

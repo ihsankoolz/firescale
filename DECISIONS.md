@@ -24,7 +24,6 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
-- **(M17) A changed file that no project owns runs everything with `verify --affected`.** That is your rule, and it is safe, but in a repo with no root project a README or `docs/` change runs every project. A list of paths that affect nothing (`*.md`, `docs/**`) would fix that, at the risk of a doc that a test reads. Say if you want it, and which paths.
 - **(M17) The binary is 4.3 MB larger** (3.9 to 8.2 MB, ADR 0033): tree-sitter's TypeScript and Python grammars. The tamper guard needs them too. Say if size matters enough to load grammars some other way.
 - **(M17) A dynamic import also depends on every shared folder with Python in it**, not only on every other Python project, since it can load those too (ADR 0032).
 - **(M17) With a root project, a file directly in the repo root folder runs everything** (it may be `ruff.toml` or `tsconfig.base.json`, read by projects below). A file in a subfolder of the root's project runs only the root's steps.
@@ -93,6 +92,10 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M17 follow-up — files that affect no project, and the cross-compiled builds
+
+**Built** (ADR 0034): a changed file that no project owns and that cannot change a build or a test affects no project with `verify --affected`: Markdown, text files (not requirement or constraint lists, not `CMakeLists.txt`), a licence, and anything under the root `docs/`. `check` still runs, and a note names the files. Every other unowned file still runs everything. Tests: `a_root_readme_change_affects_no_project_but_an_unowned_root_script_affects_all` and "runs no project for a root README change, but everything for an unowned root script" in `graph.test.ts`.
 
 ## M17 — Project graph and affected verify
 
