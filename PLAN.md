@@ -407,7 +407,7 @@ One milestone and one pull request per pack. Moved up from the end of the plan b
 
 ---
 
-## M17 — Project graph and affected verify ◐
+## M17 — Project graph and affected verify ☑
 
 Added by the owner (ADR 0031): make verify cheap before making it fair. Decisions in ADR 0032 (the graph) and ADR 0033 (tree-sitter for imports).
 
@@ -426,11 +426,11 @@ Added by the owner (ADR 0031): make verify cheap before making it fair. Decision
 
 **Done when** (each proven by a test)
 
-- ☐ On the course-project fixture, with services importing a shared folder: a change in the shared folder affects every service that imports it; a change in one service affects only that service; a frontend change affects only the frontend; a change to the root Compose file affects everything.
-- ☐ Each edge source has a fixture, and `--explain` names the source.
-- ☐ A dynamic import gives the warning and the wide edge.
-- ☐ With no base and a clean tree, everything is affected, with a note.
-- ☐ `facts`, `graph --explain` and `verify --affected` planning (no installs, no scripts) run on the three real repos in DECISIONS.md. Small problems fixed with fixture tests; the rest logged.
+- ☑ On the course-project fixture, with services importing a shared folder: a change in the shared folder affects every service that imports it; a change in one service affects only that service; a frontend change affects only the frontend; a change to the root Compose file affects everything.
+- ☑ Each edge source has a fixture, and `--explain` names the source.
+- ☑ A dynamic import gives the warning and the wide edge.
+- ☑ With no base and a clean tree, everything is affected, with a note.
+- ☑ `facts`, `graph --explain` and `verify --affected` planning (no installs, no scripts) run on the three real repos in DECISIONS.md. Small problems fixed with fixture tests; the rest logged.
 
 ---
 
