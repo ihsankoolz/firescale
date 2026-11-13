@@ -11,10 +11,9 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::install::ci_install_commands;
-
 #[cfg(test)]
 mod tests;
+pub(crate) mod workflow;
 
 pub const ID: &str = "core/ci-exists";
 
@@ -22,12 +21,6 @@ const WORKFLOWS: &str = ".github/workflows";
 
 /// The only file the fix ever creates.
 pub(crate) const STARTER: &str = ".github/workflows/ci.yml";
-
-/// Pinned to commit SHAs. The comment is the tag the SHA belongs to.
-const CHECKOUT: &str = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1";
-const SETUP_NODE: &str = "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0";
-
-const INSTALL_PLACEHOLDER: &str = "# Add the step that installs your dependencies here.";
 
 /// Configs of other CI systems. The rule only understands GitHub Actions
 /// triggers, so any of these at the root means there is nothing to report.
@@ -196,51 +189,6 @@ pub(crate) fn candidate_files(ctx: &RuleContext) -> Result<Vec<String>> {
     Ok(files)
 }
 
-/// The starter workflow. LF line endings.
-fn starter_workflow(install: Option<&[&str]>, has_package_manager: bool) -> String {
-    let mut lines: Vec<String> = [
-        "# Created by firescale (core/ci-exists). This file belongs to your team:",
-        "# edit it freely. firescale will not rewrite it.",
-        "name: CI",
-        "",
-        "on:",
-        "  pull_request:",
-        "  push:",
-        "    branches: [main, master]",
-        "",
-        "permissions:",
-        "  contents: read",
-        "",
-        "jobs:",
-        "  verify:",
-        "    runs-on: ubuntu-latest",
-        "    steps:",
-    ]
-    .iter()
-    .map(|line| (*line).to_owned())
-    .collect();
-    lines.push(format!("      - uses: {CHECKOUT}"));
-    lines.push(format!("      - uses: {SETUP_NODE}"));
-    lines.push("        with:".to_owned());
-    lines.push("          node-version: 24".to_owned());
-    match install {
-        Some(commands) => {
-            lines.extend(
-                commands
-                    .iter()
-                    .map(|command| format!("      - run: {command}")),
-            );
-        }
-        None if has_package_manager => lines.push(format!("      {INSTALL_PLACEHOLDER}")),
-        None => {}
-    }
-    lines.push("      # Runs check, lint, typecheck and test.".to_owned());
-    lines.push("      - run: npx firescale verify".to_owned());
-    let mut text = lines.join("\n");
-    text.push('\n');
-    text
-}
-
 /// Removes a `#` comment: a `#` at the start of the text or after whitespace.
 pub(crate) fn strip_comment(line: &str) -> &str {
     let mut prev_space = true;
@@ -331,28 +279,42 @@ pub(crate) fn mentions_pull_request(text: &str) -> bool {
 /// requests. The caller has checked that nothing is in the way. Shared with
 /// `group-project/ci-verify`, so either rule's fix writes the same file.
 pub(crate) fn create_starter(ctx: &RuleContext) -> Result<FixResult> {
-    let facts = detect_facts(ctx.root())?;
-    let install = facts
-        .package_manager
-        .as_deref()
-        .and_then(|manager| ci_install_commands(manager, &facts.lockfiles));
-    let has_package_manager = facts.package_manager.is_some();
-    ctx.create_tracked(
-        STARTER,
-        &starter_workflow(install.as_deref(), has_package_manager),
-    )?;
+    let setup = current_setup(ctx)?;
+    ctx.create_tracked(STARTER, &workflow::workflow(&setup))?;
     let mut notes = vec![format!(
-        "Review {STARTER}: it runs `npx firescale verify`. Add anything your project needs before that step (services, secrets, other toolchains)."
+        "Review {STARTER}: it runs `npx firescale verify` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains)."
     )];
-    if install.is_none() && has_package_manager {
-        notes.push(format!(
-            "{STARTER} has no install step: firescale does not know the install command for CI with your package manager. Add it where the comment says."
-        ));
-    }
+    notes.extend(setup.notes());
     Ok(FixResult {
         changed_files: vec![STARTER.to_owned()],
         notes,
     })
+}
+
+/// What the workflow sets up for this repo now.
+fn current_setup(ctx: &RuleContext) -> Result<workflow::Setup> {
+    let facts = detect_facts(ctx.root())?;
+    let has_python_version = on_disk(ctx.root(), ".python-version").is_file();
+    Ok(workflow::Setup::from_facts(&facts, has_python_version))
+}
+
+/// The workflow firescale would write now, when the tracked starter is one
+/// firescale wrote and nobody has edited, and it differs: `fscale sync`
+/// offers it. A workflow a person wrote, or edited, is never rewritten.
+fn newer_starter(ctx: &RuleContext) -> Result<Option<String>> {
+    let path = on_disk(ctx.root(), STARTER);
+    let linked = path.symlink_metadata().is_ok_and(|meta| !meta.is_file());
+    if linked || !ctx.git().is_repo()? || !ctx.git().tracked_files()?.iter().any(|f| f == STARTER) {
+        return Ok(None);
+    }
+    let Some(text) = ctx.read(STARTER)? else {
+        return Ok(None);
+    };
+    if !workflow::firescale_wrote(&text) {
+        return Ok(None);
+    }
+    let newer = workflow::workflow(&current_setup(ctx)?);
+    Ok((text.replace("\r\n", "\n") != newer).then_some(newer))
 }
 
 impl BuiltinRule for CiExists {
@@ -402,6 +364,18 @@ impl BuiltinRule for CiExists {
             });
             return Ok(vec![finding(message, fixable)]);
         }
+        if newer_starter(ctx)?.is_some() {
+            return Ok(vec![Finding {
+                message: format!(
+                    "{STARTER} is a workflow firescale wrote and nobody has edited, and a newer one exists: it runs only the projects a pull request changes, judged against its base, and keeps a shared step cache written from the default branch only. `fscale sync` replaces it; a workflow you edited is never rewritten."
+                ),
+                file: STARTER.to_owned(),
+                range: None,
+                project: None,
+                fixable: Fixable::Deterministic,
+                severity: Some(Severity::Low),
+            }]);
+        }
         for file in &workflows {
             if let Some(text) = ctx.read(file)? {
                 if mentions_pull_request(&text) {
@@ -425,6 +399,15 @@ impl BuiltinRule for CiExists {
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         // Never trust the diagnostics alone: look at the disk again, and only
         // create a file where there is none.
+        if let Some(newer) = newer_starter(ctx)? {
+            ctx.write(STARTER, &newer)?;
+            return Ok(FixResult {
+                changed_files: vec![STARTER.to_owned()],
+                notes: vec![format!(
+                    "{STARTER} was a workflow firescale wrote, unedited; it is now the newer one (only what a pull request changes, and a shared step cache). Review it."
+                )],
+            });
+        }
         if !candidate_files(ctx)?.is_empty() || starter_blocker(ctx)?.is_some() {
             return Ok(FixResult::default());
         }

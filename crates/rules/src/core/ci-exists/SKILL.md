@@ -28,22 +28,24 @@ Without CI on pull requests, broken builds and failing tests reach the main bran
 
 ## Agent fix instructions
 
-`fscale fix` only ever creates a file that is absent. It never overwrites, edits or renames a file that exists on disk, tracked or not. It also creates nothing when git still tracks a CI config that is missing from disk, when a `.gitignore` rule ignores the workflow path, or when `.github` is a symbolic link.
+`fscale fix` creates a file that is absent, and replaces `.github/workflows/ci.yml` only when it is tracked and exactly as firescale wrote it (its last line, `# firescale-workflow: <digest>`, matches the rest, or it is byte for byte a starter of firescale 0.1 to 0.3). It never overwrites, edits or renames any other file that exists on disk, tracked or not. It also creates nothing when git still tracks a CI config that is missing from disk, when a `.gitignore` rule ignores the workflow path, or when `.github` is a symbolic link.
 
 ### DETERMINISTIC
 
 Applies only when the repo has no CI at all: `.github/workflows/` holds no `.yml` or `.yaml` file on disk, `.github/workflows/ci.yml` does not exist, and no config of another CI system exists.
 
-Create `.github/workflows/ci.yml` and stage it with `git add`. The starter workflow runs on pull requests and on pushes to `main` and `master`, with read-only permissions. Its one job checks out the code, sets up Node, installs dependencies with the detected package manager (`npm ci` or `npm install` for npm; pnpm installed and then `pnpm install --frozen-lockfile`; a comment to fill in for any other package manager; no install step when there is none), then runs `npx firescale verify`. Line endings are LF. Once created, the file belongs to the team and is not rewritten.
+Create `.github/workflows/ci.yml` and stage it with `git add`. The workflow runs on pull requests and on pushes to `main` and `master`, with read-only permissions, and has two jobs (docs/ci.md). The pull request job has `cache-mode: read` and only restore steps; it runs `npx firescale verify --affected --base "origin/$BASE_REF" --jobs 2 --shared-cache .firescale/shared`. The push job runs a full `npx firescale verify --jobs 2 --shared-cache .firescale/shared` and saves the caches from the default branch only. Both check out the whole history, set up Node (and Python when there are pip projects), restore the package managers' download caches and install dependencies (`npm ci` or `npm install` for npm; pnpm installed and then `pnpm install --frozen-lockfile`; `python -m pip install -r ...` in each pip project's folder; a comment to fill in for any other package manager). Line endings are LF; the last line is its digest.
+
+Also applies when `.github/workflows/ci.yml` is tracked, exactly as firescale wrote it, and older than the workflow firescale writes now: replace it with the new one. A low-severity finding says so.
 
 ### REPORT
 
-- After the starter is created: tell the user to review `.github/workflows/ci.yml` and add what the project needs before the verify step (services, secrets, other toolchains). If the install step is a comment, say so.
+- After the workflow is created or replaced: tell the user to review `.github/workflows/ci.yml` and add what the project needs before the verify step (services, secrets, other toolchains). If the install step is a comment, say so. Once they edit it, firescale never rewrites it.
 - A workflow or another CI config that exists but is not tracked by git: tell the user to `git add` it. Do not replace it.
 - A CI config that git tracks but that is missing from disk: tell the user to restore it with `git restore <file>` or to commit its deletion. Do not create a new one.
 - A `.gitignore` rule that ignores `.github/workflows/ci.yml`: tell the user. Do not force-add the file.
 - Workflows exist but none runs on pull requests: add `pull_request:` under `on:` in the most suitable one, change nothing else in it, and report which file you changed. `fscale fix` never does this.
-- Do not add secrets, deploy steps or paths outside `.github/workflows/`.
+- Do not add secrets, deploy steps or paths outside `.github/workflows/`. Never use `pull_request_target`, and never add a cache save to the pull request job.
 
 ## Verify
 

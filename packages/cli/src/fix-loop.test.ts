@@ -337,7 +337,9 @@ describe('every built-in fix is idempotent through the loop', () => {
     });
     const after = await snapshot();
     expect(after.example).toContain('API_URL');
-    expect(after.workflow).toContain('- run: npx firescale verify\n');
+    expect(after.workflow).toContain(
+      '- run: npx firescale verify --jobs 2 --shared-cache .firescale/shared\n',
+    );
     expect(after.readme).toContain('# demo\n');
     expect((after.tracked ?? '').split(',')).toEqual(
       expect.arrayContaining(['.github/workflows/ci.yml', 'README.md']),
