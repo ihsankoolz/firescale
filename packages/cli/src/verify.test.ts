@@ -335,6 +335,65 @@ describe('fscale verify', () => {
   });
 });
 
+describe('lint and typecheck on a package that is not installed', () => {
+  /** What ESLint 9 prints when its flat config imports a package that is not installed. */
+  const ESLINT_MISSING = [
+    "const path = require('node:path');",
+    "const config = path.join(process.cwd(), 'eslint.config.js');",
+    "console.error('\\nOops! Something went wrong! :(\\n\\nESLint: 9.9.0\\n');",
+    "console.error(`Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@eslint/js' imported from ${config}`);",
+    "console.error('    at packageResolve (node:internal/modules/esm/resolve:854:9)');",
+    'process.exit(2);',
+    '',
+  ].join('\n');
+
+  function lintRepo(extra: Record<string, string> = {}): Record<string, string> {
+    return {
+      'firescale.config.json': JSON.stringify({
+        verify: { lint: 'node lint.cjs', typecheck: false, test: false },
+      }),
+      'package.json': JSON.stringify({
+        name: 'web',
+        private: true,
+        devDependencies: { '@eslint/js': '9.9.0', eslint: '9.9.0' },
+      }),
+      'package-lock.json': '{}\n',
+      'eslint.config.js':
+        "import js from '@eslint/js';\nexport default [js.configs.recommended];\n",
+      'lint.cjs': ESLINT_MISSING,
+      ...extra,
+    };
+  }
+
+  it('Lint that fails on a missing package is setup needed, not failed', async () => {
+    const repo = await fixtures.create({ files: lintRepo() });
+    const result = await runCli(['verify'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout.split('\n')[0]).toBe('verify: SETUP NEEDED for lint');
+    expect(result.stdout).toContain("the package '@eslint/js' is not installed");
+    expect(result.stdout).toContain('Do not change code for it.');
+    // npm ci, not npm install: the lockfile stays as it is.
+    expect(result.stdout).toContain('Set it up: npm ci\nThen run again: node lint.cjs\n');
+    expect(result.stdout).not.toContain('Fix the failure');
+
+    const json = await validate((await runCli(['verify', '--json'], repo.root)).stdout);
+    expect(json.result).toBe('setup-needed');
+    const lint = json.steps.find((step) => step.name === 'lint');
+    expect(lint?.status).toBe('setup-needed');
+    expect((lint as { fix?: string } | undefined)?.fix).toBe('npm ci');
+  });
+
+  it('is a normal failure when the package is installed', async () => {
+    const repo = await fixtures.create({
+      files: lintRepo({ 'node_modules/@eslint/js/package.json': '{"name":"@eslint/js"}' }),
+    });
+    const result = await runCli(['verify'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout.split('\n')[0]).toBe('verify: FAILED at lint');
+    expect(result.stdout).toContain('Fix the failure, then run again: node lint.cjs');
+  });
+});
+
 describe('fscale verify in a repo with projects in subfolders', () => {
   /** The course project, with stand-ins for python, npx and npm on the PATH. */
   async function courseProject(config?: object) {
