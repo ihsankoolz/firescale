@@ -508,6 +508,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
                 skipped,
                 skipped_rows: 0,
                 why,
+                marker: false,
                 focused,
                 uses,
                 weight,

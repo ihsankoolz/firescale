@@ -180,6 +180,11 @@ pub struct TestCase {
     /// Why it does not run when no marker says so: `"its body does
     /// nothing"`, `"after a return"`, `"inside if (false)"`.
     pub why: Option<&'static str>,
+    /// Not a test but something that keeps tests from running: a
+    /// `collect_ignore` entry, an autouse fixture that skips. It counts
+    /// with the skips only, so adding one is `test-skipped` and removing
+    /// one (running those tests again) is no finding.
+    pub marker: bool,
     /// `.only`, `f…`, or inside a focused `describe`: the file's other tests
     /// do not run.
     pub focused: bool,
@@ -628,7 +633,7 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
                     counts.excused_tests += test.weight;
                     continue;
                 }
-                if count_tests {
+                if count_tests && !test.marker {
                     counts.base_tests += test.weight;
                     for _ in 0..test.weight {
                         base_ids.push((test.id.clone(), path.clone(), test.line));
@@ -669,7 +674,7 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
         }
         if let Some(read) = head_file {
             for test in &read.tests {
-                if count_tests {
+                if count_tests && !test.marker {
                     counts.head_tests += test.weight;
                     *head_ids.entry(test.id.clone()).or_default() += test.weight;
                 }

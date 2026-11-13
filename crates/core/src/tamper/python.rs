@@ -4,11 +4,20 @@
 //! - Tests: `def test*` at module level, and `def test*` methods of a class
 //!   named `Test*` or one whose superclass ends with `TestCase`.
 //! - Skips: `@pytest.mark.skip`, `skipif`, `xfail`, `unittest.skip…` on the
-//!   test or its classes, `pytestmark`, a `pytest.skip(…)` or
-//!   `self.skipTest(…)` first, a body that does nothing, a definition that
-//!   never runs.
-//! - Assertions: `assert`, any `…assert…(…)` call, `pytest.raises` and
-//!   `pytest.warns`; not those that never run or cannot fail.
+//!   test or its classes, a skip mark given a name in the module
+//!   (`needs_db = pytest.mark.skipif(…)`), `pytestmark`, `__test__ = False`,
+//!   a module-level `pytest.importorskip(…)`, a `pytest.skip(…)` or
+//!   `self.skipTest(…)` first in the test or in its class's `setUp`, a body
+//!   that does nothing (unless a decorator pytest does not know may supply
+//!   it), a definition that never runs (after a module-level skip).
+//! - Pseudo-tests, always skipped: each entry of `collect_ignore` and
+//!   `collect_ignore_glob` (conftest.py), and an autouse fixture that calls
+//!   skip first: adding one skips tests the file does not name.
+//! - Assertions: `assert`, any `…assert…(…)` call, `self.fail(…)`,
+//!   `pytest.fail(…)`, `pytest.raises` and `pytest.warns`; not those that
+//!   never run or certainly pass (`assert True`, `assert 1 == 1`,
+//!   `assert (x, "message")`). One that certainly fails (`assert False`)
+//!   counts: it is how a test says "never reach here".
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,8 +35,19 @@ const PYTEST_SKIPS: [&str; 3] = ["skip", "skipif", "xfail"];
 /// unittest decorators that do the same.
 const UNITTEST_SKIPS: [&str; 4] = ["skip", "skipIf", "skipUnless", "expectedFailure"];
 
-/// Values that are the same on every run: an `assert` of one of these, or
-/// `self.assertTrue(True)`, cannot fail.
+/// The methods whose first statement, when it skips, skips every test of
+/// their class.
+const SETUPS: [&str; 4] = ["setUp", "setUpClass", "setup_method", "setup_class"];
+/// Why the tests of a module or class that sets `__test__ = False` do not
+/// run.
+const TEST_FALSE: &str = "__test__ = False";
+/// The conftest.py variables that keep pytest from collecting files.
+const IGNORES: [&str; 2] = ["collect_ignore", "collect_ignore_glob"];
+/// Splats in a literal: a list made of them alone may be empty.
+const SPLATS: [&str; 3] = ["list_splat", "parenthesized_list_splat", "dictionary_splat"];
+
+/// Values that are the same on every run: an `assert` comparing two of
+/// these that are written the same, or `self.assertTrue(True)`, cannot fail.
 const LITERALS: [&str; 20] = [
     "integer",
     "float",
@@ -63,8 +83,21 @@ const GRAMMAR: Grammar = Grammar {
 };
 
 /// True for a statement after which its block does not run:
-/// `pytest.skip(…)`, `pytest.xfail(…)`, `self.skipTest(…)`.
+/// `pytest.skip(…)`, `pytest.xfail(…)`, `self.skipTest(…)`, `raise
+/// unittest.SkipTest(…)` (also `SkipTest(…)`, `pytest.skip.Exception(…)`).
+/// At module level, the definitions after one are never collected.
 fn stops(statement: Node<'_>, src: &[u8]) -> bool {
+    if statement.kind() == "raise_statement" {
+        return children(statement)
+            .first()
+            .and_then(|raised| mark_name(*raised, src))
+            .is_some_and(|path| {
+                matches!(
+                    path.iter().map(String::as_str).collect::<Vec<_>>()[..],
+                    ["unittest", "SkipTest"] | ["SkipTest"] | ["pytest", "skip", "Exception"]
+                )
+            });
+    }
     called(statement, src).is_some_and(|path| {
         matches!(
             path.iter().map(String::as_str).collect::<Vec<_>>()[..],
@@ -145,13 +178,66 @@ fn called(statement: Node<'_>, src: &[u8]) -> Option<Vec<String>> {
     dotted(call.child_by_field_name("function")?, src)
 }
 
-/// What the file's imports bind: for `from X import a as b`, `b` → (`X`,
-/// `a`); for `import X as Y`, `Y` → (`X`, `""`).
-struct Names {
-    bound: BTreeMap<String, (String, String)>,
+/// The name and value of a statement `name = value` (also `name: T =
+/// value`).
+fn assigned<'t>(statement: Node<'t>, src: &[u8]) -> Option<(String, Node<'t>)> {
+    if statement.kind() != "expression_statement" {
+        return None;
+    }
+    let assignment = children(statement)
+        .into_iter()
+        .next()
+        .filter(|inner| inner.kind() == "assignment")?;
+    let left = assignment
+        .child_by_field_name("left")
+        .filter(|left| left.kind() == "identifier")?;
+    Some((
+        text(left, src).to_owned(),
+        assignment.child_by_field_name("right")?,
+    ))
 }
 
-impl Names {
+/// What the file's imports bind: for `from X import a as b`, `b` → (`X`,
+/// `a`); for `import X as Y`, `Y` → (`X`, `""`). And what its module-level
+/// assignments bind that the reader looks at.
+struct Names<'t> {
+    bound: BTreeMap<String, (String, String)>,
+    /// Names given a skip mark at module level: `needs_db =
+    /// pytest.mark.skipif(…)`, `slow = pytest.mark.skip`.
+    skip_marks: BTreeSet<String>,
+    /// Names assigned once at module level, to a list or tuple literal:
+    /// `CASES = [(1, 2), (3, 4)]`.
+    constants: BTreeMap<String, Node<'t>>,
+}
+
+impl<'t> Names<'t> {
+    /// Reads the module-level assignments of named skip marks and
+    /// constants, in order, so a name given another skip mark's name is one
+    /// too.
+    fn read_module(&mut self, root: Node<'t>, src: &[u8]) {
+        let mut times: BTreeMap<String, usize> = BTreeMap::new();
+        let mut values: BTreeMap<String, Node<'t>> = BTreeMap::new();
+        for statement in children(root) {
+            let Some((name, value)) = assigned(statement, src) else {
+                continue;
+            };
+            if mark_name(value, src).is_some_and(|path| self.is_skip(&path)) {
+                self.skip_marks.insert(name.clone());
+            } else {
+                self.skip_marks.remove(&name);
+            }
+            *times.entry(name.clone()).or_default() += 1;
+            values.insert(name, value);
+        }
+        self.constants = values
+            .into_iter()
+            .filter(|(name, value)| {
+                times.get(name) == Some(&1)
+                    && matches!(value.kind(), "list" | "tuple" | "expression_list")
+            })
+            .collect();
+    }
+
     /// True when `name` is the module `module` (`pytest`, or an alias of it).
     fn is_module(&self, name: &str, module: &str) -> bool {
         name == module
@@ -198,9 +284,23 @@ impl Names {
             return true;
         }
         before.is_empty()
-            && self
-                .imported_from(last, "unittest")
-                .is_some_and(|original| UNITTEST_SKIPS.contains(&original))
+            && (self.skip_marks.contains(last)
+                || self
+                    .imported_from(last, "unittest")
+                    .is_some_and(|original| UNITTEST_SKIPS.contains(&original)))
+    }
+
+    /// True for a decorator pytest or unittest knows, that does not supply
+    /// a test's body: a pytest mark, `pytest.fixture`, a unittest skip, a
+    /// named skip mark. Any other (pytest-bdd's `@scenario(…)`) may.
+    fn is_known_decorator(&self, decorator: Node<'_>, src: &[u8]) -> bool {
+        mark_name(decorator, src).is_some_and(|path| {
+            self.is_skip(&path)
+                || self.is_pytest(&path, &["fixture"])
+                || path
+                    .split_last()
+                    .is_some_and(|(_, before)| before.iter().any(|part| part == "mark"))
+        })
     }
 
     /// True for an expression that is a skip mark, or a list or tuple
@@ -217,7 +317,7 @@ impl Names {
 
 /// The module part and the name part of every import, with the spec each
 /// name stands for in [`TestFile::imports`].
-fn imports(root: Node<'_>, src: &[u8]) -> (BTreeMap<String, String>, Names) {
+fn imports<'t>(root: Node<'t>, src: &[u8]) -> (BTreeMap<String, String>, Names<'t>) {
     let mut specs = BTreeMap::new();
     let mut bound = BTreeMap::new();
     walk(root, |node| match node.kind() {
@@ -260,7 +360,14 @@ fn imports(root: Node<'_>, src: &[u8]) -> (BTreeMap<String, String>, Names) {
         "future_import_statement" => false,
         _ => true,
     });
-    (specs, Names { bound })
+    (
+        specs,
+        Names {
+            bound,
+            skip_marks: BTreeSet::new(),
+            constants: BTreeMap::new(),
+        },
+    )
 }
 
 /// A `dotted_name`, or an `aliased_import`'s name and alias.
@@ -375,7 +482,7 @@ fn arguments<'t>(call: Node<'t>, src: &[u8]) -> (Vec<Node<'t>>, BTreeMap<String,
 /// For a `@pytest.mark.parametrize(names, values)` decorator: its rows,
 /// and how many of them are a `pytest.param(…, marks=<a skip>)`. `None` for
 /// any other decorator.
-fn parametrize(decorator: Node<'_>, src: &[u8], names: &Names) -> Option<(usize, usize)> {
+fn parametrize(decorator: Node<'_>, src: &[u8], names: &Names<'_>) -> Option<(usize, usize)> {
     if decorator.kind() != "call" {
         return None;
     }
@@ -389,7 +496,17 @@ fn parametrize(decorator: Node<'_>, src: &[u8], names: &Names) -> Option<(usize,
         .get(1)
         .copied()
         .or_else(|| keywords.get("argvalues").copied());
-    let Some(values) = values.filter(|values| matches!(values.kind(), "list" | "tuple")) else {
+    // A bare name: the list or tuple a module-level assignment gives it.
+    let values = values.and_then(|values| {
+        if values.kind() == "identifier" {
+            names.constants.get(text(values, src)).copied()
+        } else {
+            Some(values)
+        }
+    });
+    let Some(values) =
+        values.filter(|values| matches!(values.kind(), "list" | "tuple" | "expression_list"))
+    else {
         return Some((1, 0));
     };
     let rows = children(values);
@@ -427,29 +544,216 @@ fn is_test_class(class: Node<'_>, name: &str, src: &[u8]) -> bool {
         })
 }
 
-/// Why a test function does not run when no marker says so.
+/// Why a test function does not run when no marker says so. `own_body` is
+/// false when a decorator pytest does not know may supply the body, so a
+/// body that does nothing is not a reason.
 fn not_run(
     function: Node<'_>,
     src: &[u8],
-    names: &Names,
+    names: &Names<'_>,
     dead: &reach::Dead,
+    own_body: bool,
 ) -> Option<&'static str> {
     let body = function.child_by_field_name("body")?;
-    let first = children(body)
-        .into_iter()
-        .find(|statement| !noop(*statement, src));
-    if first.is_some_and(|statement| calls_skip(statement, src, names)) {
+    if first_doing(body, src).is_some_and(|statement| calls_skip(statement, src, names)) {
         return Some("it calls skip first");
     }
-    if reach::does_nothing(body, src, &GRAMMAR) {
+    if own_body && reach::does_nothing(body, src, &GRAMMAR) {
         return Some("its body does nothing");
     }
     dead.why(function)
 }
 
+/// The first statement of a block that does something: not `pass`, `...`
+/// or a docstring.
+fn first_doing<'t>(body: Node<'t>, src: &[u8]) -> Option<Node<'t>> {
+    children(body)
+        .into_iter()
+        .find(|statement| !noop(*statement, src))
+}
+
+/// True for a function whose first statement that does something skips.
+fn skips_first(function: Node<'_>, src: &[u8], names: &Names<'_>) -> bool {
+    function
+        .child_by_field_name("body")
+        .and_then(|body| first_doing(body, src))
+        .is_some_and(|statement| calls_skip(statement, src, names))
+}
+
+/// True for a class body with a `setUp`, `setUpClass`, `setup_method` or
+/// `setup_class` that skips first: none of the class's tests run.
+fn setup_skips(body: Node<'_>, src: &[u8], names: &Names<'_>) -> bool {
+    children(body).into_iter().any(|statement| {
+        let function = if statement.kind() == "decorated_definition" {
+            statement.child_by_field_name("definition")
+        } else {
+            Some(statement)
+        };
+        function
+            .filter(|function| function.kind() == "function_definition")
+            .filter(|function| {
+                function
+                    .child_by_field_name("name")
+                    .is_some_and(|name| SETUPS.contains(&text(name, src)))
+            })
+            .is_some_and(|function| skips_first(function, src, names))
+    })
+}
+
+/// True for a module or class body that says `__test__ = False`: pytest
+/// collects none of its tests.
+fn not_collected(body: Node<'_>, src: &[u8]) -> bool {
+    children(body).into_iter().any(|statement| {
+        assigned(statement, src)
+            .is_some_and(|(name, value)| name == "__test__" && value.kind() == "false")
+    })
+}
+
+/// True for a module that calls `pytest.importorskip(…)` at module level,
+/// as a statement or in an assignment: its tests are skipped when the
+/// module is missing.
+fn imports_or_skips(root: Node<'_>, src: &[u8], names: &Names<'_>) -> bool {
+    let is_importorskip = |node: Node<'_>| {
+        node.kind() == "call"
+            && node
+                .child_by_field_name("function")
+                .and_then(|function| dotted(function, src))
+                .is_some_and(|path| names.is_pytest(&path, &["importorskip"]))
+    };
+    children(root).into_iter().any(|statement| {
+        if statement.kind() != "expression_statement" {
+            return false;
+        }
+        children(statement)
+            .first()
+            .is_some_and(|inner| is_importorskip(*inner))
+            || assigned(statement, src).is_some_and(|(_, value)| is_importorskip(value))
+    })
+}
+
+/// True for `@pytest.fixture(autouse=True)` (or `fixture` imported from
+/// pytest) on a function that skips first: every test it reaches is
+/// skipped.
+fn autouse_skips(function: Node<'_>, src: &[u8], names: &Names<'_>) -> bool {
+    decorators(function).into_iter().any(|decorator| {
+        decorator.kind() == "call"
+            && decorator
+                .child_by_field_name("function")
+                .and_then(|callee| dotted(callee, src))
+                .is_some_and(|path| names.is_pytest(&path, &["fixture"]))
+            && arguments(decorator, src)
+                .1
+                .get("autouse")
+                .is_some_and(|value| value.kind() == "true")
+    }) && skips_first(function, src, names)
+}
+
+/// The text of a string literal, or of literals written next to each
+/// other, escapes as written; `None` for an f-string with a value in it or
+/// anything else.
+fn string_value(node: Node<'_>, src: &[u8]) -> Option<String> {
+    match node.kind() {
+        "string" => {
+            let mut value = String::new();
+            for part in children(node) {
+                match part.kind() {
+                    "string_content" => value.push_str(text(part, src)),
+                    "interpolation" => return None,
+                    _ => {}
+                }
+            }
+            Some(value)
+        }
+        "concatenated_string" => {
+            let mut value = String::new();
+            for part in children(node) {
+                value.push_str(&string_value(part, src)?);
+            }
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
+/// The string entries a module-level statement adds to `collect_ignore`
+/// or `collect_ignore_glob`: `= [...]`, `+= [...]`, `.append("…")`,
+/// `.extend([...])`, `.insert(0, "…")`. Each with the variable's name.
+fn ignored_entries<'t>(statement: Node<'t>, src: &[u8], found: &mut Vec<(&'static str, Node<'t>)>) {
+    let (variable, mut stack) = match statement.kind() {
+        "assignment" | "augmented_assignment" => {
+            let (Some(left), Some(right)) = (
+                statement.child_by_field_name("left"),
+                statement.child_by_field_name("right"),
+            ) else {
+                return;
+            };
+            (text(left, src), vec![right])
+        }
+        "call" => {
+            let Some(function) = statement
+                .child_by_field_name("function")
+                .filter(|function| function.kind() == "attribute")
+            else {
+                return;
+            };
+            let (Some(object), Some(method)) = (
+                function.child_by_field_name("object"),
+                function.child_by_field_name("attribute"),
+            ) else {
+                return;
+            };
+            if !matches!(text(method, src), "append" | "extend" | "insert") {
+                return;
+            }
+            let mut positional = arguments(statement, src).0;
+            positional.reverse();
+            (text(object, src), positional)
+        }
+        _ => return,
+    };
+    let Some(variable) = IGNORES.iter().copied().find(|name| *name == variable) else {
+        return;
+    };
+    while let Some(value) = stack.pop() {
+        match value.kind() {
+            "string" | "concatenated_string" => found.push((variable, value)),
+            "list"
+            | "tuple"
+            | "set"
+            | "expression_list"
+            | "parenthesized_expression"
+            | "binary_operator" => stack.extend(children(value).into_iter().rev()),
+            _ => {}
+        }
+    }
+}
+
+/// Every string entry of `collect_ignore` and `collect_ignore_glob` at
+/// module level (also inside a module-level `if` or `try`), that runs.
+fn collect_ignored<'t>(
+    root: Node<'t>,
+    src: &[u8],
+    dead: &reach::Dead,
+) -> Vec<(&'static str, Node<'t>)> {
+    let mut found = Vec::new();
+    walk(root, |node| match node.kind() {
+        "function_definition" | "class_definition" | "lambda" => false,
+        "expression_statement" => {
+            if dead.why(node).is_none() {
+                if let Some(inner) = children(node).into_iter().next() {
+                    ignored_entries(inner, src, &mut found);
+                }
+            }
+            false
+        }
+        _ => true,
+    });
+    found
+}
+
 /// True for `pytest.skip(…)`, `pytest.xfail(…)`, `skip(…)` imported from
 /// pytest, `self.skipTest(…)`, or `raise unittest.SkipTest(…)`.
-fn calls_skip(statement: Node<'_>, src: &[u8], names: &Names) -> bool {
+fn calls_skip(statement: Node<'_>, src: &[u8], names: &Names<'_>) -> bool {
     if statement.kind() == "raise_statement" {
         return children(statement).first().is_some_and(|raised| {
             mark_name(*raised, src)
@@ -465,9 +769,12 @@ fn calls_skip(statement: Node<'_>, src: &[u8], names: &Names) -> bool {
 
 /// Whether a call is an assertion, and whether it can fail. `None` for a
 /// call that is not one.
-fn call_assertion(call: Node<'_>, src: &[u8], names: &Names) -> Option<bool> {
+fn call_assertion(call: Node<'_>, src: &[u8], names: &Names<'_>) -> Option<bool> {
     let function = call.child_by_field_name("function")?;
-    if dotted(function, src).is_some_and(|path| names.is_pytest(&path, &["raises", "warns"])) {
+    if dotted(function, src).is_some_and(|path| {
+        names.is_pytest(&path, &["raises", "warns", "fail"])
+            || matches!(&path[..], [receiver, method] if receiver == "self" && method == "fail")
+    }) {
         return Some(true);
     }
     let (last, receiver) = match function.kind() {
@@ -489,15 +796,159 @@ fn call_assertion(call: Node<'_>, src: &[u8], names: &Names) -> Option<bool> {
         && positional
             .iter()
             .all(|argument| reach::constant(*argument, &LITERALS));
-    Some(!constant)
+    let passes = constant
+        && match last {
+            "assertTrue" => positional
+                .first()
+                .is_some_and(|value| truth(*value, src) == Some(true)),
+            "assertFalse" => positional
+                .first()
+                .is_some_and(|value| truth(*value, src) == Some(false)),
+            "assertEqual" | "assertEquals" | "assertIs" => match positional[..] {
+                [a, b, ..] => same_literal(a, b, src, last == "assertIs"),
+                _ => false,
+            },
+            _ => false,
+        };
+    Some(!passes)
 }
 
-/// True for an `assert` statement that can fail: its condition is not a
-/// literal. The message after the comma is not looked at.
-fn assert_can_fail(statement: Node<'_>) -> bool {
+/// True for an `assert` statement that can fail: its condition does not
+/// certainly pass. The message after the comma is not looked at. `assert
+/// False` can: it is how a test says "never reach here".
+fn assert_can_fail(statement: Node<'_>, src: &[u8]) -> bool {
     children(statement)
         .first()
-        .is_some_and(|condition| !reach::constant(*condition, &LITERALS))
+        .is_some_and(|condition| !certainly_passes(*condition, src))
+}
+
+/// The expression inside any parentheses around it, at most
+/// [`MAX_CHAIN`] deep.
+fn unwrap_parentheses(node: Node<'_>) -> Node<'_> {
+    let mut at = node;
+    for _ in 0..MAX_CHAIN {
+        if at.kind() != "parenthesized_expression" {
+            break;
+        }
+        match children(at)[..] {
+            [inner] => at = inner,
+            _ => break,
+        }
+    }
+    at
+}
+
+/// True for an `assert` condition that passes on every run: a truthy
+/// literal, a non-empty tuple of anything (`assert (x == 3, "message")`),
+/// or `a == b` / `a is b` of two literals written the same.
+fn certainly_passes(condition: Node<'_>, src: &[u8]) -> bool {
+    if truth(condition, src) == Some(true) {
+        return true;
+    }
+    let comparison = unwrap_parentheses(condition);
+    if comparison.kind() != "comparison_operator" {
+        return false;
+    }
+    let [a, b] = children(comparison)[..] else {
+        return false;
+    };
+    let mut cursor = comparison.walk();
+    let operators: Vec<&str> = comparison
+        .children_by_field_name("operators", &mut cursor)
+        .map(|operator| text(operator, src))
+        .collect();
+    match operators[..] {
+        ["=="] => same_literal(a, b, src, false),
+        ["is"] => same_literal(a, b, src, true),
+        _ => false,
+    }
+}
+
+/// True for two literal values written the same, white space aside: they
+/// are equal. For `is`, not when a list literal is in them: two lists are
+/// never the same object.
+fn same_literal(a: Node<'_>, b: Node<'_>, src: &[u8], identity: bool) -> bool {
+    let squeezed = |node: Node<'_>| -> String { text(node, src).split_whitespace().collect() };
+    let has_list = |node: Node<'_>| {
+        let mut found = false;
+        walk(node, |inner| {
+            found |= inner.kind() == "list";
+            !found
+        });
+        found
+    };
+    reach::constant(a, &LITERALS)
+        && reach::constant(b, &LITERALS)
+        && squeezed(a) == squeezed(b)
+        && !(identity && (has_list(a) || has_list(b)))
+}
+
+/// Whether a value is certainly truthy (`Some(true)`: `True`, a non-zero
+/// number, a non-empty string, a non-empty list, tuple, set or dict of
+/// anything), certainly falsy (`Some(false)`: `False`, `None`, zero, `""`,
+/// `[]`, `()`, `{}`), through `not` and parentheses; `None` when it is not
+/// known from the text.
+fn truth(node: Node<'_>, src: &[u8]) -> Option<bool> {
+    let mut at = node;
+    let mut negated = false;
+    for _ in 0..MAX_CHAIN {
+        match at.kind() {
+            "parenthesized_expression" => match children(at)[..] {
+                [inner] => at = inner,
+                _ => return None,
+            },
+            "not_operator" => {
+                negated = !negated;
+                at = at.child_by_field_name("argument")?;
+            }
+            _ => break,
+        }
+    }
+    let value = match at.kind() {
+        "true" => true,
+        "false" | "none" => false,
+        "integer" | "float" => !is_zero(text(at, src)),
+        "unary_operator" => {
+            let operator = at.child_by_field_name("operator").map(|op| text(op, src));
+            let operand = at.child_by_field_name("argument")?;
+            if !matches!(operator, Some("-" | "+"))
+                || !matches!(operand.kind(), "integer" | "float")
+            {
+                return None;
+            }
+            !is_zero(text(operand, src))
+        }
+        "string" | "concatenated_string" => !string_value(at, src)?.is_empty(),
+        "tuple" | "list" | "set" | "dictionary" => {
+            let items = children(at);
+            if items.is_empty() {
+                false
+            } else if items.iter().all(|item| SPLATS.contains(&item.kind())) {
+                // `[*a]` is empty when `a` is.
+                return None;
+            } else {
+                true
+            }
+        }
+        _ => return None,
+    };
+    Some(value != negated)
+}
+
+/// True for a number literal that is zero: `0`, `0.0`, `.0`, `0x0`,
+/// `0e5`, `0j`.
+fn is_zero(literal: &str) -> bool {
+    let lower: String = literal
+        .chars()
+        .filter(|c| *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let lower = lower.trim_end_matches(['j', 'l']);
+    let digits = match lower.get(..2) {
+        Some("0x" | "0o" | "0b") => lower.get(2..).unwrap_or_default(),
+        _ => lower.split('e').next().unwrap_or(lower),
+    };
+    digits.chars().any(|c| c == '0') && digits.chars().all(|c| c == '0' || c == '.')
 }
 
 /// Reads the tests, skips and assertions of a Python test file.
@@ -512,7 +963,8 @@ pub(super) fn read(source: &str) -> TestFile {
     let src = source.as_bytes();
     let root = tree.root_node();
     let dead = reach::Dead::of(root, src, &GRAMMAR);
-    let (specs, names) = imports(root, src);
+    let (specs, mut names) = imports(root, src);
+    names.read_module(root, src);
     let mut file = TestFile {
         imports: specs,
         has_errors: root.has_error(),
@@ -526,9 +978,15 @@ pub(super) fn read(source: &str) -> TestFile {
             file.error_line.is_none() && node.has_error()
         });
     }
-    let module_skipped = pytestmark(root, src)
+    let mut module_skipped = pytestmark(root, src)
         .into_iter()
-        .any(|value| names.skips(value, src));
+        .any(|value| names.skips(value, src))
+        || imports_or_skips(root, src, &names);
+    let mut module_why = None;
+    if not_collected(root, src) {
+        module_skipped = true;
+        module_why = Some(TEST_FALSE);
+    }
 
     // Each class and function open around the node being visited.
     enum Scope {
@@ -537,6 +995,8 @@ pub(super) fn read(source: &str) -> TestFile {
             /// It and every class around it can hold tests.
             holds_tests: bool,
             skipped: bool,
+            /// Why, when no marker says so.
+            why: Option<&'static str>,
             /// The rows and skipped rows of its parametrize decorators and
             /// its classes'.
             rows: Vec<(usize, usize)>,
@@ -560,15 +1020,16 @@ pub(super) fn read(source: &str) -> TestFile {
                     .map_or("", |name| text(name, src))
                     .to_owned();
                 let outer = open.last().map(|(_, scope)| scope);
-                let (outer_holds, outer_skipped, mut rows) = match outer {
-                    None => (true, false, Vec::new()),
+                let (outer_holds, outer_skipped, mut why, mut rows) = match outer {
+                    None => (true, false, None, Vec::new()),
                     Some(Scope::Class {
                         holds_tests,
                         skipped,
+                        why,
                         rows,
                         ..
-                    }) => (*holds_tests, *skipped, rows.clone()),
-                    Some(Scope::Function { .. }) => (false, false, Vec::new()),
+                    }) => (*holds_tests, *skipped, *why, rows.clone()),
+                    Some(Scope::Function { .. }) => (false, false, None, Vec::new()),
                 };
                 let mut skipped = outer_skipped;
                 for decorator in decorators(node) {
@@ -582,6 +1043,14 @@ pub(super) fn read(source: &str) -> TestFile {
                     skipped |= pytestmark(body, src)
                         .into_iter()
                         .any(|value| names.skips(value, src));
+                    if not_collected(body, src) {
+                        skipped = true;
+                        why = why.or(Some(TEST_FALSE));
+                    }
+                    if setup_skips(body, src, &names) {
+                        skipped = true;
+                        why = why.or(Some("its class's setup calls skip first"));
+                    }
                 }
                 let holds_tests = outer_holds && is_test_class(node, &name, src);
                 open.push((
@@ -590,6 +1059,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         name,
                         holds_tests,
                         skipped,
+                        why,
                         rows,
                     },
                 ));
@@ -598,19 +1068,22 @@ pub(super) fn read(source: &str) -> TestFile {
                 let name = node
                     .child_by_field_name("name")
                     .map_or("", |name| text(name, src));
-                let (is_test, class_skipped, mut rows) = match open.last().map(|(_, scope)| scope) {
-                    None => (true, false, Vec::new()),
-                    Some(Scope::Class {
-                        holds_tests,
-                        skipped,
-                        rows,
-                        ..
-                    }) => (*holds_tests, *skipped, rows.clone()),
-                    Some(Scope::Function { .. }) => (false, false, Vec::new()),
-                };
+                let (is_test, class_skipped, class_why, mut rows) =
+                    match open.last().map(|(_, scope)| scope) {
+                        None => (true, false, None, Vec::new()),
+                        Some(Scope::Class {
+                            holds_tests,
+                            skipped,
+                            why,
+                            rows,
+                            ..
+                        }) => (*holds_tests, *skipped, *why, rows.clone()),
+                        Some(Scope::Function { .. }) => (false, false, None, Vec::new()),
+                    };
                 let mut test = None;
                 if is_test && name.starts_with("test") {
                     let mut skipped = module_skipped || class_skipped;
+                    let mut own_body = true;
                     for decorator in decorators(node) {
                         if let Some(table) = parametrize(decorator, src, &names) {
                             rows.push(table);
@@ -618,11 +1091,12 @@ pub(super) fn read(source: &str) -> TestFile {
                         {
                             skipped = true;
                         }
+                        own_body &= names.is_known_decorator(decorator, src);
                     }
                     let why = if skipped {
-                        None
+                        class_why.or(module_why)
                     } else {
-                        not_run(node, src, &names, &dead)
+                        not_run(node, src, &names, &dead, own_body)
                     };
                     skipped |= why.is_some();
                     let weight = rows
@@ -662,9 +1136,22 @@ pub(super) fn read(source: &str) -> TestFile {
                             weight.saturating_sub(running)
                         },
                         why,
+                        marker: false,
                         focused: false,
                         uses,
                         weight,
+                    });
+                } else if dead.why(node).is_none() && autouse_skips(node, src, &names) {
+                    file.tests.push(TestCase {
+                        id: format!("autouse fixture {name}"),
+                        line: node.start_position().row + 1,
+                        skipped: true,
+                        skipped_rows: 0,
+                        why: Some("an autouse fixture skips every test it reaches"),
+                        marker: true,
+                        focused: false,
+                        uses: BTreeSet::new(),
+                        weight: 1,
                     });
                 }
                 // A function inside a test belongs to it.
@@ -678,7 +1165,7 @@ pub(super) fn read(source: &str) -> TestFile {
             }
             "assert_statement" | "call" => {
                 let can_fail = if node.kind() == "assert_statement" {
-                    Some(assert_can_fail(node))
+                    Some(assert_can_fail(node, src))
                 } else {
                     call_assertion(node, src, &names)
                 };
@@ -703,6 +1190,24 @@ pub(super) fn read(source: &str) -> TestFile {
         }
         true
     });
+    // Each file a conftest.py keeps pytest from collecting: one skipped
+    // pseudo-test per entry, so adding one is a skip and moving one is not.
+    for (variable, entry) in collect_ignored(root, src, &dead) {
+        let Some(value) = string_value(entry, src) else {
+            continue;
+        };
+        file.tests.push(TestCase {
+            id: format!("{variable}: {value}"),
+            line: entry.start_position().row + 1,
+            skipped: true,
+            skipped_rows: 0,
+            why: Some("collect_ignore in conftest.py"),
+            marker: true,
+            focused: false,
+            uses: BTreeSet::new(),
+            weight: 1,
+        });
+    }
     file
 }
 
@@ -1166,11 +1671,13 @@ def test_a(self, mock):
     self.fail_soon(1)
 "#,
         );
+        // `-1.5 == 3 * 2` is literals, but not written the same: it fails.
         assert_eq!(
             shapes(&file),
             [
                 "assertf\"{x}\"",
                 "assertx",
+                "self.assertEqual(-1.5,3*2,msg=reason)",
                 "self.assertEqual(x,3)",
                 "self.assertTrue(True,x)",
                 "mock.assert_called_once()",
@@ -1180,6 +1687,546 @@ def test_a(self, mock):
                 "self.assertRaises(ValueError,f)",
             ]
         );
+    }
+
+    #[test]
+    fn assertions_that_certainly_fail_count() {
+        let file = read(
+            r#"
+import pytest
+from pytest import fail
+
+def test_raises():
+    try:
+        parse("x")
+        assert False, "should raise"
+    except ValueError:
+        pass
+
+class T(unittest.TestCase):
+    def test_a(self):
+        assert 0
+        assert 0.0
+        assert None
+        assert ""
+        assert []
+        assert ()
+        assert {}
+        assert [*rest]
+        assert not True
+        assert 1 == 2
+        assert 1 != 1
+        assert 1 == 1 == 2
+        assert [] is []
+        assert 1 + 1 == 2
+        self.assertTrue(False)
+        self.assertTrue(0)
+        self.assertFalse(True)
+        self.assertFalse("x")
+        self.assertEqual(1, 2)
+        self.assertIs([], [])
+        self.assertIn(1, [1])
+        self.fail("unreachable")
+        pytest.fail("unreachable")
+        fail("unreachable")
+"#,
+        );
+        assert_eq!(
+            shapes(&file),
+            [
+                "assertFalse,\"shouldraise\"",
+                "assert0",
+                "assert0.0",
+                "assertNone",
+                "assert\"\"",
+                "assert[]",
+                "assert()",
+                "assert{}",
+                "assert[*rest]",
+                "assertnotTrue",
+                "assert1==2",
+                "assert1!=1",
+                "assert1==1==2",
+                "assert[]is[]",
+                "assert1+1==2",
+                "self.assertTrue(False)",
+                "self.assertTrue(0)",
+                "self.assertFalse(True)",
+                "self.assertFalse(\"x\")",
+                "self.assertEqual(1,2)",
+                "self.assertIs([],[])",
+                "self.assertIn(1,[1])",
+                "self.fail(\"unreachable\")",
+                "pytest.fail(\"unreachable\")",
+                "fail(\"unreachable\")",
+            ]
+        );
+        assert_eq!(file.assertions[0].test, Some(0));
+    }
+
+    #[test]
+    fn assertions_that_certainly_pass_are_not_counted() {
+        let file = read(
+            r#"
+class T(unittest.TestCase):
+    def test_a(self):
+        assert 1
+        assert -2.5
+        assert 0x10
+        assert 1e-3
+        assert "x" "y"
+        assert b"x"
+        assert [x]
+        assert {"a": 1}
+        assert {x}
+        assert (x == 3, "msg")
+        assert (total(cart), 3)
+        assert ((x, y))
+        assert not 0
+        assert not ""
+        assert None is None
+        assert "a" == "a"
+        assert (1, 2) == (1,  2)
+        assert [1] == [1]
+        self.assertTrue(1)
+        self.assertTrue("yes")
+        self.assertFalse(None)
+        self.assertFalse("")
+        self.assertFalse([])
+        self.assertEqual("a", "a")
+        self.assertEquals(1, 1)
+        self.assertIs(None, None)
+        other.fail("x")
+        self.fail_soon()
+        failing("x")
+"#,
+        );
+        assert_eq!(shapes(&file), Vec::<&str>::new());
+        // A tuple whose items are only splats may be empty, so it counts.
+        assert_eq!(
+            shapes(&read("def test_a():\n    assert (*xs,)\n")),
+            ["assert(*xs,)"]
+        );
+    }
+
+    #[test]
+    fn numbers_read_as_zero() {
+        for zero in [
+            "0", "00", "0.0", ".0", "0.", "0e5", "0E-3", "0x0", "0o0", "0b0", "0j", "0_0",
+        ] {
+            assert!(is_zero(zero), "{zero}");
+        }
+        for not_zero in ["1", "0.5", "1e-9", "0x10", "0xe", "0b1", "1j", "10", ""] {
+            assert!(!is_zero(not_zero), "{not_zero}");
+        }
+    }
+
+    #[test]
+    fn a_named_skip_mark_skips() {
+        let file = read(
+            r#"
+import pytest
+from pytest import mark
+
+needs_db = pytest.mark.skipif(True, reason="db")
+later = pytest.mark.skip
+flaky = mark.xfail(reason="flaky")
+also_later = later
+slow = pytest.mark.slow
+renamed = pytest.mark.skip
+renamed = pytest.mark.slow
+
+@needs_db
+def test_a():
+    assert f() == 1
+
+@later(reason="x")
+def test_b():
+    assert f() == 1
+
+@flaky
+class TestC:
+    def test_c(self):
+        assert f() == 1
+
+@also_later
+def test_d():
+    assert f() == 1
+
+@slow
+def test_e():
+    assert f() == 1
+
+@renamed
+def test_f():
+    assert f() == 1
+
+def helper():
+    local = pytest.mark.skip
+
+@local
+def test_g():
+    assert f() == 1
+
+@pytest.mark.parametrize("a", [1, pytest.param(2, marks=needs_db)])
+def test_h(a):
+    assert a
+"#,
+        );
+        assert_eq!(
+            ids(&file),
+            [
+                ("test_a", true),
+                ("test_b", true),
+                ("TestC::test_c", true),
+                ("test_d", true),
+                ("test_e", false),
+                ("test_f", false),
+                ("test_g", false),
+                ("test_h", false),
+            ]
+        );
+        assert_eq!(file.tests[7].skipped_rows, 1);
+        let module = read("import pytest\nwindows_only = pytest.mark.skipif(not WIN, reason=\"w\")\npytestmark = windows_only\n\ndef test_a():\n    assert f()\n");
+        assert_eq!(ids(&module), [("test_a", true)]);
+    }
+
+    #[test]
+    fn dunder_test_false_skips_the_module_or_the_class() {
+        let module = read("__test__ = False\n\ndef test_a():\n    assert f()\n\nclass TestB:\n    def test_b(self):\n        assert f()\n");
+        assert_eq!(ids(&module), [("test_a", true), ("TestB::test_b", true)]);
+        assert!(module
+            .tests
+            .iter()
+            .all(|test| test.why == Some("__test__ = False")));
+        let class = read("class TestA:\n    __test__ = False\n    def test_a(self):\n        assert f()\n\nclass TestB:\n    __test__ = True\n    def test_b(self):\n        assert f()\n\ndef test_c():\n    __test__ = False\n    assert f()\n");
+        assert_eq!(
+            ids(&class),
+            [
+                ("TestA::test_a", true),
+                ("TestB::test_b", false),
+                ("test_c", false)
+            ]
+        );
+        assert_eq!(class.tests[0].why, Some("__test__ = False"));
+    }
+
+    #[test]
+    fn a_module_level_importorskip_skips_the_module() {
+        for source in [
+            "import pytest\nnp = pytest.importorskip(\"numpy\")\n\ndef test_a():\n    assert np.ones(1)[0] == 1\n",
+            "import pytest\npytest.importorskip(\"numpy\", minversion=\"2\")\n\ndef test_a():\n    assert f()\n",
+            "from pytest import importorskip\nnp = importorskip(\"numpy\")\n\ndef test_a():\n    assert f()\n",
+        ] {
+            let file = read(source);
+            assert_eq!(ids(&file), [("test_a", true)], "{source}");
+            assert_eq!(file.tests[0].why, None);
+        }
+        // In a test, it is that test's business; elsewhere not pytest's.
+        for source in [
+            "import pytest\n\ndef test_a():\n    np = pytest.importorskip(\"numpy\")\n    assert np.ones(1)[0] == 1\n\ndef test_b():\n    assert f()\n",
+            "np = importorskip(\"numpy\")\n\ndef test_b():\n    assert f()\n",
+        ] {
+            let file = read(source);
+            assert!(file.tests.iter().all(|test| !test.skipped), "{source}");
+        }
+    }
+
+    #[test]
+    fn a_setup_that_skips_first_skips_the_class() {
+        let file = read(
+            r#"
+import unittest
+import pytest
+
+class A(unittest.TestCase):
+    def setUp(self):
+        """Not on CI."""
+        self.skipTest("not on CI")
+        self.db = connect()
+
+    def test_a(self):
+        self.assertEqual(f(), 1)
+
+class B(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        raise unittest.SkipTest("no db")
+
+    def test_b(self):
+        self.assertEqual(f(), 1)
+
+class TestC:
+    def setup_method(self, method):
+        pytest.skip("later")
+
+    def test_c(self):
+        assert f() == 1
+
+class D(unittest.TestCase):
+    def setUp(self):
+        self.db = connect()
+        if self.db is None:
+            self.skipTest("no db")
+
+    def test_d(self):
+        self.assertEqual(f(), 1)
+
+class TestE:
+    def helper(self):
+        pytest.skip("not setup")
+
+    def test_e(self):
+        assert f() == 1
+"#,
+        );
+        assert_eq!(
+            ids(&file),
+            [
+                ("A::test_a", true),
+                ("B::test_b", true),
+                ("TestC::test_c", true),
+                ("D::test_d", false),
+                ("TestE::test_e", false),
+            ]
+        );
+        assert_eq!(
+            file.tests[0].why,
+            Some("its class's setup calls skip first")
+        );
+    }
+
+    #[test]
+    fn a_module_level_skip_skips_what_follows() {
+        for source in [
+            "import unittest\n\ndef test_before():\n    assert f()\n\nraise unittest.SkipTest(\"posix only\")\n\ndef test_after():\n    assert f()\n\nclass TestAfter:\n    def test_m(self):\n        assert f()\n",
+            "from unittest import SkipTest\n\ndef test_before():\n    assert f()\n\nraise SkipTest\n\ndef test_after():\n    assert f()\n\nclass TestAfter:\n    def test_m(self):\n        assert f()\n",
+            "import pytest\n\ndef test_before():\n    assert f()\n\npytest.skip(\"posix only\", allow_module_level=True)\n\n@pytest.mark.slow\ndef test_after():\n    assert f()\n\nclass TestAfter:\n    def test_m(self):\n        assert f()\n",
+            "import pytest\n\ndef test_before():\n    assert f()\n\nraise pytest.skip.Exception(\"x\", allow_module_level=True)\n\ndef test_after():\n    assert f()\n\nclass TestAfter:\n    def test_m(self):\n        assert f()\n",
+        ] {
+            let file = read(source);
+            assert_eq!(
+                ids(&file),
+                [
+                    ("test_before", false),
+                    ("test_after", true),
+                    ("TestAfter::test_m", true)
+                ],
+                "{source}"
+            );
+            assert_eq!(file.tests[1].why, Some("after a skip"), "{source}");
+            assert_eq!(file.tests[2].why, Some("after a skip"), "{source}");
+            assert_eq!(file.assertions.len(), 1, "{source}");
+        }
+        // Only when the module can't be imported: the tests may run.
+        let file = read("import unittest\ntry:\n    import numpy\nexcept ImportError:\n    raise unittest.SkipTest(\"numpy\")\n\ndef test_a():\n    assert f()\n\nraise ValueError(\"not a skip\")\n\ndef test_b():\n    assert f()\n");
+        assert_eq!(ids(&file), [("test_a", false), ("test_b", false)]);
+    }
+
+    #[test]
+    fn collect_ignore_entries_are_skipped_pseudo_tests() {
+        let file = read(
+            r#"
+import sys
+
+collect_ignore = ["setup.py", "legacy/test_old.py"]
+collect_ignore_glob = ("*_slow.py",)
+collect_ignore += ["build"]
+collect_ignore.append("docs/conf.py")
+collect_ignore.extend(["a.py", f"{x}.py"])
+if sys.version_info < (3, 10):
+    collect_ignore.append("tests/test_match.py")
+if False:
+    collect_ignore.append("never.py")
+
+def pytest_configure(config):
+    collect_ignore.append("inside.py")
+
+ignored = ["not_this.py"]
+others.append("nor_this.py")
+"#,
+        );
+        let found: Vec<&str> = file.tests.iter().map(|test| test.id.as_str()).collect();
+        assert_eq!(
+            found,
+            [
+                "collect_ignore: setup.py",
+                "collect_ignore: legacy/test_old.py",
+                "collect_ignore_glob: *_slow.py",
+                "collect_ignore: build",
+                "collect_ignore: docs/conf.py",
+                "collect_ignore: a.py",
+                "collect_ignore: tests/test_match.py",
+            ]
+        );
+        assert!(file.tests.iter().all(|test| test.skipped
+            && test.weight == 1
+            && test.why == Some("collect_ignore in conftest.py")));
+        assert_eq!(file.tests[0].line, 4);
+    }
+
+    #[test]
+    fn an_autouse_fixture_that_skips_is_a_skipped_pseudo_test() {
+        let file = read(
+            r#"
+import pytest
+from pytest import fixture
+
+@pytest.fixture(autouse=True)
+def no_network():
+    """Network tests are off."""
+    pytest.skip("no network")
+
+@fixture(autouse=True, scope="session")
+def no_db():
+    raise unittest.SkipTest("no db")
+
+@pytest.fixture(autouse=True)
+def tmp_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    if not tmp_path.exists():
+        pytest.skip("no tmp")
+
+@pytest.fixture
+def skipper():
+    pytest.skip("asked for")
+
+@pytest.fixture(autouse=False)
+def off():
+    pytest.skip("x")
+
+@other.fixture(autouse=True)
+def not_pytest():
+    pytest.skip("x")
+"#,
+        );
+        let found: Vec<(&str, bool)> = ids(&file);
+        assert_eq!(
+            found,
+            [
+                ("autouse fixture no_network", true),
+                ("autouse fixture no_db", true)
+            ]
+        );
+        assert_eq!(
+            file.tests[0].why,
+            Some("an autouse fixture skips every test it reaches")
+        );
+        assert_eq!(file.tests[0].weight, 1);
+    }
+
+    #[test]
+    fn a_decorator_pytest_does_not_know_may_supply_the_body() {
+        let file = read(
+            r#"
+import pytest
+from pytest_bdd import scenario
+
+@scenario("cart.feature", "Add")
+def test_add():
+    pass
+
+@pytest.mark.slow
+def test_slow():
+    pass
+
+@pytest.mark.parametrize("a", [1])
+def test_rows(a):
+    """Nothing."""
+
+@pytest.mark.usefixtures("db")
+@scenario("cart.feature", "Remove")
+def test_remove():
+    pass
+
+@scenario("cart.feature", "Skip")
+def test_skip_first():
+    pytest.skip("later")
+"#,
+        );
+        assert_eq!(
+            ids(&file),
+            [
+                ("test_add", false),
+                ("test_slow", true),
+                ("test_rows", true),
+                ("test_remove", false),
+                ("test_skip_first", true),
+            ]
+        );
+        assert_eq!(file.tests[0].why, None);
+        assert_eq!(file.tests[1].why, Some("its body does nothing"));
+    }
+
+    #[test]
+    fn parametrize_rows_from_a_module_constant() {
+        let file = read(
+            r#"
+import pytest
+
+CASES = [(1, 2), (3, 4)]
+TUPLE = (1, 2, 3)
+BARE = 1, 2, 3, 4
+WITH_SKIP = [1, pytest.param(2, marks=pytest.mark.skip), 3]
+TWICE = [1]
+TWICE = [1, 2]
+CALLED = list(range(5))
+
+@pytest.mark.parametrize("a,b", CASES)
+def test_a(a, b):
+    assert a < b
+
+@pytest.mark.parametrize("a", TUPLE)
+def test_b(a):
+    assert a
+
+@pytest.mark.parametrize("a", argvalues=BARE)
+def test_c(a):
+    assert a
+
+@pytest.mark.parametrize("a", WITH_SKIP)
+def test_d(a):
+    assert a
+
+@pytest.mark.parametrize("a", TWICE)
+def test_e(a):
+    assert a
+
+@pytest.mark.parametrize("a", CALLED)
+def test_f(a):
+    assert a
+
+@pytest.mark.parametrize("a", UNKNOWN)
+def test_g(a):
+    assert a
+
+def helper():
+    LOCAL = [1, 2, 3]
+
+@pytest.mark.parametrize("a", LOCAL)
+def test_h(a):
+    assert a
+"#,
+        );
+        let weights: Vec<(usize, usize)> = file
+            .tests
+            .iter()
+            .map(|test| (test.weight, test.skipped_rows))
+            .collect();
+        assert_eq!(
+            weights,
+            [
+                (2, 0),
+                (3, 0),
+                (4, 0),
+                (3, 1),
+                (1, 0),
+                (1, 0),
+                (1, 0),
+                (1, 0)
+            ]
+        );
+        assert_eq!(file.assertions[0].weight, 2);
     }
 
     #[test]
@@ -1301,7 +2348,32 @@ def test_off(a):
             .map(|depth| format!("{}if x:\n", "    ".repeat(depth)))
             .collect();
         let _ = read(&format!("{nested}{}assert y\n", "    ".repeat(300)));
+        let nots = read(&format!(
+            "def test_a():\n    assert {}True\n",
+            "not ".repeat(5000)
+        ));
+        assert_eq!(nots.assertions.len(), 1);
+        let lists = read(&format!(
+            "collect_ignore = {}\"a.py\"{}\n",
+            "[".repeat(3000),
+            "]".repeat(3000)
+        ));
+        assert_eq!(lists.tests.len(), 1);
+        let sums = read(&format!(
+            "collect_ignore = [\"a\"]{}\n",
+            " + [\"b\"]".repeat(5000)
+        ));
+        assert_eq!(sums.tests.len(), 5001);
         for sample in [
+            "collect_ignore =",
+            "collect_ignore.append(",
+            "collect_ignore += 1",
+            "__test__ = False\n@",
+            "x = pytest.mark.skip\n@x(",
+            "@pytest.fixture(autouse=True)\ndef f(",
+            "assert",
+            "assert (",
+            "assert 0x",
             "",
             "\u{feff}",
             "@",
