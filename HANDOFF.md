@@ -4,10 +4,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**M19, blame-aware verify's base run, is in progress** (this session started 2026-11-13 07:06 UTC; it builds M18 to M21, one pull request each, and stops after M21).
+**M19, blame-aware verify's base run, is done in its pull request; M20 (per-test labels) is next** (this session started 2026-11-13 07:06 UTC; it builds M18 to M21, one pull request each, and stops after M21).
 
 - **Branch:** `claude/amazing-planck-g1745y` (the cloud session may push only to this branch; it is restarted from `main` after each merge, so each pull request has its own history).
-- **Done in this session:** M18, the local step cache (#28, ADR 0036).
+- **Done in this session:** M18, the local step cache (#28, ADR 0036); M19, the base run (ADR 0037).
 - **Done before this session:** M17 (#25), the M17 follow-up (#26) and the 0.2.1 fixes (#27, ADR 0034, 0035); the version is 0.2.1. The `v0.2.0` tag exists and 0.2.0 is on npm. `v0.2.1` has not been tagged.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
@@ -21,8 +21,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. **0.1.3 was released on 2026-11-12** and run on the course project on Windows: progress lines, setup detection, parallel projects and Ctrl+C worked, and no process was left behind.
 - **Done in the session of 2026-11-12 (evening):** M12 `doctor` and the two fixes from the 0.1.3 run (ADR 0025, 0026), M13 agent files (ADR 0027), M14 generators (ADR 0028), M15 Next.js pack (ADR 0029), M16 Python pack (ADR 0030), and the 0.2.0 version.
 - **Done in the session of 2026-11-12/13:** the plan update (ADR 0031) and M17, the project graph and affected verify (ADR 0032, ADR 0033).
-- **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036).
-- **Not started, in order:** M19 to M21 blame-aware verify (verify schema 6), M22 faster generated CI and a shared cache, M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
+- **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036); M19, blame-aware verify's base run (ADR 0037, verify schema 6).
+- **Not started, in order:** M20 and M21 blame-aware verify, M22 faster generated CI and a shared cache, M23 to M26 tamper guard, M27 guarded agent runner, M28 adapters and `fscale ledger`, M29 Supabase pack, M30 Expo pack. ADR 0031 has the table from the old numbers.
 
 ## How to resume
 
@@ -30,6 +30,14 @@ Current state of the project, so a new session can resume cold. Updated in every
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on M19, for whoever touches blame-aware verify (ADR 0037):
+
+- `crates/core/src/blame.rs`: `choose_base` (no base on a default branch without upstream), `compare` (never fails the run; labels by evidence), `run_in_worktree`, `Worktree` (links removed before the worktree), the base store (`.firescale/base/`, format 3, with signatures).
+- `pre-existing` needs `signature_within(head, base)` (`verify.rs`, `failure_signature`): never loosen that to "the base failed too". Every review found a way an environment difference turned into a pass.
+- Base steps run through `run_base_step` with `FSCALE_BASE_RUN=1`; the course stand-ins log ` [base]` then, and `stepCalls` leaves those out (`baseCalls` has them).
+- Every git command sets `GIT_OPTIONAL_LOCKS=0` (`git.rs`): a test checks the index bytes.
+- Test fixtures for blame work on a `feature` branch: on `main` with no upstream there is no base.
 
 Notes on M18, for whoever touches the step cache (ADR 0036):
 
