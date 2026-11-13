@@ -11,7 +11,7 @@
 //! docs/verify.md. Anything else, and anything that could be a mistake in the
 //! code (a module that the project itself holds), stays a normal failure.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Why a failed step looks like an environment that is not set up.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -778,6 +778,389 @@ fn login_failed(described: &str) -> SetupProblem {
     }
 }
 
+// --- Node packages that are not installed
+
+/// The package a bare import names: `react` for `react`, `vite` for
+/// `vite/client`, `@eslint/js` for `@eslint/js` and `@scope/x/y`. `None` for
+/// anything that is not a package name: a relative or absolute path, a
+/// drive letter, a Node built-in (`node:fs`), a subpath import (`#x`), or a
+/// path alias such as `@/components`, `~/x` or `$lib/x`.
+fn package_of(name: &str) -> Option<&str> {
+    let name = name.trim();
+    let valid = |part: &str| {
+        !part.is_empty()
+            && !part.starts_with('.')
+            && part
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
+            && !part.starts_with('~')
+    };
+    if name.contains(':') || name.contains('\\') {
+        return None;
+    }
+    if let Some(rest) = name.strip_prefix('@') {
+        let (scope, after) = rest.split_once('/')?;
+        let package = after.split('/').next().unwrap_or(after);
+        return (valid(scope) && valid(package)).then(|| &name[..scope.len() + package.len() + 2]);
+    }
+    let package = name.split('/').next().unwrap_or(name);
+    valid(package).then_some(package)
+}
+
+/// The package that ESLint loads for a shareable config named in `extends`:
+/// `next` and `next/core-web-vitals` are `eslint-config-next`, `@scope` is
+/// `@scope/eslint-config`, `@scope/x` is `@scope/eslint-config-x`. Names
+/// ESLint resolves itself (`eslint:recommended`, `plugin:x/y`) are `None`.
+fn eslint_config_package(name: &str) -> Option<String> {
+    // A path (`./base.js`) or a name ESLint resolves itself.
+    if name.contains(':') || (!name.starts_with('@') && package_of(name).is_none()) {
+        return None;
+    }
+    let full = if let Some(rest) = name.strip_prefix('@') {
+        match rest.split_once('/') {
+            None => format!("{name}/eslint-config"),
+            Some((scope, "" | "eslint-config")) => format!("@{scope}/eslint-config"),
+            Some((scope, after)) if after.starts_with("eslint-config") => {
+                format!("@{scope}/{after}")
+            }
+            Some((scope, after)) => format!("@{scope}/eslint-config-{after}"),
+        }
+    } else if name.starts_with("eslint-config-") {
+        name.to_owned()
+    } else {
+        format!("eslint-config-{name}")
+    };
+    package_of(&full).map(str::to_owned)
+}
+
+/// What a missing Node package is about: a package to import or require, or
+/// the type definitions TypeScript looks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wanted {
+    Package,
+    Types,
+}
+
+/// The names a package can be installed under: itself, and for TypeScript
+/// its `@types` package (`@types/react`, `@types/scope__name`).
+fn install_names(package: &str, typescript: bool) -> Vec<String> {
+    let mut names = vec![package.to_owned()];
+    if typescript && !package.starts_with("@types/") {
+        let types = match package.strip_prefix('@') {
+            Some(scoped) => format!("@types/{}", scoped.replacen('/', "__", 1)),
+            None => format!("@types/{package}"),
+        };
+        names.push(types);
+    }
+    names
+}
+
+/// Whether a missing Node package is a setup problem.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PackageState {
+    /// In a `node_modules` folder, or the folder uses Yarn Plug'n'Play: the
+    /// install happened, so the error is about the code or the config.
+    Present,
+    /// Not installed, but no `package.json` lists it: a dependency missing
+    /// from the manifest is a change to make in the repo.
+    Undeclared,
+    /// Listed and not installed: installing the dependencies fixes it.
+    Missing,
+}
+
+/// Looks for any of `names` in `node_modules` and in the `package.json`
+/// dependency lists of every folder from each of `starts` up to `root`. Node
+/// resolves a bare import the same way, from the importing file's folder up.
+fn package_state(names: &[String], root: &Path, starts: &[PathBuf]) -> PackageState {
+    const LISTS: [&str; 4] = [
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ];
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut manifests = false;
+    let mut declared = false;
+    for start in starts {
+        let mut current = Some(start.as_path());
+        while let Some(folder) = current {
+            if !seen.iter().any(|done| done == folder) {
+                seen.push(folder.to_path_buf());
+                let modules = folder.join("node_modules");
+                let present = names.iter().any(|name| {
+                    name.split('/')
+                        .fold(modules.clone(), |path, part| path.join(part))
+                        .exists()
+                });
+                if present || folder.join(".pnp.cjs").is_file() || folder.join(".pnp.js").is_file()
+                {
+                    return PackageState::Present;
+                }
+                let manifest = std::fs::read_to_string(folder.join("package.json"))
+                    .ok()
+                    .and_then(|text| {
+                        serde_json::from_str::<serde_json::Value>(
+                            text.trim_start_matches('\u{feff}'),
+                        )
+                        .ok()
+                    });
+                if let Some(manifest) = manifest {
+                    manifests = true;
+                    declared |= LISTS.iter().any(|list| {
+                        manifest
+                            .get(list)
+                            .and_then(serde_json::Value::as_object)
+                            .is_some_and(|deps| names.iter().any(|name| deps.contains_key(name)))
+                    });
+                }
+            }
+            if folder == root {
+                break;
+            }
+            current = folder.parent().filter(|parent| parent.starts_with(root));
+        }
+    }
+    if manifests && !declared {
+        PackageState::Undeclared
+    } else {
+        PackageState::Missing
+    }
+}
+
+/// The folder of a file a message names, when it is inside the repo:
+/// absolute, or relative to the step's folder `dir`.
+fn folder_of_file(file: &str, root: &Path, dir: &Path) -> Option<PathBuf> {
+    let file = file.trim().trim_matches(['\'', '"']);
+    if file.is_empty() || file.starts_with("file://") {
+        return None;
+    }
+    let path = Path::new(file);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        file.split(['/', '\\'])
+            .filter(|part| !part.is_empty() && *part != ".")
+            .fold(dir.to_path_buf(), |path, part| path.join(part))
+    };
+    let folder = path.parent()?;
+    folder.starts_with(root).then(|| folder.to_path_buf())
+}
+
+/// The file that imported a missing package, from the message itself or the
+/// lines after it: `... imported from /x/eslint.config.js` (ESM), the first
+/// entry under `Require stack:` (CommonJS), or the file a TypeScript error
+/// starts with (`src/main.tsx(1,20): error TS2307` or
+/// `src/main.tsx:1:20 - error TS2307`).
+fn importer(lines: &[&str], index: usize, root: &Path, dir: &Path) -> Option<PathBuf> {
+    let line = lines[index].trim();
+    if let Some(at) = line.find(" imported from ") {
+        return folder_of_file(&line[at + " imported from ".len()..], root, dir);
+    }
+    if let Some(at) = line.find("error TS") {
+        let file = line[..at]
+            .trim_end()
+            .trim_end_matches(['-', ':'])
+            .trim_end();
+        let file = match file.strip_suffix(')') {
+            Some(open) => &open[..open.rfind('(')?],
+            None => file
+                .trim_end_matches(|c: char| c.is_ascii_digit() || c == ':')
+                .trim_end(),
+        };
+        return folder_of_file(file, root, dir);
+    }
+    let rest = lines.get(index + 1..)?;
+    let stack = rest
+        .iter()
+        .take(3)
+        .position(|next| next.trim() == "Require stack:")?;
+    let first = rest.get(stack + 1)?.trim().strip_prefix("- ")?;
+    folder_of_file(first, root, dir)
+}
+
+/// A missing Node package named on line `index`, and what is missing: from
+/// Node (ESM and CommonJS), ESLint, and TypeScript. `Some(None)` when the
+/// line is such a message about something that is not a package (a path, an
+/// alias, a built-in): a mistake in the code.
+fn node_missing(lines: &[&str], index: usize, has_stack: bool) -> Option<Option<(String, Wanted)>> {
+    let line = lines[index].trim();
+    let package = |name: &str| Some(package_of(name).map(|p| (p.to_owned(), Wanted::Package)));
+    // Node ESM: `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'vitest' imported from ...`.
+    if line.contains("ERR_MODULE_NOT_FOUND") || line.starts_with("Error: Cannot find package") {
+        if let Some(at) = line.find("Cannot find package ") {
+            return package(name_after(line, at + "Cannot find package ".len())?);
+        }
+    }
+    // TypeScript: `error TS2307: Cannot find module 'react' or its corresponding type declarations.`
+    if let Some(at) = line.find("TS2307: Cannot find module ") {
+        let name = name_after(line, at + "TS2307: Cannot find module ".len())?;
+        return Some(package_of(name).map(|p| (p.to_owned(), Wanted::Types)));
+    }
+    // TypeScript: `error TS2688: Cannot find type definition file for 'vite/client'.`
+    if let Some(at) = line.find("TS2688: Cannot find type definition file for ") {
+        let name = name_after(
+            line,
+            at + "TS2688: Cannot find type definition file for ".len(),
+        )?;
+        return Some(package_of(name).map(|p| (p.to_owned(), Wanted::Types)));
+    }
+    // Node CommonJS, with its `Require stack:` or `MODULE_NOT_FOUND` code:
+    // `Error: Cannot find module 'eslint-plugin-react'`, also inside ESLint 8's
+    // `Failed to load plugin 'react' declared in '.eslintrc': Cannot find module ...`.
+    if let Some(at) = line.find("Cannot find module ") {
+        let cjs = (has_stack && line.contains("Error"))
+            || line.contains("Failed to load plugin ")
+            || line.contains("Failed to load parser ");
+        if cjs && !line.contains("imported from") {
+            return package(name_after(line, at + "Cannot find module ".len())?);
+        }
+    }
+    // ESLint 8: `ESLint couldn't find the plugin "eslint-plugin-react".`
+    if let Some(at) = line.find("ESLint couldn't find the plugin ") {
+        return package(name_after(
+            line,
+            at + "ESLint couldn't find the plugin ".len(),
+        )?);
+    }
+    // ESLint 8: `ESLint couldn't find the config "next" to extend from.` (the
+    // CLI) and `Failed to load config "next" to extend from.` (the message
+    // itself, which `next lint` and editors show).
+    for marker in ["ESLint couldn't find the config ", "Failed to load config "] {
+        if let Some(at) = line.find(marker) {
+            if line.contains(" to extend from") {
+                let name = name_after(line, at + marker.len())?;
+                return Some(eslint_config_package(name).map(|p| (p, Wanted::Package)));
+            }
+        }
+    }
+    None
+}
+
+/// The setup problem of a Node package that is missing on line `index`;
+/// `Some(None)` when that line shows a mistake in the code instead.
+fn node_package_problem(
+    lines: &[&str],
+    index: usize,
+    has_stack: bool,
+    root: &Path,
+    dir: &Path,
+) -> Option<Option<SetupProblem>> {
+    let found = node_missing(lines, index, has_stack)?;
+    let Some((package, wanted)) = found else {
+        return Some(None);
+    };
+    let mut starts = vec![dir.to_path_buf()];
+    starts.extend(importer(lines, index, root, dir));
+    let names = install_names(&package, wanted == Wanted::Types);
+    if package_state(&names, root, &starts) != PackageState::Missing {
+        return Some(None);
+    }
+    let reason = if lines[index].contains("TS2688") {
+        let name = lines[index]
+            .find("file for ")
+            .and_then(|at| name_after(lines[index], at + "file for ".len()))
+            .unwrap_or(&package);
+        format!("the type definitions for '{name}' are not installed")
+    } else {
+        format!("the package '{package}' is not installed")
+    };
+    Some(Some(SetupProblem {
+        reason,
+        missing_program: None,
+        missing_service: None,
+        start_services: None,
+    }))
+}
+
+// --- Installing without rewriting the lockfile
+
+/// True for a Yarn 2 or later project: `packageManager` names `yarn@2` or
+/// later in `dir` or the root, or else there is a `.yarnrc.yml` from `dir` up
+/// to the root, or the lockfile has Yarn 2's `__metadata:` header.
+fn is_yarn_berry(root: &Path, dir: &Path) -> bool {
+    for folder in [dir, root] {
+        let declared = std::fs::read_to_string(folder.join("package.json"))
+            .ok()
+            .and_then(|text| {
+                serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}')).ok()
+            })
+            .and_then(|json| {
+                json.get("packageManager")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            });
+        if let Some(version) = declared.as_deref().and_then(|pm| pm.strip_prefix("yarn@")) {
+            return leading_digits(version)
+                .parse::<u32>()
+                .is_ok_and(|major| major >= 2);
+        }
+    }
+    if file_up_to_root(".yarnrc.yml", root, dir) {
+        return true;
+    }
+    std::fs::read_to_string(dir.join("yarn.lock"))
+        .is_ok_and(|lock| lock.lines().any(|line| line.trim_end() == "__metadata:"))
+}
+
+/// True when `name` is a file in `dir` or a folder above it, up to `root`.
+fn file_up_to_root(name: &str, root: &Path, dir: &Path) -> bool {
+    let mut current = Some(dir);
+    while let Some(folder) = current {
+        if folder.join(name).is_file() {
+            return true;
+        }
+        if folder == root {
+            break;
+        }
+        current = folder.parent().filter(|parent| parent.starts_with(root));
+    }
+    false
+}
+
+/// The form of a project's install command that installs exactly what its
+/// lockfile says and never rewrites the lockfile, for `doctor` and for
+/// verify's setup-needed text. `install` is the command `fscale facts`
+/// found, to be run in `dir`. With no lockfile for its package manager, or a
+/// command this does not know, `install` comes back as it is.
+///
+/// - `npm install` with `package-lock.json` or `npm-shrinkwrap.json`: `npm ci`.
+/// - `pnpm install` with `pnpm-lock.yaml`: `pnpm install --frozen-lockfile`.
+/// - `yarn install` with `yarn.lock`: `yarn install --immutable` for Yarn 2
+///   and later, `yarn install --frozen-lockfile` for Yarn 1.
+/// - `bun install` with `bun.lock` or `bun.lockb`: `bun install --frozen-lockfile`.
+/// - `uv sync` with `uv.lock` here or above (a uv workspace keeps one at
+///   its root): `uv sync --locked`.
+/// - `pipenv install --dev` with `Pipfile.lock`: `pipenv sync --dev`.
+/// - `poetry install` stays: it installs from `poetry.lock` and does not
+///   rewrite it.
+#[must_use]
+pub fn locked_install(install: &str, root: &Path, dir: &Path) -> String {
+    let has = |name: &str| dir.join(name).is_file();
+    let locked = match install {
+        "npm install" if has("package-lock.json") || has("npm-shrinkwrap.json") => "npm ci",
+        "pnpm install" if has("pnpm-lock.yaml") => "pnpm install --frozen-lockfile",
+        "yarn install" if has("yarn.lock") => {
+            if is_yarn_berry(root, dir) {
+                "yarn install --immutable"
+            } else {
+                "yarn install --frozen-lockfile"
+            }
+        }
+        "bun install" if has("bun.lock") || has("bun.lockb") => "bun install --frozen-lockfile",
+        "uv sync" if file_up_to_root("uv.lock", root, dir) => "uv sync --locked",
+        "pipenv install --dev" if has("Pipfile.lock") => "pipenv sync --dev",
+        _ => install,
+    };
+    locked.to_owned()
+}
+
+/// mypy: `error: Cannot find implementation or library stub for module named "requests"  [import-not-found]`.
+fn mypy_missing(line: &str) -> Option<&str> {
+    const STUB: &str = "Cannot find implementation or library stub for module named ";
+    let at = line.find(STUB)?;
+    name_after(line, at + STUB.len())
+}
+
 /// Looks at the output of a failed step for a sign that the environment is
 /// not set up. `dir` is the folder the step ran in, `root` the repo root.
 /// Returns `None` when unsure: then the step is a normal failure.
@@ -812,7 +1195,9 @@ pub fn setup_problem(
     if reports_failed_tests(output) {
         return None;
     }
-    for line in output.lines() {
+    let lines: Vec<&str> = output.lines().collect();
+    let has_stack = output.contains("Require stack:") || output.contains("MODULE_NOT_FOUND");
+    for (index, line) in lines.iter().enumerate() {
         let line = line.trim();
         // Python: `ModuleNotFoundError: No module named 'jwt'`, and
         // `python: No module named pytest` from `python -m pytest`.
@@ -869,25 +1254,22 @@ pub fn setup_problem(
                 return Some(missing(name));
             }
         }
-        // Node ESM: Cannot find package 'vitest' imported from ...
-        if line.contains("ERR_MODULE_NOT_FOUND") || line.starts_with("Error: Cannot find package") {
-            if let Some(index) = line.find("Cannot find package ") {
-                if let Some(name) = name_after(line, index + "Cannot find package ".len()) {
-                    let relative = name.starts_with('.')
-                        || name.starts_with('/')
-                        || name.starts_with('\\')
-                        || name.chars().nth(1) == Some(':');
-                    if relative {
-                        return None;
-                    }
-                    return Some(SetupProblem {
-                        reason: format!("the package '{name}' is not installed"),
-                        missing_program: None,
-                        missing_service: None,
-                        start_services: None,
-                    });
-                }
+        // mypy, with the module not installed in its environment.
+        if let Some(module) = mypy_missing(line) {
+            if is_local_module(module, root, dir) {
+                return None;
             }
+            return Some(SetupProblem {
+                reason: format!("the Python module '{module}' is not installed"),
+                missing_program: None,
+                missing_service: None,
+                start_services: None,
+            });
+        }
+        // Node, ESLint and TypeScript: a package that is listed in a
+        // package.json and is in no node_modules folder.
+        if let Some(found) = node_package_problem(&lines, index, has_stack, root, dir) {
+            return found;
         }
         // sh: exit code 127 means the shell could not find the command.
         if exit_code == Some(127) {
@@ -1547,6 +1929,404 @@ mod tests {
                 assert!(!text.contains(user), "user name in {text}");
             }
         }
+    }
+
+    /// A frontend whose package.json lists react, vite, ESLint and its
+    /// plugins, with `installed` packages in `frontend/node_modules`.
+    fn frontend(installed: &[&str]) -> Fixture {
+        let manifest = r#"{"name":"web","dependencies":{"react":"18.3.1"},"devDependencies":{"@eslint/js":"9.9.0","eslint":"9.9.0","eslint-plugin-react":"7.35.0","eslint-config-next":"14.2.0","@scope/eslint-config":"1.0.0","@scope/eslint-config-strict":"1.0.0","@types/react":"18.3.3","@types/node":"20.0.0","vite":"5.4.0","lodash":"4.17.21"}}"#;
+        let markers: Vec<(String, &str)> = installed
+            .iter()
+            .map(|name| (format!("frontend/node_modules/{name}/package.json"), "{}"))
+            .collect();
+        let mut files: Vec<(&str, &str)> = vec![
+            ("frontend/package.json", manifest),
+            ("frontend/src/main.tsx", ""),
+        ];
+        files.extend(markers.iter().map(|(path, text)| (path.as_str(), *text)));
+        Fixture::new(&files, Track::NoGit).unwrap()
+    }
+
+    fn in_frontend(output: &str, installed: &[&str]) -> Option<SetupProblem> {
+        let fixture = frontend(installed);
+        let dir = fixture.root().join("frontend");
+        let output = output.replace("{dir}", &dir.to_string_lossy());
+        setup_problem(&output, Some(2), fixture.root(), &dir)
+    }
+
+    /// The real messages, with `{dir}` for the frontend's folder.
+    const ESLINT_FLAT: &str = "\nOops! Something went wrong! :(\n\nESLint: 9.9.0\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find package '@eslint/js' imported from {dir}/eslint.config.js\n    at packageResolve (node:internal/modules/esm/resolve:854:9)\n";
+    const ESLINT_CJS: &str = "\nOops! Something went wrong! :(\n\nESLint: 9.9.0\n\nError: Cannot find module 'eslint-plugin-react'\nRequire stack:\n- {dir}/eslint.config.cjs\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)\n";
+    const ESLINT8_PLUGIN: &str = "\nOops! Something went wrong! :(\n\nESLint: 8.57.0\n\nESLint couldn't find the plugin \"eslint-plugin-react\".\n\n(The package \"eslint-plugin-react\" was not found when loaded as a Node module from the directory \"{dir}\".)\n\nIt's likely that the plugin isn't installed correctly. Try reinstalling by running the following:\n\n    npm install eslint-plugin-react@latest --save-dev\n\nThe plugin \"eslint-plugin-react\" was referenced from the config file in \".eslintrc.cjs\".\n";
+    const ESLINT8_FAILED_PLUGIN: &str = "Failed to load plugin 'react' declared in '.eslintrc.json': Cannot find module 'eslint-plugin-react'\nRequire stack:\n- {dir}/__placeholder__.js\n";
+    const ESLINT8_CONFIG: &str = "\nOops! Something went wrong! :(\n\nESLint: 8.57.0\n\nESLint couldn't find the config \"next/core-web-vitals\" to extend from. Please check that the name of the config is correct.\n\nThe config \"next/core-web-vitals\" was referenced from the config file in \"{dir}/.eslintrc.json\".\n";
+    const NEXT_LINT_CONFIG: &str =
+        "Failed to load config \"next\" to extend from.\nReferenced from: {dir}/.eslintrc.json\n";
+    const TS2307: &str = "src/main.tsx(1,19): error TS2307: Cannot find module 'react' or its corresponding type declarations.\n";
+    const TS2307_PRETTY: &str = "src/main.tsx:1:19 - error TS2307: Cannot find module 'react' or its corresponding type declarations.\n\n1 import React from 'react';\n                    ~~~~~~~\n\nFound 1 error in src/main.tsx:1\n";
+    const TS2688: &str = "error TS2688: Cannot find type definition file for 'vite/client'.\n  The file is in the program because:\n    Entry point of type library 'vite/client' specified in compilerOptions\n";
+
+    #[test]
+    fn lint_and_typecheck_on_a_package_that_is_not_installed_are_setup_problems() {
+        for (output, reason) in [
+            (ESLINT_FLAT, "the package '@eslint/js' is not installed"),
+            (
+                ESLINT_CJS,
+                "the package 'eslint-plugin-react' is not installed",
+            ),
+            (
+                ESLINT8_PLUGIN,
+                "the package 'eslint-plugin-react' is not installed",
+            ),
+            (
+                ESLINT8_FAILED_PLUGIN,
+                "the package 'eslint-plugin-react' is not installed",
+            ),
+            (
+                ESLINT8_CONFIG,
+                "the package 'eslint-config-next' is not installed",
+            ),
+            (
+                NEXT_LINT_CONFIG,
+                "the package 'eslint-config-next' is not installed",
+            ),
+            (TS2307, "the package 'react' is not installed"),
+            (TS2307_PRETTY, "the package 'react' is not installed"),
+            (
+                TS2688,
+                "the type definitions for 'vite/client' are not installed",
+            ),
+        ] {
+            let found = in_frontend(output, &[]);
+            assert_eq!(
+                found.as_ref().map(|p| p.reason.as_str()),
+                Some(reason),
+                "{output}"
+            );
+            let found = found.unwrap();
+            assert_eq!(found.missing_program, None);
+            assert_eq!(found.missing_service, None);
+        }
+        // With no node_modules folder at all, as on a fresh clone, and on Windows.
+        let windows = "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'vite' imported from C:\\Users\\me\\web\\vite.config.ts.timestamp-1.mjs\n";
+        assert_eq!(
+            in_frontend(windows, &[]).map(|p| p.reason),
+            Some("the package 'vite' is not installed".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_package_that_is_installed_is_a_normal_failure() {
+        // The package is there: its error is about the code or the config.
+        for (output, installed) in [
+            (ESLINT_FLAT, "@eslint/js"),
+            (ESLINT_CJS, "eslint-plugin-react"),
+            (ESLINT8_PLUGIN, "eslint-plugin-react"),
+            (ESLINT8_FAILED_PLUGIN, "eslint-plugin-react"),
+            (ESLINT8_CONFIG, "eslint-config-next"),
+            (NEXT_LINT_CONFIG, "eslint-config-next"),
+            (TS2307, "react"),
+            // Its type definitions are there.
+            (TS2307_PRETTY, "@types/react"),
+            (TS2688, "vite"),
+        ] {
+            assert_eq!(in_frontend(output, &[installed]), None, "{output}");
+        }
+        // In node_modules of a folder above the project, up to the root.
+        let fixture = Fixture::new(
+            &[
+                ("package.json", r#"{"devDependencies":{"@eslint/js":"9"}}"#),
+                ("node_modules/@eslint/js/package.json", "{}"),
+                ("apps/web/package.json", "{}"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let dir = fixture.root().join("apps").join("web");
+        let out = ESLINT_FLAT.replace("{dir}", &dir.to_string_lossy());
+        assert_eq!(setup_problem(&out, Some(2), fixture.root(), &dir), None);
+        // Yarn Plug'n'Play keeps no node_modules: unsure, so a failure.
+        let fixture = Fixture::new(
+            &[
+                ("package.json", r#"{"devDependencies":{"@eslint/js":"9"}}"#),
+                (".pnp.cjs", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let out = ESLINT_FLAT.replace("{dir}", &fixture.root().to_string_lossy());
+        assert_eq!(
+            setup_problem(&out, Some(2), fixture.root(), fixture.root()),
+            None
+        );
+    }
+
+    #[test]
+    fn the_importing_files_folder_counts_for_a_run_from_the_root() {
+        // `pnpm -r lint` runs from the root; the package is in the member's
+        // node_modules, and the member's file imported it.
+        let fixture = Fixture::new(
+            &[
+                ("package.json", r#"{"private":true}"#),
+                (
+                    "packages/web/package.json",
+                    r#"{"devDependencies":{"@eslint/js":"9","react":"18"}}"#,
+                ),
+                ("packages/web/node_modules/@eslint/js/package.json", "{}"),
+                ("packages/web/node_modules/react/package.json", "{}"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let web = fixture.root().join("packages").join("web");
+        let out = ESLINT_FLAT.replace("{dir}", &web.to_string_lossy());
+        assert_eq!(
+            setup_problem(&out, Some(2), fixture.root(), fixture.root()),
+            None
+        );
+        let ts = "packages/web/src/a.tsx(1,19): error TS2307: Cannot find module 'react' or its corresponding type declarations.\n";
+        assert_eq!(
+            setup_problem(ts, Some(2), fixture.root(), fixture.root()),
+            None
+        );
+        // Not installed there either, but listed: setup.
+        let fixture = Fixture::new(
+            &[
+                ("package.json", r#"{"private":true}"#),
+                (
+                    "packages/web/package.json",
+                    r#"{"devDependencies":{"@eslint/js":"9"}}"#,
+                ),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let web = fixture.root().join("packages").join("web");
+        let out = ESLINT_FLAT.replace("{dir}", &web.to_string_lossy());
+        assert_eq!(
+            setup_problem(&out, Some(2), fixture.root(), fixture.root()).map(|p| p.reason),
+            Some("the package '@eslint/js' is not installed".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_missing_import_that_is_not_a_listed_package_is_a_normal_failure() {
+        for output in [
+            // Relative and absolute paths, a drive letter.
+            "src/main.tsx(2,20): error TS2307: Cannot find module './App' or its corresponding type declarations.\n",
+            "Error: Cannot find module '../shared/config'\nRequire stack:\n- {dir}/eslint.config.cjs\n",
+            "Error: Cannot find module '{dir}/eslint.config.cjs'\n  code: 'MODULE_NOT_FOUND',\n",
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '{dir}/src/util.js' imported from {dir}/src/main.js\n",
+            "Error: Cannot find module 'C:\\x\\eslint.config.cjs'\nRequire stack:\n- C:\\x\\y.js\n",
+            "ESLint couldn't find the config \"./base.js\" to extend from.\n",
+            // Path aliases and built-ins.
+            "src/main.tsx(3,20): error TS2307: Cannot find module '@/components/Button' or its corresponding type declarations.\n",
+            "src/main.tsx(3,20): error TS2307: Cannot find module '~/lib' or its corresponding type declarations.\n",
+            "src/main.tsx(3,20): error TS2307: Cannot find module '$lib/x' or its corresponding type declarations.\n",
+            "src/main.tsx(3,20): error TS2307: Cannot find module '#internal' or its corresponding type declarations.\n",
+            "Error: Cannot find module 'node:fs'\nRequire stack:\n- {dir}/a.js\n",
+            // A bare name that no package.json lists: a dependency the code
+            // forgot, or a path alias such as `@components/x`.
+            "src/main.tsx(3,20): error TS2307: Cannot find module 'left-pad' or its corresponding type declarations.\n",
+            "src/main.tsx(3,20): error TS2307: Cannot find module '@components/Button' or its corresponding type declarations.\n",
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'zod' imported from {dir}/src/main.js\n",
+            "ESLint couldn't find the plugin \"eslint-plugin-vue\".\n",
+            // `Cannot find module` with no sign of Node's loader: a test's own text.
+            "expected error: Cannot find module 'react'\n",
+        ] {
+            assert_eq!(in_frontend(output, &[]), None, "{output}");
+        }
+    }
+
+    #[test]
+    fn scoped_eslint_configs_and_subpaths_name_their_package() {
+        assert_eq!(package_of("@eslint/js"), Some("@eslint/js"));
+        assert_eq!(package_of("@scope/x/y"), Some("@scope/x"));
+        assert_eq!(package_of("lodash/fp"), Some("lodash"));
+        assert_eq!(package_of("vite/client"), Some("vite"));
+        assert_eq!(package_of("@scope"), None);
+        assert_eq!(package_of("@/x"), None);
+        assert_eq!(package_of("./x"), None);
+        assert_eq!(
+            eslint_config_package("next/core-web-vitals").as_deref(),
+            Some("eslint-config-next")
+        );
+        assert_eq!(
+            eslint_config_package("@scope").as_deref(),
+            Some("@scope/eslint-config")
+        );
+        assert_eq!(
+            eslint_config_package("@scope/strict").as_deref(),
+            Some("@scope/eslint-config-strict")
+        );
+        assert_eq!(
+            eslint_config_package("@scope/eslint-config-strict").as_deref(),
+            Some("@scope/eslint-config-strict")
+        );
+        assert_eq!(
+            eslint_config_package("eslint-config-airbnb").as_deref(),
+            Some("eslint-config-airbnb")
+        );
+        assert_eq!(eslint_config_package("plugin:react/recommended"), None);
+        assert_eq!(eslint_config_package("./base.js"), None);
+        assert_eq!(
+            install_names("@scope/x", true),
+            vec!["@scope/x".to_owned(), "@types/scope__x".to_owned()]
+        );
+        // The scoped config is listed in the fixture, so its message is setup.
+        let out = "ESLint couldn't find the config \"@scope/strict\" to extend from.\n";
+        assert_eq!(
+            in_frontend(out, &[]).map(|p| p.reason),
+            Some("the package '@scope/eslint-config-strict' is not installed".to_owned())
+        );
+    }
+
+    #[test]
+    fn mypy_on_a_module_that_is_not_installed_is_a_setup_problem() {
+        let out = "app/api.py:3: error: Cannot find implementation or library stub for module named \"requests\"  [import-not-found]\napp/api.py:3: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\nFound 1 error in 1 file (checked 4 source files)\n";
+        assert_eq!(
+            reason(out, 1),
+            "the Python module 'requests' is not installed"
+        );
+        // A module of the project itself: maybe a typo in the code.
+        let local = "main.py:1: error: Cannot find implementation or library stub for module named \"app.servics\"  [import-not-found]\n";
+        assert_eq!(problem(local, 1), None);
+        // Installed without types is another message, and a normal failure.
+        let untyped = "main.py:1: error: Skipping analyzing \"yaml\": module is installed, but missing library stubs or py.typed marker  [import-untyped]\n";
+        assert_eq!(problem(untyped, 1), None);
+    }
+
+    fn locked(install: &str, files: &[(&str, &str)]) -> String {
+        let fixture = Fixture::new(files, Track::NoGit).unwrap();
+        let dir = fixture.root().join("app");
+        std::fs::create_dir_all(&dir).unwrap();
+        locked_install(install, fixture.root(), &dir)
+    }
+
+    #[test]
+    fn npm_with_a_lockfile_installs_with_npm_ci() {
+        assert_eq!(
+            locked("npm install", &[("app/package-lock.json", "{}")]),
+            "npm ci"
+        );
+        assert_eq!(
+            locked("npm install", &[("app/npm-shrinkwrap.json", "{}")]),
+            "npm ci"
+        );
+        assert_eq!(locked("npm install", &[]), "npm install");
+        // The lockfile of another folder does not count.
+        assert_eq!(
+            locked("npm install", &[("package-lock.json", "{}")]),
+            "npm install"
+        );
+    }
+
+    #[test]
+    fn pnpm_with_a_lockfile_installs_with_a_frozen_lockfile() {
+        assert_eq!(
+            locked("pnpm install", &[("app/pnpm-lock.yaml", "")]),
+            "pnpm install --frozen-lockfile"
+        );
+        assert_eq!(locked("pnpm install", &[]), "pnpm install");
+        // A lockfile of another manager does not count.
+        assert_eq!(
+            locked("pnpm install", &[("app/package-lock.json", "{}")]),
+            "pnpm install"
+        );
+    }
+
+    #[test]
+    fn yarn_with_a_lockfile_installs_with_its_versions_flag() {
+        let classic = "# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.\n# yarn lockfile v1\n";
+        assert_eq!(
+            locked("yarn install", &[("app/yarn.lock", classic)]),
+            "yarn install --frozen-lockfile"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[
+                    ("app/yarn.lock", classic),
+                    ("app/package.json", r#"{"packageManager":"yarn@1.22.22"}"#)
+                ]
+            ),
+            "yarn install --frozen-lockfile"
+        );
+        let berry = "# This file is generated by running \"yarn install\" inside your project.\n\n__metadata:\n  version: 8\n";
+        assert_eq!(
+            locked("yarn install", &[("app/yarn.lock", berry)]),
+            "yarn install --immutable"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[
+                    ("app/yarn.lock", ""),
+                    ("app/package.json", r#"{"packageManager":"yarn@4.5.0"}"#)
+                ]
+            ),
+            "yarn install --immutable"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[
+                    ("app/yarn.lock", ""),
+                    ("package.json", r#"{"packageManager":"yarn@3.8.0"}"#)
+                ]
+            ),
+            "yarn install --immutable"
+        );
+        assert_eq!(
+            locked(
+                "yarn install",
+                &[("app/yarn.lock", ""), (".yarnrc.yml", "")]
+            ),
+            "yarn install --immutable"
+        );
+        assert_eq!(locked("yarn install", &[]), "yarn install");
+    }
+
+    #[test]
+    fn bun_with_a_lockfile_installs_with_a_frozen_lockfile() {
+        assert_eq!(
+            locked("bun install", &[("app/bun.lock", "")]),
+            "bun install --frozen-lockfile"
+        );
+        assert_eq!(
+            locked("bun install", &[("app/bun.lockb", "")]),
+            "bun install --frozen-lockfile"
+        );
+        assert_eq!(locked("bun install", &[]), "bun install");
+    }
+
+    #[test]
+    fn python_managers_with_a_lockfile_install_from_it() {
+        assert_eq!(
+            locked("uv sync", &[("app/uv.lock", "")]),
+            "uv sync --locked"
+        );
+        // A uv workspace keeps its lockfile at the workspace root.
+        assert_eq!(locked("uv sync", &[("uv.lock", "")]), "uv sync --locked");
+        assert_eq!(locked("uv sync", &[]), "uv sync");
+        assert_eq!(
+            locked("pipenv install --dev", &[("app/Pipfile.lock", "{}")]),
+            "pipenv sync --dev"
+        );
+        assert_eq!(locked("pipenv install --dev", &[]), "pipenv install --dev");
+        // poetry install never rewrites an existing poetry.lock.
+        assert_eq!(
+            locked("poetry install", &[("app/poetry.lock", "")]),
+            "poetry install"
+        );
+        // pip has no lockfile of its own.
+        assert_eq!(
+            locked(
+                ".venv/bin/python -m pip install -r requirements.txt",
+                &[("app/requirements.txt", "")]
+            ),
+            ".venv/bin/python -m pip install -r requirements.txt"
+        );
     }
 
     const REFUSED: &str = "Error: connect ECONNREFUSED 127.0.0.1:5432\n";

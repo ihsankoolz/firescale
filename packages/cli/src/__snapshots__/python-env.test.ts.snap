@@ -1,0 +1,29 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`setup problems are not test failures > prints a reason that several services share once, with each service and its commands under it 1`] = `
+"
+Last lines of test in backend/audit_service (the first of 4 with this reason; \`fscale verify --json\` has the output of each):
+  python: No module named pytest
+
+Setup needed for 4 steps, all for one reason: the Python module 'pytest' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.
+- test in backend/audit_service
+  Set it up in backend/audit_service: python -m pip install -r requirements-dev.txt
+  Then run again in backend/audit_service: python -m pytest
+- test in backend/ledger_service
+  Set it up in backend/ledger_service: python -m pip install -r requirements-dev.txt
+  Then run again in backend/ledger_service: python -m pytest
+- test in backend/market_service
+  Set it up in backend/market_service: python -m pip install -r requirements-dev.txt
+  Then run again in backend/market_service: python -m pytest
+- test in backend/realtime_service
+  Set it up in backend/realtime_service: python -m pip install -r requirements-dev.txt
+  Then run again in backend/realtime_service: python -m pytest
+
+Last lines of lint in backend/auth_service:
+  python: No module named ruff
+
+Setup needed for lint in backend/auth_service: the environment is not ready, so this is not a problem in the code. Do not change code for it.
+Set it up in backend/auth_service: python -m pip install -r requirements-dev.txt
+Then run again in backend/auth_service: python -m ruff check .
+"
+`;

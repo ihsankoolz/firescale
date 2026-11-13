@@ -2,12 +2,12 @@
 // service runs with its own virtual environment, one project's failure does
 // not stop the others, and an environment that is not set up is reported as
 // "setup needed", apart from real failures.
-import { copyFile, mkdir, readFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
-import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
+import { COURSE_SERVICES, courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
 import { EXIT_OK, EXIT_VIOLATIONS, PYTHON_STUB, runCli, stepCalls } from './test-helpers.js';
 
 const fixtures = fixtureSet();
@@ -227,6 +227,64 @@ describe('setup problems are not test failures', () => {
     expect(hook.code).toBe(EXIT_BLOCK);
     expect(hook.stderr).toContain('SETUP NEEDED');
     expect(hook.stderr).toContain('Do not edit code, tests or config to get past it.');
+  });
+
+  it('prints a reason that several services share once, with each service and its commands under it', async () => {
+    const { repo, tools, env } = await courseProject();
+    // A python with nothing installed: `python -m <module>` says the module is missing.
+    if (WINDOWS) {
+      await writeFile(
+        path.join(tools.root, 'python.cmd'),
+        '@echo off\r\n1>&2 echo python: No module named %2\r\nexit /b 1\r\n',
+      );
+    } else {
+      const file = path.join(tools.root, 'python');
+      await writeFile(file, '#!/bin/sh\necho "python: No module named $2" >&2\nexit 1\n');
+      await chmod(file, 0o755);
+    }
+    const result = await runCli(['verify'], repo.root, env());
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const out = result.stdout;
+    // auth_service's lint stops at ruff; the other four services share pytest.
+    const others = COURSE_SERVICES.filter((service) => service !== 'auth_service');
+    const group = [
+      "Setup needed for 4 steps, all for one reason: the Python module 'pytest' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.",
+      ...others.flatMap((service) => [
+        `- test in backend/${service}`,
+        `  Set it up in backend/${service}: python -m pip install -r requirements-dev.txt`,
+        `  Then run again in backend/${service}: python -m pytest`,
+      ]),
+      '',
+    ].join('\n');
+    expect(out).toContain(`\n${group}`);
+    expect(out.match(/the Python module 'pytest' is not installed\. The/g)).toHaveLength(1);
+    // The last lines of the first service only.
+    expect(out).toContain(
+      'Last lines of test in backend/audit_service (the first of 4 with this reason; `fscale verify --json` has the output of each):\n',
+    );
+    expect(out).not.toContain('Last lines of test in backend/ledger_service');
+    // A reason of its own keeps the layout of a single project.
+    expect(out).toContain(
+      'Setup needed for lint in backend/auth_service: the environment is not ready, so this is not a problem in the code. Do not change code for it.\nSet it up in backend/auth_service: python -m pip install -r requirements-dev.txt\n',
+    );
+    expect(
+      out.slice(out.indexOf('\nLast lines of'), out.indexOf('\nRun `fscale doctor`')),
+    ).toMatchSnapshot();
+
+    // The JSON is unchanged: each step with its own detail and fix.
+    const json = await runCli(['verify', '--json'], repo.root, env());
+    const report = await validate<VerifyReport>('verify-output.schema.json', json.stdout);
+    const setup = report.steps.filter((step) => step.status === 'setup-needed');
+    expect(setup.map((step) => `${step.name} in ${step.project ?? '.'}`)).toEqual([
+      'test in backend/audit_service',
+      'lint in backend/auth_service',
+      'test in backend/ledger_service',
+      'test in backend/market_service',
+      'test in backend/realtime_service',
+    ]);
+    for (const step of setup) {
+      expect(step.fix).toBe('python -m pip install -r requirements-dev.txt');
+    }
   });
 
   it('keeps a real test failure a normal failure', async () => {

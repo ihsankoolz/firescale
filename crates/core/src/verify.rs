@@ -23,7 +23,7 @@ use crate::graph::{project_id, Affected, Graph};
 use crate::process::{run_tree, Ending, Watch};
 use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT};
 use crate::runs::{RunRecord, RunningStep};
-use crate::setup::{refused_service, service_down, setup_problem, SetupProblem};
+use crate::setup::{locked_install, refused_service, service_down, setup_problem, SetupProblem};
 use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
 
 /// Version of the `fscale verify --json` format.
@@ -224,7 +224,8 @@ pub struct ProjectPlan {
     pub kind: Option<String>,
     pub steps: Vec<(String, Planned)>,
     /// The command that installs the project's dependencies, named when a
-    /// step fails because the environment is not set up.
+    /// step fails because the environment is not set up. With a lockfile it
+    /// is the form that does not rewrite it (`npm ci`, `setup::locked_install`).
     pub install: Option<String>,
     /// True for a Python project for which no virtual environment was
     /// found, so its commands use `python` from the PATH (ADR 0022).
@@ -243,7 +244,8 @@ pub struct VerifyPlan {
     pub projects: Vec<ProjectPlan>,
     /// From `verify.failOnSkipped`.
     pub fail_on_skipped: bool,
-    /// The command that installs the root's dependencies, if known.
+    /// The command that installs the root's dependencies, if known, in the
+    /// form that does not rewrite a lockfile (`setup::locked_install`).
     pub install: Option<String>,
     /// True when the root is a Python project with no virtual environment.
     pub python_from_path: bool,
@@ -518,7 +520,12 @@ fn runs_by_itself(project: &Project, covered: &str) -> bool {
 /// The steps of the projects that run by themselves, and of any other folder
 /// named under `verify.projects`. `covered` is the kind of project the
 /// root's own commands run.
-fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec<ProjectPlan> {
+fn plan_projects(
+    root: &Path,
+    facts: &RepoFacts,
+    config: &VerifyConfig,
+    covered: &str,
+) -> Vec<ProjectPlan> {
     let mut plans: Vec<ProjectPlan> = Vec::new();
     let mut discovered: Vec<&Project> = facts
         .projects
@@ -570,7 +577,9 @@ fn plan_projects(facts: &RepoFacts, config: &VerifyConfig, covered: &str) -> Vec
                 root: project.root.clone(),
                 kind: Some(project.kind.clone()),
                 steps,
-                install: project.commands.install.clone(),
+                install: project.commands.install.as_deref().map(|install| {
+                    locked_install(install, root, &project_dir(root, &project.root))
+                }),
                 python_from_path: detected_runs && from_path(project),
             });
         }
@@ -723,7 +732,7 @@ pub fn plan_verify(
         "cargo" => "rust",
         other => other,
     };
-    let projects = plan_projects(facts, config, covered);
+    let projects = plan_projects(root, facts, config, covered);
     // With no commands of its own, the root only lists what the config sets
     // for it, as long as a project has a step that runs or is named as
     // skipped. Projects that are all turned off do not make the root silent.
@@ -750,7 +759,9 @@ pub fn plan_verify(
         .projects
         .iter()
         .find(|project| project.root == "." && project.kind == covered);
-    let install = covering.and_then(|project| project.commands.install.clone());
+    let install = covering
+        .and_then(|project| project.commands.install.as_deref())
+        .map(|install| locked_install(install, root, root));
     let python_from_path = covering.is_some_and(from_path);
     VerifyPlan {
         runner: if all_from_config {
@@ -3310,6 +3321,104 @@ fn affected_intro(affected: &AffectedReport) -> String {
     }
 }
 
+/// Why a step needs setup, as its detail says it after the command:
+/// `cmd (exit 2): <reason>`, `cmd (stopped early after 3s): <reason>`, or
+/// `cmd (stopped early after 3s; its first error shows <reason>)`. Without
+/// the timings, so projects with the same problem have the same reason.
+fn setup_reason<'a>(detail: &'a str, command: &str) -> Option<&'a str> {
+    let rest = detail.strip_prefix(command)?.strip_prefix(" (")?;
+    let close = rest.find(')')?;
+    if let Some(reason) = rest[close..].strip_prefix("): ") {
+        return Some(reason).filter(|reason| !reason.is_empty());
+    }
+    let inside = &rest[..close];
+    for marker in ["; its first error shows ", "; the output shows "] {
+        if let Some(at) = inside.find(marker) {
+            // The reason itself can hold brackets: up to the detail's last one.
+            let reason = rest[at + marker.len()..].strip_suffix(')')?;
+            return Some(reason).filter(|reason| !reason.is_empty());
+        }
+    }
+    None
+}
+
+/// The setup-needed steps that share their reason with another one, as
+/// groups of indexes into `report.steps`, in step order (ADR 0022's text,
+/// printed once per reason).
+fn shared_setup_reasons(report: &VerifyReport) -> Vec<(&str, Vec<usize>)> {
+    let mut groups: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (index, step) in report.steps.iter().enumerate() {
+        if step.status != StepStatus::SetupNeeded || step.label.is_some() {
+            continue;
+        }
+        let Some(reason) = step
+            .command
+            .as_deref()
+            .and_then(|command| setup_reason(&step.detail, command))
+        else {
+            continue;
+        };
+        match groups.iter_mut().find(|(shared, _)| *shared == reason) {
+            Some((_, members)) => members.push(index),
+            None => groups.push((reason, vec![index])),
+        }
+    }
+    groups.retain(|(_, members)| members.len() > 1);
+    groups
+}
+
+/// One block for several steps that need the same setup: the reason once,
+/// then each step with its own setup command and the command to run again.
+/// Only the first step's last lines are shown; `--json` has every step's.
+fn format_setup_group(out: &mut String, report: &VerifyReport, reason: &str, members: &[usize]) {
+    let steps: Vec<&StepReport> = members.iter().map(|&index| &report.steps[index]).collect();
+    let place = |step: &StepReport| {
+        step.project.as_ref().map_or_else(String::new, |project| {
+            format!(" in {}", place_name(project))
+        })
+    };
+    let first = steps[0];
+    let note = format!(
+        " (the first of {} with this reason; `fscale verify --json` has the output of each)",
+        steps.len()
+    );
+    if !first.output_tail.is_empty() {
+        out.push_str(&format!(
+            "\nLast lines of {}{}{note}:\n",
+            first.name,
+            place(first)
+        ));
+        for line in &first.output_tail {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    if !first.first_error.is_empty() {
+        out.push_str(&format!(
+            "\nFirst error of {}{}{note}:\n",
+            first.name,
+            place(first)
+        ));
+        for line in &first.first_error {
+            out.push_str(&format!("  {line}\n"));
+        }
+    }
+    out.push_str(&format!(
+        "\nSetup needed for {} steps, all for one reason: {reason}. The environment is not ready, so this is not a problem in the code. Do not change code for it.\n",
+        steps.len()
+    ));
+    for step in steps {
+        let place = place(step);
+        out.push_str(&format!("- {}{place}\n", step.name));
+        match &step.fix {
+            Some(fix) => out.push_str(&format!("  Set it up{place}: {fix}\n")),
+            None => out.push_str("  Set up what the reason names, or ask a person to.\n"),
+        }
+        if let Some(command) = &step.command {
+            out.push_str(&format!("  Then run again{place}: {command}\n"));
+        }
+    }
+}
+
 /// Renders the compact summary. No durations, so the text is stable.
 #[must_use]
 pub fn format_verify_human(report: &VerifyReport) -> String {
@@ -3382,7 +3491,22 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         .and_then(|base| base.commit.as_deref())
         .map(|commit| commit[..commit.len().min(7)].to_owned())
         .unwrap_or_default();
-    for failure in report.steps.iter().filter(|step| blocks(step.status)) {
+    let shared = shared_setup_reasons(report);
+    for (index, failure) in report
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| blocks(step.status))
+    {
+        // Several steps with the same setup problem: one block, where the
+        // first of them is.
+        if let Some((reason, members)) = shared.iter().find(|(_, members)| members.contains(&index))
+        {
+            if members[0] == index {
+                format_setup_group(&mut out, report, reason, members);
+            }
+            continue;
+        }
         let place = failure
             .project
             .as_ref()
@@ -4901,6 +5025,81 @@ mod tests {
     }
 
     #[test]
+    fn projects_with_the_same_setup_problem_share_one_block() {
+        let fixture = Fixture::new(
+            &[
+                ("a/x.txt", ""),
+                ("b/x.txt", ""),
+                ("c/x.txt", ""),
+                ("d/x.txt", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let jwt = say_and_exit("E   ModuleNotFoundError: No module named 'jwt'", 2);
+        let flask = say_and_exit("E   ModuleNotFoundError: No module named 'flask'", 2);
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: vec![
+                project("a", &[("test", &jwt)], Some("pip install -r a.txt")),
+                project("b", &[("test", &flask)], Some("pip install -r b.txt")),
+                project("c", &[("test", &jwt)], Some("pip install -r c.txt")),
+                project("d", &[("test", &jwt)], None),
+            ],
+            ..VerifyPlan::default()
+        };
+        let report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.result, VerifyResult::SetupNeeded);
+        let text = format_verify_human(&report);
+        // The reason once, then each project with its own commands.
+        let group = format!(
+            "\nSetup needed for 3 steps, all for one reason: the Python module 'jwt' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.\n- test in a\n  Set it up in a: pip install -r a.txt\n  Then run again in a: {jwt}\n- test in c\n  Set it up in c: pip install -r c.txt\n  Then run again in c: {jwt}\n- test in d\n  Set up what the reason names, or ask a person to.\n  Then run again in d: {jwt}\n"
+        );
+        assert!(text.contains(&group), "{text}");
+        assert_eq!(
+            text.matches("the Python module 'jwt' is not installed. The")
+                .count(),
+            1
+        );
+        // The last lines of the first one only.
+        assert!(
+            text.contains("\nLast lines of test in a (the first of 3 with this reason; `fscale verify --json` has the output of each):\n"),
+            "{text}"
+        );
+        assert!(!text.contains("Last lines of test in c"), "{text}");
+        // A project with its own reason keeps today's layout.
+        assert!(
+            text.contains("\nSetup needed for test in b: the environment is not ready, so this is not a problem in the code. Do not change code for it.\nSet it up in b: pip install -r b.txt\nThen run again in b: "),
+            "{text}"
+        );
+        assert!(text.contains("Last lines of test in b:\n"), "{text}");
+        // The block comes where the first of its steps is: before b's.
+        assert!(text.find("- test in a").unwrap() < text.find("for test in b:").unwrap());
+        // The JSON still has every step with its own detail and fix.
+        let json = format_verify_json(&report);
+        assert_eq!(
+            json.matches("\"status\": \"setup-needed\"").count(),
+            4,
+            "{json}"
+        );
+        assert!(json.contains("\"fix\": \"pip install -r c.txt\""), "{json}");
+    }
+
+    #[test]
+    fn the_reason_of_a_setup_step_leaves_out_its_timings() {
+        for (detail, reason) in [
+            ("pytest -q (exit 2): the Python module 'jwt' is not installed", Some("the Python module 'jwt' is not installed")),
+            ("pytest -q (stopped early after 12s): could not connect to Redis on localhost:6379; the service is probably not running, so start it", Some("could not connect to Redis on localhost:6379; the service is probably not running, so start it")),
+            ("pytest -q (stopped early after 3m 2s; its first error shows could not log in to MySQL on localhost: password authentication failed (x))", Some("could not log in to MySQL on localhost: password authentication failed (x)")),
+            ("pytest -q (no result within 5m; its first error shows the package 'zod' is not installed)", Some("the package 'zod' is not installed")),
+            ("pytest -q (exit 2)", None),
+            ("other (exit 2): x", None),
+        ] {
+            assert_eq!(setup_reason(detail, "pytest -q"), reason, "{detail}");
+        }
+    }
+
+    #[test]
     fn plans_carry_each_projects_install_command() {
         let (fixture, facts) = course_facts();
         let plan = plan_verify(
@@ -4916,8 +5115,62 @@ mod tests {
             audit.install.as_deref(),
             Some("python -m pip install -r requirements-dev.txt")
         );
+        // The frontend has a package-lock.json: `npm install` would rewrite
+        // it, `npm ci` installs exactly what it says.
+        let frontend = plan.projects.last().unwrap();
+        assert_eq!(frontend.install.as_deref(), Some("npm ci"));
+        // Without the lockfile, the plain install.
+        std::fs::remove_file(fixture.root().join("frontend").join("package-lock.json")).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
         let frontend = plan.projects.last().unwrap();
         assert_eq!(frontend.install.as_deref(), Some("npm install"));
+    }
+
+    #[test]
+    fn the_setup_text_names_the_install_that_keeps_the_lockfile() {
+        // A pnpm project and a uv project, each with its lockfile.
+        let fixture = Fixture::new(
+            &[
+                ("web/package.json", r#"{"name":"web","scripts":{"lint":"eslint ."}}"#),
+                ("web/pnpm-lock.yaml", "lockfileVersion: '9.0'\n"),
+                (
+                    "api/pyproject.toml",
+                    "[project]\nname = \"api\"\nversion = \"0.1.0\"\n[dependency-groups]\ndev = [\"pytest\"]\n",
+                ),
+                ("api/uv.lock", "version = 1\n"),
+                ("api/tests/test_x.py", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = crate::facts::detect_facts_with(fixture.root(), None).unwrap();
+        let plan = plan_verify(
+            fixture.root(),
+            &facts,
+            &VerifyConfig::default(),
+            false,
+            None,
+        );
+        let install = |root: &str| {
+            plan.projects
+                .iter()
+                .find(|project| project.root == root)
+                .and_then(|project| project.install.clone())
+        };
+        assert_eq!(
+            install("web").as_deref(),
+            Some("pnpm install --frozen-lockfile")
+        );
+        assert_eq!(install("api").as_deref(), Some("uv sync --locked"));
+        // What facts records, and the rules write into AGENTS.md, is unchanged.
+        let web = facts.projects.iter().find(|p| p.root == "web").unwrap();
+        assert_eq!(web.commands.install.as_deref(), Some("pnpm install"));
     }
 
     #[test]
