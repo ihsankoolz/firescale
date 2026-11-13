@@ -525,7 +525,9 @@ Decisions in ADR 0039. `cargo test` per-test labels are read from its text outpu
 
 ---
 
-## M22 — Faster generated CI and a shared cache ☐
+## M22 — Faster generated CI and a shared cache ◐ (the last box needs 0.3.0 on npm)
+
+Decisions in ADR 0041, with what GitHub's docs said on 2026-11-13. The pull request job has `cache-mode: read` and only restore steps; records are small (key, result, time, output digest, writer) and used only when written from the default branch; laptops do not read the shared cache yet (see "Later").
 
 **Build**
 
@@ -536,9 +538,9 @@ Decisions in ADR 0039. `cargo test` per-test labels are read from its text outpu
 
 **Done when**
 
-- ☐ The generated workflow has a snapshot test, and a pull request job in it cannot write the shared cache, proven by a test that reads the workflow.
-- ☐ A step result restored from the shared cache is reused only on an exact key match, proven by a test.
-- ☐ A pull request in a fixture repo on GitHub runs only its affected projects and gets cache hits from the default branch. Run by hand, with the output in the pull request.
+- ☑ The generated workflow has a snapshot test, and a pull request job in it cannot write the shared cache, proven by a test that reads the workflow.
+- ☑ A step result restored from the shared cache is reused only on an exact key match, proven by a test.
+- ☐ A pull request in a fixture repo on GitHub runs only its affected projects and gets cache hits from the default branch. Run by hand, with the output in the pull request. Open: it needs a firescale on npm with `--shared-cache` (0.3.0, not yet published).
 
 ---
 
@@ -655,3 +657,4 @@ One milestone and one pull request per pack, with the same "Build" and "Done whe
 - A public benchmark built from fix ledgers.
 - A thin MCP server; Nx plugins for EAS and Supabase.
 - Test-level selection: run only the tests a change can reach, below the project level (ADR 0031).
+- Laptops read the shared step cache of CI (ADR 0041): today only CI reads it. It needs a token on each machine and a way to check who wrote a record that does not rest on the cache's scoping.

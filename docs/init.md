@@ -40,7 +40,7 @@ In an empty folder (a folder that holds nothing, or only `.git`), `init`:
 3. runs every fix until nothing is left to fix,
 4. prints the changes, then the violations that no fix can repair.
 
-With the `core` pack that gives you a `.gitignore`, a starter CI workflow that runs `npx firescale verify` on pull requests, and a README skeleton. The workflow and the README are yours from then on: firescale created them and will not rewrite them.
+With the `core` pack that gives you a `.gitignore`, a CI workflow that runs `npx firescale verify` on pull requests (only what each one changes) and on pushes, with a shared step cache ([ci.md](ci.md)), and a README skeleton. The README is yours from then on. The workflow is yours as soon as you edit it: until then, `fscale sync` replaces it when firescale has a newer one, and after your first edit it never touches it again.
 
 `--packs` takes built-in pack names, separated by commas. Add a custom pack by editing `packs` in the config afterwards.
 
@@ -119,8 +119,8 @@ A bad config, an unknown pack and a bad `after` declaration are all found before
 - In a dry run, what custom TypeScript rules would still report afterwards is not listed, because the Node host reads the real repo, not the scratch copy. Their fixes are previewed.
 - The preview of `adopt --dry-run` and `sync --check` runs in a copy of the repo that holds tracked files, files git does not ignore, folders and symbolic links. Files that git ignores are not in it, and neither are the repo's own git settings (`.git/info/exclude`, sparse checkout), so in such repos the preview can differ from the real run.
 - Files are written in place, not through a temporary file. If the disk fills up or the process is killed while a fix appends to `.gitignore`, that file can be left cut short.
-- The starter workflow calls `npx firescale verify`, which needs firescale on npm. Until 0.1.0 is published it fails at that step.
-- The starter workflow has an install step only for npm and pnpm. For anything else it says so under "To review".
+- The workflow calls `npx firescale verify --shared-cache …`, which needs a firescale on npm that knows `--shared-cache` (0.3.0 or later). With an older one it fails at that step.
+- The workflow installs only npm, pnpm and pip projects. For anything else it says so under "To review".
 - These commands print text only. There is no `--json` output yet.
 
 ## Agent files (the `agent-ready` pack)

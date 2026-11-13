@@ -200,7 +200,7 @@ Each agent sits behind an adapter interface. Exact CLI flags must be confirmed a
 
 - A verify step that **passed** is cached on the machine, keyed by the firescale version, the command, the hashes of the project's files and of the projects and shared folders it depends on, the lockfile, the tool versions, the OS and CPU architecture, and an allowlist of environment variables. A failure always runs again.
 - A step that needs a network service that is not in the repo is never cached.
-- The CI that `init` generates keeps the cache in the GitHub Actions cache. Only pushes to the default branch write it; pull requests and laptops only read it, so a pull request cannot plant a result that the default branch trusts (CVE-2025-36852).
+- The CI that `init` generates keeps the cache in the GitHub Actions cache. Only pushes to the default branch write it; pull requests only read it, so a pull request cannot plant a result that the default branch trusts (CVE-2025-36852). Laptops do not read it yet (ADR 0041).
 
 ### Blame-aware verify
 
