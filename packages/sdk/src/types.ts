@@ -170,7 +170,8 @@ export interface FirescaleConfig {
 
 /**
  * A time limit: a number of seconds, a text such as `"90s"`, `"10m"`, `"1h"`
- * or `"1h 30m"`, or `false` for no limit. The default is 10 minutes a step.
+ * or `"1h 30m"`, or `false` for no limit. By default a step is stopped after
+ * 10 minutes with no new output, or 60 minutes in all (ADR 0043).
  */
 export type VerifyTimeout = number | string | false;
 
@@ -203,8 +204,23 @@ export interface VerifyProjectSettings extends VerifySteps {
 export interface VerifyConfig extends VerifySteps {
   /** `true` makes a step that was skipped for lack of a command fail the run. Default `false`. */
   failOnSkipped?: boolean;
-  /** The time limit of every step, unless a more specific one is set. Default `"10m"`. */
+  /**
+   * The overall time limit of every step, unless a limit is set for the step
+   * or its project, which then is the only one. Default `"60m"` (ADR 0043).
+   */
   timeout?: VerifyTimeout;
+  /**
+   * How long a step may print nothing new before it is stopped; `false` for
+   * no such limit. Not used for a step whose limit is set by step or project.
+   * Default `"10m"` (ADR 0043).
+   */
+  idleTimeout?: VerifyTimeout;
+  /**
+   * `true`: a step that passes on the head also runs on the base commit, so
+   * it can be labelled `fixed`. Default `false`: only steps that did not pass
+   * run on the base (ADR 0043).
+   */
+  labelFixed?: boolean;
   /** `false`: do not set `CI=1` for the commands. Default `true`. */
   ci?: boolean;
   /**
