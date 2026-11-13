@@ -25,6 +25,8 @@ blake3 = "=1.8.7"
 tree-sitter = "=0.26.3"
 tree-sitter-python = "=0.25.0"
 tree-sitter-typescript = "=0.23.2"
+# The tamper guard reads Rust tests (M24, ADR 0044).
+tree-sitter-rust = "=0.24.2"
 # Not used directly: held at 0.1.7 because 0.1.8+ needs Rust 1.90.
 tree-sitter-language = "=0.1.7"
 
