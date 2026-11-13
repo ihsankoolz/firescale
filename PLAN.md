@@ -583,18 +583,22 @@ Not a milestone. Running 0.3.0 on the course project (Windows 11) blocked on a h
 
 ---
 
-## M24 — Tamper guard: more languages and policy ☐
+## M24 — Tamper guard: more languages and policy ☑
+
+Decisions in ADR 0044: pytest and unittest, then Rust (`tree-sitter-rust` 0.24.2); the misses ADR 0042 admitted closed where the syntax tree makes them certain; lint suppressions brought forward from M25; the policy keys `testPaths` and `allow`, read from the base commit.
 
 **Build**
 
 - The same counts for Rust and Python.
 - Policy in the firescale config: protected test paths and allowed exceptions. It is read from the **base commit**, never from the head.
+- Added by the owner for this milestone: Python first (the owner's project is five pytest services: deleted tests, `skip`, `skipif`, `xfail`, a bare `return` or `pass` replacing the body, removed assertions); `if (false)` or an early `return` before a test's assertions, and an assertion replaced by one that cannot fail, each with a caught case and a not-a-finding case; new lint-disable comments and `allow` attributes as net counts (from M25).
 
 **Done when**
 
-- ☐ Skipping a test, deleting a test and removing an assertion are each caught in Rust and Python fixture repos, and moves and renames are not findings.
-- ☐ Loosening the policy in the same change has no effect, proven by a test.
-- ☐ A file firescale cannot parse is reported as "not checked", never as clean.
+- ☑ Skipping a test, deleting a test and removing an assertion are each caught in Rust and Python fixture repos, and moves and renames are not findings (`bench/tamper-corpus.json`, `py:` and `rs:` cases, run by `tamper.test.ts`).
+- ☑ Loosening the policy in the same change has no effect, proven by tests: `"off"` or `{ "policy": "off" }`, a wider `allow`, and a dropped `testPaths` entry in the change all leave the base's policy in force.
+- ☑ A file firescale cannot parse is reported as "not checked", never as clean, in every language (a `not-checked` case for each).
+- ☑ Each new kind of finding has a caught case and a not-a-finding case in every language; the counts are in `bench/RESULTS.md`, marked as fixture counts, not a measured rate (M26).
 
 ---
 
@@ -603,14 +607,14 @@ Not a milestone. Running 0.3.0 on the course project (Windows 11) blocked on a h
 **Build**
 
 - More detectors, same base-versus-head method:
-  - new lint-disable comments and `allow` attributes (net count per file),
+  - ~~new lint-disable comments and `allow` attributes~~: done in M24 (ADR 0044), counted per rule over the whole change rather than per file; suppressions turned off in linter config files stay here,
   - lowered coverage thresholds in the common config files,
   - CI steps removed or made unable to fail (`continue-on-error`, `|| true`, a deleted verify step),
   - `--no-verify` in scripts, hooks or CI.
 
 **Done when**
 
-- ☐ Each of the four detectors has a caught case and a not-a-finding case in fixture repos.
+- ☐ Each of the remaining three detectors (and rules turned off in linter config) has a caught case and a not-a-finding case in fixture repos.
 - ☐ Every finding names the file, the line, and what changed against the base.
 
 ---

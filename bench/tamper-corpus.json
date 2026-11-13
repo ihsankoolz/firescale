@@ -1,5 +1,5 @@
 {
-  "about": "Labelled changes for the tamper guard (ADR 0042). expect lists the kinds of finding a case must give; an empty list means none. Each case is a git repo whose main branch has base and whose working tree on a branch has head (null deletes a file).",
+  "about": "Labelled changes for the tamper guard (ADR 0042, ADR 0044). expect lists the kinds of finding a case must give; an empty list means none. Each case is a git repo whose main branch has base and whose working tree on a branch has head (null deletes a file). The cases were written together with the guard: their counts show it does what the ADRs say, not a measured false-positive or miss rate (M26 measures that).",
   "cases": [
     {
       "name": "ts: a test deleted",
@@ -454,6 +454,1335 @@
       },
       "head": {
         "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect.soft(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion wrapped in if (false)",
+      "expect": ["assertion-removed"],
+      "note": "The assertion is still written but never runs (ADR 0044).",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    if (false) {\n      expect(sub(3, 1)).toBe(2);\n    }\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an early return before the assertions",
+      "expect": ["assertion-removed"],
+      "note": "The test still computes something, then returns before its assertions.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    const sum = add(1, 2);\n    return;\n    expect(sum).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: a return as the first statement of a test",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The body runs nothing: the test is as good as skipped.",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  return;\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test wrapped in if (false)",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The test is never registered.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  if (false) {\n    it(\"subtracts\", () => {\n      expect(sub(3, 1)).toBe(2);\n    });\n  }\n});\n"
+      }
+    },
+    {
+      "name": "ts: an assertion replaced by expect(true).toBe(true)",
+      "expect": ["assertion-removed"],
+      "note": "An assertion that cannot fail is not counted.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(true).toBe(true);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "js: an assertion replaced by assert.ok(true)",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.ok(true);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The test still exists and passes, testing nothing.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {});\n});\n"
+      }
+    },
+    {
+      "name": "ts: a placeholder expect(true).toBe(true) kept while a test is added",
+      "expect": [],
+      "note": "A placeholder on both sides counts on neither.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"loads\", () => {\n    expect(true).toBe(true);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"loads\", () => {\n    expect(true).toBe(true);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n\n  it(\"adds negatives\", () => {\n    expect(add(-1, -2)).toBe(-3);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a dead if (false) block removed",
+      "expect": [],
+      "note": "Code that never ran was not counted on the base.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n    if (false) {\n      expect(sub(1, 1)).toBe(0);\n    }\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an early return removed",
+      "expect": [],
+      "note": "Turning an assertion back on is not a finding.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    const diff = sub(3, 1);\n    return;\n    expect(diff).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    const diff = sub(3, 1);\n    expect(diff).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a conditional return before an assertion",
+      "expect": [],
+      "note": "Only a return that always runs makes what follows unreachable.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\nexport const sub = (a: number, b: number): number => a - b;\n",
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add, sub } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n    expect(add(0, 0)).toBe(0);\n  });\n\n  it(\"subtracts\", () => {\n    if (typeof sub !== \"function\") {\n      return;\n    }\n    expect(sub(3, 1)).toBe(2);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: an eslint-disable-next-line added",
+      "expect": ["suppression-added"],
+      "note": "A new suppression in a source file, not a test.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "ts: a @ts-ignore added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // @ts-ignore\n  return total.toFixed(\"2\");\n}\n"
+      }
+    },
+    {
+      "name": "js: line disables replaced by one file-wide eslint-disable",
+      "expect": ["suppression-added"],
+      "note": "Fewer comments, but a wider reach: the range form is its own key.",
+      "base": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "/* eslint-disable no-console */\nfunction run(items) {\n  console.log(items.length);\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "js: an eslint-disable comment added to a test",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "math.js": "exports.add = (a, b) => a + b;\nexports.sub = (a, b) => a - b;\n",
+        "__tests__/math.js": "const assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      },
+      "head": {
+        "__tests__/math.js": "/* eslint-disable jest/no-disabled-tests */\nconst assert = require(\"node:assert\");\nconst { add, sub } = require(\"../math\");\n\ntest(\"adds\", () => {\n  assert.equal(add(1, 2), 3);\n  assert.equal(add(0, 0), 0);\n});\n\ntest(\"subtracts\", () => {\n  assert.equal(sub(3, 1), 2);\n});\n"
+      }
+    },
+    {
+      "name": "ts: a suppression moved with its code to another file",
+      "expect": [],
+      "note": "Counted per rule over the whole change, so a move is not a finding.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export { report } from \"./format\";\n",
+        "src/format.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "ts: @ts-ignore turned into @ts-expect-error",
+      "expect": [],
+      "note": "Both are one ts:ignore suppression; the second is stricter.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  // @ts-ignore\n  return total.toFixed(\"2\");\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // @ts-expect-error: toFixed takes a number\n  return total.toFixed(\"2\");\n}\n"
+      }
+    },
+    {
+      "name": "js: an eslint-disable removed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "js: eslint-disable-next-line mentioned in prose",
+      "expect": [],
+      "note": "A directive must open the comment.",
+      "base": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "// Do not add eslint-disable-next-line here: fix the code instead.\nfunction run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "ts: a reason added to an existing suppression",
+      "expect": [],
+      "note": "Same rule, same place.",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "export function report(total: number): string {\n  // eslint-disable-next-line no-console -- the CLI prints the total\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "py: a # noqa added to an import",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "import os\nfrom decimal import Decimal  # noqa: F401\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      }
+    },
+    {
+      "name": "py: a # type: ignore added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum(  # type: ignore[arg-type]\n        (Decimal(p) for p in prices), Decimal(0)\n    )\n"
+      }
+    },
+    {
+      "name": "py: a # pylint: disable moved with its function to another module",
+      "expect": [],
+      "note": "Counted per rule over the whole change.",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):  # pylint: disable=invalid-name\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "from app.totals import total\n\n__all__ = [\"total\"]\n",
+        "app/totals.py": "from decimal import Decimal\n\n\ndef total(prices):  # pylint: disable=invalid-name\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      }
+    },
+    {
+      "name": "py: noqa mentioned in a comment's prose",
+      "expect": [],
+      "note": "A directive must open its # part.",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      },
+      "head": {
+        "app/pricing.py": "# Keep imports used: do not reach for noqa here.\nfrom decimal import Decimal\n\n\ndef total(prices):\n    return sum((Decimal(p) for p in prices), Decimal(0))\n"
+      }
+    },
+    {
+      "name": "rs: an #[allow(dead_code)] added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\n#[allow(dead_code)]\nfn unused() -> u32 {\n    0\n}\n"
+      }
+    },
+    {
+      "name": "rs: a crate-wide #![allow(clippy::pedantic)] added",
+      "expect": ["suppression-added"],
+      "note": "An inner attribute reaches the whole module: its own key.",
+      "base": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "#![allow(clippy::pedantic)]\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      }
+    },
+    {
+      "name": "rs: #[allow] turned into #[expect]",
+      "expect": [],
+      "note": "Both suppress the lint; #[expect] also fails when it is no longer needed.",
+      "base": {
+        "src/pricing.rs": "#[allow(clippy::cast_possible_truncation)]\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "#[expect(clippy::cast_possible_truncation, reason = \"prices fit in u32\")]\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      }
+    },
+    {
+      "name": "rs: an #[allow] in a comment or a string",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "// Never add #[allow(dead_code)] here.\npub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub const NOTE: &str = \"#[allow(unused)]\";\n"
+      }
+    },
+    {
+      "name": "py: a test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "test_tax and its assertion are gone; tax still exists.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n"
+      }
+    },
+    {
+      "name": "py: a whole test file deleted, its subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "app/pricing.py stays, so the tests were not deleted with their subject.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": null
+      }
+    },
+    {
+      "name": "py: a test skipped with @pytest.mark.skip",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\n@pytest.mark.skip(reason=\"flaky\")\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a test skipped with @pytest.mark.skipif",
+      "expect": ["test-skipped"],
+      "note": "A condition that holds on the machine that runs it skips the test there.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\n@pytest.mark.skipif(tax(1) != 0.2, reason=\"rounding\")\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a test marked @pytest.mark.xfail",
+      "expect": ["test-skipped"],
+      "note": "An xfail test passes when it fails.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\n@pytest.mark.xfail\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a unittest test skipped with @unittest.skip",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_cart.py": "import unittest\n\nfrom app.pricing import discount, total\n\n\nclass TotalTest(unittest.TestCase):\n    def test_total(self):\n        x = total([1, 2])\n        self.assertEqual(x, 3)\n\n    def test_discount(self):\n        self.assertEqual(discount(100, 10), 90)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      },
+      "head": {
+        "tests/test_cart.py": "import unittest\n\nfrom app.pricing import discount, total\n\n\nclass TotalTest(unittest.TestCase):\n    @unittest.skip(\"broken on CI\")\n    def test_total(self):\n        x = total([1, 2])\n        self.assertEqual(x, 3)\n\n    def test_discount(self):\n        self.assertEqual(discount(100, 10), 90)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      }
+    },
+    {
+      "name": "py: a test body replaced by pass",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "A body that does nothing is a skipped test.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    pass\n"
+      }
+    },
+    {
+      "name": "py: a test body replaced by a bare return",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The assertion is gone and the body returns before doing anything.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    return\n"
+      }
+    },
+    {
+      "name": "py: an early return before the assertions",
+      "expect": ["assertion-removed"],
+      "note": "The assertions are still written below the return, but never run.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    prices = [1, 2]\n    return\n    assert total(prices) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: assertions wrapped in if False:",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    if False:\n        assert total([1, 2]) == 3\n        assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: assert subtotal == 3 replaced by assert True",
+      "expect": ["assertion-removed"],
+      "note": "assert True cannot fail, so it is not counted.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    subtotal = total([1, 2])\n    assert subtotal == 3\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    subtotal = total([1, 2])\n    assert True\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n"
+      }
+    },
+    {
+      "name": "py: self.assertEqual(x, 3) replaced by self.assertTrue(True)",
+      "expect": ["assertion-removed"],
+      "note": "An assertion of constants cannot fail, so it is not counted.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_cart.py": "import unittest\n\nfrom app.pricing import discount, total\n\n\nclass TotalTest(unittest.TestCase):\n    def test_total(self):\n        x = total([1, 2])\n        self.assertEqual(x, 3)\n\n    def test_discount(self):\n        self.assertEqual(discount(100, 10), 90)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      },
+      "head": {
+        "tests/test_cart.py": "import unittest\n\nfrom app.pricing import discount, total\n\n\nclass TotalTest(unittest.TestCase):\n    def test_total(self):\n        x = total([1, 2])\n        self.assertTrue(True)\n\n    def test_discount(self):\n        self.assertEqual(discount(100, 10), 90)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      }
+    },
+    {
+      "name": "py: one assertion removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: one parametrize row given marks=pytest.mark.skip",
+      "expect": ["test-skipped"],
+      "note": "The test still has three rows, but one of them no longer runs.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\n@pytest.mark.parametrize(\n    \"percent, expected\",\n    [\n        (10, 90),\n        (20, 80),\n        (50, 50),\n    ],\n)\ndef test_discount(percent, expected):\n    assert discount(100, percent) == expected\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\n@pytest.mark.parametrize(\n    \"percent, expected\",\n    [\n        (10, 90),\n        pytest.param(20, 80, marks=pytest.mark.skip),\n        (50, 50),\n    ],\n)\ndef test_discount(percent, expected):\n    assert discount(100, percent) == expected\n"
+      }
+    },
+    {
+      "name": "py: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "A syntax error: the file's tests cannot be compared, which is never taken as clean.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax(:\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a test renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax_is_twenty_percent():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a test moved to another test file",
+      "expect": [],
+      "note": "Both files are in the change; the totals are the same.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n",
+        "tests/test_tax.py": "from app.pricing import tax\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a test file renamed",
+      "expect": [],
+      "note": "A delete and an add of the same tests.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": null,
+        "tests/test_prices.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a test class renamed",
+      "expect": [],
+      "note": "Every id changes; the counts do not.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_cart.py": "import unittest\n\nfrom app.pricing import discount, total\n\n\nclass TotalTest(unittest.TestCase):\n    def test_total(self):\n        x = total([1, 2])\n        self.assertEqual(x, 3)\n\n    def test_discount(self):\n        self.assertEqual(discount(100, 10), 90)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      },
+      "head": {
+        "tests/test_cart.py": "import unittest\n\nfrom app.pricing import discount, total\n\n\nclass PricingTest(unittest.TestCase):\n    def test_total(self):\n        x = total([1, 2])\n        self.assertEqual(x, 3)\n\n    def test_discount(self):\n        self.assertEqual(discount(100, 10), 90)\n\n\nif __name__ == \"__main__\":\n    unittest.main()\n"
+      }
+    },
+    {
+      "name": "py: a test split in two",
+      "expect": [],
+      "note": "One test more, the same assertions.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total_of_two():\n    assert total([1, 2]) == 3\n\n\ndef test_total_of_none():\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: three tests folded into one parametrized test",
+      "expect": [],
+      "note": "Three rows weigh as three tests, and the one assertion as three.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_discount_10():\n    assert discount(100, 10) == 90\n\n\ndef test_discount_20():\n    assert discount(100, 20) == 80\n\n\ndef test_discount_50():\n    assert discount(100, 50) == 50\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\n@pytest.mark.parametrize(\n    \"percent, expected\",\n    [\n        (10, 90),\n        (20, 80),\n        (50, 50),\n    ],\n)\ndef test_discount(percent, expected):\n    assert discount(100, percent) == expected\n"
+      }
+    },
+    {
+      "name": "py: a file reformatted",
+      "expect": [],
+      "note": "Quotes, line breaks and blank lines change; the tree's counts do not.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\nfrom app.pricing import (\n    discount,\n    tax,\n    total,\n)\n\ndef test_total( ):\n    assert total(\n        [1, 2]\n    ) == 3\n    assert total( [] ) == 0\n\ndef test_discount():\n    assert (\n        discount(100, 10) == 90\n    )\n\ndef test_tax():\n    assert tax(100)==20\n"
+      }
+    },
+    {
+      "name": "py: assertions made stricter",
+      "expect": [],
+      "note": "One assertion for one: an isinstance check added, pytest.approx used.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    x = total([1, 2])\n    assert x == 3 and isinstance(x, int)\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == pytest.approx(20)\n"
+      }
+    },
+    {
+      "name": "py: tests added",
+      "expect": [],
+      "note": "",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n\n\ndef test_tax_rate():\n    assert tax(100, rate=0.1) == 10\n"
+      }
+    },
+    {
+      "name": "py: a skip removed",
+      "expect": [],
+      "note": "A skipped test turned back on.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\n@pytest.mark.skip(reason=\"flaky\")\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a placeholder assert True on both sides",
+      "expect": [],
+      "note": "assert True is not counted on either side; the real assertions are kept.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n\n\ndef test_imports():\n    assert True\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n\n\ndef test_imports():\n    \"\"\"The module imports.\"\"\"\n    assert True\n"
+      }
+    },
+    {
+      "name": "py: tests deleted with the module they test",
+      "expect": [],
+      "note": "app/shipping.py and its tests are deleted together; no name of it is left.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "app/shipping.py": "def shipping(weight):\n    return 5 if weight < 10 else 12\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n",
+        "tests/test_shipping.py": "from app.shipping import shipping\n\n\ndef test_light():\n    assert shipping(1) == 5\n\n\ndef test_heavy():\n    assert shipping(20) == 12\n"
+      },
+      "head": {
+        "app/shipping.py": null,
+        "tests/test_shipping.py": null
+      }
+    },
+    {
+      "name": "py: a docstring added",
+      "expect": [],
+      "note": "",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    \"\"\"Tax is twenty percent by default.\"\"\"\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "rs: a test deleted from mod tests",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "Unit tests next to the code: applies_a_discount is gone and discount still exists.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: a whole tests/ file deleted, its subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "src/pricing.rs stays. The helper prices() the file defines is test code, not a subject, so its deletion excuses nothing.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": null
+      }
+    },
+    {
+      "name": "rs: a test ignored with #[ignore]",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\n#[ignore = \"flaky\"]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test ignored on Windows with cfg_attr",
+      "expect": ["test-skipped"],
+      "note": "#[cfg_attr(windows, ignore)] runs the test only sometimes, like skipIf.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    #[cfg_attr(windows, ignore)]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: an assert_eq! removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "fn totals_prices() {} still counts as a test, but one that does nothing.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: return; inserted before the assertions",
+      "expect": ["assertion-removed"],
+      "note": "The assertions after the return never run. The test still runs its first line, so it is not a skip.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        return;\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: assertions wrapped in if false",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    if false {\n        assert_eq!(sum, 3);\n        assert_eq!(total(&[]), 0);\n    }\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: assert_eq!(total, 3) replaced by assert!(true)",
+      "expect": ["assertion-removed"],
+      "note": "assert!(true) cannot fail, so it is not an assertion.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert!(true);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "The closing brace of applies_a_discount is missing, so its tests cannot be counted.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n\n"
+      }
+    },
+    {
+      "name": "rs: a test fn renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn takes_ten_percent_off() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: mod tests renamed",
+      "expect": [],
+      "note": "Every id changes from tests:: to unit:: ; the counts do not.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod unit {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test moved from mod tests to tests/",
+      "expect": [],
+      "note": "One test fewer in src/pricing.rs, one more in tests/pricing.rs.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n}\n",
+        "tests/pricing.rs": "use shop::pricing::discount;\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test file reformatted",
+      "expect": [],
+      "note": "Line breaks and indentation change; the syntax tree's counts do not.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> { vec![1, 2] }\n\n#[test] fn totals_prices() {\n        let sum = total(&prices());\n        assert_eq!(\n            sum,\n            3\n        );\n        assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() { assert_eq!(discount(100, 10), 90); }\n"
+      }
+    },
+    {
+      "name": "rs: assert!(a == b) turned into assert_eq!(a, b)",
+      "expect": [],
+      "note": "One assertion for one.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert!(sum == 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: tests added",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n}\n"
+      },
+      "head": {
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn totals_prices() {\n        let total = total(&[1, 2]);\n        assert_eq!(total, 3);\n        assert_eq!(super::total(&[]), 0);\n    }\n\n    #[test]\n    fn applies_a_discount() {\n        assert_eq!(discount(100, 10), 90);\n    }\n\n    #[test]\n    fn a_zero_discount_keeps_the_price() {\n        assert_eq!(discount(100, 0), 100);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: an #[ignore] removed",
+      "expect": [],
+      "note": "A skipped test turned back on.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\n#[ignore]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      }
+    },
+    {
+      "name": "rs: a source file deleted with its inline tests",
+      "expect": [],
+      "note": "src/old.rs and its mod tests are gone, and none of the names it defined is left in the change: the tests went with their subject.",
+      "base": {
+        "src/lib.rs": "pub mod old;\npub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "src/old.rs": "pub fn legacy_total(prices: &[u32]) -> u32 {\n    let mut sum = 0;\n    for price in prices {\n        sum += price;\n    }\n    sum\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn sums_in_a_loop() {\n        assert_eq!(legacy_total(&[1, 2]), 3);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/old.rs": null
+      }
+    },
+    {
+      "name": "rs: a #[should_panic] test added",
+      "expect": [],
+      "note": "should_panic is a test that runs, not a skip.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n"
+      },
+      "head": {
+        "tests/pricing.rs": "use shop::pricing::{discount, total};\n\nfn prices() -> Vec<u32> {\n    vec![1, 2]\n}\n\n#[test]\nfn totals_prices() {\n    let sum = total(&prices());\n    assert_eq!(sum, 3);\n    assert_eq!(total(&[]), 0);\n}\n\n#[test]\nfn applies_a_discount() {\n    assert_eq!(discount(100, 10), 90);\n}\n\n#[test]\n#[should_panic]\nfn a_discount_over_100_percent_panics() {\n    discount(100, 200);\n}\n"
+      }
+    },
+    {
+      "name": "rs: a placeholder assert!(true) on both sides",
+      "expect": [],
+      "note": "assert!(true) is not counted on either side, so changing the test around it is not a finding.",
+      "base": {
+        "src/lib.rs": "pub mod pricing;\n",
+        "src/pricing.rs": "pub fn total(prices: &[u32]) -> u32 {\n    prices.iter().sum()\n}\n\npub fn discount(price: u32, percent: u32) -> u32 {\n    price - price * percent / 100\n}\n",
+        "tests/smoke.rs": "use shop::pricing::total;\n\n#[test]\nfn runs() {\n    total(&[]);\n    assert!(true);\n}\n"
+      },
+      "head": {
+        "tests/smoke.rs": "use shop::pricing::total;\n\n#[test]\nfn runs() {\n    total(&[1, 2, 3]);\n    assert!(true, \"it did not panic\");\n}\n"
+      }
+    },
+    {
+      "name": "js: assert.fail on a path that must not be reached removed",
+      "expect": ["assertion-removed"],
+      "note": "An assertion that always fails is not one that cannot fail: it marks a path that must not run.",
+      "base": {
+        "parse.js": "exports.parse = (text) => {\n  if (!/^\\d+$/.test(text)) throw new Error(\"not a number\");\n  return Number(text);\n};\n",
+        "__tests__/parse.js": "const assert = require(\"node:assert\");\nconst { parse } = require(\"../parse\");\n\ntest(\"rejects words\", () => {\n  try {\n    parse(\"x\");\n    assert.fail(\"parse should throw\");\n  } catch (error) {\n    assert.match(String(error), /not a number/);\n  }\n});\n"
+      },
+      "head": {
+        "__tests__/parse.js": "const assert = require(\"node:assert\");\nconst { parse } = require(\"../parse\");\n\ntest(\"rejects words\", () => {\n  try {\n    parse(\"x\");\n  } catch (error) {\n    assert.match(String(error), /not a number/);\n  }\n});\n"
+      }
+    },
+    {
+      "name": "rs: assert!(false) in a match arm removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => assert!(false, \"parse should fail\"),\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      },
+      "head": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => {}\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test module gated behind a feature",
+      "expect": ["test-skipped"],
+      "note": "cargo test without the feature compiles none of these tests.",
+      "base": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => assert!(false, \"parse should fail\"),\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      },
+      "head": {
+        "src/parse.rs": "pub fn parse(text: &str) -> Result<u32, String> {\n    text.parse::<u32>().map_err(|e| e.to_string())\n}\n\n#[cfg(all(test, feature = \"slow-tests\"))]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn rejects_words() {\n        match parse(\"x\") {\n            Ok(_) => assert!(false, \"parse should fail\"),\n            Err(message) => assert!(!message.is_empty()),\n        }\n    }\n\n    #[test]\n    fn reads_numbers() {\n        assert_eq!(parse(\"12\"), Ok(12));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "rs: an integration test file gated with #![cfg(feature)]",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "tests/parse.rs": "use parse::parse;\n\n#[test]\nfn reads_numbers() {\n    assert_eq!(parse(\"12\"), Ok(12));\n}\n"
+      },
+      "head": {
+        "tests/parse.rs": "#![cfg(feature = \"integration\")]\nuse parse::parse;\n\n#[test]\nfn reads_numbers() {\n    assert_eq!(parse(\"12\"), Ok(12));\n}\n"
+      }
+    },
+    {
+      "name": "rs: a test module in another file turned off with cfg(any())",
+      "expect": ["test-deleted"],
+      "note": "src/tests.rs is not part of the change; its declaration counts as one test.",
+      "base": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(test)]\nmod tests;\n",
+        "src/tests.rs": "use super::*;\n\n#[test]\nfn doubles() {\n    assert_eq!(double(2), 4);\n}\n\n#[test]\nfn doubles_zero() {\n    assert_eq!(double(0), 0);\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(any())]\nmod tests;\n"
+      }
+    },
+    {
+      "name": "rs: a test module in another file renamed",
+      "expect": [],
+      "note": "The declaration and the file are renamed together.",
+      "base": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(test)]\nmod tests;\n",
+        "src/tests.rs": "use super::*;\n\n#[test]\nfn doubles() {\n    assert_eq!(double(2), 4);\n}\n\n#[test]\nfn doubles_zero() {\n    assert_eq!(double(0), 0);\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn double(n: u32) -> u32 {\n    n * 2\n}\n\n#[cfg(test)]\nmod unit;\n",
+        "src/tests.rs": null,
+        "src/unit.rs": "use super::*;\n\n#[test]\nfn doubles() {\n    assert_eq!(double(2), 4);\n}\n\n#[test]\nfn doubles_zero() {\n    assert_eq!(double(0), 0);\n}\n"
+      }
+    },
+    {
+      "name": "rs: a #[cfg(unix)] test kept while another is added",
+      "expect": [],
+      "note": "A test gated on both sides counts as skipped on both.",
+      "base": {
+        "src/sep.rs": "pub fn sep() -> char {\n    '/'\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    #[cfg(unix)]\n    fn slash_on_unix() {\n        assert_eq!(sep(), '/');\n    }\n}\n"
+      },
+      "head": {
+        "src/sep.rs": "pub fn sep() -> char {\n    '/'\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    #[cfg(unix)]\n    fn slash_on_unix() {\n        assert_eq!(sep(), '/');\n    }\n\n    #[test]\n    fn is_ascii() {\n        assert!(sep().is_ascii());\n    }\n}\n"
+      }
+    },
+    {
+      "name": "py: tests deleted with their helper module, the subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "A factory beside the tests is a helper, not what they test: app/payments.py stays.",
+      "base": {
+        "app/__init__.py": "",
+        "app/payments.py": "def refund(order, amount):\n    if amount > order[\"total\"]:\n        raise ValueError(\"refund exceeds total\")\n    return order[\"total\"] - amount\n",
+        "tests/payments/__init__.py": "",
+        "tests/payments/factories.py": "def make_order(total=100):\n    return {\"id\": 1, \"total\": total}\n",
+        "tests/payments/test_refunds.py": "import pytest\n\nfrom app.payments import refund\nfrom .factories import make_order\n\n\ndef test_partial_refund():\n    assert refund(make_order(), 30) == 70\n\n\ndef test_refund_too_large():\n    with pytest.raises(ValueError):\n        refund(make_order(), 300)\n"
+      },
+      "head": {
+        "tests/payments/__init__.py": null,
+        "tests/payments/factories.py": null,
+        "tests/payments/test_refunds.py": null
+      }
+    },
+    {
+      "name": "ts: tests deleted with their fixture module, the subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "",
+      "base": {
+        "src/payments.ts": "export const refund = (order: { total: number }, amount: number): number => order.total - amount;\n",
+        "__tests__/fixtures.ts": "export const makeOrder = (total = 100) => ({ id: 1, total });\n",
+        "__tests__/payments.test.ts": "import { refund } from \"../src/payments\";\nimport { makeOrder } from \"./fixtures\";\n\nit(\"refunds part of an order\", () => {\n  expect(refund(makeOrder(), 30)).toBe(70);\n});\n"
+      },
+      "head": {
+        "__tests__/fixtures.ts": null,
+        "__tests__/payments.test.ts": null
+      }
+    },
+    {
+      "name": "py: # type: ignore narrowed to one error code",
+      "expect": [],
+      "note": "A narrower suppression in place of a wider one.",
+      "base": {
+        "app/pricing.py": "def total(order):\n    return order.total  # type: ignore\n"
+      },
+      "head": {
+        "app/pricing.py": "def total(order):\n    return order.total  # type: ignore[union-attr]\n"
+      }
+    },
+    {
+      "name": "ts: a bare eslint-disable-next-line narrowed to one rule",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/load.ts": "export function load(raw: string): unknown {\n  // eslint-disable-next-line\n  const data: any = JSON.parse(raw);\n  return data;\n}\n"
+      },
+      "head": {
+        "src/load.ts": "export function load(raw: string): unknown {\n  // eslint-disable-next-line @typescript-eslint/no-explicit-any\n  const data: any = JSON.parse(raw);\n  return data;\n}\n"
+      }
+    },
+    {
+      "name": "rs: #[allow(clippy::all)] narrowed to one lint",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/sum.rs": "#[allow(clippy::all)]\npub fn sum(values: &[u32]) -> u32 {\n    let mut total = 0;\n    for i in 0..values.len() {\n        total += values[i];\n    }\n    total\n}\n"
+      },
+      "head": {
+        "src/sum.rs": "#[allow(clippy::needless_range_loop)]\npub fn sum(values: &[u32]) -> u32 {\n    let mut total = 0;\n    for i in 0..values.len() {\n        total += values[i];\n    }\n    total\n}\n"
+      }
+    },
+    {
+      "name": "js: a file-wide eslint-disable split into line disables",
+      "expect": [],
+      "note": "Two narrower suppressions in the same file in place of the file-wide one.",
+      "base": {
+        "src/run.js": "/* eslint-disable no-console */\nfunction run(items) {\n  console.log(items.length);\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      },
+      "head": {
+        "src/run.js": "function run(items) {\n  // eslint-disable-next-line no-console\n  console.log(items.length);\n  // eslint-disable-next-line no-console\n  console.log(items[0]);\n  return items;\n}\nmodule.exports = { run };\n"
+      }
+    },
+    {
+      "name": "py: a # type: ignore moved to the top of the module",
+      "expect": ["suppression-added"],
+      "note": "Before the first statement, mypy ignores the whole module.",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)  # type: ignore\n"
+      },
+      "head": {
+        "app/pricing.py": "# type: ignore\nfrom decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)\n"
+      }
+    },
+    {
+      "name": "rs: an #[allow] moved from a function to its module",
+      "expect": ["suppression-added"],
+      "note": "On the mod item it reaches every function in it.",
+      "base": {
+        "src/lib.rs": "mod big {\n    #[allow(clippy::unwrap_used)]\n    pub fn first(values: &[u32]) -> u32 {\n        *values.first().unwrap()\n    }\n\n    pub fn last(values: &[u32]) -> u32 {\n        *values.last().unwrap_or(&0)\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "#[allow(clippy::unwrap_used)]\nmod big {\n    pub fn first(values: &[u32]) -> u32 {\n        *values.first().unwrap()\n    }\n\n    pub fn last(values: &[u32]) -> u32 {\n        *values.last().unwrap_or(&0)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "ts: rules turned off in an inline eslint configuration comment",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/report.ts": "export function report(total: number): string {\n  return `total: ${total}`;\n}\n"
+      },
+      "head": {
+        "src/report.ts": "/* eslint no-console: \"off\" */\nexport function report(total: number): string {\n  console.log(total);\n  return `total: ${total}`;\n}\n"
+      }
+    },
+    {
+      "name": "py: # pylint: skip-file added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "app/pricing.py": "from decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)  # type: ignore\n"
+      },
+      "head": {
+        "app/pricing.py": "# pylint: skip-file\nfrom decimal import Decimal\n\n\ndef total(order):\n    return Decimal(order.total)  # type: ignore\n"
+      }
+    },
+    {
+      "name": "py: assert False in an except path removed",
+      "expect": ["assertion-removed"],
+      "note": "assert False after a call that must raise is how the test fails when it does not; it counts.",
+      "base": {
+        "app/parse.py": "def parse_price(text):\n    value = float(text)\n    if value < 0:\n        raise ValueError(\"negative price\")\n    return value\n",
+        "tests/test_parse.py": "from app.parse import parse_price\n\n\ndef test_parse():\n    assert parse_price(\"1.5\") == 1.5\n\n\ndef test_negative_is_rejected():\n    try:\n        parse_price(\"-1\")\n        assert False, \"a negative price must raise\"\n    except ValueError:\n        pass\n"
+      },
+      "head": {
+        "tests/test_parse.py": "from app.parse import parse_price\n\n\ndef test_parse():\n    assert parse_price(\"1.5\") == 1.5\n\n\ndef test_negative_is_rejected():\n    try:\n        parse_price(\"-1\")\n    except ValueError:\n        pass\n"
+      }
+    },
+    {
+      "name": "py: self.fail removed",
+      "expect": ["assertion-removed"],
+      "note": "self.fail(...) is an explicit failure: removing it is removing an assertion.",
+      "base": {
+        "app/parse.py": "def parse_price(text):\n    value = float(text)\n    if value < 0:\n        raise ValueError(\"negative price\")\n    return value\n",
+        "tests/test_parse.py": "import unittest\n\nfrom app.parse import parse_price\n\n\nclass ParseTests(unittest.TestCase):\n    def test_parse(self):\n        self.assertEqual(parse_price(\"1.5\"), 1.5)\n\n    def test_negative_is_rejected(self):\n        try:\n            parse_price(\"-1\")\n            self.fail(\"a negative price must raise\")\n        except ValueError:\n            pass\n"
+      },
+      "head": {
+        "tests/test_parse.py": "import unittest\n\nfrom app.parse import parse_price\n\n\nclass ParseTests(unittest.TestCase):\n    def test_parse(self):\n        self.assertEqual(parse_price(\"1.5\"), 1.5)\n\n    def test_negative_is_rejected(self):\n        try:\n            parse_price(\"-1\")\n        except ValueError:\n            pass\n"
+      }
+    },
+    {
+      "name": "py: a named skip mark applied",
+      "expect": ["test-skipped"],
+      "note": "needs_db is pytest.mark.skipif(...) given a name; @needs_db skips the test.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\nneeds_db = pytest.mark.skipif(True, reason=\"needs a database\")\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\n@needs_db\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: __test__ = False added",
+      "expect": ["test-skipped"],
+      "note": "pytest collects no test from a module that sets __test__ = False.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n__test__ = False\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: pytest.importorskip of a missing module added",
+      "expect": ["test-skipped"],
+      "note": "The module is not installed, so every test of the file is skipped.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfastmath = pytest.importorskip(\"fastmath_not_installed\")\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: setUp calling self.skipTest first",
+      "expect": ["test-skipped"],
+      "note": "A setUp that skips first skips every test of its class.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import unittest\n\nfrom app.pricing import tax, total\n\n\nclass PricingTests(unittest.TestCase):\n    def setUp(self):\n        self.prices = [1, 2]\n\n    def test_total(self):\n        self.assertEqual(total(self.prices), 3)\n\n    def test_tax(self):\n        self.assertEqual(tax(100), 20)\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import unittest\n\nfrom app.pricing import tax, total\n\n\nclass PricingTests(unittest.TestCase):\n    def setUp(self):\n        self.skipTest(\"pricing is being reworked\")\n        self.prices = [1, 2]\n\n    def test_total(self):\n        self.assertEqual(total(self.prices), 3)\n\n    def test_tax(self):\n        self.assertEqual(tax(100), 20)\n"
+      }
+    },
+    {
+      "name": "py: a module-level raise unittest.SkipTest",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "Raised while the module is imported: nothing after it is collected, so its tests are skipped and their assertions never run.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import unittest\n\nfrom app.pricing import tax, total\n\n\nclass PricingTests(unittest.TestCase):\n    def setUp(self):\n        self.prices = [1, 2]\n\n    def test_total(self):\n        self.assertEqual(total(self.prices), 3)\n\n    def test_tax(self):\n        self.assertEqual(tax(100), 20)\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import unittest\n\nfrom app.pricing import tax, total\n\nraise unittest.SkipTest(\"pricing is being reworked\")\n\n\nclass PricingTests(unittest.TestCase):\n    def setUp(self):\n        self.prices = [1, 2]\n\n    def test_total(self):\n        self.assertEqual(total(self.prices), 3)\n\n    def test_tax(self):\n        self.assertEqual(tax(100), 20)\n"
+      }
+    },
+    {
+      "name": "py: a collect_ignore entry added in conftest.py",
+      "expect": ["test-skipped"],
+      "note": "pytest no longer collects tests/test_checkout.py.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\ncollect_ignore = [\"test_legacy.py\"]\n",
+        "tests/test_checkout.py": "from app.pricing import total\n\n\ndef test_checkout_total(prices):\n    assert total(prices) == 6\n"
+      },
+      "head": {
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\ncollect_ignore = [\"test_legacy.py\", \"test_checkout.py\"]\n"
+      }
+    },
+    {
+      "name": "py: an autouse fixture that skips",
+      "expect": ["test-skipped"],
+      "note": "An autouse fixture in conftest.py that calls pytest.skip skips every test it reaches.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n",
+        "tests/test_checkout.py": "from app.pricing import total\n\n\ndef test_checkout_total(prices):\n    assert total(prices) == 6\n"
+      },
+      "head": {
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\n@pytest.fixture(autouse=True)\ndef pricing_is_off():\n    pytest.skip(\"pricing is being reworked\")\n"
+      }
+    },
+    {
+      "name": "py: an assert turned into an always-true tuple",
+      "expect": ["assertion-removed"],
+      "note": "assert (x == 3, \"msg\") asserts a non-empty tuple: it always passes.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert (total([1, 2]) == 3, \"the total is wrong\")\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a collect_ignore entry kept while a test is added",
+      "expect": [],
+      "note": "conftest.py gains a fixture; its collect_ignore entry stays.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\ncollect_ignore = [\"test_legacy.py\"]\n",
+        "tests/test_checkout.py": "from app.pricing import total\n\n\ndef test_checkout_total(prices):\n    assert total(prices) == 6\n"
+      },
+      "head": {
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\n@pytest.fixture\ndef empty():\n    return []\n\n\ncollect_ignore = [\"test_legacy.py\"]\n",
+        "tests/test_checkout.py": "from app.pricing import total\n\n\ndef test_checkout_total(prices):\n    assert total(prices) == 6\n\n\ndef test_checkout_empty(empty):\n    assert total(empty) == 0\n"
+      }
+    },
+    {
+      "name": "py: a pytest-bdd scenario test with a pass body added",
+      "expect": [],
+      "note": "@scenario supplies the test's body: a pass body is not a body that does nothing.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_cart_steps.py": "from pytest_bdd import given, scenario, then\n\nfrom app.pricing import total\n\n\n@scenario(\"cart.feature\", \"Total of an empty cart\")\ndef test_empty_cart():\n    pass\n\n\n@given(\"an empty cart\", target_fixture=\"cart\")\ndef empty_cart():\n    return []\n\n\n@then(\"the total is 0\")\ndef total_is_zero(cart):\n    assert total(cart) == 0\n"
+      }
+    },
+    {
+      "name": "py: parametrize rows moved into a module-level constant",
+      "expect": [],
+      "note": "The rows are the same two, read from CASES.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import total\n\n\n@pytest.mark.parametrize(\"prices, expected\", [([1, 2], 3), ([], 0)])\ndef test_total(prices, expected):\n    assert total(prices) == expected\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import total\n\nCASES = [\n    ([1, 2], 3),\n    ([], 0),\n]\n\n\n@pytest.mark.parametrize(\"prices, expected\", CASES)\ndef test_total(prices, expected):\n    assert total(prices) == expected\n"
+      }
+    },
+    {
+      "name": "py: assert False kept and a test added",
+      "expect": [],
+      "note": "The assert False is counted on both sides.",
+      "base": {
+        "app/parse.py": "def parse_price(text):\n    value = float(text)\n    if value < 0:\n        raise ValueError(\"negative price\")\n    return value\n",
+        "tests/test_parse.py": "from app.parse import parse_price\n\n\ndef test_parse():\n    assert parse_price(\"1.5\") == 1.5\n\n\ndef test_negative_is_rejected():\n    try:\n        parse_price(\"-1\")\n        assert False, \"a negative price must raise\"\n    except ValueError:\n        pass\n"
+      },
+      "head": {
+        "tests/test_parse.py": "from app.parse import parse_price\n\n\ndef test_parse():\n    assert parse_price(\"1.5\") == 1.5\n\n\ndef test_negative_is_rejected():\n    try:\n        parse_price(\"-1\")\n        assert False, \"a negative price must raise\"\n    except ValueError:\n        pass\n\n\ndef test_parse_integer():\n    assert parse_price(\"2\") == 2\n"
+      }
+    },
+    {
+      "name": "py: a named mark that is not a skip applied",
+      "expect": [],
+      "note": "slow = pytest.mark.slow only labels the test.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\ndef test_tax():\n    assert tax(100) == 20\n"
+      },
+      "head": {
+        "tests/test_pricing.py": "import pytest\n\nfrom app.pricing import discount, tax, total\n\nslow = pytest.mark.slow\n\n\ndef test_total():\n    assert total([1, 2]) == 3\n    assert total([]) == 0\n\n\ndef test_discount():\n    assert discount(100, 10) == 90\n\n\n@slow\ndef test_tax():\n    assert tax(100) == 20\n"
+      }
+    },
+    {
+      "name": "py: a collect_ignore entry removed from conftest.py",
+      "expect": [],
+      "note": "Running the tests again is not a finding: the entry or fixture counts with the skips only.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\ncollect_ignore = [\"test_legacy.py\", \"test_checkout.py\"]\n",
+        "tests/test_checkout.py": "from app.pricing import total\n\n\ndef test_checkout_total(prices):\n    assert total(prices) == 6\n"
+      },
+      "head": {
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\ncollect_ignore = [\"test_legacy.py\"]\n"
+      }
+    },
+    {
+      "name": "py: an autouse fixture that skips removed",
+      "expect": [],
+      "note": "Running the tests again is not a finding: the entry or fixture counts with the skips only.",
+      "base": {
+        "app/pricing.py": "def total(prices):\n    return sum(prices)\n\n\ndef discount(price, percent):\n    return round(price * (100 - percent) / 100, 2)\n\n\ndef tax(price, rate=0.2):\n    return round(price * rate, 2)\n",
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n\n\n@pytest.fixture(autouse=True)\ndef pricing_is_off():\n    pytest.skip(\"pricing is being reworked\")\n",
+        "tests/test_checkout.py": "from app.pricing import total\n\n\ndef test_checkout_total(prices):\n    assert total(prices) == 6\n"
+      },
+      "head": {
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n"
       }
     }
   ]

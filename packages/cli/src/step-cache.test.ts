@@ -380,7 +380,9 @@ describe('the step cache on the course project', () => {
     await repo.write('ruff.toml', 'line-length = 90\n');
     await run({ SHIM_VERSION: '2.0.0', PYTHONPATH: 'somewhere' });
     expect(projectsIn(await calls())).toEqual(everything);
-  });
+    // About ten verify runs of a six-project repo: 18.6 s on its own on a
+    // Windows runner, so the default 30 s left no room for a busy one.
+  }, 90_000);
 });
 
 describe('the step cache keys a step on the files as they are when it starts', () => {

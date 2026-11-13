@@ -22,6 +22,13 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M24) Lint suppressions are counted per rule over the whole change, not per file** as PLAN.md's M25 line said (ADR 0044): a function moved to another file keeps its `#[allow]` or `# noqa` without a finding. The cost: removing a suppression of a rule in one file while adding one of the same rule elsewhere is not reported.
+- **(M24) The suppression detector came forward from M25** at your request. Suppressions in linter config files (`.eslintrc` rules turned off, ruff's `ignore`, `Cargo.toml` `[lints]`) stay in M25 with the coverage thresholds.
+- **(M24) The Rust grammar adds 1.4 MB** to the binary (9.0 to 10.5 MB, +15.8%). Say if Rust should be read only when a repo has Rust in it (it would still be in the binary).
+- **(M24) The base is local git state.** An agent can move the base ref, commit to a local default branch with no remote, or hide a test file with `git update-index --skip-worktree`. Verify could refuse to run the guard when a test file has the skip-worktree or assume-unchanged bit; say if you want that in M25 next to the CI detectors.
+- **(M24) A test added to a file skipped as a whole** (`importorskip`, a module `pytestmark` skip, a JS `describe.skip`) is reported as `test-skipped`. Say if a new test under a skip the base already had should be exempt (it would also exempt a renamed test skipped that way).
+- **(M24) `allow` leaves files out of the counts** rather than dropping findings that name them, so a test moved from an allowed file into a counted one is a gain and the other way a loss (reported). Say if you want allowed files to be compared among themselves instead.
+
 - **(M23) The tamper guard is report-only until the default branch's config says `"tamper": "enforced"`** (ADR 0042). Say if new repos from `fscale init` should start enforced.
 - **(M23) Net counts can miss one swap**: a test deleted while an unrelated one is added. Test-by-test matching (skylos's approach) would catch it at the cost of a similarity threshold.
 - **(M22) Laptops do not read the shared cache** (ADR 0041, PLAN "Later").
@@ -119,6 +126,42 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M24 — Tamper guard: Python and Rust, and its policy
+
+**Built** (ADR 0044, `docs/verify.md` "The tamper guard"):
+
+1. **Python, first** (`crates/core/src/tamper/python.rs`): pytest and unittest tests in `test_*.py`, `*_test.py`, `conftest.py` or a `test`/`tests` folder; skips by `@pytest.mark.skip`, `skipif`, `xfail`, `pytestmark`, `@unittest.skip…`, `pytest.skip(…)` first, a body replaced by `pass` or a bare `return`; `@pytest.mark.parametrize` rows (one skipped row is a skip); `assert`, `self.assert…`, `mock.assert_…`, `pytest.raises`.
+2. **Rust** (`rust.rs`, `tree-sitter-rust` 0.24.2): `#[test]`, `#[tokio::test]`, `#[rstest]` with its `#[case]` rows, `#[test_case]`; `#[ignore]`, `cfg_attr(…, ignore)`, `#[cfg(any())]`; `assert!` and its forms; unit tests in any `.rs` file that holds them, integration tests in `tests/`.
+3. **The misses ADR 0042 admitted**, in every language, where the tree makes them certain (`reach.rs`): an assertion inside `if (false)` / `if False:` / `if false {}` or after a `return` is not counted; a test in such code, or whose body does nothing, is skipped; an assertion whose every argument is a literal (`expect(true).toBe(true)`, `assert True`, `self.assertTrue(True)`, `assert!(true)`) is not counted. Each has a caught case and a not-a-finding case.
+4. **Lint suppressions** (`suppress.rs`, kind `suppression-added`): `eslint-disable…`, `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck`, `biome-ignore`, `deno-lint-ignore`, `# noqa`, `# ruff: noqa`, `# type: ignore`, `# pyright: ignore`, `# mypy:`, `# pylint: disable`, `# nosec`, `#[allow]`, `#[expect]`, `#![allow]`, in every changed source file, net per tool and rule over the change.
+5. **The policy keys**: `verify.tamper` may be `{ "policy", "testPaths", "allow" }`; all of it from the base commit only. A change that widens `allow`, drops a `testPaths` entry or turns the guard off has no effect on itself (tests for each).
+6. **One `git cat-file --batch`** reads the base side of every changed file (`git::files_at`).
+7. **Corpus**: 147 cases in four languages (80 to catch, 67 honest edits); a test checks every kind has a caught case and every language has not-a-finding cases. On these fixtures: 98 of 98 findings caught, 0 false positives. **That is a fixture count, not a measured rate**; M26 measures one.
+8. **A smoke check on real history** (`bench/RESULTS.md`): the last 120 commits of the FastAPI template and the last 100 of this repo gave 4 findings, each true (three new `#[allow]`, one removed assertion), and two pytest files deleted with their subject were excused. Two repos are not a sample.
+
+**How the work was split:** the Python and Rust readers were written by two subagents in their own worktrees, against the shared types and helpers I wrote first; I wrote the JS changes, the suppression detector, the policy, the guard and its integration, and merged their files under your identity. A fresh subagent reviewed the whole diff before the pull request; a third fixed its Python findings.
+
+**The review** (ADR 0044, "After the review") reproduced a regression and several bypasses, all fixed with tests and corpus cases: removing an always-failing `assert False` / `assert.fail(…)` / `assert!(false)` was no longer reported (every all-literal assertion had been read as "cannot fail"); Rust tests turned off by a feature `cfg` or by switching off `#[cfg(test)] mod tests;`; pytest skips pytest really applies (named marks, `__test__ = False`, `importorskip`, a setup or autouse fixture that skips, `collect_ignore`, a module-level `SkipTest`); a test helper module accepted as the deleted "subject" (also in M23's JS reader); 4,000 tests in one block taking 40 s (now 0.6 s); narrowed suppressions reported and widened ones missed; an unreadable base policy dropping `testPaths`. Admitted rather than fixed: a Rust test file moved out of what Cargo compiles, a subject merged into an existing file under a new name, and local git state (`update-ref`, `--skip-worktree`) changing the base.
+
+**Decided on your behalf** (ADR 0044):
+
+- **Suppressions net per rule over the whole change**, not per file (see "Needs your decision").
+- **`@ts-ignore` and `@ts-expect-error` are one key, `#[allow]` and `#[expect]` one key**; a file-wide or module-wide form is its own key (folding line disables into one `/* eslint-disable */` is a finding).
+- **"Cannot fail" means every argument is a literal**, nothing else: a weakened matcher (`toBe(3)` → `toBeDefined()`) is still M26's. `expect.assertions(n)` and a call on a receiver other than `self` (`mock.assert_called_once()`) never count as "cannot fail".
+- **A test whose body does nothing is a skip**, in every language, also `it("x")` with no function; not in Python when a decorator pytest does not know may supply the body.
+- **Any Rust `cfg` other than `cfg(test)` on a test or its module is a conditional skip**, like `cfg_attr(…, ignore)`; `#[cfg(test)] mod tests;` counts as one test.
+- **A `collect_ignore` entry or an autouse fixture that skips counts as a skip and no test**, so removing one is no finding.
+- **A removed suppression covers a narrower added one** of the same tool (one for one across the change; a removed file-wide one covers any number in its own file).
+- **An assertion that certainly fails counts**; only literals that certainly pass are left out, and arithmetic is not worked out.
+- **Python test ids are `Class::test`**, without the file, so a move keeps them; Rust ids are `module::test`.
+- **A Rust file is a test file when it holds tests on either side**, so a deleted `mod tests` is read on the base. An integration test file (tests outside `#[cfg(test)]`) never counts as a deleted subject.
+- **`allow` leaves files out of the counts** for the kinds it names; `testPaths` adds files of a language the guard reads.
+- **A base `verify.tamper` the guard cannot read** keeps its mode when readable (else `evaluated`) and drops its lists: never looser than what it says.
+
+**Measured:** release binary 9,029,008 B before, 10,454,800 B after (+1,425,792 B, +15.8%, mostly the Rust grammar). Clean release builds 94 s and 83 s, each once with other work running: noise.
+
+**Tests changed on purpose, none weakened:** a unit test of the Rust reader expected a `#[cfg(unix)]` test to count as running; that was the review's bypass, so it is now a conditional skip. A Python unit test expected `self.assertEqual(-1.5, 3 * 2)` not to count; it can fail, so it counts. Two Rust unit tests of the JS reader used placeholder assertions (`assert(true)`, `assert.equal(1, 1)`, `expect(1).toBe(1)`) as fixtures; those are now, by design, not counted, so the fixtures use real subjects (`assert(ok)`, `assert.equal(add(1, 0), 1)`, `expect(n).toBe(1)`) and still check the same things. The corpus check "a caught case for every kind" now asks it of four languages and five kinds instead of two and four. On Windows CI, `step-cache.test.ts` "runs again only the projects a change reaches" (about ten verify runs, 18.6 s on its own there) passed the default 30 s limit while the larger tamper corpus ran beside it; it now has its own 90 s limit, like the other multi-run tests, and the corpus test runs no verify step per case. Its assertions are unchanged.
 
 ## 0.4.0 — fixes after running 0.3.0 on the course project
 

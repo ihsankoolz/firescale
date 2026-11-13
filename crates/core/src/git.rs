@@ -175,6 +175,17 @@ pub fn run_git_env(cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<Gi
 
 /// Like `run_git`, with `input` written to git's stdin.
 pub fn run_git_with_input(cwd: &Path, args: &[&str], input: &[u8]) -> Result<GitOutput> {
+    let (code, stdout, stderr) = run_git_bytes(cwd, args, input)?;
+    Ok(GitOutput {
+        code,
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
+}
+
+/// Like [`run_git_with_input`], with git's output as bytes: the exit code,
+/// stdout and stderr.
+pub fn run_git_bytes(cwd: &Path, args: &[&str], input: &[u8]) -> Result<(i32, Vec<u8>, Vec<u8>)> {
     use std::io::Write;
 
     let failed = |error: std::io::Error| {
@@ -208,11 +219,78 @@ pub fn run_git_with_input(cwd: &Path, args: &[&str], input: &[u8]) -> Result<Git
         child.wait_with_output()
     })
     .map_err(failed)?;
-    Ok(GitOutput {
-        code: output.status.code().unwrap_or(-1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
+    Ok((
+        output.status.code().unwrap_or(-1),
+        output.stdout,
+        output.stderr,
+    ))
+}
+
+/// The bytes of each of `paths` (relative to `cwd`, forward slashes) as
+/// `commit` has them, from one `git cat-file --batch`. A path the commit
+/// does not have is left out. A path with a line break is read with
+/// `git show`.
+#[must_use]
+pub fn files_at(
+    cwd: &Path,
+    commit: &str,
+    paths: &[&str],
+) -> std::collections::BTreeMap<String, Vec<u8>> {
+    let mut found = std::collections::BTreeMap::new();
+    if paths.is_empty() {
+        return found;
+    }
+    // `<commit>:<path>` in a batch is relative to the repo's top, so add
+    // the folder `cwd` is in.
+    let prefix = run_git(cwd, &["rev-parse", "--show-prefix"])
+        .ok()
+        .filter(|out| out.code == 0)
+        .map(|out| out.stdout.trim_end_matches(['\r', '\n']).to_owned())
+        .unwrap_or_default();
+    let (plain, odd): (Vec<&str>, Vec<&str>) =
+        paths.iter().partition(|path| !path.contains(['\n', '\r']));
+    for path in odd {
+        if let Ok((0, bytes, _)) = run_git_bytes(cwd, &["show", &format!("{commit}:./{path}")], &[])
+        {
+            found.insert(path.to_owned(), bytes);
+        }
+    }
+    let input: String = plain
+        .iter()
+        .map(|path| format!("{commit}:{prefix}{path}\n"))
+        .collect();
+    let Ok((0, out, _)) = run_git_bytes(cwd, &["cat-file", "--batch"], input.as_bytes()) else {
+        return found;
+    };
+    // Each answer is `<oid> <type> <size>\n<content>\n`, or `<name> missing\n`.
+    let mut at = 0;
+    for path in plain {
+        let Some(end) = out[at..]
+            .iter()
+            .position(|b| *b == b'\n')
+            .map(|end| at + end)
+        else {
+            break;
+        };
+        let header = String::from_utf8_lossy(&out[at..end]).into_owned();
+        at = end + 1;
+        let words: Vec<&str> = header.rsplitn(3, ' ').collect();
+        let (Some(size), Some(kind)) = (words.first(), words.get(1)) else {
+            continue;
+        };
+        let Ok(size) = size.parse::<usize>() else {
+            // `missing`, `ambiguous`: no content follows.
+            continue;
+        };
+        let Some(content) = out.get(at..at + size) else {
+            break;
+        };
+        if *kind == "blob" {
+            found.insert(path.to_owned(), content.to_vec());
+        }
+        at += size + 1;
+    }
+    found
 }
 
 /// Git access for one repo root.

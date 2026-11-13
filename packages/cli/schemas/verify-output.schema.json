@@ -419,13 +419,13 @@
       }
     },
     "tamper": {
-      "description": "The tamper guard (ADR 0042): tests, skips and assertions in the changed JS/TS test files, compared with the base commit. Absent without a base commit.",
+      "description": "The tamper guard (ADR 0042, ADR 0044): tests, skips and assertions in the changed JS/TS, Python and Rust test files, and lint suppressions in every changed source file of those languages, compared with the base commit. Absent without a base commit.",
       "type": "object",
       "additionalProperties": false,
       "required": ["policy", "base", "files", "counts", "findings"],
       "properties": {
         "policy": {
-          "description": "verify.tamper on the base commit: off, evaluated (report only, the default) or enforced (findings fail verify).",
+          "description": "verify.tamper (or verify.tamper.policy) on the base commit: off, evaluated (report only, the default) or enforced (findings fail verify).",
           "enum": ["off", "evaluated", "enforced"]
         },
         "base": {
@@ -448,7 +448,9 @@
             "baseAssertions",
             "headAssertions",
             "excusedTests",
-            "excusedAssertions"
+            "excusedAssertions",
+            "baseSuppressions",
+            "headSuppressions"
           ],
           "properties": {
             "baseTests": {
@@ -482,6 +484,15 @@
             "excusedAssertions": {
               "type": "integer",
               "minimum": 0
+            },
+            "baseSuppressions": {
+              "description": "Lint suppressions (eslint-disable, @ts-ignore, noqa, type: ignore, #[allow]…) in the changed source files on the base commit.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "headSuppressions": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         },
@@ -493,8 +504,14 @@
             "required": ["kind", "file", "line", "onBase", "what"],
             "properties": {
               "kind": {
-                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, or a new .only), assertion-removed (fewer assertions), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
-                "enum": ["test-deleted", "test-skipped", "assertion-removed", "not-checked"]
+                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, a test that never runs or does nothing, or a new .only), assertion-removed (fewer assertions that run and can fail), suppression-added (more lint suppressions of a rule), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
+                "enum": [
+                  "test-deleted",
+                  "test-skipped",
+                  "assertion-removed",
+                  "suppression-added",
+                  "not-checked"
+                ]
               },
               "file": {
                 "type": "string"
@@ -508,7 +525,7 @@
                 "type": "boolean"
               },
               "what": {
-                "description": "The test's describe path and title, or the assertion's source with white space squeezed.",
+                "description": "The test's suite path and name, the assertion's source with white space squeezed, or the suppression's comment or attribute with its key.",
                 "type": "string"
               }
             }
@@ -519,6 +536,32 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "allowed": {
+          "description": "Changed files that verify.tamper.allow on the base commit leaves out of the counts, with the kinds it leaves out.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "kinds"],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "kinds": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "test-deleted",
+                    "test-skipped",
+                    "assertion-removed",
+                    "suppression-added",
+                    "not-checked"
+                  ]
+                }
+              }
+            }
           }
         }
       }

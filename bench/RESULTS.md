@@ -2,6 +2,63 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## M24: the tamper guard for Python and Rust, suppressions and policy
+
+Measured on 2026-11-13 on the build machine (Linux x64, 4 cores).
+
+### The labelled corpus
+
+**These are counts on fixtures, not a measured rate.** The corpus was written together with the guard, by the same hands, so it shows the guard does what ADR 0042 and ADR 0044 say. It does not say how often the guard is wrong on real changes: M26 measures the false-positive and miss rates on a corpus that was not written with it.
+
+`node bench/tamper-rates.mjs --bin target/release/fscale` runs the 147 cases of `bench/tamper-corpus.json` through `fscale verify --json`, each in its own git repo:
+
+| Kind              | Cases that must give it | Caught | Missed |
+| ----------------- | ----------------------- | ------ | ------ |
+| test-deleted      | 11                      | 11     | 0      |
+| test-skipped      | 30                      | 30     | 0      |
+| assertion-removed | 41                      | 41     | 0      |
+| suppression-added | 12                      | 12     | 0      |
+| not-checked       | 4                       | 4      | 0      |
+
+| Language   | Cases | Not-a-finding cases | Findings caught | Missed | False positives |
+| ---------- | ----- | ------------------- | --------------- | ------ | --------------- |
+| TypeScript | 46    | 23                  | 30              | 0      | 0               |
+| JavaScript | 16    | 6                   | 12              | 0      | 0               |
+| Python     | 53    | 23                  | 36              | 0      | 0               |
+| Rust       | 32    | 15                  | 20              | 0      | 0               |
+
+- 80 cases must give at least one finding (98 findings in all); 67 must give none. On these fixtures: 0 missed, 0 false positives, 0 of 67 not-a-finding cases with any finding. Again: fixture counts, not a rate.
+- New in M24: pytest and unittest (deleted tests, `skip`, `skipif`, `xfail`, `unittest.skip`, named skip marks, `__test__ = False`, `importorskip`, a setup or autouse fixture that skips, `collect_ignore`, a body replaced by `pass` or `return`, a skipped parametrize row, removed assertions, `assert True`, `self.assertTrue(True)`, a removed `assert False` or `self.fail`), Rust (`#[ignore]`, `cfg_attr(…, ignore)`, a feature or platform `cfg`, a test module in another file turned off, an emptied body, removed `assert_eq!`, `assert!(true)`, a removed `assert!(false)`), the misses ADR 0042 admitted in every language (`if (false)`, an early `return`, an assertion that cannot fail, each with a not-a-finding case), lint suppressions (added, widened, inline ESLint configuration, `skip-file`; with moved, narrowed, split and renamed-to-stricter not-a-finding cases), and tests deleted with a helper module, not their subject.
+- The independent review before the pull request found the cases from "a removed `assert False`" on; each is in the corpus now (ADR 0044, "After the review").
+
+### Reading a wide test file
+
+One changed file with every test in one block, release build, `fscale verify --json` wall time, after the review's fix to how code that never runs is found (before it, these took 40 s, 19 s and 22 s):
+
+| File                                   | Time   |
+| -------------------------------------- | ------ |
+| JS, 4,000 tests in one `describe`      | 0.60 s |
+| JS, one test with 4,000 `expect` calls | 0.34 s |
+| Python, 4,000 test functions           | 0.35 s |
+
+### A smoke check on real history (not a rate either)
+
+The debug build ran `fscale verify --json --base <parent>` on each of the last 120 non-merge commits of `fastapi/full-stack-fastapi-template` up to `aabb901` (a pytest backend, listed in DECISIONS.md) and the last 100 of this repo (Rust and TypeScript tests), with no-op stand-ins for `uv`, `bun`, `npm`, `cargo` and the like first on the PATH so none of their tooling ran.
+
+- fastapi: 4 commits touched test files; no findings. Two pytest files deleted with the modules they test (`f8dd304`) were excused as "deleted with its subject".
+- this repo: 4 findings in 3 commits, each true: three `#[allow(clippy::too_many_arguments)]` added (`5460f2d`, `60ab2c7`) and one `expect(…).not.toContain(…)` removed in a refactor of a test helper (`470533e`), an honest edit a person should still see.
+
+Two repositories, written by careful people, are not a sample: this says the guard is not noisy on them, nothing more.
+
+### Binary size and build time
+
+| Release build of `fscale`                      | Before M24 (`7e13ee3`) | After M24                           |
+| ---------------------------------------------- | ---------------------- | ----------------------------------- |
+| Binary size                                    | 9,029,008 B            | 10,454,800 B (+1,425,792 B, +15.8%) |
+| Clean `cargo build --release -p firescale-cli` | 94 s                   | 83 s                                |
+
+The 1.4 MB are mostly the Rust grammar's parse tables (`tree-sitter-rust` 0.24.2); the readers and the suppression detector are a small part. The size is of the final build; the build times were taken once each, before the review's fixes, in their own target folders, with other work on the machine (a package install during the first), so their difference is noise.
+
 ## M23: the tamper guard
 
 Measured on 2026-11-13 on the build machine (Linux x64, 4 cores).

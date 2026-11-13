@@ -483,16 +483,11 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                 };
             }
             "tamper" => {
-                verify.tamper = Some(
-                    value
-                        .as_str()
-                        .and_then(crate::tamper::Policy::parse)
-                        .ok_or_else(|| {
-                            Error::user(format!(
-                                "{name}: verify.tamper must be \"off\", \"evaluated\" (report only, the default) or \"enforced\" (findings fail verify). It is read from the base commit, so a change to it takes effect once it is merged."
-                            ))
-                        })?,
-                );
+                verify.tamper = Some(crate::tamper::TamperPolicy::parse(value).map_err(|why| {
+                    Error::user(format!(
+                        "{name}: {why}. It is read from the base commit, so a change to it takes effect once it is merged."
+                    ))
+                })?);
             }
             "projects" => {
                 let Value::Object(projects) = value else {
