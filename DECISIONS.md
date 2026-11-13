@@ -22,6 +22,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M20) Vitest and Jest results come from their default reporters' text**, not their JSON reporters (ADR 0038): the JSON reporters need flags on your command, which verify does not edit. A custom reporter gives no per-test results, and the step is compared as a whole.
+- **(M20) Per-test results can make a failure `new`, never `pre-existing` on their own**: the output evidence of M19 still has to hold. So an old failure in a renamed test file, whose output names the new path, blocks with a note instead of passing.
+
 - **(M19) The base worktree links the head's dependency folders instead of installing** (ADR 0037): `node_modules`, `.venv` and `venv` wherever they are. No network, no install into a shared Python. When a lockfile or `requirements*.txt` changed, the base is not judged without `verify.baseInstall`, and failures block as before. PLAN.md said "run the repo's install command there"; say if you want an install by default.
 - **(M19) Tests that need a build output the repo does not commit** (a compiled binary, `dist/`) fail on the base worktree for want of it, and a head failure there would read as `pre-existing`. Such a repo needs its build in `verify.baseInstall`; this repo sets `"baseInstall": "pnpm install --frozen-lockfile --offline && pnpm build"`. pnpm workspaces need `verify.baseInstall` anyway: pnpm refuses a linked `node_modules` for `pnpm -r` (that base result counts as setup needed, so it never makes a failure `pre-existing`). firescale cannot tell such a failure from a code failure at step level; M20's per-test labels narrow it for Vitest, Jest and pytest.
 - **(M19) "Pre-existing" needs evidence:** the head's failing output must be contained in the base's, line by line with numbers folded (ADR 0037). This blocks some failures that really are old but print something run-specific (a temp path, a random seed). Blocking an old failure is the safe side.
@@ -103,6 +106,19 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M20 — Blame-aware verify: per-test labels
+
+**Built** (ADR 0038, `docs/verify.md`):
+
+1. Per-test results for pytest (a JUnit report asked for through `PYTEST_ADDOPTS`, read with a small reader of `<testcase>`; the command is unchanged), Vitest and Jest (their default reporters' failure lines). The runner is read from the command, or from the package script behind `npm test` and the like.
+2. A test is its file and name: `tests/test_auth.py::TestLogin::test_ok`, `src/a.test.ts > math > adds`, `src/a.test.js › math › adds`.
+3. A failing test that does not fail on the base makes the step `new`; the summary names it under `New failing tests:` and says how many others already failed there. `pre-existing` still needs M19's output evidence. A base with no passed test is not evidence. JSON: a step's `failedTests` with labels.
+4. Renamed test files (git's rename detection) keep their tests: an old failure there is never `new`; it blocks with a note, since its output differs.
+5. Other runners are compared as whole steps, with a note. The base store (format 4) keeps the failing tests.
+6. `PYTEST_ADDOPTS` joins the variables `core/env-example` does not ask for.
+
+**Proof** (`blame.test.ts` "per-test labels", `pertest::tests`): with one old and one new failing test, only the new one is `new` and named, for pytest and for Vitest; a runner without per-test results falls back with a note; a renamed test file's old failure is never `new`; a base with no passed test is not trusted; the JUnit, Vitest and Jest readers, runner detection and rename mapping.
 
 ## M19 — Blame-aware verify: the base run
 

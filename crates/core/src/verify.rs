@@ -833,11 +833,30 @@ pub struct StepReport {
     /// With a base to compare with: how the step did on the base commit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base: Option<crate::blame::BaseOutcome>,
+    /// For pytest, Vitest and Jest: each failing test, with its label when
+    /// there is a base to compare with (ADR 0038).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub failed_tests: Vec<FailedTest>,
+    /// The runner's per-test results. Not in JSON.
+    #[serde(skip)]
+    pub test_results: Option<crate::pertest::TestResults>,
     /// The failure's signature: one short hash per normalised line of its
     /// output (ADR 0037). A failure is `pre-existing` only when its
     /// signature on the head is contained in the base's. Not in JSON.
     #[serde(skip)]
     pub signature: Vec<String>,
+}
+
+/// A failing test of a step (ADR 0038).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedTest {
+    /// Its file and name: `tests/test_auth.py::test_login`,
+    /// `src/a.test.ts > math > adds`.
+    pub id: String,
+    /// With a base: `new` or `pre-existing`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<crate::blame::Label>,
 }
 
 /// Where a step's pass from the cache came from.
@@ -1780,6 +1799,28 @@ fn run_step(
     let mut shell = shell(command);
     shell.current_dir(&dir);
     environment(&mut shell, options.config, options.base_run);
+    // Per-test results (ADR 0038): pytest writes a JUnit report through
+    // PYTEST_ADDOPTS, so the command stays as the user wrote it.
+    let runner = crate::pertest::TestRunner::of(
+        command,
+        crate::pertest::script_text(&dir, command).as_deref(),
+    );
+    let junit = (runner == Some(crate::pertest::TestRunner::Pytest)).then(|| {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        std::env::temp_dir().join(format!(
+            "firescale-junit-{}-{nanos}.xml",
+            std::process::id()
+        ))
+    });
+    if let Some(junit) = &junit {
+        let own = std::env::var("PYTEST_ADDOPTS").unwrap_or_default();
+        shell.env(
+            "PYTEST_ADDOPTS",
+            format!("{own} --junitxml={}", junit.to_string_lossy()).trim(),
+        );
+    }
     let spawned = Mutex::new(None);
     let heartbeat = |elapsed: Duration, last: Option<&str>| {
         // `last output: ...`, or a running count of tests (ADR 0025).
@@ -1898,6 +1939,8 @@ fn run_step(
         label: None,
         base: None,
         signature: Vec::new(),
+        failed_tests: Vec::new(),
+        test_results: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -1908,6 +1951,29 @@ fn run_step(
     };
     if !matches!(finished.ending, Ending::Exited(Some(0))) {
         report.signature = failure_signature(&text(), unit.root);
+    }
+    if let Some(runner) = runner {
+        let xml = junit
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok());
+        report.test_results = runner.read(&text(), xml.as_deref());
+        report.failed_tests = report
+            .test_results
+            .as_ref()
+            .map(|results| {
+                results
+                    .failed
+                    .iter()
+                    .map(|id| FailedTest {
+                        id: id.clone(),
+                        label: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    if let Some(junit) = &junit {
+        let _ = std::fs::remove_file(junit);
     }
     let early_seen = early
         .into_inner()
@@ -2190,6 +2256,8 @@ fn run_unit(
                 label: None,
                 base: None,
                 signature: Vec::new(),
+                failed_tests: Vec::new(),
+                test_results: None,
             })
             .collect());
     }
@@ -2215,6 +2283,8 @@ fn run_unit(
             label: None,
             base: None,
             signature: Vec::new(),
+            failed_tests: Vec::new(),
+            test_results: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2377,6 +2447,8 @@ fn cached_or_run(
             label: None,
             base: None,
             signature: Vec::new(),
+            failed_tests: Vec::new(),
+            test_results: None,
         });
     }
     let ran_at = now_secs();
@@ -2460,6 +2532,8 @@ pub fn run_verify_with(
         label: None,
         base: None,
         signature: Vec::new(),
+        failed_tests: Vec::new(),
+        test_results: None,
     }];
     let check_failed = !check.ok && !options.every_step;
 
@@ -3056,10 +3130,41 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                 ));
                 continue;
             }
-            Some(crate::blame::Label::New) => out.push_str(&format!(
-                "\nNew: {}{place} passes on the base commit {base_short}, so this change broke it.\n",
-                failure.name
-            )),
+            Some(crate::blame::Label::New) => {
+                let new_tests: Vec<&str> = failure
+                    .failed_tests
+                    .iter()
+                    .filter(|test| test.label == Some(crate::blame::Label::New))
+                    .map(|test| test.id.as_str())
+                    .collect();
+                let old = failure.failed_tests.len() - new_tests.len();
+                if new_tests.is_empty()
+                    || failure
+                        .base
+                        .as_ref()
+                        .is_some_and(|base| base.status == crate::blame::BaseStatus::Passed)
+                {
+                    out.push_str(&format!(
+                        "\nNew: {}{place} passes on the base commit {base_short}, so this change broke it.\n",
+                        failure.name
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "\nNew: {}{place} also fails on the base commit {base_short}, but {} of its failing tests {} not fail there, so this change broke {}{}.\n",
+                        failure.name,
+                        new_tests.len(),
+                        if new_tests.len() == 1 { "does" } else { "do" },
+                        if new_tests.len() == 1 { "it" } else { "them" },
+                        if old == 0 { String::new() } else { format!(" ({old} other{} already failed there)", if old == 1 { "" } else { "s" }) }
+                    ));
+                }
+                if !new_tests.is_empty() {
+                    out.push_str("New failing tests:\n");
+                    for test in &new_tests {
+                        out.push_str(&format!("  {test}\n"));
+                    }
+                }
+            }
             _ => {}
         }
         if !failure.output_tail.is_empty() {

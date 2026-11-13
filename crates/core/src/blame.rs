@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::affected::{changed_files, Changed};
 use crate::error::{Error, Result};
 use crate::git::{run_git, run_git_env};
+use crate::pertest::{follow_renames, TestResults};
 use crate::progress::{format_duration, format_limit};
 use crate::stepcache::{now_secs, StepCache};
 use crate::verify::{
@@ -101,6 +102,9 @@ pub struct BaseOutcome {
     /// The base failure's signature, compared with the head's.
     #[serde(skip)]
     pub signature: Vec<String>,
+    /// The base's per-test results, for pytest, Vitest and Jest.
+    #[serde(skip)]
+    pub tests: Option<TestResults>,
 }
 
 impl BaseOutcome {
@@ -110,6 +114,7 @@ impl BaseOutcome {
             source,
             note,
             signature: Vec::new(),
+            tests: None,
         }
     }
 }
@@ -342,7 +347,7 @@ pub fn renames_since(root: &Path, base: &BaseCommit) -> BTreeMap<String, String>
 
 // ------------------------------------------------------------ the store
 
-const STORE_FORMAT: u32 = 3;
+const STORE_FORMAT: u32 = 4;
 
 /// A base result kept for a later run with the same base.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,23 +361,40 @@ struct StoredBase {
     /// The failure's signature (hashes of its normalised output lines).
     #[serde(default)]
     signature: Vec<String>,
+    /// The failing tests, for pytest, Vitest and Jest (ADR 0038).
+    #[serde(default)]
+    failed_tests: Option<Vec<String>>,
+    #[serde(default)]
+    passed_tests: u64,
 }
 
 fn store_dir(root: &Path) -> PathBuf {
     root.join(".firescale").join("base")
 }
 
-fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>)> {
+fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<TestResults>)> {
     let text = fs::read_to_string(store_dir(root).join(format!("{key}.json"))).ok()?;
     let stored: StoredBase = serde_json::from_str(&text).ok()?;
     let fresh = now_secs().saturating_sub(stored.ran_at) <= crate::stepcache::MAX_AGE.as_secs();
-    (stored.format == STORE_FORMAT && stored.key == key && fresh)
-        .then_some((stored.status, stored.signature))
+    (stored.format == STORE_FORMAT && stored.key == key && fresh).then(|| {
+        let tests = stored.failed_tests.map(|failed| TestResults {
+            failed: failed.into_iter().collect(),
+            passed: stored.passed_tests,
+        });
+        (stored.status, stored.signature, tests)
+    })
 }
 
 /// Keeps a base result. Only passed and failed are kept: the others say
 /// nothing about the code.
-fn keep(root: &Path, key: &str, status: BaseStatus, duration_ms: u64, signature: &[String]) {
+fn keep(
+    root: &Path,
+    key: &str,
+    status: BaseStatus,
+    duration_ms: u64,
+    signature: &[String],
+    tests: Option<&TestResults>,
+) {
     if !matches!(status, BaseStatus::Passed | BaseStatus::Failed) {
         return;
     }
@@ -388,6 +410,8 @@ fn keep(root: &Path, key: &str, status: BaseStatus, duration_ms: u64, signature:
         ran_at: now_secs(),
         duration_ms,
         signature: signature.to_vec(),
+        failed_tests: tests.map(|tests| tests.failed.iter().cloned().collect()),
+        passed_tests: tests.map_or(0, |tests| tests.passed),
     };
     let Ok(text) = serde_json::to_string_pretty(&stored) else {
         return;
@@ -833,6 +857,7 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         if same {
             let mut outcome = BaseOutcome::new(head, BaseSource::SameInputs, None);
             outcome.signature.clone_from(&step.signature);
+            outcome.tests.clone_from(&step.test_results);
             report.steps[index].base = Some(outcome);
             summary.same_inputs += 1;
             continue;
@@ -854,9 +879,10 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         } else {
             None
         };
-        if let Some((status, signature)) = kept {
+        if let Some((status, signature, tests)) = kept {
             let mut outcome = BaseOutcome::new(status, BaseSource::Cache, None);
             outcome.signature = signature;
+            outcome.tests = tests;
             report.steps[index].base = Some(outcome);
             summary.from_cache += 1;
             continue;
@@ -923,6 +949,8 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     // 3. Labels, by evidence.
     let short = run.base.short().to_owned();
     let budget_text = budget.map_or_else(|| "no limit".to_owned(), format_limit);
+    let renames = renames_since(run.root, run.base);
+    let mut per_step_notes: Vec<String> = Vec::new();
     for step in &mut report.steps {
         if step.name == "check" {
             continue;
@@ -930,9 +958,31 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         let failed = matches!(step.status, StepStatus::Failed | StepStatus::TimedOut);
         let signature = step.signature.clone();
         let timed_out = step.status == StepStatus::TimedOut;
+        let place_text = place(step);
+        let prefix = step
+            .project
+            .as_deref()
+            .filter(|project| *project != ".")
+            .map_or_else(String::new, |project| format!("{project}/"));
+        let head_tests = step.test_results.clone();
         let Some(outcome) = step.base.as_mut() else {
             continue;
         };
+        // Per-test comparison, when both sides have per-test results.
+        let per_test = match (&head_tests, &outcome.tests) {
+            (Some(head), Some(base)) if failed && outcome.status == BaseStatus::Failed => {
+                let base_failed = follow_renames(&base.failed, &renames, &prefix);
+                let new_tests: BTreeSet<String> =
+                    head.failed.difference(&base_failed).cloned().collect();
+                Some((new_tests, base.passed == 0 && head.passed > 0, base_failed))
+            }
+            _ => None,
+        };
+        if failed && outcome.status == BaseStatus::Failed && head_tests.is_none() && !timed_out {
+            per_step_notes.push(format!(
+                "{place_text}: its runner gives no per-test results, so it is compared as a whole step"
+            ));
+        }
         let (label, why) = match (failed, outcome.status) {
             (true, BaseStatus::Passed) => (Some(Label::New), None),
             (true, BaseStatus::Failed) if timed_out => (
@@ -941,15 +991,32 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
                     "it timed out on the head but failed on the base commit {short}, which is not the same failure"
                 )),
             ),
-            (true, BaseStatus::Failed) if signature_within(&signature, &outcome.signature) => {
-                (Some(Label::PreExisting), None)
-            }
-            (true, BaseStatus::Failed) => (
-                None,
-                Some(format!(
-                    "it fails on the base commit {short} too, but not in the same way (its output on the head has lines the base's has not)"
-                )),
-            ),
+            (true, BaseStatus::Failed) => match &per_test {
+                // The base's tests did not run at all: its environment
+                // failed, not its code.
+                Some((_, true, _)) => (
+                    None,
+                    Some(format!(
+                        "no test passed on the base commit {short}, so its run says nothing about the code"
+                    )),
+                ),
+                Some((new_tests, false, _)) if !new_tests.is_empty() => (Some(Label::New), None),
+                _ if signature_within(&signature, &outcome.signature) => {
+                    (Some(Label::PreExisting), None)
+                }
+                Some(_) => (
+                    None,
+                    Some(format!(
+                        "the same tests fail on the base commit {short}, but not in the same way (its output on the head has lines the base's has not)"
+                    )),
+                ),
+                None => (
+                    None,
+                    Some(format!(
+                        "it fails on the base commit {short} too, but not in the same way (its output on the head has lines the base's has not)"
+                    )),
+                ),
+            },
             (false, BaseStatus::Failed) => (Some(Label::Fixed), None),
             (true, BaseStatus::SetupNeeded) => (
                 None,
@@ -971,13 +1038,29 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             }
             (false, _) => (None, None),
         };
-        step.label = label;
         if let Some(why) = why {
             outcome.note = Some(format!(
                 "{why}, so this failure blocks as it would without a base"
             ));
         }
+        // Each failing test's label.
+        let base_failed: Option<BTreeSet<String>> = match (&per_test, outcome.status) {
+            (Some((_, false, base_failed)), _) => Some(base_failed.clone()),
+            (_, BaseStatus::Passed) => Some(BTreeSet::new()),
+            _ => None,
+        };
+        step.label = label;
+        if let Some(base_failed) = base_failed {
+            for test in &mut step.failed_tests {
+                test.label = Some(if base_failed.contains(&test.id) {
+                    Label::PreExisting
+                } else {
+                    Label::New
+                });
+            }
+        }
     }
+    report.notes.extend(per_step_notes);
     // Failing steps that got no base result at all (the budget ran out
     // before they were reached) block too; say why.
     for step in &mut report.steps {
@@ -1191,7 +1274,14 @@ fn run_in_worktree(
                         format_duration(Duration::from_millis(ran.duration_ms))
                     ));
                     if let Some(key) = &pending.key {
-                        keep(run.root, key, status, ran.duration_ms, &ran.signature);
+                        keep(
+                            run.root,
+                            key,
+                            status,
+                            ran.duration_ms,
+                            &ran.signature,
+                            ran.test_results.as_ref(),
+                        );
                     }
                     let note = (status == BaseStatus::SetupNeeded).then(|| {
                         if refused_link {
@@ -1202,6 +1292,7 @@ fn run_in_worktree(
                     });
                     let mut outcome = BaseOutcome::new(status, BaseSource::Ran, note);
                     outcome.signature = ran.signature;
+                    outcome.tests = ran.test_results;
                     outcome
                 }
             }

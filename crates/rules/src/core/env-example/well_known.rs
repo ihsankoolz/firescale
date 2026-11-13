@@ -87,6 +87,7 @@ pub const NAMES: &[&str] = &[
     "PYTHONDONTWRITEBYTECODE",
     "PYTHONIOENCODING",
     "PYTHONHASHSEED",
+    "PYTEST_ADDOPTS",
     "VIRTUAL_ENV",
     // Rust, Go and Java.
     "RUST_BACKTRACE",

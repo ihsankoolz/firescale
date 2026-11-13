@@ -423,3 +423,147 @@ describe('blame-aware verify on the course project', () => {
     expect((await stepCalls(log)).length).toBeGreaterThan(0);
   });
 });
+
+// Per-test labels (M20, ADR 0038).
+
+/** A stand-in for pytest: tests test_a, test_b and test_c in each tests/test_*.py, failing those failing.txt names. */
+const FAKE_PYTEST = [
+  "const fs = require('fs');",
+  "const files = fs.readdirSync('tests').filter((f) => f.startsWith('test_') && f.endsWith('.py')).sort();",
+  "const failing = fs.readFileSync('failing.txt', 'utf8').split(',').map((s) => s.trim()).filter(Boolean);",
+  "const report = /--junitxml=(\\S+)/.exec(process.env.PYTEST_ADDOPTS || '');",
+  'let xml = \'<?xml version="1.0"?><testsuites><testsuite name="pytest">\';',
+  'for (const file of files) {',
+  "  for (const name of ['test_a', 'test_b', 'test_c']) {",
+  '    const bad = failing.includes(name);',
+  "    xml += '<testcase classname=\"tests.' + file.replace('.py', '') + '\" name=\"' + name + '\">' + (bad ? '<failure message=\"assert\">assert False</failure>' : '') + '</testcase>';",
+  "    if (bad) console.log('FAILED tests/' + file + '::' + name + ' - assert False');",
+  '  }',
+  '}',
+  "xml += '</testsuite></testsuites>';",
+  'if (report) fs.writeFileSync(report[1], xml);',
+  'process.exit(failing.length > 0 ? 1 : 0);',
+  '',
+].join('\n');
+
+/** A stand-in for Vitest's default reporter, failing the tests failing.txt names. */
+const FAKE_VITEST = [
+  "const fs = require('fs');",
+  "const failing = fs.readFileSync('failing.txt', 'utf8').split(',').map((s) => s.trim()).filter(Boolean);",
+  "const names = ['adds', 'multiplies', 'divides'];",
+  "for (const name of failing) console.log(' FAIL  src/math.test.ts > math > ' + name + '\\nAssertionError: expected 1 to be 2');",
+  "console.log('      Tests  ' + failing.length + ' failed | ' + (names.length - failing.length) + ' passed (' + names.length + ')');",
+  'process.exit(failing.length > 0 ? 1 : 0);',
+  '',
+].join('\n');
+
+async function runnerRepo(script: string, file: string, failing: string) {
+  const repo = await fixtures.create({
+    files: {
+      'firescale.config.json': JSON.stringify({
+        packs: ['core'],
+        verify: { lint: false, typecheck: false, test: `node ${file}` },
+      }),
+      '.gitignore': '.firescale/\n',
+      [file]: script,
+      'failing.txt': `${failing}\n`,
+      'tests/test_old.py': 'def test_a():\n    assert True\n',
+    },
+    track: 'no-git',
+  });
+  const root = repo.root;
+  expect((await runGit(root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+  await commitAll(root, 'base');
+  expect((await runGit(root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+  const write = (name: string, content: string) => writeFile(path.join(root, name), content);
+  return { root, write };
+}
+
+interface FailedTest {
+  id: string;
+  label?: string;
+}
+
+function failedTests(report: Report): FailedTest[] {
+  return (step(report, 'test') as Step & { failedTests?: FailedTest[] }).failedTests ?? [];
+}
+
+describe('per-test labels', () => {
+  it('labels only the new failing test new, and names it, for pytest', async () => {
+    const { root, write } = await runnerRepo(FAKE_PYTEST, 'pytest.js', 'test_a');
+    await write('failing.txt', 'test_a, test_b\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBe('new');
+    expect(failedTests(json)).toEqual([
+      { id: 'tests/test_old.py::test_a', label: 'pre-existing' },
+      { id: 'tests/test_old.py::test_b', label: 'new' },
+    ]);
+    const human = await runCli(['verify'], root);
+    expect(human.stdout).toContain('New failing tests:\n  tests/test_old.py::test_b\n');
+    expect(human.stdout).not.toContain('  tests/test_old.py::test_a\n');
+    expect(human.stdout).toContain('(1 other already failed there)');
+  });
+
+  it('labels only the new failing test new, and names it, for Vitest', async () => {
+    const { root, write } = await runnerRepo(FAKE_VITEST, 'vitest.js', 'adds');
+    await write('failing.txt', 'adds, divides\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBe('new');
+    expect(failedTests(json)).toEqual([
+      { id: 'src/math.test.ts > math > adds', label: 'pre-existing' },
+      { id: 'src/math.test.ts > math > divides', label: 'new' },
+    ]);
+    expect((await runCli(['verify'], root)).stdout).toContain(
+      'New failing tests:\n  src/math.test.ts > math > divides\n',
+    );
+    // Only the old one failing: pre-existing.
+    await write('failing.txt', 'adds\n');
+    await write('tests/note.txt', 'a change\n');
+    const old = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(old, 'test').label).toBe('pre-existing');
+    expect(old.result).toBe('pre-existing');
+  });
+
+  it('falls back to step labels, with a note, for a runner without per-test results', async () => {
+    const plain = [
+      "const fs = require('fs');",
+      "const failing = fs.readFileSync('failing.txt', 'utf8').trim();",
+      "if (failing) console.log('broken: ' + failing);",
+      'process.exit(failing ? 1 : 0);',
+      '',
+    ].join('\n');
+    const { root, write } = await runnerRepo(plain, 'check.js', 'one');
+    await write('tests/note.txt', 'a change\n');
+    const json = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(json, 'test').label).toBe('pre-existing');
+    expect(failedTests(json)).toEqual([]);
+    expect(json.notes?.join('\n')).toContain(
+      'test: its runner gives no per-test results, so it is compared as a whole step',
+    );
+  });
+
+  it('never turns the old failures of a renamed test file into new ones', async () => {
+    const { root } = await runnerRepo(FAKE_PYTEST, 'pytest.js', 'test_a');
+    expect((await runGit(root, ['mv', 'tests/test_old.py', 'tests/test_new.py'])).code).toBe(0);
+    const result = await runCli(['verify', '--json'], root);
+    const json = await report(result.stdout);
+    // The same test, by git's rename: never new. Its output names the new
+    // file, so it is not proven the same failure either: it blocks, saying so.
+    expect(failedTests(json)).toEqual([{ id: 'tests/test_new.py::test_a', label: 'pre-existing' }]);
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base?.note).toContain('the same tests fail on the base commit');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+  });
+
+  it('does not trust a base on which no test passed', async () => {
+    const { root, write } = await runnerRepo(FAKE_PYTEST, 'pytest.js', 'test_a, test_b, test_c');
+    await write('failing.txt', 'test_a\n');
+    const json = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base?.note).toContain('no test passed on the base commit');
+  });
+});

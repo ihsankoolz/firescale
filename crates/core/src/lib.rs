@@ -23,6 +23,7 @@ pub mod imports;
 pub mod jsonedit;
 pub mod model;
 pub mod node;
+pub mod pertest;
 pub mod process;
 pub mod progress;
 pub mod references;
