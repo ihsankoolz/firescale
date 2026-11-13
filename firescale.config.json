@@ -8,6 +8,6 @@
     }
   },
   "verify": {
-    "baseInstall": "pnpm build"
+    "baseInstall": "pnpm install --frozen-lockfile --offline && pnpm build"
   }
 }
