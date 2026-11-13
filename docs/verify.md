@@ -129,15 +129,31 @@ When every failure is pre-existing, verify exits 0 with the result `pre-existing
 
 ## The tamper guard
 
-With a base commit, verify also compares the **test files the change touches** with the base (ADR 0042): JavaScript and TypeScript files named `*.test.*` or `*.spec.*`, or in a `__tests__`, `test`, `tests` or `spec` folder. Each is parsed with tree-sitter on the base and now, and three things are counted over all of them together:
+With a base commit, verify also compares the **files the change touches** with the base (ADR 0042, ADR 0044). Each is parsed with tree-sitter on the base and now, and counted over all of them together:
 
-- **tests** (`it`, `test` and their forms, by `describe` path and title): fewer than on the base is `test-deleted`;
-- **skipped and focused tests** (`.skip`, `.todo`, `x…`, a skipped `describe`; `.only`): more than on the base is `test-skipped`;
-- **assertions** (`expect(…)`, `assert(…)`, `assert.…(…)`): fewer than on the base is `assertion-removed`.
+- **Test files**: JavaScript and TypeScript files named `*.test.*` or `*.spec.*` or in a `__tests__`, `test`, `tests` or `spec` folder; Python files named `test_*.py`, `*_test.py` or `conftest.py`, or in a `test` or `tests` folder; Rust files in a `tests` folder, and any Rust file that holds tests (`#[test]`, `#[cfg(test)]`); and whatever the base's `verify.tamper.testPaths` names.
+- **tests** (`it`, `test` and their forms by `describe` path and title; pytest and unittest `test*` functions and methods; Rust `#[test]`, `#[tokio::test]`, `#[rstest]` and the like): fewer than on the base is `test-deleted`. `it.each` tables, `@pytest.mark.parametrize` lists and `#[case]` rows count by their rows.
+- **skipped tests** (`.skip`, `.todo`, `x…`, `.only`; `@pytest.mark.skip`, `skipif`, `xfail`, `pytestmark`, `unittest.skip…`, `pytest.skip(…)` first; `#[ignore]`, `cfg_attr(…, ignore)`; and in every language a test whose body does nothing or that never runs, inside `if (false)` or after a `return`): more than on the base is `test-skipped`;
+- **assertions** (`expect(…)`, `assert(…)`, `assert.…(…)`; Python `assert`, `self.assert…(…)`, `mock.assert_…(…)`, `pytest.raises`; Rust `assert!` and its forms): fewer than on the base is `assertion-removed`. An assertion that never runs (inside `if (false)`, after a `return`) or cannot fail (every argument a literal: `expect(true).toBe(true)`, `assert True`, `assert!(true)`) does not count;
+- **lint suppressions**, in every changed JS/TS, Python and Rust file: `eslint-disable…`, `@ts-ignore`, `@ts-expect-error`, `biome-ignore`, `# noqa`, `# type: ignore`, `# pyright: ignore`, `# pylint: disable`, `#[allow(…)]`, `#[expect(…)]` and the like, per tool and rule: more of a rule than on the base is `suppression-added`.
 
-Because the counts are net over the whole change and come from the syntax tree, a renamed test, a test moved to another file, a test split in two, a reformatted file and an assertion replaced by a stricter one are not findings. A test deleted together with every module of the repo it uses is not counted. A changed test file tree-sitter cannot read is a `not-checked` finding of its own, never taken as clean.
+Because the counts are net over the whole change and come from the syntax tree, a renamed test, a test moved to another file, a test split in two, a reformatted file, an assertion replaced by a stricter one, a suppression moved with its code and `@ts-ignore` turned into `@ts-expect-error` are not findings. A test deleted together with every module of the repo it uses is not counted. A changed test file tree-sitter cannot read is a `not-checked` finding of its own, never taken as clean.
 
-Findings are **report-only** by default: they are listed with file and line (a deleted test or assertion at its line on the base commit), and the headline says how many (`verify: OK - tamper guard: 3 report-only findings`). To make them fail verify, set `"tamper": "enforced"` under `verify` in the config. **The setting is read from the base commit**, never from the working tree, so a change cannot turn the guard off, or on, for itself: it takes effect once merged. `"off"` turns it off.
+Findings are **report-only** by default: they are listed with file and line (a deleted test or assertion at its line on the base commit), and the headline says how many (`verify: OK - tamper guard: 3 report-only findings`). To make them fail verify, set `"tamper": "enforced"` under `verify` in the config. `"off"` turns it off. The object form adds protected test paths and allowed exceptions:
+
+```json
+"verify": {
+  "tamper": {
+    "policy": "enforced",
+    "testPaths": ["checks/**/*.py"],
+    "allow": ["tests/legacy/**", { "path": "src/generated/**", "kinds": ["suppression-added"] }]
+  }
+}
+```
+
+`testPaths` are globs of more files to read as test files. `allow` leaves files out of the counts, for every kind of finding or only the `kinds` listed (`test-deleted`, `test-skipped`, `assertion-removed`, `suppression-added`, `not-checked`); the summary and `--json` (`tamper.allowed`) name the files it left out. **All of it is read from the base commit**, never from the working tree, so a change cannot turn the guard off, widen `allow` or drop a test path for itself: a change to it takes effect once merged.
+
+The counts in `bench/RESULTS.md` come from a labelled corpus written together with the guard. They show it does what ADR 0042 and ADR 0044 say; they are not a measured false-positive or miss rate (M26).
 
 ## The step cache
 

@@ -505,7 +505,13 @@
             "properties": {
               "kind": {
                 "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, a test that never runs or does nothing, or a new .only), assertion-removed (fewer assertions that run and can fail), suppression-added (more lint suppressions of a rule), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
-                "enum": ["test-deleted", "test-skipped", "assertion-removed", "suppression-added", "not-checked"]
+                "enum": [
+                  "test-deleted",
+                  "test-skipped",
+                  "assertion-removed",
+                  "suppression-added",
+                  "not-checked"
+                ]
               },
               "file": {
                 "type": "string"
@@ -546,7 +552,13 @@
               "kinds": {
                 "type": "array",
                 "items": {
-                  "enum": ["test-deleted", "test-skipped", "assertion-removed", "suppression-added", "not-checked"]
+                  "enum": [
+                    "test-deleted",
+                    "test-skipped",
+                    "assertion-removed",
+                    "suppression-added",
+                    "not-checked"
+                  ]
                 }
               }
             }
