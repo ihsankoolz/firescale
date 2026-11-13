@@ -226,7 +226,7 @@ describe('blame-aware verify', () => {
     expect((await runs()).filter((run) => run.startsWith('base '))).toEqual([]);
   });
 
-  it("links the head's ignored root .env into the base worktree, and keeps no value from it (ADR 0043)", async () => {
+  it("puts the head's ignored root .env into the base worktree, never writes the head's through it, and keeps no value from it (ADR 0043)", async () => {
     const { root, runs, write } = await blameRepo('ok', 'fail');
     const secret = 'sk-test-9f8e7d6c5b4a-never-shown';
     // The test reads the ignored .env, as the course project's tests do.
@@ -238,6 +238,8 @@ describe('blame-aware verify', () => {
         `fs.appendFileSync(${JSON.stringify(path.join(root, '..', `${path.basename(root)}-env.log`))}, where + ' test\\n');`,
         "if (!fs.existsSync('.env')) { console.log('KeyError: API_KEY (no .env file)'); process.exit(1); }",
         "if (!fs.readFileSync('.env', 'utf8').includes('API_KEY=')) process.exit(2);",
+        // A base run that writes .env must not reach the head's file.
+        "if (where === 'base') fs.writeFileSync('.env', 'API_KEY=overwritten-by-the-base\\n');",
         "console.log('AssertionError: expected 2 to equal 3');",
         "process.exit(fs.readFileSync('test.txt', 'utf8').includes('fail') ? 1 : 0);",
         '',
@@ -748,6 +750,38 @@ describe('per-test labels', () => {
     await write('failing.txt', 'adds=3\n');
     const same = await report((await runCli(['verify', '--json'], root)).stdout);
     expect(step(same, 'test').label).toBe('pre-existing');
+  });
+
+  it('does not let per-test results decide when one step ran pytest twice and the report holds only the last run (ADR 0043)', async () => {
+    // Two pytest sessions write the same JUnit report: the first one's
+    // failures are not in it. failing.txt is `<first run's>|<second run's>`.
+    const twice = [
+      "const fs = require('fs');",
+      "const [first, second] = fs.readFileSync('failing.txt', 'utf8').trim().split('|').map((part) => part.split(',').map((s) => s.trim()).filter(Boolean));",
+      "const words = [...(process.env.PYTEST_ADDOPTS || '').matchAll(/'([^']*)'|(\\S+)/g)].map((m) => m[1] ?? m[2]);",
+      "const report = /^--junitxml=(.+)$/.exec(words.find((w) => w.startsWith('--junitxml=')) || '');",
+      'for (const [suite, failing] of [["unit", first], ["api", second]]) {',
+      "  console.log('============ test session starts ============');",
+      '  let xml = \'<?xml version="1.0"?><testsuites><testsuite name="pytest">\';',
+      "  for (const name of ['test_a', 'test_b', 'test_c']) {",
+      '    const bad = failing.includes(name);',
+      "    xml += '<testcase classname=\"tests.test_' + suite + '\" name=\"' + name + '\" file=\"tests/test_' + suite + '.py\">' + (bad ? '<failure message=\"assert False\">assert False</failure>' : '') + '</testcase>';",
+      "    if (bad) console.log('FAILED tests/test_' + suite + '.py::' + name + ' - assert False');",
+      '  }',
+      "  xml += '</testsuite></testsuites>';",
+      '  if (report) fs.writeFileSync(report[1], xml);',
+      '}',
+      'process.exit(first.length + second.length > 0 ? 1 : 0);',
+      '',
+    ].join('\n');
+    const { root, write } = await runnerRepo(twice, 'pytest.js', 'test_a|test_b');
+    // The first run gets a new failure; the report only shows the second.
+    await write('failing.txt', 'test_a, test_c|test_b\n');
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(step(json, 'test').base?.note).toMatch(/not in the same way/);
   });
 
   it('falls back to step labels, with a note, for a runner without per-test results', async () => {

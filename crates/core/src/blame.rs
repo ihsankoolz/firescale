@@ -373,6 +373,8 @@ struct StoredBase {
     /// lines, never the text (ADR 0043).
     #[serde(default)]
     failure_reasons: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    partial_tests: bool,
 }
 
 fn store_dir(root: &Path) -> PathBuf {
@@ -389,6 +391,7 @@ fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<Tes
             failed: failed.into_iter().collect(),
             passed: stored.passed_tests,
             reasons,
+            partial: stored.partial_tests,
         });
         (stored.status, stored.signature, tests)
     })
@@ -422,6 +425,7 @@ fn keep(
         failed_tests: tests.map(|tests| tests.failed.iter().cloned().collect()),
         passed_tests: tests.map_or(0, |tests| tests.passed),
         failure_reasons: tests.map(|tests| tests.reasons.clone()).unwrap_or_default(),
+        partial_tests: tests.is_some_and(|tests| tests.partial),
     };
     let Ok(text) = serde_json::to_string_pretty(&stored) else {
         return;
@@ -442,7 +446,7 @@ pub struct Worktree {
     /// The links to the head's dependency folders, removed before the
     /// worktree so nothing can delete through them.
     links: std::sync::Mutex<Vec<PathBuf>>,
-    /// The head's env files linked in (ADR 0043), removed before the
+    /// The head's env files copied in (ADR 0043), removed before the
     /// worktree.
     files: std::sync::Mutex<Vec<PathBuf>>,
     /// The firescale root inside it.
@@ -510,9 +514,9 @@ impl Worktree {
         made
     }
 
-    /// Links the head's file `target` in at `link`, and remembers it.
-    fn link_file(&self, target: &Path, link: &Path) -> bool {
-        let made = link_file(target, link);
+    /// Copies the head's file `target` in at `link`, and remembers it.
+    fn copy_file(&self, target: &Path, link: &Path) -> bool {
+        let made = copy_file_in(target, link);
         if made {
             self.files
                 .lock()
@@ -649,24 +653,21 @@ fn link_dir(target: &Path, link: &Path) -> bool {
     }
 }
 
-/// Links a file of the head into a worktree: a symbolic link, else (on
-/// Windows without the right to make one) a hard link, else a copy, which
-/// is removed with the worktree. Its contents are never read here.
-fn link_file(target: &Path, link: &Path) -> bool {
+/// Puts a copy of a file of the head into a worktree, removed with it. A
+/// copy, not a link: a base step that writes the file (`cp .env.example
+/// .env`, a test that saves a setting) must never change the head's own,
+/// which git cannot restore (ADR 0043). Its contents are never read here.
+fn copy_file_in(target: &Path, link: &Path) -> bool {
     if link.exists() || fs::symlink_metadata(link).is_ok() || !target.is_file() {
         return false;
     }
     if link.parent().is_none_or(|parent| !parent.is_dir()) {
         return false;
     }
-    #[cfg(unix)]
-    let linked = std::os::unix::fs::symlink(target, link).is_ok();
-    #[cfg(windows)]
-    let linked = std::os::windows::fs::symlink_file(target, link).is_ok();
-    linked || fs::hard_link(target, link).is_ok() || fs::copy(target, link).is_ok()
+    fs::copy(target, link).is_ok()
 }
 
-/// The env files of the head that are linked into a worktree (ADR 0043).
+/// The env files of the head that are copied into a worktree (ADR 0043).
 const ENV_FILES: [&str; 2] = [".env", ".env.local"];
 
 /// The head's env files (`.env`, `.env.local`) at the root and in each
@@ -1181,9 +1182,12 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             }
             _ => BTreeSet::new(),
         };
+        // Only when the head's per-test results cover the whole run (one
+        // run of the runner, every test binary reported): a failure outside
+        // them would otherwise hide behind old ones (ADR 0043).
         let head_failed_any = head_tests
             .as_ref()
-            .is_some_and(|head| !head.failed.is_empty());
+            .is_some_and(|head| !head.failed.is_empty() && !head.partial);
         if failed
             && outcome.status == BaseStatus::Failed
             && (head_tests.is_none() || outcome.tests.is_none())
@@ -1389,7 +1393,7 @@ fn prepare_worktree(
     // worktree has the file already (tracked there) or lacks the folder,
     // nothing is linked; that is no reason not to judge.
     for file in &links.env_files {
-        let _ = worktree.link_file(
+        let _ = worktree.copy_file(
             &folder_of(run.root, Some(file)),
             &folder_of(&worktree.root, Some(file)),
         );
@@ -1404,6 +1408,7 @@ fn prepare_worktree(
         say(&format!("installing: {install}"));
         match run_base_step(
             &worktree.root,
+            run.root,
             None,
             "install",
             install,
@@ -1480,6 +1485,7 @@ fn run_in_worktree(
             let ran = if dir.is_dir() {
                 run_base_step(
                     &worktree.root,
+                    run.root,
                     project,
                     &step.name,
                     &command,
@@ -1729,6 +1735,7 @@ fn confirm_fixed(
             let command = step.command.clone().unwrap_or_default();
             match run_base_step(
                 &worktree.root,
+                run.root,
                 plan_of(run.plan, step),
                 &step.name,
                 &command,

@@ -32,9 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::doctor::{Machine, ThisMachine};
 use crate::git::run_git;
-use crate::graph::{
-    cannot_affect_builds, is_document_or_media, project_id, Graph, NodeType, Source,
-};
+use crate::graph::{is_document_or_media, project_id, Graph, NodeType, Source};
 use crate::services::services_in;
 use crate::walk::{walk_entries, EntryKind};
 
@@ -483,9 +481,17 @@ fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
         return true;
     }
     let unowned = !owned.iter().any(|folder| inside(path, folder));
-    // A file no project owns that cannot change a build or a test affects
-    // no project (ADR 0034, ADR 0043), so it is in no project's key either.
-    if unowned && (cannot_affect_builds(path) || is_document_or_media(path)) {
+    // A file directly in the repo root that no project owns and that is a
+    // picture, a document, an archive, media, Markdown or a licence (a
+    // screenshot, the README) is in no project's key (ADR 0043). Deeper
+    // ones stay in: a test may read `fixtures/words.txt` or a sample image
+    // by its path, which the graph does not see.
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    let readme_like = name.ends_with(".md")
+        || name.ends_with(".markdown")
+        || name.starts_with("license")
+        || name.starts_with("licence");
+    if unowned && !path.contains('/') && (is_document_or_media(path) || readme_like) {
         return false;
     }
     scope.above.contains(parent(path)) || (scope.unowned && unowned)

@@ -59,7 +59,10 @@ impl TestRunner {
     pub fn read(self, stdout: &str, stderr: &str, junit: Option<&str>) -> Option<TestResults> {
         let output = || format!("{stdout}\n{stderr}");
         match self {
-            Self::Pytest => junit.and_then(parse_junit),
+            Self::Pytest => junit.and_then(parse_junit).map(|mut results| {
+                pytest_extras(&mut results, &output());
+                results
+            }),
             Self::Vitest => parse_vitest(&output()),
             Self::Jest => parse_jest(&output()),
             Self::Cargo => parse_cargo(stdout, stderr),
@@ -90,6 +93,11 @@ pub struct TestResults {
     /// the lines with what changes between runs taken out, so no text is
     /// kept (ADR 0043).
     pub reasons: BTreeMap<String, Vec<String>>,
+    /// True when the output shows the results may not cover the whole run:
+    /// more than one run of the runner in the step, or a test binary that
+    /// ended without its results. Then per-test results cannot make a
+    /// failure pre-existing on their own (ADR 0043).
+    pub partial: bool,
 }
 
 impl TestResults {
@@ -109,6 +117,14 @@ impl TestResults {
             *lines = hashed;
         }
         self.reasons.retain(|_, lines| !lines.is_empty());
+    }
+
+    /// Adds lines to a reason, for failures reported one line at a time.
+    fn append_reason(&mut self, id: &str, line: &str) {
+        self.reasons
+            .entry(id.to_owned())
+            .or_default()
+            .push(line.trim().to_owned());
     }
 
     fn add_reason(&mut self, id: &str, lines: &[String]) {
@@ -152,6 +168,13 @@ pub fn roots_of(root: &std::path::Path) -> Vec<String> {
         roots.push(real.replace('\\', "/"));
         roots.push(real);
     }
+    // Python's repr of a Windows path doubles its backslashes.
+    let doubled: Vec<String> = roots
+        .iter()
+        .filter(|root| root.contains('\\'))
+        .map(|root| root.replace('\\', "\\\\"))
+        .collect();
+    roots.extend(doubled);
     roots.retain(|root| root.len() > 1);
     roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
     roots.dedup();
@@ -166,6 +189,17 @@ fn is_stack_frame(line: &str) -> bool {
         || line.starts_with("❯ ")
         || line.starts_with("File \"")
         || line.starts_with("stack backtrace:")
+}
+
+/// True for the first line of an error: `TypeError: x is not a function`,
+/// `Error: boom`, `AssertionError: expected 3 to be 4`.
+fn is_error_headline(line: &str) -> bool {
+    let line = line.trim_start();
+    let Some((head, _)) = line.split_once(':') else {
+        return false;
+    };
+    !head.contains(' ')
+        && (head.ends_with("Error") || head.ends_with("Exception") || head == "Error")
 }
 
 /// True for a line of a code excerpt: `  3| x`, `> 4 |   expect(x)`,
@@ -215,7 +249,8 @@ const TIME_UNITS: [&str; 15] = [
 /// or received value is part of the reason.
 #[must_use]
 pub fn normalise_reason_line(line: &str, roots: &[String]) -> String {
-    let mut line = crate::verify::strip_ansi(line).trim().to_owned();
+    // Python's repr of a Windows path doubles its backslashes.
+    let mut line = crate::verify::strip_ansi(line).trim().replace("\\\\", "\\");
     for root in roots {
         line = replace_any_case(&line, root, "<root>");
     }
@@ -289,24 +324,48 @@ fn fold_times(line: &str) -> String {
                 end += 1;
             }
             let number: String = chars[index..end].iter().collect();
-            let clock = number.matches(':').count() >= 1 && !number.contains('-')
-                || number.matches('-').count() == 2;
-            if clock {
+            // A clock time with seconds, or a date with one: `14:08:27`,
+            // `2026-11-13T10:22:33.123`, `2026-11-13 10:22:33`. Not
+            // `10:30` or `127.0.0.1:5432`, which may be values.
+            if is_clock(&number) || is_date_time(&number) {
                 out.push_str("<time>");
                 index = end;
                 continue;
             }
-            // A number followed by a unit of time.
-            let mut after = end;
-            if chars.get(after) == Some(&' ') {
-                after += 1;
+            if is_date(&number) && chars.get(end) == Some(&' ') {
+                let mut next = end + 1;
+                while next < chars.len()
+                    && (chars[next].is_ascii_digit()
+                        || (matches!(chars[next], '.' | ':')
+                            && chars.get(next + 1).is_some_and(char::is_ascii_digit)))
+                {
+                    next += 1;
+                }
+                let clock: String = chars[end + 1..next].iter().collect();
+                if is_clock(&clock) {
+                    out.push_str("<time>");
+                    index = next;
+                    continue;
+                }
             }
+            // A number followed by a unit of time that ends the word; a
+            // one-letter unit only right after the number (`2m`, not `2 m`).
+            let spaced = chars.get(end) == Some(&' ');
+            let after = if spaced { end + 1 } else { end };
             let mut unit_end = after;
             while unit_end < chars.len() && chars[unit_end].is_alphabetic() {
                 unit_end += 1;
             }
             let unit: String = chars[after..unit_end].iter().collect();
-            if unit_end > after && TIME_UNITS.contains(&unit.as_str()) {
+            let ends_word = chars.get(unit_end).is_none_or(|c| !c.is_alphanumeric());
+            let one_letter = unit.chars().count() == 1 && unit != "s";
+            if unit_end > after
+                && ends_word
+                && TIME_UNITS.contains(&unit.as_str())
+                && !(spaced && one_letter)
+                && !number.contains(':')
+                && number.matches('.').count() <= 1
+            {
                 out.push_str("<time>");
                 index = unit_end;
                 continue;
@@ -319,6 +378,39 @@ fn fold_times(line: &str) -> String {
         index += 1;
     }
     out
+}
+
+/// `14:08:27` or `14:08:27.123`: a clock time with seconds.
+fn is_clock(text: &str) -> bool {
+    let (main, fraction) = text.split_once('.').unwrap_or((text, "0"));
+    let parts: Vec<&str> = main.split(':').collect();
+    let two = |part: &str, max: u32| {
+        part.len() == 2 && part.parse::<u32>().is_ok_and(|value| value < max)
+    };
+    parts.len() == 3
+        && two(parts[0], 24)
+        && two(parts[1], 60)
+        && two(parts[2], 61)
+        && !fraction.is_empty()
+        && fraction.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `2026-11-13`.
+fn is_date(text: &str) -> bool {
+    let parts: Vec<&str> = text.split('-').collect();
+    parts.len() == 3
+        && parts[0].len() == 4
+        && parts[1].len() == 2
+        && parts[2].len() == 2
+        && parts
+            .iter()
+            .all(|part| part.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// `2026-11-13T10:22:33`, with any fraction of a second.
+fn is_date_time(text: &str) -> bool {
+    text.split_once('T')
+        .is_some_and(|(date, time)| is_date(date) && is_clock(time))
 }
 
 /// `file.ts:12:5` as `file.ts:#`, and `line 12` as `line #`: where a line
@@ -482,6 +574,27 @@ pub fn parse_junit(xml: &str) -> Option<TestResults> {
     Some(results)
 }
 
+/// What pytest's JUnit report leaves out (ADR 0043): pytest-cov's
+/// `Required test coverage of 80% not reached`, a failing test of its own,
+/// and a step that ran pytest more than once (each run writes the same
+/// report, so the last one hides the others).
+fn pytest_extras(results: &mut TestResults, output: &str) {
+    let mut sessions = 0;
+    for raw in output.lines() {
+        let line = clean(raw);
+        if line.contains("test session starts") {
+            sessions += 1;
+        }
+        if line.contains("Required test coverage of") && line.contains("not reached") {
+            results.failed.insert(COVERAGE_THRESHOLD.to_owned());
+            results.append_reason(COVERAGE_THRESHOLD, &line);
+        }
+    }
+    if sessions > 1 {
+        results.partial = true;
+    }
+}
+
 // ----------------------------------------------------------- Vitest, Jest
 
 fn clean(line: &str) -> String {
@@ -497,6 +610,7 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
     let mut seen_summary = false;
     let mut in_failures = false;
     let mut in_unhandled = false;
+    let mut summaries = 0;
     let mut block = Block::default();
     for raw in output.lines() {
         let line = clean(raw);
@@ -517,8 +631,11 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
         }
         if line.contains("does not meet") && line.contains("threshold") {
             results.failed.insert(COVERAGE_THRESHOLD.to_owned());
-            results.add_reason(COVERAGE_THRESHOLD, std::slice::from_ref(&line));
+            results.append_reason(COVERAGE_THRESHOLD, &line);
             continue;
+        }
+        if line.starts_with("Test Files ") {
+            summaries += 1;
         }
         if line.starts_with("Test Files ") || line.starts_with("Tests ") {
             block.flush(&mut results);
@@ -527,7 +644,7 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
         }
         if in_unhandled {
             // Unhandled errors' own banners are not their reason.
-            if !line.contains("⎯⎯") && !line.starts_with("Vitest caught") {
+            if !line.contains("⎯⎯") {
                 block.push(&line);
             }
             continue;
@@ -570,6 +687,7 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
             }
         }
     }
+    results.partial = summaries > 1;
     block.flush(&mut results);
     (seen_summary || !results.failed.is_empty()).then_some(results)
 }
@@ -586,7 +704,15 @@ struct Block {
 
 impl Block {
     fn push(&mut self, line: &str) {
-        if self.ids.is_empty() || self.frames {
+        if self.ids.is_empty() {
+            return;
+        }
+        // A second error of the same test (an `afterEach` failure, another
+        // unhandled error) is part of its reason too.
+        if self.frames && is_error_headline(line) {
+            self.frames = false;
+        }
+        if self.frames {
             return;
         }
         if is_stack_frame(line) {
@@ -613,14 +739,18 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
     let mut results = TestResults::default();
     let mut seen_summary = false;
     let mut file: Option<String> = None;
+    let mut summaries = 0;
     let mut block = Block::default();
     for raw in output.lines() {
         let line = clean(raw);
         if line.starts_with("Jest: ") && line.contains("coverage threshold") {
             block.flush(&mut results);
             results.failed.insert(COVERAGE_THRESHOLD.to_owned());
-            results.add_reason(COVERAGE_THRESHOLD, std::slice::from_ref(&line));
+            results.append_reason(COVERAGE_THRESHOLD, &line);
             continue;
+        }
+        if line.starts_with("Test Suites:") {
+            summaries += 1;
         }
         let ends_block = line.starts_with("FAIL ")
             || line.starts_with("PASS ")
@@ -685,6 +815,7 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
             }
         }
     }
+    results.partial = summaries > 1;
     block.flush(&mut results);
     (seen_summary || !results.failed.is_empty()).then_some(results)
 }
@@ -727,6 +858,7 @@ pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
     let mut results = TestResults::default();
     let mut binary = String::new();
     let mut block_index = 0;
+    let mut results_seen = 0;
     let mut block = Block::default();
     let mut seen = false;
     for raw in stdout.lines() {
@@ -746,6 +878,7 @@ pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
         }
         if line.starts_with("test result:") {
             block.flush(&mut results);
+            results_seen += 1;
             seen = true;
             continue;
         }
@@ -800,6 +933,8 @@ pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
             _ => {}
         }
     }
+    // A test binary that crashed printed no `test result:` line.
+    results.partial = !together && results_seen < binaries.len();
     block.flush(&mut results);
     (seen || !results.failed.is_empty()).then_some(results)
 }
@@ -1023,7 +1158,26 @@ mod tests {
             );
         };
         same("took 12ms", "took 1.5 s");
-        same("at 14:08:27 on 2026-11-13", "at 09:01:02 on 2026-11-14");
+        same(
+            "at 14:08:27 on 2026-11-13T10:22:33Z",
+            "at 09:01:02 on 2026-11-14T08:00:01Z",
+        );
+        same(
+            "logged 2026-11-13 10:22:33.120",
+            "logged 2026-11-14 08:00:01.5",
+        );
+        differ(
+            "expected '10:30' to be '10:00'",
+            "expected '25:99' to be '10:00'",
+        );
+        differ("connect 127.0.0.1:5432", "connect 127.0.0.1:6379");
+        differ("call 555-123-4567", "call 555-123-9999");
+        differ("found 2 h1", "found 3 h1");
+        differ("expected 2026-11-13", "expected 2026-11-14");
+        same(
+            "open 'C:\\\\Users\\\\me\\\\repo\\\\x.json'",
+            "open 'C:\\Users\\me\\repo\\x.json'",
+        );
         same(
             "open '/home/me/repo/data.json'",
             "open 'c:\\users\\me\\repo/data.json'",
@@ -1099,9 +1253,24 @@ Error: boom
         assert!(results.failed.contains(UNHANDLED_ERRORS));
         assert_eq!(
             results.reasons[UNHANDLED_ERRORS],
-            vec!["Error: boom".to_owned()]
+            vec![
+                "Vitest caught 1 unhandled error during the test run.".to_owned(),
+                "Error: boom".to_owned()
+            ]
         );
-
+        // A second error, after the first one's stack, is part of the reason.
+        let two = unhandled.replace(
+            " Test Files",
+            "TypeError: x is not a function\n ❯ src/b.ts:2:2\n Test Files",
+        );
+        assert!(parse_vitest(&two).unwrap().reasons[UNHANDLED_ERRORS]
+            .contains(&"TypeError: x is not a function".to_owned()));
+        // Every coverage line counts, and two runs in one step are partial.
+        let coverage = "ERROR: Coverage for lines (50%) does not meet global threshold (80%)\nERROR: Coverage for functions (40%) does not meet global threshold (80%)\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n Test Files  1 passed (1)\n      Tests  1 passed (1)\n";
+        let results = parse_vitest(coverage).unwrap();
+        assert_eq!(results.reasons[COVERAGE_THRESHOLD].len(), 2);
+        assert!(results.partial);
+        assert!(!parse_vitest(vitest).unwrap().partial);
         let jest = "\
 FAIL src/math.test.js
   ● math › adds
@@ -1132,7 +1301,23 @@ Jest: \"global\" coverage threshold for lines (80%) not met: 50%
         assert!(results.failed.contains(COVERAGE_THRESHOLD));
 
         let junit = r#"<testsuite><testcase classname="tests.test_a" name="test_x" file="tests/test_a.py"><failure message="AssertionError: assert 3 == 4">trace</failure></testcase></testsuite>"#;
-        let results = parse_junit(junit).unwrap();
+        let results = TestRunner::Pytest
+            .read(
+                "==== test session starts ====\nFAIL Required test coverage of 80% not reached. Total coverage: 61.20%\n",
+                "",
+                Some(junit),
+            )
+            .unwrap();
+        assert!(results.failed.contains(COVERAGE_THRESHOLD));
+        assert!(!results.partial);
+        let twice = TestRunner::Pytest
+            .read(
+                "== test session starts ==\n== test session starts ==\n",
+                "",
+                Some(junit),
+            )
+            .unwrap();
+        assert!(twice.partial);
         assert_eq!(
             results.reasons["tests/test_a.py::test_x"],
             vec!["AssertionError: assert 3 == 4".to_owned()]
@@ -1157,7 +1342,13 @@ failures:
 test result: FAILED. 0 passed; 1 failed
 ";
         let cargo_err = "     Running unittests src/lib.rs (target/debug/deps/core-1a2b)\n";
+        // A second binary that crashed before its results: partial.
+        let crashed = format!(
+            "{cargo_err}     Running tests/api.rs (target/debug/deps/api-9f8e)\nerror: test failed, to rerun pass `--test api`\n\nCaused by:\n  process didn't exit successfully (signal: 11, SIGSEGV: invalid memory reference)\n"
+        );
+        assert!(parse_cargo(cargo_out, &crashed).unwrap().partial);
         let results = parse_cargo(cargo_out, cargo_err).unwrap();
+        assert!(!results.partial);
         assert_eq!(
             results.reasons["core::tests::a"],
             vec![

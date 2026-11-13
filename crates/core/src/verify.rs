@@ -1452,18 +1452,27 @@ struct Unit<'a> {
     install: Option<&'a str>,
     /// False when `--affected` found that no change reaches this unit.
     runs: bool,
+    /// For a step of the base run: the head's root, which the head's
+    /// linked dependency folders resolve to, so it is normalised in test
+    /// reasons too (ADR 0043).
+    head_root: Option<&'a Path>,
 }
 
 /// The next step when the environment is not set up: the command that
 /// starts the services, the install command, or nothing when the summary
 /// can only say what to install by hand.
-fn setup_fix(problem: &crate::setup::SetupProblem, install: Option<&str>) -> Option<String> {
+fn setup_fix(
+    problem: &crate::setup::SetupProblem,
+    install: Option<&str>,
+    root: &Path,
+    dir: &Path,
+) -> Option<String> {
     if problem.missing_service.is_some() {
         return problem.start_services.clone();
     }
     match (&problem.missing_program, install) {
         (Some(_), _) | (None, None) => None,
-        (None, Some(install)) => Some(install.to_owned()),
+        (None, Some(install)) => Some(crate::setup::install_for(problem, install, root, dir)),
     }
 }
 
@@ -1831,6 +1840,12 @@ fn environment(command: &mut Command, config: &VerifyConfig, base_run: bool) {
         command.env("FSCALE_BASE_RUN", "1");
     }
     command.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
+    // Python holds output in a buffer when it writes to a pipe, so a suite
+    // that is making progress would look silent to the idle limit
+    // (ADR 0043). A value the environment already has is kept.
+    if std::env::var_os("PYTHONUNBUFFERED").is_none() {
+        command.env("PYTHONUNBUFFERED", "1");
+    }
     let ci_set = std::env::var_os("CI").is_some_and(|value| !value.is_empty());
     if !config.no_ci_variable && !ci_set {
         command.env("CI", "1");
@@ -1939,6 +1954,7 @@ fn run_step(
                     missing_program: None,
                     missing_service: None,
                     start_services: None,
+                    missing_package: None,
                 },
                 EarlyKind::NoPass,
             ));
@@ -1954,7 +1970,7 @@ fn run_step(
         } else {
             "the step runs on because verify.stopWhenServiceDown is false"
         };
-        let start = setup_fix(&problem, unit.install)
+        let start = setup_fix(&problem, unit.install, unit.root, &dir)
             .map_or_else(String::new, |fix| format!("; start it with: {fix}"));
         options.say(&format!(
             "{place}: {label}, seen while running: {service} is not running ({evidence}){start}; {then}"
@@ -2042,7 +2058,12 @@ fn run_step(
         report.test_results = runner.read(&stdout, &stderr, xml.as_deref());
         // Each failing test's reason, as hashes of its normalised lines.
         if let Some(results) = report.test_results.as_mut() {
-            results.hash_reasons(&crate::pertest::roots_of(unit.root));
+            let mut roots = crate::pertest::roots_of(unit.root);
+            if let Some(head) = unit.head_root {
+                roots.extend(crate::pertest::roots_of(head));
+                roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
+            }
+            results.hash_reasons(&roots);
         }
         // A run that stopped at its first failure may hide a later new one:
         // never evidence for pre-existing (ADR 0039).
@@ -2152,7 +2173,7 @@ fn run_step(
             report.output_tail = tail(&finished.stdout, &finished.stderr);
             match early_seen {
                 Some((problem, EarlyKind::AllErrored)) => {
-                    let start = setup_fix(&problem, unit.install)
+                    let start = setup_fix(&problem, unit.install, unit.root, &dir)
                         .map_or_else(String::new, |fix| format!(" ({fix})"));
                     let service = problem.missing_service.clone().unwrap_or_default();
                     if let Some(found) = first_error(&mut report) {
@@ -2162,7 +2183,7 @@ fn run_step(
                             "{command} (stopped early after {took}; its first error shows {})",
                             found.reason
                         );
-                        report.fix = setup_fix(&found, unit.install);
+                        report.fix = setup_fix(&found, unit.install, unit.root, &dir);
                         options.say(&format!(
                             "{place}: SETUP NEEDED after {took} (stopped early)"
                         ));
@@ -2181,7 +2202,7 @@ fn run_step(
                             "{command} (stopped early after {took}; its first error shows {})",
                             found.reason
                         );
-                        report.fix = setup_fix(&found, unit.install);
+                        report.fix = setup_fix(&found, unit.install, unit.root, &dir);
                         options.say(&format!(
                             "{place}: SETUP NEEDED after {took} (stopped early)"
                         ));
@@ -2209,7 +2230,7 @@ fn run_step(
                     report.status = StepStatus::SetupNeeded;
                     report.detail =
                         format!("{command} (stopped early after {took}): {}", problem.reason);
-                    report.fix = setup_fix(&problem, unit.install);
+                    report.fix = setup_fix(&problem, unit.install, unit.root, &dir);
                     options.say(&format!(
                         "{place}: SETUP NEEDED after {took} (stopped early)"
                     ));
@@ -2261,13 +2282,13 @@ fn run_step(
                 setup_problem(&text(), None, unit.root, &dir).or_else(|| seen_early.clone())
             {
                 report.detail = format!("{command} ({what}; the output shows {})", problem.reason);
-                report.fix = setup_fix(&problem, unit.install);
+                report.fix = setup_fix(&problem, unit.install, unit.root, &dir);
             } else if let Some(found) = first_error(&mut report) {
                 // The first error names the environment: setup needed.
                 report.status = StepStatus::SetupNeeded;
                 report.detail =
                     format!("{command} ({what}; its first error shows {})", found.reason);
-                report.fix = setup_fix(&found, unit.install);
+                report.fix = setup_fix(&found, unit.install, unit.root, &dir);
             }
             options.say(&format!("{place}: TIMED OUT after {took} (limit {limit})"));
             return Ok(report);
@@ -2298,7 +2319,7 @@ fn run_step(
         Some(problem) => {
             report.status = StepStatus::SetupNeeded;
             report.detail = format!("{command} ({exit}): {}", problem.reason);
-            report.fix = setup_fix(&problem, unit.install);
+            report.fix = setup_fix(&problem, unit.install, unit.root, &dir);
             if report.fix.is_none() {
                 if let Some(program) = &problem.missing_program {
                     report.detail.push_str(&format!(
@@ -2533,6 +2554,7 @@ pub(crate) fn run_again(
         project,
         install: project.and_then(|project| project.install.as_deref()),
         runs: true,
+        head_root: None,
     };
     run_step(&unit, name, command, &again)
 }
@@ -2542,6 +2564,7 @@ pub(crate) fn run_again(
 /// more time than is left before `deadline` (ADR 0037).
 pub(crate) fn run_base_step(
     root: &Path,
+    head_root: &Path,
     project: Option<&ProjectPlan>,
     name: &str,
     command: &str,
@@ -2565,6 +2588,7 @@ pub(crate) fn run_base_step(
         project,
         install: project.and_then(|project| project.install.as_deref()),
         runs: true,
+        head_root: Some(head_root),
     };
     run_step(&unit, name, command, &base)
 }
@@ -2748,6 +2772,7 @@ pub fn run_verify_with(
                 .affected
                 .as_ref()
                 .is_none_or(|affected| affected.runs(None)),
+            head_root: None,
         },
     ))
     .chain(plan.projects.iter().map(|project| {
@@ -2761,6 +2786,7 @@ pub fn run_verify_with(
                     .affected
                     .as_ref()
                     .is_none_or(|affected| affected.runs(Some(project))),
+                head_root: None,
             },
         )
     }))

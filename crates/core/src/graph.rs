@@ -1546,6 +1546,11 @@ pub fn build_graph(root: &Path, facts: &RepoFacts) -> Graph {
 /// root's `docs/` folder.
 #[must_use]
 pub fn cannot_affect_builds(file: &str) -> bool {
+    // A requirements list, wherever it is (`requirements/base.txt`), is
+    // what gets installed.
+    if crate::facts::is_dependency_list(file) {
+        return false;
+    }
     if file.starts_with("docs/") {
         return true;
     }
@@ -2136,6 +2141,14 @@ mod tests {
             affected_projects(&graph, &["frontend/README.md"]),
             ["frontend"]
         );
+    }
+
+    #[test]
+    fn a_requirements_list_in_a_requirements_folder_can_affect_builds() {
+        assert!(!cannot_affect_builds("requirements/base.txt"));
+        assert!(!cannot_affect_builds("requirements-dev.txt"));
+        assert!(cannot_affect_builds("notes.txt"));
+        assert!(cannot_affect_builds("docs/guide.md"));
     }
 
     #[test]

@@ -14,7 +14,7 @@
 use std::path::{Path, PathBuf};
 
 /// Why a failed step looks like an environment that is not set up.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SetupProblem {
     /// What is missing, in a few words: "the Python module 'jwt' is not
     /// installed".
@@ -30,6 +30,9 @@ pub struct SetupProblem {
     /// step's folder or a folder above it, to be run in the step's folder:
     /// `docker compose up -d`, or `docker compose -f ../compose.yaml up -d`.
     pub start_services: Option<String>,
+    /// A Node package that is listed but not installed: the install that
+    /// keeps the lockfile works only when the lockfile names it (ADR 0043).
+    pub missing_package: Option<String>,
 }
 
 /// Programs that a project's own install command does not provide.
@@ -99,6 +102,7 @@ fn missing(program: &str) -> SetupProblem {
             missing_program: Some(name),
             missing_service: None,
             start_services: None,
+            missing_package: None,
         }
     } else {
         SetupProblem {
@@ -108,6 +112,7 @@ fn missing(program: &str) -> SetupProblem {
             missing_program: None,
             missing_service: None,
             start_services: None,
+            missing_package: None,
         }
     }
 }
@@ -551,6 +556,7 @@ pub fn service_down(described: &str, root: &Path, dir: &Path) -> SetupProblem {
         missing_program: None,
         missing_service: Some(described.to_owned()),
         start_services: start_services(root, dir),
+        missing_package: None,
     }
 }
 
@@ -775,6 +781,7 @@ fn login_failed(described: &str) -> SetupProblem {
         missing_program: None,
         missing_service: Some(described.to_owned()),
         start_services: None,
+        missing_package: None,
     }
 }
 
@@ -1069,6 +1076,7 @@ fn node_package_problem(
         missing_program: None,
         missing_service: None,
         start_services: None,
+        missing_package: Some(package),
     }))
 }
 
@@ -1154,6 +1162,118 @@ pub fn locked_install(install: &str, root: &Path, dir: &Path) -> String {
     locked.to_owned()
 }
 
+/// True when a TypeScript or mypy run reports an error other than a
+/// package or module that cannot be found.
+fn other_type_errors(lines: &[&str]) -> bool {
+    lines.iter().any(|line| {
+        let ts = line.contains("error TS")
+            && !line.contains("error TS2307")
+            && !line.contains("error TS2688");
+        let mypy = line.contains(": error: ")
+            && mypy_missing(line).is_none()
+            && !line.contains("[import-untyped]");
+        ts || mypy
+    })
+}
+
+/// True when a dependency list in `dir` or a folder above it, up to the
+/// root, names the Python module `module` (its top-level name, with `-`
+/// and `_` alike, in any letter case): `requirements*.txt`,
+/// `pyproject.toml`, `Pipfile`, `setup.cfg`.
+fn python_dependency_named(module: &str, root: &Path, dir: &Path) -> bool {
+    let top = module.split('.').next().unwrap_or(module);
+    let wanted = top.to_ascii_lowercase().replace('_', "-");
+    if wanted.is_empty() {
+        return false;
+    }
+    let mut at = Some(dir);
+    while let Some(folder) = at {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            break;
+        };
+        for entry in entries.filter_map(std::result::Result::ok) {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            let listed = (name.starts_with("requirements") && name.ends_with(".txt"))
+                || matches!(name.as_str(), "pyproject.toml" | "pipfile" | "setup.cfg");
+            if !listed {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            let text = text.to_ascii_lowercase().replace('_', "-");
+            let named = text
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'))
+                .any(|word| word == wanted);
+            if named {
+                return true;
+            }
+        }
+        if folder == root {
+            break;
+        }
+        at = folder.parent().filter(|up| up.starts_with(root));
+    }
+    false
+}
+
+/// The install to name for `problem`: the lockfile-keeping `install`, or
+/// its plain form when the problem is a Node package that the lockfile
+/// does not name yet (it was just added to package.json), since `npm ci`
+/// and the frozen installs refuse a lockfile that is out of date
+/// (ADR 0043).
+#[must_use]
+pub fn install_for(problem: &SetupProblem, install: &str, root: &Path, dir: &Path) -> String {
+    let Some(package) = &problem.missing_package else {
+        return install.to_owned();
+    };
+    let plain = match install {
+        "npm ci" => "npm install",
+        "pnpm install --frozen-lockfile" => "pnpm install",
+        "yarn install --immutable" | "yarn install --frozen-lockfile" => "yarn install",
+        "bun install --frozen-lockfile" => "bun install",
+        _ => return install.to_owned(),
+    };
+    let lockfiles = [
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lock",
+        "bun.lockb",
+    ];
+    let mut at = Some(dir);
+    while let Some(folder) = at {
+        for name in lockfiles {
+            if let Ok(bytes) = std::fs::read(folder.join(name)) {
+                let text = String::from_utf8_lossy(&bytes);
+                return if names_package(&text, package) {
+                    install.to_owned()
+                } else {
+                    plain.to_owned()
+                };
+            }
+        }
+        if folder == root {
+            break;
+        }
+        at = folder.parent().filter(|up| up.starts_with(root));
+    }
+    install.to_owned()
+}
+
+/// True when a lockfile's text names `package` as a whole name:
+/// `"node_modules/react"`, `react@18`, `'react':`, `/react@`.
+fn names_package(text: &str, package: &str) -> bool {
+    text.match_indices(package).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + package.len()..].chars().next();
+        let starts = before.is_none_or(|c| matches!(c, '"' | '\'' | '/' | ' ' | '\n' | '\t'));
+        let ends = after.is_none_or(|c| matches!(c, '"' | '\'' | '@' | ':'));
+        starts && ends
+    })
+}
+
 /// mypy: `error: Cannot find implementation or library stub for module named "requests"  [import-not-found]`.
 fn mypy_missing(line: &str) -> Option<&str> {
     const STUB: &str = "Cannot find implementation or library stub for module named ";
@@ -1211,6 +1331,7 @@ pub fn setup_problem(
                 missing_program: None,
                 missing_service: None,
                 start_services: None,
+                missing_package: None,
             });
         }
         // Windows: the Microsoft Store stand-in for a Python that is not installed.
@@ -1232,6 +1353,7 @@ pub fn setup_problem(
                 missing_program: None,
                 missing_service: None,
                 start_services: None,
+                missing_package: None,
             });
         }
         // pnpm exec: Command "oxlint" not found
@@ -1254,9 +1376,15 @@ pub fn setup_problem(
                 return Some(missing(name));
             }
         }
-        // mypy, with the module not installed in its environment.
+        // mypy, with the module not installed in its environment. Not when
+        // mypy also found other errors (a missing package must not hide a
+        // type error), and only for a module a dependency list names, so a
+        // typo in an import stays a failure (ADR 0043).
         if let Some(module) = mypy_missing(line) {
-            if is_local_module(module, root, dir) {
+            if is_local_module(module, root, dir)
+                || other_type_errors(&lines)
+                || !python_dependency_named(module, root, dir)
+            {
                 return None;
             }
             return Some(SetupProblem {
@@ -1264,11 +1392,17 @@ pub fn setup_problem(
                 missing_program: None,
                 missing_service: None,
                 start_services: None,
+                missing_package: None,
             });
         }
         // Node, ESLint and TypeScript: a package that is listed in a
-        // package.json and is in no node_modules folder.
+        // package.json and is in no node_modules folder. A TypeScript run
+        // with other errors beside it is a failure: the missing package
+        // must not hide a type error (ADR 0043).
         if let Some(found) = node_package_problem(&lines, index, has_stack, root, dir) {
+            if line.contains("error TS") && other_type_errors(&lines) {
+                return None;
+            }
             return found;
         }
         // sh: exit code 127 means the shell could not find the command.
@@ -2032,6 +2166,10 @@ mod tests {
         ] {
             assert_eq!(in_frontend(output, &[installed]), None, "{output}");
         }
+        // Not installed, but a type error beside it: a failure, so the
+        // missing package does not hide the type error (ADR 0043).
+        let mixed = format!("{TS2307}src/main.tsx(9,3): error TS2322: Type 'number' is not assignable to type 'string'.\n");
+        assert_eq!(in_frontend(&mixed, &[]), None);
         // In node_modules of a folder above the project, up to the root.
         let fixture = Fixture::new(
             &[
@@ -2184,16 +2322,75 @@ mod tests {
     #[test]
     fn mypy_on_a_module_that_is_not_installed_is_a_setup_problem() {
         let out = "app/api.py:3: error: Cannot find implementation or library stub for module named \"requests\"  [import-not-found]\napp/api.py:3: note: See https://mypy.readthedocs.io/en/stable/running_mypy.html#missing-imports\nFound 1 error in 1 file (checked 4 source files)\n";
+        let fixture = Fixture::new(
+            &[
+                ("svc/requirements.txt", "Requests==2.32.0\nmypy\n"),
+                ("svc/main.py", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let svc = fixture.root().join("svc");
+        let found = setup_problem(out, Some(1), fixture.root(), &svc).map(|found| found.reason);
         assert_eq!(
-            reason(out, 1),
-            "the Python module 'requests' is not installed"
+            found.as_deref(),
+            Some("the Python module 'requests' is not installed")
         );
+        // A module no dependency list names: maybe a typo in an import.
+        let typo = out.replace("\"requests\"", "\"requets\"");
+        assert_eq!(setup_problem(&typo, Some(1), fixture.root(), &svc), None);
+        // A type error beside it is a failure: the missing module must not hide it.
+        let mixed = format!("{out}app/api.py:9: error: Incompatible return value type (got \"int\", expected \"str\")  [return-value]\n");
+        assert_eq!(setup_problem(&mixed, Some(1), fixture.root(), &svc), None);
+        assert_eq!(problem(out, 1), None);
         // A module of the project itself: maybe a typo in the code.
         let local = "main.py:1: error: Cannot find implementation or library stub for module named \"app.servics\"  [import-not-found]\n";
         assert_eq!(problem(local, 1), None);
         // Installed without types is another message, and a normal failure.
         let untyped = "main.py:1: error: Skipping analyzing \"yaml\": module is installed, but missing library stubs or py.typed marker  [import-untyped]\n";
         assert_eq!(problem(untyped, 1), None);
+    }
+
+    #[test]
+    fn a_package_the_lockfile_does_not_name_yet_gets_the_plain_install() {
+        let fixture = Fixture::new(
+            &[(
+                "web/package-lock.json",
+                r#"{"packages":{"node_modules/react":{"version":"18.3.1"}}}"#,
+            )],
+            Track::NoGit,
+        )
+        .unwrap();
+        let dir = fixture.root().join("web");
+        let problem = |package: &str| SetupProblem {
+            reason: format!("the package '{package}' is not installed"),
+            missing_package: Some(package.to_owned()),
+            ..SetupProblem::default()
+        };
+        // Named in the lockfile: npm ci installs it without rewriting it.
+        assert_eq!(
+            install_for(&problem("react"), "npm ci", fixture.root(), &dir),
+            "npm ci"
+        );
+        // Just added to package.json: npm ci would refuse the lockfile.
+        assert_eq!(
+            install_for(&problem("zod"), "npm ci", fixture.root(), &dir),
+            "npm install"
+        );
+        // A prefix of a named package is not that package.
+        assert_eq!(
+            install_for(&problem("reac"), "npm ci", fixture.root(), &dir),
+            "npm install"
+        );
+        // Not a package problem: the locked install as it is.
+        let other = SetupProblem {
+            reason: "the Python module 'jwt' is not installed".to_owned(),
+            ..SetupProblem::default()
+        };
+        assert_eq!(
+            install_for(&other, "npm ci", fixture.root(), &dir),
+            "npm ci"
+        );
     }
 
     fn locked(install: &str, files: &[(&str, &str)]) -> String {
