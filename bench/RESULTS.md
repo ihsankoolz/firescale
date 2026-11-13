@@ -2,6 +2,29 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## M18: the step cache, cold and warm
+
+Release build, Linux x64 local container (4 vCPUs), Node 22, 2026-11-13. `bench/verify-bench.mjs --runs 100`, in the same small repo as the M7 rows below. The cold row runs `--no-cache`: every step runs, and verify also hashes the repo twice (before, and before storing), asks `node --version` and stores three entries. The warm row serves all three steps from the cache: what is left is the check, the hashing and the one `node --version`.
+
+| Scenario                                                                   |      p50 |      p99 |      max |
+| -------------------------------------------------------------------------- | -------: | -------: | -------: |
+| overhead: `fscale verify`, every step off                                  |  12.6 ms |  17.1 ms |  17.1 ms |
+| commands, cold cache: `fscale verify --no-cache`, three `node -e ""` steps | 174.2 ms | 198.8 ms | 198.8 ms |
+| commands, warm cache: `fscale verify`, the same three steps                |  35.8 ms |  43.3 ms |  43.3 ms |
+| stop hook: `fscale hooks run --agent claude`, same repo, warm cache        |  35.1 ms |  39.7 ms |  39.7 ms |
+
+The cold run costs about 75 ms more than the M7 "commands" row (99.6 ms): the version probe, two hashes of the repo and the writes. A real step (a test suite of seconds or minutes) dwarfs that.
+
+On the real repos of DECISIONS.md, copied, with every step replaced by `node -e 0` (so no script of theirs ran), `--jobs 4`, one run each:
+
+| Repo                                     | Units |   Cold |  Warm | Warm, from the cache |
+| ---------------------------------------- | ----: | -----: | ----: | -------------------- |
+| `fastapi/full-stack-fastapi-template`    |     4 | 262 ms | 96 ms | 12 of 13 steps       |
+| `vercel/commerce`                        |     1 | 209 ms | 45 ms | 3 of 4 steps         |
+| `GoogleCloudPlatform/microservices-demo` |    12 | 555 ms | 79 ms | 33 of 34 steps       |
+
+After a new file in `src/checkoutservice` of `microservices-demo`, only that service's steps and the repo root's own steps (which cover the whole repo) ran again: 27 of 34 steps came from the cache.
+
 ## M17: tree-sitter and the project graph
 
 Release build of `fscale` on the build machine (Linux x64, 4 vCPUs), 2026-11-13, before and after M17 added tree-sitter with its Python and TypeScript grammars (ADR 0033):

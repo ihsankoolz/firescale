@@ -37,9 +37,9 @@ async function validate(json: string): Promise<Report> {
   return data as Report;
 }
 
-/** A node one-liner that appends `word` to the file named by STEP_LOG. */
+/** A node one-liner that appends `word` to `steps.log`, which git ignores. */
 function logs(word: string): string {
-  return `node -e "require('fs').appendFileSync(process.env.STEP_LOG, '${word}\\n')"`;
+  return `node -e "require('fs').appendFileSync('steps.log', '${word}\\n')"`;
 }
 
 /** A repo whose three steps only log that they ran. */
@@ -51,14 +51,14 @@ async function loggingRepo(extra: Record<string, string> = {}) {
         verify: { lint: logs('lint'), typecheck: logs('typecheck'), test: logs('test') },
       }),
       'src/a.js': 'export const a = 1;\n',
+      '.gitignore': 'steps.log\n',
       ...extra,
     },
   });
-  const outside = await fixtures.create({ files: {}, track: 'no-git' });
-  const log = path.join(outside.root, 'steps.log');
+  const log = path.join(repo.root, 'steps.log');
   const ran = async (): Promise<string[]> =>
     (await readFile(log, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
-  return { repo, log, ran };
+  return { repo, ran };
 }
 
 /** The course project with stand-ins for python, npx and npm that answer --version. */
@@ -84,13 +84,13 @@ function projectsIn(calls: string[]): string[] {
 
 describe('the step cache', () => {
   it('runs no step again on a second run with no change, and says so', async () => {
-    const { repo, log, ran } = await loggingRepo();
-    const first = await runCli(['verify'], repo.root, { STEP_LOG: log });
+    const { repo, ran } = await loggingRepo();
+    const first = await runCli(['verify'], repo.root, {});
     expect(first.code).toBe(EXIT_OK);
     expect(await ran()).toEqual(['lint', 'typecheck', 'test']);
     expect(first.stdout.split('\n')[0]).toBe('verify: OK');
 
-    const second = await runCli(['verify'], repo.root, { STEP_LOG: log });
+    const second = await runCli(['verify'], repo.root, {});
     expect(second.code).toBe(EXIT_OK);
     expect(await ran()).toEqual(['lint', 'typecheck', 'test']);
     const lines = second.stdout.split('\n');
@@ -109,9 +109,7 @@ describe('the step cache', () => {
     );
     expect(second.stdout).toContain('Run fscale verify --no-cache to run every step.');
 
-    const json = await validate(
-      (await runCli(['verify', '--json'], repo.root, { STEP_LOG: log })).stdout,
-    );
+    const json = await validate((await runCli(['verify', '--json'], repo.root, {})).stdout);
     expect(json.cache).toMatchObject({ read: true, hits: 3 });
     for (const step of json.steps.filter((step) => step.name !== 'check')) {
       expect(step.status).toBe('passed');
@@ -122,19 +120,19 @@ describe('the step cache', () => {
   });
 
   it('--no-cache runs every step and still stores the passes', async () => {
-    const { repo, log, ran } = await loggingRepo();
-    await runCli(['verify', '--no-cache'], repo.root, { STEP_LOG: log });
-    const again = await runCli(['verify', '--no-cache', '--json'], repo.root, { STEP_LOG: log });
+    const { repo, ran } = await loggingRepo();
+    await runCli(['verify', '--no-cache'], repo.root, {});
+    const again = await runCli(['verify', '--no-cache', '--json'], repo.root, {});
     expect((await validate(again.stdout)).cache).toEqual({ read: false, hits: 0, savedMs: 0 });
     expect(await ran()).toHaveLength(6);
-    const third = await runCli(['verify'], repo.root, { STEP_LOG: log });
+    const third = await runCli(['verify'], repo.root, {});
     expect(third.stdout.split('\n')[0]).toContain('3 of 4 steps passed from the cache');
     expect(await ran()).toHaveLength(6);
   });
 
   it('runs again after a change to a tracked, an untracked or a deleted file, and not for an ignored one', async () => {
-    const { repo, log, ran } = await loggingRepo({ '.gitignore': 'out/\n' });
-    const run = () => runCli(['verify'], repo.root, { STEP_LOG: log });
+    const { repo, ran } = await loggingRepo({ '.gitignore': 'steps.log\nout/\n' });
+    const run = () => runCli(['verify'], repo.root, {});
     await run();
     await repo.write('out/build.js', 'ignored\n');
     await run();
@@ -174,11 +172,11 @@ describe('the step cache', () => {
   });
 
   it('never caches a step that needs a service the repo does not start', async () => {
-    const { repo, log, ran } = await loggingRepo({
+    const { repo, ran } = await loggingRepo({
       '.env.example': 'DATABASE_URL=postgresql://app:secret@localhost:5432/app\n',
     });
     for (let run = 0; run < 2; run += 1) {
-      const result = await runCli(['verify'], repo.root, { STEP_LOG: log, FSCALE_LOG: 'cache' });
+      const result = await runCli(['verify'], repo.root, { FSCALE_LOG: 'cache' });
       expect(result.stderr).toContain(
         'cache: not cached test: it may need PostgreSQL on localhost:5432 (from .env.example (DATABASE_URL)), a service the repo does not start',
       );
@@ -187,29 +185,25 @@ describe('the step cache', () => {
   });
 
   it('caches a step whose service the repo starts with Compose', async () => {
-    const { repo, log, ran } = await loggingRepo({
+    const { repo, ran } = await loggingRepo({
       '.env.example': 'DATABASE_URL=postgresql://app:secret@localhost:5432/app\n',
       'compose.yaml': 'services:\n  db:\n    image: postgres:16\n    ports:\n      - "5432:5432"\n',
     });
-    await runCli(['verify'], repo.root, { STEP_LOG: log });
-    await runCli(['verify'], repo.root, { STEP_LOG: log });
+    await runCli(['verify'], repo.root, {});
+    await runCli(['verify'], repo.root, {});
     expect(await ran()).toHaveLength(3);
   });
 
   it('keys on allowlisted variables only, and writes no value of the environment', async () => {
-    const { repo, log, ran } = await loggingRepo();
+    const { repo, ran } = await loggingRepo();
     const secret = 'sk-live-0123456789-do-not-store';
-    await runCli(['verify'], repo.root, { STEP_LOG: log, MY_TOKEN: secret, NODE_ENV: 'test' });
+    await runCli(['verify'], repo.root, { MY_TOKEN: secret, NODE_ENV: 'test' });
     expect(await ran()).toHaveLength(3);
     // A variable outside the allowlist changes nothing.
-    await runCli(['verify'], repo.root, { STEP_LOG: log, MY_TOKEN: 'another', NODE_ENV: 'test' });
+    await runCli(['verify'], repo.root, { MY_TOKEN: 'another', NODE_ENV: 'test' });
     expect(await ran()).toHaveLength(3);
     // An allowlisted one runs every step again.
-    await runCli(['verify'], repo.root, {
-      STEP_LOG: log,
-      MY_TOKEN: secret,
-      NODE_ENV: 'production',
-    });
+    await runCli(['verify'], repo.root, { MY_TOKEN: secret, NODE_ENV: 'production' });
     expect(await ran()).toHaveLength(6);
     const dir = path.join(repo.root, '.firescale', 'steps');
     const entries = await readdir(dir);
@@ -218,8 +212,6 @@ describe('the step cache', () => {
       const text = await readFile(path.join(dir, entry), 'utf8');
       expect(text).not.toContain(secret);
       expect(text).not.toContain('production');
-      // STEP_LOG is not on the allowlist: its value (a path) is nowhere.
-      expect(text).not.toContain(path.basename(path.dirname(log)));
     }
   });
 

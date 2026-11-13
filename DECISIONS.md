@@ -22,6 +22,11 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M18) The step cache is on by default** (ADR 0036). A second `fscale verify` with no change runs no lint, typecheck or test command; `--no-cache` runs everything. A file git ignores (a `.env`, a generated file) is not in the key, so a change there can leave a stale pass until `--no-cache`.
+- **(M18) Files that belong to no project, Markdown and `docs/` included, are in every project's key.** `--affected` treats such a change as affecting nothing (ADR 0034), but a test may read them; the cache takes the safe side, at the cost of misses after a README edit.
+- **(M18) The environment allowlist is a fixed list of 19 variables** (`docs/verify.md`), with no config key to add one. Say if you want `verify.cacheEnv`.
+- **(M18) Limits: 30 days and 500 entries**, cleaned at the end of each run that stored something.
+
 - **(M17) The binary is 4.3 MB larger** (3.9 to 8.2 MB, ADR 0033): tree-sitter's TypeScript and Python grammars. The tamper guard needs them too. Say if size matters enough to load grammars some other way.
 - **(M17) A dynamic import also depends on every shared folder with Python in it**, not only on every other Python project, since it can load those too (ADR 0032).
 - **(M17) With a root project, a file directly in the repo root folder runs everything** (it may be `ruff.toml` or `tsconfig.base.json`, read by projects below). A file in a subfolder of the root's project runs only the root's steps.
@@ -90,6 +95,23 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M18 — The local step cache
+
+**Built** (ADR 0036, `docs/verify.md` "The step cache"):
+
+1. A lint, typecheck or test step that **passed** is stored in `.firescale/steps/<key>.json` and served from there while its key is unchanged. Failed, setup needed, timed out, stopped and skipped steps are never stored.
+2. The key: the cache format, the firescale version, the step, folder and command; the bytes of every file the step can read as they are in the working tree (`git ls-files --cached --others --exclude-standard`, so tracked files with uncommitted changes and untracked files git does not ignore; a CRLF checkout is other bytes): its project's folder, the projects and shared nodes it depends on in the M17 graph, the files directly in each folder above them, and every file no project owns; the versions of known tools the command starts (never a repo script); the package manager's marker in `node_modules` and the packages of the project's `.venv`; OS and CPU; and 19 allowlisted variables, hashed.
+3. Never cached: a step that may need a service the repo does not start (an `.env.example` service with no Compose service), a project with a dynamic import (or one it depends on), an input that could not be read.
+4. A pass is stored only if its files are the same at the end of the run, so a step that writes its own inputs is never stored. Entries older than 30 days and the least recently used beyond 500 are removed at the end of each run.
+5. A hit reads `cached` in the summary with the time it took and when it passed; the headline says `N of M steps passed from the cache, not run now`, and a line says what the cache saved. In JSON the step stays `passed` with `durationMs: 0` and a `cache` object; the report has `cache: {read, hits, savedMs}` (schema 5, new optional fields).
+6. `--no-cache` runs every step and still stores passes. `FSCALE_LOG=cache` prints hit, miss, not cached (with the reason), stored and not stored.
+
+**Proof** (`packages/cli/src/step-cache.test.ts`; `stepcache::tests` in Rust): a second run runs nothing and says so; a tracked, an untracked and a deleted file, and CRLF bytes, run again, an ignored file does not; on the course project a change in one service runs that service only, a change in `backend/shared` the three services that import it, the frontend lockfile the frontend, a new tool version and an allowlisted variable everything, another variable nothing; a failed step is never stored; a service from `.env.example` is never cached, one Compose starts is; no value outside the allowlist reaches the key or the folder; a step that writes its own input is not stored; a dynamic import and an unreadable file are not cached; cleaning by age and count. Timings in `bench/RESULTS.md`.
+
+**Tests changed on purpose, none weakened:** the stand-ins for `python`, `npx` and `npm` log every call, and the cache now asks tools for their versions to key a step. Three helpers that compare the list of commands a run made now leave out `--version` probes (`stepCalls` in `test-helpers.ts`); what they assert about the steps is unchanged. The progress test's second run passes `--no-cache`, because the first run stored the pass of the step whose progress line it checks. Two JSON snapshots gained the `cache` object.
+
+**Found on real repos** (copies with every step replaced by `node -e 0`, so none of their scripts ran): all three key, store and hit; after a new file in one `microservices-demo` service, only that service and the repo root's own steps ran again. A folder named only in `verify.projects` (a workspace member of `fastapi/full-stack-fastapi-template`, named so by the test config) is keyed on the whole repo, as designed. The usual `facts`, `check`, `adopt --dry-run`, `doctor`, `graph` and `verify --dry-run` runs gave the same results as after M17.
 
 ## 0.2.1 — setup problems in test steps, from running 0.2.0 on the course project
 

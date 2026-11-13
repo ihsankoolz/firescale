@@ -4,7 +4,14 @@ import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
 import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
-import { EXIT_OK, EXIT_USAGE, EXIT_VIOLATIONS, NODE_STUB, runCli, stepCalls } from './test-helpers.js';
+import {
+  EXIT_OK,
+  EXIT_USAGE,
+  EXIT_VIOLATIONS,
+  NODE_STUB,
+  runCli,
+  stepCalls,
+} from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
