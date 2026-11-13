@@ -306,7 +306,12 @@ mod tests {
             note.contains(&format!("process {}", std::process::id())),
             "{note}"
         );
-        assert!(note.contains("started 2m 05s ago"), "{note}");
+        // The other run started 125 s before this one; a slow machine can
+        // cross one more second before the note is written.
+        assert!(
+            note.contains("started 2m 05s ago") || note.contains("started 2m 06s ago"),
+            "{note}"
+        );
         assert!(
             note.contains("test in backend/api (python -m pytest)"),
             "{note}"
