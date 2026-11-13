@@ -12,8 +12,9 @@
 //!   are read from a local env file; values are never kept or printed.
 //! - **Dependencies**: per project, installed and matching the lockfile or
 //!   the requirements; for Python, the virtual environment too.
-//! - **Services**: the local services that Compose files and `.env.example`
-//!   URLs name are reachable. Only host, port and service name are shown.
+//! - **Services**: the local services that Compose files, `.env.example`
+//!   URLs and local database URLs in `.env` and `.env.local` name are
+//!   reachable. Only host, port and service name are shown.
 //!
 //! Every problem comes with the command that fixes it. Nothing is installed,
 //! started or changed: version commands (`node --version`, ...) are the only
@@ -34,7 +35,7 @@ use crate::facts::{
     parse_toml, read_requirements, requirement_name, venv_python, RepoFacts, VENV_DIRS,
 };
 use crate::process::{run_tree, Ending, Watch};
-use crate::services::{folders_up, listening, services_in, ENV_EXAMPLE, PROBE_TIMEOUT};
+use crate::services::{folders_up, listening, services_with_local_env, ENV_EXAMPLE, PROBE_TIMEOUT};
 
 /// How long a version command may take.
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -43,7 +44,7 @@ pub const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 pub const DOCTOR_SCHEMA_VERSION: u32 = 1;
 
 /// Local env files a `.env.example` is filled into, beside it.
-pub const LOCAL_ENV_FILES: [&str; 2] = [".env", ".env.local"];
+pub use crate::services::LOCAL_ENV_FILES;
 
 /// How many names a line lists before "and N more".
 const MAX_NAMES: usize = 8;
@@ -1513,7 +1514,9 @@ impl Doctor<'_> {
                 }
             }
         }
-        for service in services_in(self.root, &folders) {
+        // Doctor also reads local database URLs from `.env` and
+        // `.env.local`; verify's service watch does not.
+        for service in services_with_local_env(self.root, &folders) {
             if self.machine.listening(&service.host, service.port) {
                 self.add(
                     "services",

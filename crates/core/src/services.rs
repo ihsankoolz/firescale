@@ -8,6 +8,10 @@
 //! - `.env.example` files: URLs such as `postgresql://user:pass@localhost:5432/app`
 //!   and pairs such as `REDIS_HOST=localhost` with `REDIS_PORT=6379`.
 //!
+//! For `fscale doctor` only, also from the `.env` and `.env.local` files in
+//! the same folders: URLs with a service scheme and a host on this machine
+//! (`services_with_local_env`). Verify's service watch does not read them.
+//!
 //! Only the service, the host and the port are kept. User names, passwords,
 //! database names and whole connection strings are never kept, so they can
 //! never be printed. Hosts that are not this machine are left out: a remote
@@ -33,6 +37,10 @@ pub(crate) const COMPOSE_FILES: [(&str, &str); 4] = [
 
 /// The example env file that lists a folder's variables.
 pub const ENV_EXAMPLE: &str = ".env.example";
+
+/// The local env files beside an example file, which hold this machine's
+/// own settings.
+pub const LOCAL_ENV_FILES: [&str; 2] = [".env", ".env.local"];
 
 /// How long a probe waits for a connection.
 pub const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
@@ -254,13 +262,12 @@ fn url_host_port(url: &str) -> Option<(String, String, Option<u16>)> {
     Some((scheme.to_ascii_lowercase(), host, port))
 }
 
-/// Services named by one `.env.example`. `file` is its path relative to the
-/// repo root, for the `source`.
-fn from_env_example(text: &str, file: &str) -> Vec<Service> {
-    let pairs = env_pairs(text);
+/// Services named by URLs with a service scheme (`postgresql+asyncpg://`,
+/// `redis://`, `mysql://`, `mongodb://`, `amqp://`...) among `pairs`, whose
+/// host passes `local`. Only the service, host and port are kept.
+fn service_urls(pairs: &[(String, String)], file: &str, local: fn(&str) -> bool) -> Vec<Service> {
     let mut found = Vec::new();
-    // URLs with a service scheme.
-    for (key, value) in &pairs {
+    for (key, value) in pairs {
         let Some((scheme, host, port)) = url_host_port(value) else {
             continue;
         };
@@ -272,7 +279,7 @@ fn from_env_example(text: &str, file: &str) -> Vec<Service> {
         let Some((name, usual)) = service_for(base) else {
             continue;
         };
-        if !is_local_host(&host) {
+        if !local(&host) {
             continue;
         }
         found.push(Service {
@@ -283,6 +290,33 @@ fn from_env_example(text: &str, file: &str) -> Vec<Service> {
             start: None,
         });
     }
+    found
+}
+
+/// True for a host that a URL in a local env file may name for a service
+/// on this machine: `localhost`, `127.0.0.1` or `::1` (also `[::1]`).
+fn is_loopback_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    ["localhost", "127.0.0.1", "::1"]
+        .iter()
+        .any(|local| host.eq_ignore_ascii_case(local))
+}
+
+/// Services named by one local env file (`.env`, `.env.local`), for
+/// doctor only. Unlike an example file it holds real settings, so only
+/// URL values with a service scheme and a host on this machine are read,
+/// and of those only the variable's name, the host and the port are kept:
+/// never the user, the password, the database name or the URL.
+fn from_local_env(text: &str, file: &str) -> Vec<Service> {
+    service_urls(&env_pairs(text), file, is_loopback_host)
+}
+
+/// Services named by one `.env.example`. `file` is its path relative to the
+/// repo root, for the `source`.
+fn from_env_example(text: &str, file: &str) -> Vec<Service> {
+    let pairs = env_pairs(text);
+    // URLs with a service scheme.
+    let mut found = service_urls(&pairs, file, is_local_host);
     // `<PREFIX>_HOST` (or `_SERVER`, `_HOSTNAME`) with `<PREFIX>_PORT`.
     for (key, value) in &pairs {
         let Some(prefix) = ["_HOST", "_SERVER", "_HOSTNAME"]
@@ -594,6 +628,23 @@ pub fn services_for_folder(root: &Path, dir: &Path) -> Vec<Service> {
 /// tests need running.
 #[must_use]
 pub fn services_in(root: &Path, folders: &[PathBuf]) -> Vec<Service> {
+    collect(root, folders, false)
+}
+
+/// What `fscale doctor` checks: [`services_in`], plus the local database,
+/// cache and queue URLs of the `.env` and `.env.local` files in the same
+/// folders (only the variable's name, the host and the port are kept).
+/// Verify's service watch does not read those files: it uses
+/// [`services_for_folder`].
+#[must_use]
+pub fn services_with_local_env(root: &Path, folders: &[PathBuf]) -> Vec<Service> {
+    collect(root, folders, true)
+}
+
+/// The services of `folders`, and with `local_env` those that the local env
+/// files name too. In each folder the example file comes first, so a port
+/// it names keeps it as its source.
+fn collect(root: &Path, folders: &[PathBuf], local_env: bool) -> Vec<Service> {
     let mut compose = Vec::new();
     let mut env = Vec::new();
     for folder in folders {
@@ -602,6 +653,14 @@ pub fn services_in(root: &Path, folders: &[PathBuf]) -> Vec<Service> {
         let file = folder.join(ENV_EXAMPLE);
         if let Ok(text) = std::fs::read_to_string(&file) {
             env.extend(from_env_example(&text, &join(&rel, ENV_EXAMPLE)));
+        }
+        if !local_env {
+            continue;
+        }
+        for name in LOCAL_ENV_FILES {
+            if let Ok(text) = std::fs::read_to_string(folder.join(name)) {
+                env.extend(from_local_env(&text, &join(&rel, name)));
+            }
         }
     }
     let env_ports: Vec<u16> = env.iter().map(|service| service.port).collect();
@@ -654,6 +713,129 @@ SECRET_KEY=changeme
         for secret in ["s3cr3t-pw", "hunter2", "app_db", "app:"] {
             assert!(!debug.contains(secret), "{secret} leaked: {debug}");
         }
+
+        // The same holds for the real settings in `.env` and `.env.local`,
+        // which doctor reads too.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("backend")).expect("mkdir");
+        std::fs::write(
+            root.join("backend/.env"),
+            "TEST_DATABASE_URL=postgresql+asyncpg://envuser:envP4ss-w0rd@localhost:5433/env_test_db\nSECRET_KEY=env-secret-key\n",
+        )
+        .expect("write");
+        std::fs::write(
+            root.join("backend/.env.local"),
+            "export CACHE_URL='rediss://localuser:l0cal-pw@[::1]:6380/3'\nQUEUE_URL=amqp://quser:q-pw@127.0.0.1/vhost_name\n",
+        )
+        .expect("write");
+        let found = services_with_local_env(root, &folders_up(root, &root.join("backend")));
+        let shown: Vec<(String, String)> = found
+            .iter()
+            .map(|service| (service.describe(), service.source.clone()))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                (
+                    "PostgreSQL on localhost:5433".to_owned(),
+                    "backend/.env (TEST_DATABASE_URL)".to_owned()
+                ),
+                (
+                    "Redis on ::1:6380".to_owned(),
+                    "backend/.env.local (CACHE_URL)".to_owned()
+                ),
+                (
+                    "RabbitMQ on 127.0.0.1:5672".to_owned(),
+                    "backend/.env.local (QUEUE_URL)".to_owned()
+                ),
+            ]
+        );
+        let debug = format!("{found:?}");
+        for secret in [
+            "envuser",
+            "envP4ss-w0rd",
+            "env_test_db",
+            "env-secret-key",
+            "localuser",
+            "l0cal-pw",
+            "quser",
+            "q-pw",
+            "vhost_name",
+            "postgresql+asyncpg://",
+            "rediss://",
+            "amqp://",
+            "@localhost",
+        ] {
+            assert!(!debug.contains(secret), "{secret} leaked: {debug}");
+        }
+    }
+
+    #[test]
+    fn local_env_files_give_only_local_service_urls() {
+        let text = "\
+TEST_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5433/test
+MYSQL_URL=mysql+pymysql://u:p@LOCALHOST/app
+PROD_DATABASE_URL=postgresql://u:p@db.example.com:5432/prod
+ANY_HOST_URL=redis://0.0.0.0:6379
+MONGO_URL=mongodb+srv://u:p@cluster0.example.net/db
+LOCAL_MONGO=mongodb://127.0.0.1
+API_URL=http://localhost:8000
+REDIS_HOST=localhost
+REDIS_PORT=6390
+";
+        let described: Vec<String> = from_local_env(text, ".env")
+            .iter()
+            .map(|service| format!("{} ({})", service.describe(), service.source))
+            .collect();
+        // A remote host, `0.0.0.0`, an `+srv` URL, a web URL and host/port
+        // pairs are left out.
+        assert_eq!(
+            described,
+            vec![
+                "PostgreSQL on localhost:5433 (.env (TEST_DATABASE_URL))",
+                "MySQL on LOCALHOST:3306 (.env (MYSQL_URL))",
+                "MongoDB on 127.0.0.1:27017 (.env (LOCAL_MONGO))",
+            ]
+        );
+    }
+
+    #[test]
+    fn verify_does_not_read_local_env_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join(".env.example"),
+            "DATABASE_URL=postgresql://u:p@localhost:5432/app\n",
+        )
+        .expect("write");
+        std::fs::write(
+            root.join(".env"),
+            "DATABASE_URL=postgresql://u:p@localhost:5432/app\nTEST_DATABASE_URL=postgresql://u:p@localhost:5433/test\n",
+        )
+        .expect("write");
+        let ports = |found: Vec<Service>| -> Vec<(u16, String)> {
+            found
+                .into_iter()
+                .map(|service| (service.port, service.source))
+                .collect()
+        };
+        assert_eq!(
+            ports(services_for_folder(root, root)),
+            vec![(5432, ".env.example (DATABASE_URL)".to_owned())]
+        );
+        assert_eq!(
+            ports(services_in(root, &[root.to_path_buf()])),
+            vec![(5432, ".env.example (DATABASE_URL)".to_owned())]
+        );
+        // Doctor: one service per port, the example file's first.
+        assert_eq!(
+            ports(services_with_local_env(root, &[root.to_path_buf()])),
+            vec![
+                (5432, ".env.example (DATABASE_URL)".to_owned()),
+                (5433, ".env (TEST_DATABASE_URL)".to_owned()),
+            ]
+        );
     }
 
     #[test]
