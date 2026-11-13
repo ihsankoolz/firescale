@@ -80,6 +80,32 @@ The step gets no fix command: there is nothing to start, and the user or passwor
 - Verify's service watch does not read these files: verify finds the test database through the first error instead.
 - "Reachable" in doctor means something accepts a connection on that port. It does not mean that it is the right database or that the login works (`docs/doctor.md`).
 
+### After the review
+
+An independent review before the pull request found ways a code failure could be called setup, which tells an agent not to fix its code. All are fixed, each with a test:
+
+- **The login check.**
+  - A test that quotes "password authentication failed" in an `assert` (pytest prints the line) no longer counts as a login failure.
+  - With failed tests, a login failure makes the step setup needed only when every `FAILED` line is itself a login failure. A plain `assert 41 == 42` beside it keeps the step failed.
+- **The "every error names an unreachable service" rule (item 4).**
+  - It reads only each error's message, after `-`, never the test's path or name.
+  - It matches client libraries as whole words, so `redistribute` is not `redis`.
+  - The message must also say a connection failed: refused, cannot reach, could not connect, `ConnectionError`, timed out and similar. An error about what the database returned (`relation "orders" does not exist`) is a code or migration problem.
+  - It uses the folder's own service port of that kind before the usual port. When that service is up, the rule does not apply.
+  - Any failure the runner counted, even with no `FAILED` line (`-rE`), keeps the step failed.
+- **Evidence while a step runs.** Only lines that say a connection failed count. A progress line such as `tests/test_redis_cache.py EEE` names a file, not a cause.
+- **After a stop with a named service,** the first error's own text wins. A refused connection to the test database makes the step setup needed even though Redis was also down and named. This is run 1 of the course project.
+- **The extra run happens only when it can reach pytest:**
+  - The command must name pytest and be one program with its arguments: no pipe, `&&`, `;`, redirection or substitution. `pytest | tee log` would hand `--maxfail=1` to `tee`, and `make test` to make.
+  - At least one test must have errored or failed, so a passing suite that only timed out gets no extra run.
+  - It must not be after a stop. It is recorded as a running command like any step.
+- **Secrets.**
+  - The last lines of a failed step are now cleaned like the first error.
+  - A URL's user and password are hidden up to the last `@`, so a password with `/` is hidden too.
+  - `password=`, `pwd=` and `passwd=` values are hidden.
+  - The names after `user`, `role` and `credentials for` are hidden, in `"`, `'` or backquotes.
+- **Address matches are exact.** `localhost:5432` is not found in `localhost:54321`.
+
 ## Consequences
 
 - On the course project, run 2 would now stop each of the three services after about ten errors. A one-minute `--maxfail=1` run would then show asyncpg's refused connection to `localhost:5433`, and the step would be setup needed, naming that host and port. Doctor would list `localhost:5433` from `.env` before the run.

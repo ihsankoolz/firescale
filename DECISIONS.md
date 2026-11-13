@@ -122,6 +122,19 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 Doctor: `doctor.test.ts` and `services.rs` tests. Rust unit tests for the first-error reader, the evidence check, the summary rule and the config key.
 
+**Independent review before the pull request** found seven issues, all fixed with tests (ADR 0035, "After the review"). Three could call a code failure setup needed, which tells an agent not to fix its code:
+
+- a test that quotes "password authentication failed" beside a real assertion failure;
+- an error in `test_redistribute_credits` (matched as "redis"), or `relation "orders" does not exist` while the database on 5433 was up (matched as PostgreSQL on 5432);
+- your run 1, which still named Redis because a progress line named a Redis test file.
+
+The others:
+
+- `--maxfail=1` was appended to piped or chained commands;
+- a passing suite that timed out got an extra run;
+- the last lines of a failed step were not cleaned of secrets;
+- port matches were prefixes.
+
 **Needs your decision**
 
 - **Thresholds.** The default of 10 errors, and the 1-minute limit of the extra run (it has no config key).

@@ -595,7 +595,9 @@ describe('setup problems seen in a test step (ADR 0035)', () => {
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const step = testStep(result.stdout);
     expect(step?.status).toBe('setup-needed');
-    expect(step?.detail).toContain(`every error (3) names Redis on localhost:${port}`);
+    expect(step?.detail).toContain(
+      `every error (3) says Redis on localhost:${port} cannot be reached`,
+    );
     expect(step?.tests?.passed).toBeGreaterThan(0);
     const human = await runCli(['verify'], repo.root);
     expect(human.stdout).toContain('Do not change code for it.');
@@ -619,6 +621,39 @@ describe('setup problems seen in a test step (ADR 0035)', () => {
       expect(result.stdout).toContain('  test       FAILED');
       expect(result.stdout).toContain('Fix the failure, then run again');
     }
+  }, 40_000);
+
+  it('is setup needed when the first error shows the real cause, though another service is down (run 1 of the course project)', async () => {
+    const redis = await closedPort();
+    const database = await closedPort();
+    const repo = await repoWith(run, {
+      // Progress lines name a Redis test file, Redis is declared and down,
+      // and the real cause is the test database.
+      'fake-pytest.js': fakePytest({
+        marker: 'E',
+        first: [
+          `E   ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', ${database})`,
+        ],
+      }).replace('tests/test_a.py ', 'tests/test_redis_cache.py '),
+      '.env.example': `REDIS_URL=redis://localhost:${redis}/0\n`,
+    });
+    const result = await runCli(['verify', '--json'], repo.root);
+    const step = testStep(result.stdout);
+    expect(step?.status).toBe('setup-needed');
+    expect(step?.detail).toContain(`localhost:${database}`);
+    expect(step?.detail).not.toContain(`localhost:${redis}`);
+  }, 40_000);
+
+  it('runs no extra pytest for a passing suite that only timed out', async () => {
+    const repo = await repoWith(
+      { ...run, test: { command: nodeScript('fake-pytest.js'), timeout: '3s' } },
+      { 'fake-pytest.js': fakePytest({ marker: '.' }) },
+    );
+    const result = await runCli(['verify', '--progress'], repo.root);
+    expect(result.stdout).toContain('TIMED OUT');
+    expect(result.stdout).toContain('If it is only slow');
+    expect(result.stdout).not.toContain('First error');
+    expect(result.stderr).not.toContain('--maxfail=1');
   }, 40_000);
 
   it('never stops a slow suite that is passing', async () => {

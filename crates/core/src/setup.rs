@@ -712,6 +712,10 @@ pub fn auth_failure(output: &str) -> Option<AuthFailure> {
     let mut remote = false;
     for raw in output.lines() {
         let line = raw.trim();
+        // A test that asserts on the message quotes it; it did not log in.
+        if quotes_a_message(line) {
+            continue;
+        }
         let found = pg_auth_at(line)
             .or_else(|| pg_auth_socket(line))
             .or_else(|| mysql_auth(line))
@@ -729,6 +733,27 @@ pub fn auth_failure(output: &str) -> Option<AuthFailure> {
         }
     }
     unaddressed.filter(|_| !remote).map(auth_found)
+}
+
+/// True for a line that only quotes a login failure: an `assert` (pytest
+/// prints the failing line, `E   assert "..." in ...`), or the message
+/// inside an open string.
+fn quotes_a_message(line: &str) -> bool {
+    let code = line.trim_start_matches(['E', '>', ' ']);
+    if code.starts_with("assert ") || line.contains(" assert ") || line.contains(" - assert ") {
+        return true;
+    }
+    let Some(index) = line
+        .find("password authentication failed")
+        .or_else(|| line.find("Access denied for user"))
+    else {
+        return false;
+    };
+    let before = &line[..index];
+    // `(1045, "Access denied ...` is how PyMySQL prints the error itself.
+    let opens_mysql_tuple = before.trim_end().ends_with("(1045, \"");
+    !opens_mysql_tuple
+        && (before.matches('"').count() % 2 == 1 || before.matches('\'').count() % 2 == 1)
 }
 
 fn auth_found(login: Login<'_>) -> AuthFailure {
@@ -771,7 +796,18 @@ pub fn setup_problem(
     // A database that refuses the test settings' login fails tests the same
     // way, and no code change fixes it either.
     if let Some(found) = auth_failure(output) {
-        return Some(login_failed(&found.described));
+        // With failed tests, only when every failed test failed on the login
+        // itself: a real assertion failure beside it is a code failure.
+        let failed: Vec<&str> = output
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("FAILED "))
+            .collect();
+        let only_logins =
+            !failed.is_empty() && failed.iter().all(|line| auth_failure(line).is_some());
+        if !reports_failed_tests(output) || only_logins {
+            return Some(login_failed(&found.described));
+        }
     }
     if reports_failed_tests(output) {
         return None;
@@ -1447,6 +1483,21 @@ mod tests {
             problem(both, 1).and_then(|p| p.missing_service).as_deref(),
             Some("Redis on localhost:6379")
         );
+    }
+
+    #[test]
+    fn a_test_that_quotes_the_message_beside_a_real_failure_is_a_normal_failure() {
+        // From the review of 0.2.1: a test asserting on the message, and a
+        // plain assertion failure, must not read as "do not change code".
+        let out = "E   assert \"FATAL:  password authentication failed for user\" in caplog.text\nFAILED tests/test_login.py::test_login_error_is_shown_to_the_user - assert \"FATAL:  password authentication failed for user\" in ''\nFAILED tests/test_math.py::test_sum - assert 41 == 42\n2 failed in 0.1s\n";
+        assert_eq!(auth_failure(out), None);
+        assert_eq!(problem(out, 1), None);
+        // A real login failure beside an assertion failure: a failure.
+        let mixed = "FAILED tests/test_db.py::test_q - asyncpg.exceptions.InvalidPasswordError: password authentication failed for user \"app\"\nFAILED tests/test_math.py::test_sum - assert 41 == 42\n2 failed\n";
+        assert_eq!(problem(mixed, 1), None);
+        // PyMySQL's own tuple is not a quote.
+        let pymysql = "E   pymysql.err.OperationalError: (1045, \"Access denied for user 'app'@'localhost' (using password: YES)\")\n";
+        assert!(auth_failure(pymysql).is_some());
     }
 
     #[test]
