@@ -121,14 +121,29 @@ The most specific setting wins: the project's step (`projects.<folder>.<step>.ti
 Setup detection (above) reads a step's output when the step ends. A test suite whose database is not running can take many minutes to end, with every test erroring, and pytest prints why only at the very end. So verify also watches a running step (ADR 0025). It is clear the step cannot succeed when:
 
 - the output so far shows a refused connection (a message from the table above) to a service on this machine that is known by its client or its usual port, or that the project's `.env.example` or Compose file names, and nothing listens on that port; or
-- pytest or unittest has reported at least 3 tests, every one an error (no pass, no failure), and a service that the project's `.env.example` or Compose file names, in its folder or a folder above it, is not listening.
+- pytest or unittest has reported at least 3 tests, every one an error (no pass, no failure), a service that the project's `.env.example` or Compose file names, in its folder or a folder above it, is not listening, **and the output names that service**: its host and port, its name, or its client library (`asyncpg`, `psycopg`, `redis`...). A service that is merely down is never named as the cause (ADR 0035).
 
 verify checks the port itself, with a connection that it closes at once, and **checks again 10 seconds later**: only a service that is still down then counts, so a step that starts its own database, or waits for one, is left alone. It then prints one line at once, and by default stops the step. A refused connection makes the step **setup needed**. Tests that all error while a named service is down make it **failed**, with the service named as the likely cause, because the errors could also come from the code:
 
 ```
-[verify] test in backend/audit_service: LIKELY SETUP, seen while running: PostgreSQL on localhost:5432 is not running (every test so far has errored (0 passed, 0 failed, 3 errors), and backend/audit_service/.env.example (DATABASE_URL) names it); start it with: docker compose -f ../../docker-compose.yml up -d; stopping the step (set verify.stopWhenServiceDown to false to let it run on)
+[verify] test in backend/audit_service: LIKELY SETUP, seen while running: PostgreSQL on localhost:5432 is not running (every test so far has errored (0 passed, 0 failed, 3 errors), the output names it, and backend/audit_service/.env.example (DATABASE_URL) lists it); start it with: docker compose -f ../../docker-compose.yml up -d; stopping the step (set verify.stopWhenServiceDown to false to let it run on)
 [verify] test in backend/audit_service: FAILED after 14.2s (stopped early)
 ```
+
+**Every test erroring, with no service to blame** (ADR 0035). When pytest or unittest has reported `verify.stopAfterErrors` errors (default 10) and no test has passed or failed, the step is stopped as likely setup, whether or not a service is down:
+
+```
+[verify] test in backend/audit_service: LIKELY SETUP, seen while running: every test so far has errored (0 passed, 0 failed, 10 errors) and none passed; stopping the step to find the first error (set verify.stopAfterErrors to false to let it run on)
+[verify] test in backend/audit_service: running `python -m pytest --maxfail=1` (at most 1m 00s) to find the first error
+```
+
+**The first error.** After a pytest step is stopped early or times out, pytest never printed why. verify runs the same command once more with `--maxfail=1` added, with its own limit of 1 minute (the main run is never changed), and prints the first error's `E   ...` lines and its summary line under `First error of test ...`, with a connection string's user and password and a failed login's user name shown as `***`. When that text shows a refused connection to a service on this machine, or a failed password login to a local database, the step is **setup needed** and the summary names the host and port from the text. Otherwise it is **failed**, says that every test errored (which usually means the environment is not ready), and lists any service the folder names that is down as `also not running, though the output does not name it`.
+
+**When it finishes.** A pytest step that ends with errors and no failures, where every error in pytest's short summary names a local service that is not running (a refused connection, or the service's name, client or address while nothing listens on its port), is **setup needed**, also when other tests passed.
+
+**A timeout of errors** does not say "if it is only slow, raise the limit": when the counts show more errors than passes, the summary says the tests are erroring, not running slowly, and points at the first error.
+
+How the two settings relate: `stopWhenServiceDown` covers stops that a service gives the evidence for (a refused connection, or a named service that is down); `stopAfterErrors` covers the stop with no service to blame. They are independent; to let every test step run to its end, set both to `false`.
 
 To let such a step run to its end instead, set `"stopWhenServiceDown": false` in `verify`. The line is still printed, and the step is still reported as setup needed if it fails. Only host, port and service name are ever shown, never a connection string or a password. `fscale doctor` checks the same services before a run (see [doctor.md](doctor.md)).
 
@@ -227,16 +242,17 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 }
 ```
 
-| Key                                      | Meaning                                                                                                                                                                                                                               |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lint`, `typecheck`, `test`              | A setting for the **whole repo**. A command runs once, from the repo root, and no project runs its own command for that step. `false` turns the step off everywhere.                                                                  |
-| `failOnSkipped`                          | `true` makes a skipped step fail the run. Default `false`.                                                                                                                                                                            |
-| `timeout`                                | The time limit of every step, unless a more specific one is set. Default `"10m"`. See "Time limits".                                                                                                                                  |
-| `ci`                                     | `false`: do not set `CI=1` for the commands. Default `true`.                                                                                                                                                                          |
-| `stopWhenServiceDown`                    | `false`: a step whose output shows that a service it needs is not running runs on to its end. Default `true`: it is stopped as soon as that is clear. See "A service that is not running, seen while the step runs".                  |
-| `<step>` as an object                    | `{ "command": "...", "timeout": "20m" }`: a command, a time limit, or both. Without `command`, the detected command runs with that limit.                                                                                             |
-| `projects.<folder>`                      | Settings for one project, by its folder. `false` turns all its steps off. An object sets single steps to a command or to `false`, and wins over the repo-wide setting for that step. Its `timeout` is the limit of each of its steps. |
-| `projects.<folder>` for any other folder | A folder `fscale facts` did not list as discovered runs exactly the commands given for it, in that folder. Use it for a project below the search depth.                                                                               |
+| Key                                      | Meaning                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lint`, `typecheck`, `test`              | A setting for the **whole repo**. A command runs once, from the repo root, and no project runs its own command for that step. `false` turns the step off everywhere.                                                                                      |
+| `failOnSkipped`                          | `true` makes a skipped step fail the run. Default `false`.                                                                                                                                                                                                |
+| `timeout`                                | The time limit of every step, unless a more specific one is set. Default `"10m"`. See "Time limits".                                                                                                                                                      |
+| `ci`                                     | `false`: do not set `CI=1` for the commands. Default `true`.                                                                                                                                                                                              |
+| `stopAfterErrors`                        | Errors a pytest or unittest step may report, with no test passed and none failed, before it is stopped as likely setup and its first error is found. Default `10`; `false` never stops it. See "A service that is not running, seen while the step runs". |
+| `stopWhenServiceDown`                    | `false`: a step whose output shows that a service it needs is not running runs on to its end. Default `true`: it is stopped as soon as that is clear. See "A service that is not running, seen while the step runs".                                      |
+| `<step>` as an object                    | `{ "command": "...", "timeout": "20m" }`: a command, a time limit, or both. Without `command`, the detected command runs with that limit.                                                                                                                 |
+| `projects.<folder>`                      | Settings for one project, by its folder. `false` turns all its steps off. An object sets single steps to a command or to `false`, and wins over the repo-wide setting for that step. Its `timeout` is the limit of each of its steps.                     |
+| `projects.<folder>` for any other folder | A folder `fscale facts` did not list as discovered runs exactly the commands given for it, in that folder. Use it for a project below the search depth.                                                                                                   |
 
 A folder named under `projects` must exist, or verify stops with exit code 2. Write the folder as `fscale facts` prints it, in the same letter case. The top-level keys are for the root's own commands; `"."` under `projects` is only for other kinds of project at the root.
 
