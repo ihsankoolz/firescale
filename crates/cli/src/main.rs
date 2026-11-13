@@ -890,6 +890,27 @@ fn verify_plan(
         }
         Changed::Files(_) => {}
     }
+    if let Some(first) = set.inert_files.first() {
+        let count = set.inert_files.len();
+        let (files, verb, run, them) = if count == 1 {
+            (
+                format!("1 changed file ({first})"),
+                "belongs",
+                "it runs",
+                "it",
+            )
+        } else {
+            (
+                format!("{count} changed files ({first} and {} more)", count - 1),
+                "belong",
+                "they run",
+                "them",
+            )
+        };
+        notes.push(format!(
+            "{files} {verb} to no project and cannot change a build or a test (Markdown, text, a licence or docs/), so {run} nothing; the check still covers {them}."
+        ));
+    }
     limit_to_affected(&mut plan, facts, &graph, &set, base);
     if let Some(affected) = plan.affected.as_mut() {
         affected.notes = notes;

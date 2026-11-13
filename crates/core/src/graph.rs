@@ -1538,6 +1538,30 @@ pub fn build_graph(root: &Path, facts: &RepoFacts) -> Graph {
 
 // ------------------------------------------------------------- affected
 
+/// True for a file that cannot change what a build or a test does, so a
+/// change to it affects no project when no project or shared node holds it
+/// (ADR 0034): Markdown (`.md`, `.markdown`), text files (`.txt`, except
+/// requirement and constraint lists and `CMakeLists.txt`), a licence
+/// (`LICENSE`, `LICENCE`, with any extension) and anything under the repo
+/// root's `docs/` folder.
+#[must_use]
+pub fn cannot_affect_builds(file: &str) -> bool {
+    if file.starts_with("docs/") {
+        return true;
+    }
+    let name = file_name(file).to_ascii_lowercase();
+    if name.starts_with("license") || name.starts_with("licence") {
+        return true;
+    }
+    if name.ends_with(".md") || name.ends_with(".markdown") {
+        return true;
+    }
+    name.ends_with(".txt")
+        && !name.contains("requirements")
+        && !name.contains("constraints")
+        && name != "cmakelists.txt"
+}
+
 /// Why a changed file affects every project, if it does: a root lockfile, a
 /// CI workflow, a Compose file or the firescale config.
 #[must_use]
@@ -1579,6 +1603,9 @@ pub struct Affected {
     pub nodes: BTreeMap<String, String>,
     /// How many files changed.
     pub changed_files: usize,
+    /// Changed files that no project owns and that cannot affect a build or
+    /// a test ([`cannot_affect_builds`]): they affect no project.
+    pub inert_files: Vec<String>,
 }
 
 impl Affected {
@@ -1677,6 +1704,11 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
             .filter(|node| node.path == ".")
             .map(|node| node.id.clone())
             .collect();
+        if deepest.is_none() && !narrow && cannot_affect_builds(file) {
+            // README.md, LICENSE, docs/: nothing to run for it.
+            result.inert_files.push(file.clone());
+            continue;
+        }
         if deepest.is_none() && !narrow {
             if roots.is_empty() {
                 result.everything = Some(format!("{file} belongs to no project"));
@@ -1981,7 +2013,7 @@ mod tests {
             ".github/workflows/ci.yml",
             "firescale.config.json",
             "backend/docker-compose.override.yml",
-            "README.md",
+            "deploy.sh",
             "backend/.coveragerc",
         ] {
             let set = affected(&graph, &changed(&[file]));
@@ -1990,6 +2022,50 @@ mod tests {
         // A lockfile inside a project is that project's.
         assert_eq!(
             affected_projects(&graph, &["frontend/package-lock.json"]),
+            ["frontend"]
+        );
+    }
+
+    #[test]
+    fn a_root_readme_change_affects_no_project_but_an_unowned_root_script_affects_all() {
+        let fixture = course_project().unwrap();
+        let graph = graph_of(&fixture);
+        for file in [
+            "README.md",
+            "CLAUDE.md",
+            "LICENSE",
+            "LICENSE-MIT.txt",
+            "notes.txt",
+            "docs/setup.png",
+            "docs/api/guide.rst",
+            ".github/pull_request_template.md",
+            "backend/NOTES.markdown",
+        ] {
+            let set = affected(&graph, &changed(&[file]));
+            assert!(set.is_empty(), "{file}: {set:?}");
+            assert_eq!(set.inert_files, [file]);
+        }
+        for file in [
+            "deploy.sh",
+            "scripts/seed.py",
+            "requirements.txt",
+            "backend/constraints.txt",
+            "CMakeLists.txt",
+            "Makefile",
+        ] {
+            assert!(
+                affected(&graph, &changed(&[file])).everything.is_some(),
+                "{file}"
+            );
+        }
+        // Together with a real change, the README adds nothing.
+        assert_eq!(
+            affected_projects(&graph, &["README.md", "frontend/src/main.ts"]),
+            ["frontend"]
+        );
+        // A doc file a project owns is that project's.
+        assert_eq!(
+            affected_projects(&graph, &["frontend/README.md"]),
             ["frontend"]
         );
     }
@@ -2395,9 +2471,11 @@ mod tests {
         );
         // Another file at the root may be a setting every project reads:
         // everything. One in a folder of the root's project is the root's.
-        assert!(affected(&graph, &changed(&["README.md"]))
+        assert!(affected(&graph, &changed(&["Makefile"]))
             .everything
             .is_some());
+        // A README cannot change a build or a test: nothing.
+        assert!(affected(&graph, &changed(&["README.md"])).is_empty());
         assert_eq!(affected_projects(&graph, &["scripts/x.js"]), ["."]);
     }
 
@@ -2490,7 +2568,7 @@ mod tests {
             "backend/shared/x.ts".to_owned(),
             "export const x = 1;\n".to_owned(),
         ));
-        files.push(("backend/notes.txt".to_owned(), "x\n".to_owned()));
+        files.push(("backend/notes.cfg".to_owned(), "x\n".to_owned()));
         files.push((
             "frontend/package.json".to_owned(),
             r#"{"name":"frontend"}"#.to_owned(),
@@ -2504,7 +2582,7 @@ mod tests {
         assert!(edge(&graph, "frontend", "backend/shared").is_some());
         assert!(graph.node("shared:backend").is_none());
         // A file beside the projects in backend/ still belongs to nobody.
-        assert!(affected(&graph, &changed(&["backend/notes.txt"]))
+        assert!(affected(&graph, &changed(&["backend/notes.cfg"]))
             .everything
             .is_some());
     }

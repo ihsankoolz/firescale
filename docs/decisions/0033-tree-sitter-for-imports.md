@@ -32,5 +32,5 @@ Most of the 4.3 MB is the grammars' parse tables (TypeScript and TSX are each ov
 ## Consequences
 
 - The tamper guard (M23) starts with the dependency in place; its ADR adds the Rust grammar and re-measures.
-- Any platform that cannot compile C cannot build fscale. The two cross-compiled release targets (macOS x64 on an Arm runner, Windows Arm64 on an x64 runner) now compile C for the target as well; the release workflow's builds prove that, and DECISIONS.md lists it until a run has.
+- Any platform that cannot compile C cannot build fscale. The two cross-compiled release targets (macOS x64 on an Arm runner, Windows Arm64 on an x64 runner) now compile C for the target as well; a Release run started by hand built both on 2026-11-13 (DECISIONS.md, "M17 follow-up").
 - A grammar upgrade can change node kinds; `imports.rs` has tests for every form it reads, so a change shows up as a failing test.
