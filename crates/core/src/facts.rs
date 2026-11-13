@@ -429,18 +429,35 @@ pub(crate) const LOCKFILE_NAMES: [&str; 10] = [
     "yarn.lock",
 ];
 
-/// True for a file that fixes which dependencies get installed: a lockfile,
-/// or a pip requirements or constraints list (`requirements*.txt`,
-/// `constraints*.txt`, or a `.txt` in a folder named `requirements`).
-/// When one differs between the base commit and the head, the head's
-/// installed dependencies do not stand for the base's (ADR 0037, ADR 0040).
+/// Lockfiles of the package managers whose installed folders the base
+/// worktree links in from the head (`node_modules`, a virtual environment).
+const LINKED_LOCKFILES: [&str; 9] = [
+    "Pipfile.lock",
+    "bun.lock",
+    "bun.lockb",
+    "npm-shrinkwrap.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "uv.lock",
+    "yarn.lock",
+];
+
+/// True for a file that fixes what goes into a `node_modules` folder or a
+/// virtual environment: a Node or Python lockfile, or a pip requirements or
+/// constraints list (`requirements*.txt`, `constraints*.txt`, or a `.txt` in
+/// a folder named `requirements`). When one differs between the base commit
+/// and the head, the head's linked folders do not stand for the base's
+/// (ADR 0037, ADR 0040). `Cargo.lock` and `go.sum` are not: Cargo and Go
+/// resolve the base's own lockfile in the worktree, and nothing is linked
+/// for them.
 #[must_use]
 pub fn is_dependency_list(path: &str) -> bool {
     let path = path.replace('\\', "/");
     let mut parts = path.rsplit('/');
     let name = parts.next().unwrap_or_default();
     let in_requirements = parts.next() == Some("requirements");
-    LOCKFILE_NAMES.contains(&name)
+    LINKED_LOCKFILES.contains(&name)
         || (Path::new(name)
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
@@ -3625,6 +3642,8 @@ mod tests {
             "notes.txt",
             "requirements.md",
             "docs/README.md",
+            "Cargo.lock",
+            "go.sum",
         ] {
             assert!(!is_dependency_list(path), "{path}");
         }

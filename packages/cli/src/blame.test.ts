@@ -598,7 +598,11 @@ describe('per-test labels', () => {
  * A repo with two Node projects, `a` and `b`, each with its own lockfile and
  * a test that fails on the base. `baseInstall` is committed on the base.
  */
-async function twoProjectRepo(baseInstall?: string) {
+async function twoProjectRepo(
+  baseInstall?: string,
+  change: string = 'a/package-lock.json',
+  extra: Record<string, string> = {},
+) {
   const outside = await fixtures.create({ files: {}, track: 'no-git' });
   const log = path.join(outside.root, 'runs.log');
   const project = (name: string) => ({
@@ -623,6 +627,7 @@ async function twoProjectRepo(baseInstall?: string) {
       '.gitignore': '.firescale/\n',
       ...project('a'),
       ...project('b'),
+      ...extra,
     },
     track: 'no-git',
   });
@@ -633,8 +638,8 @@ async function twoProjectRepo(baseInstall?: string) {
   const runs = async (): Promise<string[]> =>
     (await readFile(log, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
   const write = (file: string, content: string) => writeFile(path.join(root, file), content);
-  // Both projects change; only a's lockfile does. Both still fail as on the base.
-  await write('a/package-lock.json', '{"lockfileVersion":3,"packages":{}}\n');
+  // Both projects change, and one dependency list. Both still fail as on the base.
+  await write(change, `${(await readFile(path.join(root, change), 'utf8')).trim()} \n`);
   await write('a/test.txt', 'fail, changed\n');
   await write('b/test.txt', 'fail, changed\n');
   return { root, runs };
@@ -660,6 +665,31 @@ describe("a project's changed lockfile", () => {
     expect((await runs()).filter((run) => run.startsWith('base '))).toEqual(['base b test']);
     const human = await runCli(['verify'], root);
     expect(human.stdout.split('\n')[0]).toMatch(/^verify: FAILED at test in a/);
+  });
+
+  it("does the same for one project's requirements list", async () => {
+    const { root, runs } = await twoProjectRepo(undefined, 'b/requirements.txt', {
+      'b/requirements.txt': 'requests==2.0.0\n',
+    });
+    const json = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(json, 'test', 'b').label).toBeUndefined();
+    expect(step(json, 'test', 'b').base?.status).toBe('setup-needed');
+    expect(json.notes?.join('\n')).toContain('test in b: b/requirements.txt changed');
+    expect(step(json, 'test', 'a').label).toBe('pre-existing');
+    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual(['base a test']);
+  });
+
+  it('counts a changed root lockfile for every project below it', async () => {
+    const { root, runs } = await twoProjectRepo(undefined, 'package-lock.json', {
+      'package-lock.json': '{"lockfileVersion":3}\n',
+    });
+    const json = await report((await runCli(['verify', '--json'], root)).stdout);
+    for (const project of ['a', 'b']) {
+      expect(step(json, 'test', project).label).toBeUndefined();
+      expect(step(json, 'test', project).base?.status).toBe('setup-needed');
+    }
+    expect(json.notes?.join('\n')).toContain('test in a: package-lock.json changed');
+    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual([]);
   });
 
   it('runs verify.baseInstall and judges that project when it is set', async () => {
@@ -727,9 +757,25 @@ describe('fixed needs a real failure on the base', () => {
     // lint breaks, so the base worktree is needed; test changes but passes.
     await write('lint.txt', 'fail\n');
     await write('test.txt', 'ok, changed\n');
-    const result = await runCli(['verify', '--json'], root);
-    expect(result.code).toBe(EXIT_VIOLATIONS);
-    const json = await report(result.stdout);
+    const log = async () =>
+      (await readFile(outside, 'utf8')).split(/\r?\n/).filter((line) => line === 'base test');
+    const human = await runCli(['verify'], root);
+    expect(human.code).toBe(EXIT_VIOLATIONS);
+    expect(human.stdout).not.toContain('Fixed by this change');
+    expect(human.stdout).toMatch(
+      /test: it fails on the base commit [0-9a-f]{7}, but it fails in a worktree of the head too, so that failure comes from the worktree, not from the code, so it is not labelled fixed\./,
+    );
+    // The base run and the run in a worktree of the head each ran the test once.
+    expect(await log()).toHaveLength(2);
+    // A second run keeps no unpaired failure: the test gets no base result,
+    // and nothing runs in a worktree.
+    const second = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(second, 'test').label).toBeUndefined();
+    expect(step(second, 'test').base).toBeUndefined();
+    expect(await log()).toHaveLength(2);
+    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual(['base lint']);
+    // Without the cache both run again, and the JSON says why.
+    const json = await report((await runCli(['verify', '--json', '--no-cache'], root)).stdout);
     const test = step(json, 'test');
     expect(test.status).toBe('passed');
     expect(test.base?.status).toBe('failed');
@@ -737,25 +783,54 @@ describe('fixed needs a real failure on the base', () => {
     expect(test.base?.note).toMatch(
       /^it fails on the base commit [0-9a-f]{7}, but it fails in a worktree of the head too, so that failure comes from the worktree, not from the code, so it is not labelled fixed$/,
     );
-    expect(json.notes?.join('\n')).toContain('test: it fails on the base commit');
-    // The base run and the run in a worktree of the head each ran the test once.
-    const log = async () =>
-      (await readFile(outside, 'utf8')).split(/\r?\n/).filter((line) => line === 'base test');
-    expect(await log()).toHaveLength(2);
-    const human = await runCli(['verify'], root);
-    expect(human.stdout).not.toContain('Fixed by this change');
-    expect(human.stdout).toMatch(/test: it fails on the base commit [0-9a-f]{7}, but/);
-    // The second run reuses both kept results: nothing runs in a worktree.
-    expect(await log()).toHaveLength(2);
-    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual(['base lint']);
+    expect(await log()).toHaveLength(4);
   });
 
-  it('labels the step fixed when it passes in a worktree of the head', async () => {
-    const { root, write } = await blameRepo('ok', 'fail');
+  it('labels the step fixed when it passes in a worktree of the head, and keeps that pairing', async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
     await write('lint.txt', 'fail\n');
     await write('test.txt', 'ok\n');
     const json = await report((await runCli(['verify', '--json'], root)).stdout);
     expect(step(json, 'test').label).toBe('fixed');
     expect(step(json, 'test').base?.note).toBeUndefined();
+    // On the base, then in a worktree of the head.
+    const base = async () => (await runs()).filter((run) => run === 'base test');
+    expect(await base()).toHaveLength(2);
+    const again = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(again, 'test').label).toBe('fixed');
+    expect(step(again, 'test').base?.source).toBe('cache');
+    expect(await base()).toHaveLength(2);
+  });
+
+  it('does not pair a kept base failure with a later run of the head', async () => {
+    const { root, write } = await blameRepo('ok', 'ok');
+    // The test also needs an installed dependency, which is missing at first.
+    const needsDep = [
+      "const fs = require('fs');",
+      "const ok = fs.existsSync('node_modules/dep/ok') && !fs.readFileSync('test.txt', 'utf8').includes('fail');",
+      'process.exit(ok ? 0 : 1);',
+      '',
+    ].join('\n');
+    await write('test.js', needsDep);
+    await write('.gitignore', '.firescale/\nnode_modules/\n');
+    await commitAll(root, 'the test needs a dependency');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(path.join(root, 'node_modules', 'dep'), { recursive: true });
+    await write('lint.txt', 'fail\n');
+    await write('test.txt', 'ok, changed\n');
+    const first = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(first, 'test').label).toBe('pre-existing');
+    // The install is finished; the lockfile does not change.
+    await write('node_modules/dep/ok', '');
+    const second = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(second, 'test').status).toBe('passed');
+    expect(step(second, 'test').label).toBeUndefined();
+    // The kept failure was not used: no worktree was needed, so no base result.
+    expect(step(second, 'test').base).toBeUndefined();
+    // When the base does run again, it passes now: the old failure was the install's.
+    const fresh = await report((await runCli(['verify', '--json', '--no-cache'], root)).stdout);
+    expect(step(fresh, 'test').label).toBeUndefined();
+    expect(step(fresh, 'test').base).toMatchObject({ status: 'passed', source: 'ran' });
   });
 });

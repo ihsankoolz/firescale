@@ -835,6 +835,7 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
 
     // 1. What each step's base result is, where it is known without a run.
     let mut to_run: Vec<Pending> = Vec::new();
+    let mut confirmed: BTreeSet<usize> = BTreeSet::new();
     for index in 0..report.steps.len() {
         let step = &report.steps[index];
         if step.name == "check" {
@@ -883,6 +884,27 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             key.as_deref().and_then(|key| lookup(run.root, key))
         } else {
             None
+        };
+        // A kept failure of a step that now passes on the head is used only
+        // with the run in a worktree of the head that was made beside it,
+        // in the same run: it may have failed for a reason of that earlier
+        // worktree, such as dependencies installed since (ADR 0040).
+        // Otherwise the step runs on the base again if a worktree is made.
+        let kept = match kept {
+            Some((BaseStatus::Failed, ..)) if head == BaseStatus::Passed => {
+                let paired = key
+                    .as_deref()
+                    .and_then(|key| fixed_key(run, step, key, &environment))
+                    .and_then(|fixed| lookup(run.root, &fixed))
+                    .is_some_and(|(status, ..)| status == BaseStatus::Passed);
+                if paired {
+                    confirmed.insert(index);
+                    kept
+                } else {
+                    None
+                }
+            }
+            other => other,
         };
         if let Some((status, signature, tests)) = kept {
             let mut outcome = BaseOutcome::new(status, BaseSource::Cache, None);
@@ -991,7 +1013,16 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     // 3. A step that passes on the head and failed on the base is `fixed`
     // only when that failure came from the base's code, not from the
     // worktree it ran in (ADR 0040).
-    let fixed_evidence = confirm_fixed(report, run, &environment, &links, deadline, &say);
+    let fixed_evidence = confirm_fixed(
+        report,
+        run,
+        &environment,
+        &links,
+        &to_run,
+        &confirmed,
+        deadline,
+        &say,
+    );
 
     // 4. Labels, by evidence.
     let short = run.base.short().to_owned();
@@ -1367,6 +1398,30 @@ fn run_in_worktree(
     }
 }
 
+/// The key under which a confirmed `fixed` is kept: the step's base key
+/// and its own key on the head, so it holds only while both are the same.
+fn fixed_key(
+    run: &BaseRun<'_>,
+    step: &StepReport,
+    base_key: &str,
+    environment: &str,
+) -> Option<String> {
+    let folder = step.project.as_deref();
+    let head = run
+        .cache
+        .key(
+            folder,
+            step.kind.as_deref(),
+            &step.name,
+            step.command.as_deref()?,
+            &folder_of(run.root, folder),
+        )
+        .ok()?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(format!("fixed\0{base_key}\0{}\0{environment}", head.key).as_bytes());
+    Some(format!("fixed-{}", hasher.finalize().to_hex()))
+}
+
 /// For each step that passes on the head and failed on the base: `None`
 /// when the base's failure is a result of its code, or why it may not be.
 ///
@@ -1374,14 +1429,17 @@ fn run_in_worktree(
 /// outputs, generated files, local settings), so a step can fail there for
 /// want of them. To tell, the step runs in a worktree of the head too (the
 /// `HEAD` commit with the working tree's changes copied in), set up as the
-/// base worktree was: if it passes there, the worktree can run it, and the
-/// base's failure came from the code. That result is kept in the base
-/// store under the step's own cache key (ADR 0040).
+/// base worktree was, in the same run as the base: if it passes there, the
+/// worktree can run it, and the base's failure came from the code. Only
+/// that pairing is kept, under [`fixed_key`] (ADR 0040).
+#[allow(clippy::too_many_arguments)]
 fn confirm_fixed(
     report: &VerifyReport,
     run: &BaseRun<'_>,
     environment: &str,
     links: &[String],
+    to_run: &[Pending],
+    confirmed: &BTreeSet<usize>,
     deadline: Option<Instant>,
     say: &dyn Fn(&str),
 ) -> BTreeMap<usize, Option<String>> {
@@ -1404,7 +1462,10 @@ fn confirm_fixed(
             "the base run's time budget (verify.baseBudget) ran out before a run in a worktree of the head could tell whether that failure comes from the code"
                 .to_owned(),
         ),
-        BaseStatus::Stopped => Some("verify was stopped before it could tell whether that failure comes from the code".to_owned()),
+        BaseStatus::Stopped => Some(
+            "verify was stopped before it could tell whether that failure comes from the code"
+                .to_owned(),
+        ),
     }
     };
     let mut verdicts: BTreeMap<usize, Option<String>> = BTreeMap::new();
@@ -1419,6 +1480,17 @@ fn confirm_fixed(
         if outcome.status != BaseStatus::Failed {
             continue;
         }
+        if confirmed.contains(&index) {
+            verdicts.insert(index, None);
+            continue;
+        }
+        if outcome.source != BaseSource::Ran {
+            verdicts.insert(
+                index,
+                Some("that result is from an earlier run, which cannot tell now whether it came from the code".to_owned()),
+            );
+            continue;
+        }
         if outcome
             .tests
             .as_ref()
@@ -1430,38 +1502,19 @@ fn confirm_fixed(
             );
             continue;
         }
-        let command = step.command.clone().unwrap_or_default();
-        let folder = step.project.as_deref();
-        let key = run
-            .cache
-            .key(
-                folder,
-                step.kind.as_deref(),
-                &step.name,
-                &command,
-                &folder_of(run.root, folder),
-            )
-            .ok()
-            .map(|key| {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(format!("control\0{}\0{environment}", key.key).as_bytes());
-                format!("control-{}", hasher.finalize().to_hex())
-            });
-        let kept = if run.shortcuts {
-            key.as_deref().and_then(|key| lookup(run.root, key))
-        } else {
-            None
-        };
-        if let Some((status, _, _)) = kept {
-            verdicts.insert(index, verdict(status));
-            continue;
-        }
+        let key = to_run
+            .iter()
+            .find(|pending| pending.index == index)
+            .and_then(|pending| pending.key.as_deref())
+            .and_then(|base_key| fixed_key(run, step, base_key, environment));
         needed.push((index, key));
     }
     if needed.is_empty() {
         return verdicts;
     }
-    let made = if past(deadline) {
+    let made = if run.options.stop.load(Ordering::SeqCst) {
+        Err(Some("verify was stopped".to_owned()))
+    } else if past(deadline) {
         Err(None)
     } else {
         git_line(run.root, &["rev-parse", "--verify", "HEAD"])
@@ -1471,7 +1524,7 @@ fn confirm_fixed(
                 Worktree::add(run.root, &head).map_err(Some)
             })
             .and_then(|worktree| {
-                overlay_head(run.root, &worktree.root).map_err(Some)?;
+                overlay_head(run.root, &worktree.root, deadline, run.options.stop)?;
                 Ok(worktree)
             })
     };
@@ -1529,7 +1582,7 @@ fn confirm_fixed(
                         StepStatus::Stopped => BaseStatus::Stopped,
                         _ => BaseStatus::SetupNeeded,
                     };
-                    if let Some(key) = &key {
+                    if let Some(key) = key.as_ref().filter(|_| status == BaseStatus::Passed) {
                         keep(run.root, key, status, ran.duration_ms, &[], None);
                     }
                     say(&format!(
@@ -1554,7 +1607,15 @@ fn confirm_fixed(
 /// of `HEAD`: changed and untracked files that git does not ignore, and
 /// deletions. Ignored files are not copied: the worktree stays what the
 /// base worktree is, apart from the code.
-fn overlay_head(root: &Path, into: &Path) -> std::result::Result<(), String> {
+///
+/// Errors: `Some(why)` when it cannot be done, `None` when the budget ran
+/// out first.
+fn overlay_head(
+    root: &Path,
+    into: &Path,
+    deadline: Option<Instant>,
+    stop: &std::sync::atomic::AtomicBool,
+) -> std::result::Result<(), Option<String>> {
     let listed = |args: &[&str]| -> std::result::Result<Vec<String>, String> {
         let out = run_git(root, args).map_err(|error| error.message().to_owned())?;
         if out.code != 0 {
@@ -1581,35 +1642,65 @@ fn overlay_head(root: &Path, into: &Path) -> std::result::Result<(), String> {
         "--relative",
         "HEAD",
         "--",
-    ])?;
-    paths.extend(listed(&[
-        "-c",
-        "core.quotepath=off",
-        "ls-files",
-        "-z",
-        "--others",
-        "--exclude-standard",
-    ])?);
+    ])
+    .map_err(Some)?;
+    paths.extend(
+        listed(&[
+            "-c",
+            "core.quotepath=off",
+            "ls-files",
+            "-z",
+            "--others",
+            "--exclude-standard",
+        ])
+        .map_err(Some)?,
+    );
+    let real_into = into
+        .canonicalize()
+        .map_err(|error| Some(format!("the worktree cannot be read: {error}")))?;
     for path in paths {
         if path == ".firescale" || path.starts_with(".firescale/") {
             continue;
         }
+        if stop.load(Ordering::SeqCst) {
+            return Err(Some("verify was stopped".to_owned()));
+        }
+        if past(deadline) {
+            return Err(None);
+        }
         let from = folder_of(root, Some(&path));
         let to = folder_of(into, Some(&path));
+        // A folder on the way that the commit holds as a link (the head may
+        // have a real folder there) is replaced by a real folder, so nothing
+        // is ever written through it out of the worktree.
+        let mut at = into.to_path_buf();
+        let parts: Vec<&str> = path.split('/').collect();
+        for part in &parts[..parts.len().saturating_sub(1)] {
+            at.push(part);
+            if is_link(&at) && fs::remove_file(&at).is_err() {
+                let _ = fs::remove_dir(&at);
+            }
+        }
         match fs::symlink_metadata(&from) {
             // A submodule or a nested repo: left as the commit has it.
             Ok(meta) if meta.is_dir() => {}
             Ok(meta) => {
                 if let Some(parent) = to.parent() {
                     fs::create_dir_all(parent)
-                        .map_err(|error| format!("{path} could not be copied: {error}"))?;
+                        .map_err(|error| Some(format!("{path} could not be copied: {error}")))?;
+                    let inside = parent
+                        .canonicalize()
+                        .is_ok_and(|real| real.starts_with(&real_into));
+                    if !inside {
+                        return Err(Some(format!("{path} would be copied out of the worktree")));
+                    }
                 }
                 // Never write through a link the commit holds at that path.
                 if fs::symlink_metadata(&to).is_ok_and(|old| !old.is_dir()) {
                     let _ = fs::remove_file(&to);
                 }
                 copy_entry(&from, &to, meta.file_type().is_symlink())
-                    .map_err(|error| format!("{path} could not be copied: {error}"))?;
+                    .map_err(|error| Some(format!("{path} could not be copied: {error}")))?;
             }
             Err(_) => {
                 let _ = fs::remove_file(&to);
@@ -1956,6 +2047,67 @@ mod tests {
             .is_file());
         let list = git_line(fixture.root(), &["worktree", "list", "--porcelain"]).unwrap();
         assert_eq!(list.matches("worktree ").count(), 1, "{list}");
+    }
+
+    #[test]
+    fn the_head_overlay_copies_changes_and_deletions_and_skips_firescale() {
+        let fixture = committed();
+        let root = fixture.root();
+        fs::write(root.join("gone.txt"), "x\n").unwrap();
+        git(root, &["add", "--all"]);
+        git(root, &["commit", "--quiet", "--no-verify", "-m", "gone"]);
+        let head = git_line(root, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(root.join("a.txt"), "two\n").unwrap();
+        fs::remove_file(root.join("gone.txt")).unwrap();
+        fs::create_dir_all(root.join("new dir")).unwrap();
+        fs::write(root.join("new dir").join("b.txt"), "new\n").unwrap();
+        fs::create_dir_all(root.join(".firescale")).unwrap();
+        fs::write(root.join(".firescale").join("x.json"), "{}").unwrap();
+        let worktree = Worktree::add(root, &head).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        overlay_head(root, &worktree.root, None, &stop).unwrap();
+        assert_eq!(
+            fs::read_to_string(worktree.root.join("a.txt")).unwrap(),
+            "two\n"
+        );
+        assert!(!worktree.root.join("gone.txt").exists());
+        assert_eq!(
+            fs::read_to_string(worktree.root.join("new dir").join("b.txt")).unwrap(),
+            "new\n"
+        );
+        assert!(!worktree.root.join(".firescale").exists());
+        // The user's tree is as it was.
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "two\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_head_overlay_never_writes_through_a_link_the_commit_holds() {
+        let outside = Fixture::new(&[("keep.txt", "mine\n")], Track::NoGit).unwrap();
+        let fixture = committed();
+        let root = fixture.root();
+        // HEAD tracks `lib` as a link to a folder outside the repo...
+        std::os::unix::fs::symlink(outside.root(), root.join("lib")).unwrap();
+        git(root, &["add", "--all"]);
+        git(root, &["commit", "--quiet", "--no-verify", "-m", "link"]);
+        let head = git_line(root, &["rev-parse", "HEAD"]).unwrap();
+        // ...and the working tree has a real folder there, with a new file.
+        fs::remove_file(root.join("lib")).unwrap();
+        fs::create_dir_all(root.join("lib")).unwrap();
+        fs::write(root.join("lib").join("a.txt"), "head\n").unwrap();
+        fs::write(root.join("lib").join("keep.txt"), "head\n").unwrap();
+        let worktree = Worktree::add(root, &head).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        overlay_head(root, &worktree.root, None, &stop).unwrap();
+        assert!(!outside.root().join("a.txt").exists());
+        assert_eq!(
+            fs::read_to_string(outside.root().join("keep.txt")).unwrap(),
+            "mine\n"
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.root.join("lib").join("a.txt")).unwrap(),
+            "head\n"
+        );
     }
 
     #[test]

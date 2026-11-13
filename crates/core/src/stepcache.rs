@@ -1348,7 +1348,10 @@ impl<'a> StepCache<'a> {
             }
         }
         for (path, (state, _)) in &snapshot.files {
-            if crate::facts::is_dependency_list(path) {
+            let name = path.rsplit('/').next().unwrap_or(path);
+            if crate::facts::LOCKFILE_NAMES.contains(&name)
+                || crate::facts::is_dependency_list(path)
+            {
                 files.update(format!("head-lock\0{path}\0{state:?}\n").as_bytes());
             }
         }
