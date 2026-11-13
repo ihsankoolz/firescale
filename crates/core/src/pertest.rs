@@ -96,29 +96,45 @@ fn unescape(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// The identity of a pytest test case from its JUnit attributes:
-/// `classname="tests.test_auth.TestLogin"`, `name="test_ok"` and, when
-/// present, `file="tests/test_auth.py"`. The module part of the class name
-/// becomes the file, so ids look like pytest's own node ids.
+/// The identity of a pytest test case from its JUnit attributes
+/// (`junit_family=xunit1`, which verify asks for, gives `file`):
+/// `classname="tests.test_auth.TestLogin"`, `name="test_ok"`,
+/// `file="tests/test_auth.py"` give `tests/test_auth.py::TestLogin::test_ok`,
+/// pytest's own node id. A collection error has an empty class name and
+/// the module in `name`.
 fn pytest_id(classname: &str, name: &str, file: Option<&str>) -> String {
-    let parts: Vec<&str> = classname.split('.').collect();
-    // The class names start with a capital letter; the module path does not.
-    let module_len = parts
-        .iter()
-        .position(|part| part.chars().next().is_some_and(char::is_uppercase))
-        .unwrap_or(parts.len());
-    let file = file.map_or_else(
-        || {
-            if module_len == 0 {
-                String::new()
-            } else {
-                format!("{}.py", parts[..module_len].join("/"))
-            }
-        },
-        |file| file.replace('\\', "/"),
-    );
+    if classname.is_empty() {
+        return file.map_or_else(
+            || format!("{}.py", name.replace('.', "/")),
+            |file| file.replace('\\', "/"),
+        );
+    }
+    let (file, classes): (String, Vec<&str>) = match file {
+        Some(file) => {
+            let file = file.replace('\\', "/");
+            let module = file.strip_suffix(".py").unwrap_or(&file).replace('/', ".");
+            let classes = classname
+                .strip_prefix(&module)
+                .map(|rest| rest.split('.').filter(|part| !part.is_empty()).collect())
+                .unwrap_or_default();
+            (file, classes)
+        }
+        None => {
+            // No file: the class names are the parts that start with a
+            // capital letter after the module path.
+            let parts: Vec<&str> = classname.split('.').collect();
+            let module_len = parts
+                .iter()
+                .position(|part| part.chars().next().is_some_and(char::is_uppercase))
+                .unwrap_or(parts.len());
+            (
+                format!("{}.py", parts[..module_len].join("/")),
+                parts[module_len..].to_vec(),
+            )
+        }
+    };
     let mut id = file;
-    for class in &parts[module_len..] {
+    for class in classes {
         id.push_str("::");
         id.push_str(class);
     }
@@ -168,23 +184,32 @@ fn clean(line: &str) -> String {
     crate::verify::strip_ansi(line).trim().to_owned()
 }
 
-/// Reads Vitest's default reporter: ` FAIL  src/a.test.ts > math > adds`
-/// lines in its failure summary, and its `Tests  1 failed | 4 passed` line.
+/// Reads Vitest's default reporter: the ` FAIL  file > suite > test` lines
+/// of its `Failed Tests` and `Failed Suites` sections (not a `FAIL` a test
+/// printed itself), and its `Tests  1 failed | 4 passed` line.
 #[must_use]
 pub fn parse_vitest(output: &str) -> Option<TestResults> {
     let mut results = TestResults::default();
     let mut seen_summary = false;
+    let mut in_failures = false;
     for raw in output.lines() {
         let line = clean(raw);
-        if let Some(rest) = line.strip_prefix("FAIL ") {
-            let rest = rest.trim();
-            // `FAIL  file > suite > test`; a file-level failure has no `>`.
-            let id = rest
-                .split(" [ ")
-                .next()
-                .unwrap_or(rest)
-                .trim()
-                .replace('\\', "/");
+        if line.contains("Failed Tests") || line.contains("Failed Suites") {
+            in_failures = true;
+            continue;
+        }
+        if line.starts_with("Test Files ") {
+            in_failures = false;
+        }
+        if let Some(rest) = line.strip_prefix("FAIL ").filter(|_| in_failures) {
+            let mut id = rest.trim().replace('\\', "/");
+            // A trailing ` [ file ]` names the file of a suite-level failure.
+            if id.ends_with(']') {
+                if let Some(cut) = id.rfind(" [ ") {
+                    id.truncate(cut);
+                }
+            }
+            let id = id.trim().to_owned();
             if !id.is_empty() {
                 results.failed.insert(id);
             }
@@ -214,12 +239,14 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
     for raw in output.lines() {
         let line = clean(raw);
         if let Some(rest) = line.strip_prefix("FAIL ") {
-            file = Some(
-                rest.split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .replace('\\', "/"),
-            );
+            // `FAIL src/a.test.js`, or with a project's display name
+            // first: `FAIL web src/a.test.js`. The file is the last word
+            // that looks like a path.
+            file = rest
+                .split_whitespace()
+                .rev()
+                .find(|word| word.contains('/') || word.contains('\\') || word.contains('.'))
+                .map(|word| word.replace('\\', "/"));
             continue;
         }
         if line.starts_with("PASS ") {
@@ -227,17 +254,26 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
             continue;
         }
         if let Some(name) = line.strip_prefix("● ") {
+            // Only inside a failing file, and not Jest's own notices.
+            let notice = [
+                "Console",
+                "Deprecation Warning",
+                "Validation Warning",
+                "Validation Error",
+            ]
+            .contains(&name.trim());
+            if file.is_none() || notice {
+                continue;
+            }
             if name.starts_with("Test suite failed to run") {
                 if let Some(file) = &file {
                     results.failed.insert(file.clone());
                 }
                 continue;
             }
-            let id = match &file {
-                Some(file) => format!("{file} › {}", name.trim()),
-                None => name.trim().to_owned(),
-            };
-            results.failed.insert(id);
+            if let Some(file) = &file {
+                results.failed.insert(format!("{file} › {}", name.trim()));
+            }
         }
         if let Some(rest) = line.strip_prefix("Tests:") {
             seen_summary = true;
@@ -271,17 +307,87 @@ pub fn follow_renames(
     base.iter()
         .map(|id| {
             for (old, new) in renames {
-                let old = old.strip_prefix(prefix).unwrap_or(old);
-                let new = new.strip_prefix(prefix).unwrap_or(new);
-                if let Some(rest) = id.strip_prefix(old) {
-                    if rest.is_empty() || rest.starts_with("::") || rest.starts_with(' ') {
-                        return format!("{new}{rest}");
+                // An id is relative to the runner's root folder: the
+                // project's (`tests/x.py`) or the repo's (`api/tests/x.py`).
+                let pairs = [
+                    (
+                        old.strip_prefix(prefix).unwrap_or(old),
+                        new.strip_prefix(prefix).unwrap_or(new),
+                    ),
+                    (old.as_str(), new.as_str()),
+                ];
+                for (old, new) in pairs {
+                    if let Some(rest) = id.strip_prefix(old) {
+                        if rest.is_empty() || rest.starts_with("::") || rest.starts_with(' ') {
+                            return format!("{new}{rest}");
+                        }
                     }
                 }
             }
             id.clone()
         })
         .collect()
+}
+
+/// A path for the JUnit report of one pytest step: in the temp folder, with
+/// a name of constant shape (digits are folded in signatures), unique per
+/// process and step, so `--jobs` units never share one.
+#[must_use]
+pub fn junit_path() -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let step = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    std::env::temp_dir().join(format!(
+        "firescale-junit-{:010}-{step:06}.xml",
+        std::process::id()
+    ))
+}
+
+/// The `PYTEST_ADDOPTS` value that asks for a JUnit report at `path`, after
+/// the user's own value. pytest splits it like a POSIX shell, so the path is
+/// written with forward slashes and in single quotes: a space or a
+/// backslash in it (a Windows temp folder) stays part of the path.
+#[must_use]
+pub fn addopts(own: &str, path: &std::path::Path) -> String {
+    let path = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('\'', "'\"'\"'");
+    format!("{own} -o junit_family=xunit1 '--junitxml={path}'")
+        .trim()
+        .to_owned()
+}
+
+/// True when the user asks pytest for a JUnit report already: on the
+/// command line, in `PYTEST_ADDOPTS`, or in a pytest config file in the
+/// step's folder or above (`addopts = --junitxml=...`).
+#[must_use]
+pub fn user_asks_for_junit(root: &std::path::Path, dir: &std::path::Path, command: &str) -> bool {
+    if command.contains("--junitxml") || command.contains("--junit-xml") {
+        return true;
+    }
+    if std::env::var("PYTEST_ADDOPTS").is_ok_and(|own| own.contains("--junit")) {
+        return true;
+    }
+    let mut at = Some(dir);
+    while let Some(folder) = at {
+        for name in [
+            "pytest.ini",
+            "pyproject.toml",
+            "setup.cfg",
+            "tox.ini",
+            ".pytest.ini",
+        ] {
+            if std::fs::read_to_string(folder.join(name)).is_ok_and(|text| text.contains("--junit"))
+            {
+                return true;
+            }
+        }
+        if folder == root {
+            break;
+        }
+        at = folder.parent().filter(|up| up.starts_with(root));
+    }
+    false
 }
 
 /// The text of the package script a command runs (`npm test`, `pnpm run
@@ -406,6 +512,166 @@ Tests:       1 failed, 3 passed, 4 total
             vec!["src/math.test.js › math › adds".to_owned()]
         );
         assert!(parse_vitest("no tests here").is_none());
+    }
+
+    /// Splits like Python's `shlex.split` in POSIX mode, enough for these
+    /// tests: spaces, single and double quotes, backslash escapes.
+    fn shlex(text: &str) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut word = String::new();
+        let mut started = false;
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\'' => {
+                    started = true;
+                    for inner in chars.by_ref() {
+                        if inner == '\'' {
+                            break;
+                        }
+                        word.push(inner);
+                    }
+                }
+                '"' => {
+                    started = true;
+                    while let Some(inner) = chars.next() {
+                        match inner {
+                            '"' => break,
+                            '\\' => word.extend(chars.next()),
+                            other => word.push(other),
+                        }
+                    }
+                }
+                '\\' => {
+                    started = true;
+                    word.extend(chars.next());
+                }
+                c if c.is_whitespace() => {
+                    if started {
+                        words.push(std::mem::take(&mut word));
+                        started = false;
+                    }
+                }
+                other => {
+                    started = true;
+                    word.push(other);
+                }
+            }
+        }
+        if started {
+            words.push(word);
+        }
+        words
+    }
+
+    #[test]
+    fn the_report_option_survives_pytest_splitting_it() {
+        for path in [
+            "/tmp/with space/firescale-junit-0000000001-000001.xml",
+            r"C:\Users\John Smith\AppData\Local\Temp\firescale-junit-1.xml",
+            "/tmp/it's/r.xml",
+        ] {
+            let value = addopts("-x --tb=short", std::path::Path::new(path));
+            let words = shlex(&value);
+            let expected = format!("--junitxml={}", path.replace('\\', "/"));
+            assert_eq!(
+                words,
+                vec![
+                    "-x",
+                    "--tb=short",
+                    "-o",
+                    "junit_family=xunit1",
+                    expected.as_str()
+                ],
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn report_paths_have_one_shape_and_never_repeat() {
+        let a = junit_path();
+        let b = junit_path();
+        assert_ne!(a, b);
+        let fold = |p: &std::path::Path| {
+            p.to_string_lossy()
+                .chars()
+                .map(|c| if c.is_ascii_digit() { '#' } else { c })
+                .collect::<String>()
+        };
+        assert_eq!(fold(&a), fold(&b));
+    }
+
+    #[test]
+    fn junit_ids_use_the_file_and_handle_collection_errors() {
+        let xml = r#"<testsuite name="pytest"><testcase classname="MyApp.test_m" name="test_x" file="MyApp/test_m.py"><failure message="x"/></testcase>
+<testcase classname="" name="tests.test_broken"><error message="collection failure"/></testcase>
+<testcase classname="api.tests.test_old.TestA" name="test_y" file="api/tests/test_old.py"><failure/></testcase></testsuite>"#;
+        let failed: Vec<String> = parse_junit(xml).unwrap().failed.into_iter().collect();
+        assert_eq!(
+            failed,
+            vec![
+                "MyApp/test_m.py::test_x".to_owned(),
+                "api/tests/test_old.py::TestA::test_y".to_owned(),
+                "tests/test_broken.py".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn notices_and_printed_lines_are_not_failing_tests() {
+        let jest = "\
+PASS src/ok.test.js
+  ● Console
+
+    console.log
+      FAIL looks like this
+
+FAIL web src/math.test.js
+  ● Console
+  ● math › adds
+
+Tests:       1 failed, 3 passed, 4 total
+";
+        let results = parse_jest(jest).unwrap();
+        assert_eq!(
+            results.failed.into_iter().collect::<Vec<_>>(),
+            vec!["src/math.test.js › math › adds".to_owned()]
+        );
+        let vitest = "\
+stdout | src/math.test.ts > math > logs
+ FAIL  fake > printed by a test
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/math.test.ts > math > handles [ brackets ] in names
+ FAIL  src/math.test.ts > outer [ src/math.test.ts ]
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)
+";
+        let results = parse_vitest(vitest).unwrap();
+        assert_eq!(
+            results.failed.into_iter().collect::<Vec<_>>(),
+            vec![
+                "src/math.test.ts > math > handles [ brackets ] in names".to_owned(),
+                "src/math.test.ts > outer".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rename_matches_ids_from_the_project_or_the_repo_root() {
+        let base: BTreeSet<String> = ["api/tests/test_old.py::test_a".to_owned()]
+            .into_iter()
+            .collect();
+        let renames: Renames = [(
+            "api/tests/test_old.py".to_owned(),
+            "api/tests/test_new.py".to_owned(),
+        )]
+        .into_iter()
+        .collect();
+        assert!(follow_renames(&base, &renames, "api/").contains("api/tests/test_new.py::test_a"));
     }
 
     #[test]

@@ -1805,21 +1805,14 @@ fn run_step(
         command,
         crate::pertest::script_text(&dir, command).as_deref(),
     );
-    let junit = (runner == Some(crate::pertest::TestRunner::Pytest)).then(|| {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_nanos());
-        std::env::temp_dir().join(format!(
-            "firescale-junit-{}-{nanos}.xml",
-            std::process::id()
-        ))
-    });
+    // Not when the user already asks for a JUnit report: theirs must stay
+    // where they put it, and that step is compared as a whole.
+    let junit = (runner == Some(crate::pertest::TestRunner::Pytest)
+        && !crate::pertest::user_asks_for_junit(unit.root, &dir, command))
+    .then(crate::pertest::junit_path);
     if let Some(junit) = &junit {
         let own = std::env::var("PYTEST_ADDOPTS").unwrap_or_default();
-        shell.env(
-            "PYTEST_ADDOPTS",
-            format!("{own} --junitxml={}", junit.to_string_lossy()).trim(),
-        );
+        shell.env("PYTEST_ADDOPTS", crate::pertest::addopts(&own, junit));
     }
     let spawned = Mutex::new(None);
     let heartbeat = |elapsed: Duration, last: Option<&str>| {
@@ -1956,6 +1949,15 @@ fn run_step(
         let xml = junit
             .as_ref()
             .and_then(|path| std::fs::read_to_string(path).ok());
+        // pytest refused its options (exit 4) and wrote no report: whatever
+        // it printed is not evidence of anything, so it can never match the
+        // base's output and make a failure pre-existing.
+        if junit.is_some() && xml.is_none() && finished.ending == Ending::Exited(Some(4)) {
+            report.signature.push(format!(
+                "pytest-usage-error-{}",
+                crate::pertest::junit_path().to_string_lossy()
+            ));
+        }
         report.test_results = runner.read(&text(), xml.as_deref());
         report.failed_tests = report
             .test_results
@@ -2325,7 +2327,8 @@ pub fn failure_signature(output: &str, root: &Path) -> Vec<String> {
     let mut lines = Vec::new();
     for line in output.lines().take(SIGNATURE_LINES) {
         let mut line = line.trim().to_owned();
-        if line.is_empty() {
+        // pytest's `generated xml file: <the report verify asked for>`.
+        if line.is_empty() || line.contains("firescale-junit-") {
             continue;
         }
         for root in &roots {

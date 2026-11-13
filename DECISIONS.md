@@ -116,7 +116,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 3. A failing test that does not fail on the base makes the step `new`; the summary names it under `New failing tests:` and says how many others already failed there. `pre-existing` still needs M19's output evidence. A base with no passed test is not evidence. JSON: a step's `failedTests` with labels.
 4. Renamed test files (git's rename detection) keep their tests: an old failure there is never `new`; it blocks with a note, since its output differs.
 5. Other runners are compared as whole steps, with a note. The base store (format 4) keeps the failing tests.
-6. `PYTEST_ADDOPTS` joins the variables `core/env-example` does not ask for.
+6. The report option is quoted for pytest's shell-like splitting (forward slashes, single quotes), uses `junit_family=xunit1` for the file of each test, and is not added when you ask for a JUnit report yourself.
+
+**Independent review before the pull request** found that the unquoted report path made pytest exit 4 on the base and the head alike when the temp folder has a space (and broke it on Windows), so a new failure read as `pre-existing`: now quoted, tested end to end with a temp folder with a space, and a pytest that refuses its options is never evidence. Also fixed: pytest's `generated xml file:` line in signatures, rename ids relative to the repo root, collection errors and capitalised packages in ids, Jest's `● Console` and display names, Vitest lines a test printed and names with `[`, a user's own `--junitxml`, report files shared between `--jobs` units, and a note printed for lint steps.
 
 **Proof** (`blame.test.ts` "per-test labels", `pertest::tests`): with one old and one new failing test, only the new one is `new` and named, for pytest and for Vitest; a runner without per-test results falls back with a note; a renamed test file's old failure is never `new`; a base with no passed test is not trusted; the JUnit, Vitest and Jest readers, runner detection and rename mapping.
 

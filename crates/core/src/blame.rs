@@ -965,6 +965,7 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             .filter(|project| *project != ".")
             .map_or_else(String::new, |project| format!("{project}/"));
         let head_tests = step.test_results.clone();
+        let is_test = step.name == "test";
         let Some(outcome) = step.base.as_mut() else {
             continue;
         };
@@ -978,7 +979,12 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             }
             _ => None,
         };
-        if failed && outcome.status == BaseStatus::Failed && head_tests.is_none() && !timed_out {
+        if failed
+            && outcome.status == BaseStatus::Failed
+            && (head_tests.is_none() || outcome.tests.is_none())
+            && !timed_out
+            && is_test
+        {
             per_step_notes.push(format!(
                 "{place_text}: its runner gives no per-test results, so it is compared as a whole step"
             ));

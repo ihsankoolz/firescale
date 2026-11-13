@@ -431,7 +431,12 @@ const FAKE_PYTEST = [
   "const fs = require('fs');",
   "const files = fs.readdirSync('tests').filter((f) => f.startsWith('test_') && f.endsWith('.py')).sort();",
   "const failing = fs.readFileSync('failing.txt', 'utf8').split(',').map((s) => s.trim()).filter(Boolean);",
-  "const report = /--junitxml=(\\S+)/.exec(process.env.PYTEST_ADDOPTS || '');",
+  // Split PYTEST_ADDOPTS as pytest does (shlex, POSIX): a word in single
+  // quotes stays one word; a word that is not an option is a path, and
+  // pytest stops with exit 4 when it does not exist.
+  "const words = [...(process.env.PYTEST_ADDOPTS || '').matchAll(/'([^']*)'|(\\S+)/g)].map((m) => m[1] ?? m[2]);",
+  "for (let i = 0; i < words.length; i += 1) { if (words[i] === '-o') { i += 1; continue; } if (!words[i].startsWith('-')) { console.log('ERROR: file or directory not found: ' + words[i]); process.exit(4); } }",
+  "const report = /^--junitxml=(.+)$/.exec(words.find((w) => w.startsWith('--junitxml=')) || '');",
   'let xml = \'<?xml version="1.0"?><testsuites><testsuite name="pytest">\';',
   'for (const file of files) {',
   "  for (const name of ['test_a', 'test_b', 'test_c']) {",
@@ -451,6 +456,7 @@ const FAKE_VITEST = [
   "const fs = require('fs');",
   "const failing = fs.readFileSync('failing.txt', 'utf8').split(',').map((s) => s.trim()).filter(Boolean);",
   "const names = ['adds', 'multiplies', 'divides'];",
+  "if (failing.length > 0) console.log('⎯⎯⎯⎯⎯⎯⎯ Failed Tests ' + failing.length + ' ⎯⎯⎯⎯⎯⎯⎯\\n');",
   "for (const name of failing) console.log(' FAIL  src/math.test.ts > math > ' + name + '\\nAssertionError: expected 1 to be 2');",
   "console.log('      Tests  ' + failing.length + ' failed | ' + (names.length - failing.length) + ' passed (' + names.length + ')');",
   'process.exit(failing.length > 0 ? 1 : 0);',
@@ -557,6 +563,24 @@ describe('per-test labels', () => {
     expect(step(json, 'test').label).toBeUndefined();
     expect(step(json, 'test').base?.note).toContain('the same tests fail on the base commit');
     expect(result.code).toBe(EXIT_VIOLATIONS);
+  });
+
+  it('keeps per-test labels when the temp folder has a space in its name', async () => {
+    const { root, write } = await runnerRepo(FAKE_PYTEST, 'pytest.js', 'test_a');
+    const spaced = await fixtures.create({ files: {}, track: 'no-git' });
+    const temp = path.join(spaced.root, 'with space');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(temp, { recursive: true });
+    await write('failing.txt', 'test_a, test_b\n');
+    const env = { TMPDIR: temp, TEMP: temp, TMP: temp };
+    const result = await runCli(['verify', '--json'], root, env);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').label).toBe('new');
+    expect(failedTests(json)).toEqual([
+      { id: 'tests/test_old.py::test_a', label: 'pre-existing' },
+      { id: 'tests/test_old.py::test_b', label: 'new' },
+    ]);
   });
 
   it('does not trust a base on which no test passed', async () => {
