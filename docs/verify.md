@@ -112,7 +112,7 @@ With a base commit, verify also compares the **test files the change touches** w
 - **skipped and focused tests** (`.skip`, `.todo`, `x…`, a skipped `describe`; `.only`): more than on the base is `test-skipped`;
 - **assertions** (`expect(…)`, `assert(…)`, `assert.…(…)`): fewer than on the base is `assertion-removed`.
 
-Because the counts are net over the whole change and come from the syntax tree, a renamed test, a test moved to another file, a test split in two, a reformatted file and an assertion replaced by a stricter one are not findings. A test deleted together with every module of the repo it uses is not counted. A file with syntax errors is listed as not checked.
+Because the counts are net over the whole change and come from the syntax tree, a renamed test, a test moved to another file, a test split in two, a reformatted file and an assertion replaced by a stricter one are not findings. A test deleted together with every module of the repo it uses is not counted. A changed test file tree-sitter cannot read is a `not-checked` finding of its own, never taken as clean.
 
 Findings are **report-only** by default: they are listed with file and line (a deleted test or assertion at its line on the base commit), and the headline says how many (`verify: OK - tamper guard: 3 report-only findings`). To make them fail verify, set `"tamper": "enforced"` under `verify` in the config. **The setting is read from the base commit**, never from the working tree, so a change cannot turn the guard off, or on, for itself: it takes effect once merged. `"off"` turns it off.
 

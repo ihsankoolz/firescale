@@ -26,7 +26,7 @@ Read on 2026-11-13 from each project's own pages.
 - Each is parsed **twice with tree-sitter** (the grammars of ADR 0033): as the base commit has it (`git show <base>:<path>`) and as the working tree has it.
 - From each tree: every **test** (`it`, `test`, `xit`, `xtest`, `fit`, their `.skip`, `.only`, `.todo`, `.skipIf`, `.fixme`, `.each(…)(…)`, `.concurrent` forms), with its **id**, the titles of the enclosing `describe`/`suite`/`context` blocks and its own joined by `>`; whether it is **skipped** (`.skip`, `.todo`, `.skipIf`, `.fixme`, an `x` prefix, or inside a skipped suite) or **focused** (`.only`, an `f` prefix, or inside a focused suite); and every **assertion**: a call of `expect(…)`, `assert(…)` or `assert.<anything>(…)`, counted once per chain (`expect(a).not.toBe(1)` is one).
 - Comments, strings and template literals are not code in the tree, so `// expect(x).toBe(1)` or `"it('x')"` never count.
-- A file with syntax errors on either side is **not checked**, and listed as such; it is never counted as clean (M24 asks this of every language).
+- A changed test file that tree-sitter cannot read on either side (a syntax error, newer syntax than the grammar knows such as `interface Box<in out T>`, or a file that cannot be read) is a **`not-checked` finding** with the line of the first error. It counts and blocks like any other finding, so it is never taken as clean: otherwise one unreadable line would switch the guard off for that file (M24 asks this of every language). A file that is not valid UTF-8 is read with the bad bytes replaced, never taken as deleted.
 
 ### How it compares: net counts over the whole change
 
@@ -38,7 +38,7 @@ Over all the changed test files together:
 | `test-skipped`      | more skipped tests than on the base, or more focused tests (`.only` stops the file's other tests from running) | each skipped or focused test that was not so on the base; file and line now                   |
 | `assertion-removed` | fewer assertions than on the base                                                                              | each base assertion whose text is gone, up to the shortfall; file and line on the base commit |
 
-A test the change deleted **together with its subject** is left out of the base counts before comparing: it is gone from the working tree, it uses names imported from modules of the repo (`import`, `require`), and every one of those modules is deleted in the same change. Its assertions are left out too.
+A test the change deleted **together with its subject** is left out of the base counts before comparing: it is gone from the working tree, it uses names imported from modules of the repo (`import`, `require`), every one of those modules is deleted in the same change (gone, and not the old side of a rename git sees), and **none of those names is left** in any JavaScript or TypeScript file of the change. The last condition catches a module renamed without git seeing it (`mv` without `git add`): its names live on in the new file, so its tests are still counted. Their assertions are left out too.
 
 ### What is reported, and what is not
 
@@ -64,7 +64,14 @@ Each line is a case in `bench/tamper-corpus.json`, in TypeScript or JavaScript.
 | A test turned into `it.todo("…")`                                                                               | **yes**: `test-skipped` and `assertion-removed`                     |                                                       |
 | An assertion removed, commented out, or turned into a string                                                    | **yes**: `assertion-removed`                                        |                                                       |
 
-Known misses, by design of net counts: a change that deletes one test and adds an unrelated one (the totals hold); an assertion weakened in place (`toBe(3)` → `toBeDefined()`), which M26's approvals of changed expected values are for; an assertion moved into a helper module outside the test folders (counted as removed, a false positive); assertions in a style the reader does not know (`should`, `t.is`); tests made by a wrapper function the reader does not know.
+Known misses and false positives:
+
+- By design of net counts: a change that deletes one test and adds an unrelated one (the totals hold).
+- An assertion weakened in place (`toBe(3)` → `toBeDefined()`, or `expect(x).toBe(3)` → `expect(true).toBe(true)`): M26's approvals of changed expected values are for these.
+- Code that never reaches its assertions: `if (false) { it(…) }`, an early `return` before them. The counts are of the code as written, not as run.
+- Assertions and tests the reader does not know: `should`, `t.is`, tests made by a wrapper function, a test aliased through a variable (`const t = it.skip; t(…)` reads as a deleted test, not a skipped one).
+- False positives: an assertion moved into a helper module outside the test folders counts as removed; tests made in a `for` loop count once; an `each` table that is not an array literal counts as one row.
+- The guard runs only with a base (ADR 0037): an agent that moves the base ref (`git update-ref`) or works on a default branch with no upstream has none, and neither has a shallow clone without the merge base. The guard does not run then, and a passing run does not say so; M25's CI detector and the base-anchored CI of M22 are the backstop.
 
 ### The base and the policy
 
@@ -84,9 +91,23 @@ The summary lists each finding with its kind, file and line (marked "on the base
 
 ADR 0033 took tree-sitter with the Python, TypeScript and TSX grammars for M17, and measured it. M23 adds **no grammar** (the TSX grammar reads JavaScript); the guard is about 800 lines of Rust, tests included. Binary size and clean build time before and after are in `bench/RESULTS.md`. M24 adds the Rust grammar and measures again.
 
+## After the review
+
+An independent review before the pull request reproduced two bypasses and several smaller problems, all fixed with tests and corpus cases:
+
+- A changed test file that tree-sitter could not read dropped out of the counts with only a note, so one line of newer TypeScript next to a deleted test made `enforced` pass. It is now a `not-checked` finding that counts and blocks.
+- "Deleted with its subject" also excused a subject that was renamed. Renames git sees no longer count as deletions, and a subject whose names live on in the change is never deleted.
+- `it.fails`, `.runIf`, `test.fail`, `expect.soft`, `expect.poll`, `expect.assertions` and `expect.hasAssertions` were not read; they are now.
+- A call chain of thousands of `.then(…)` overflowed the stack; the callee walk is now a bounded loop.
+- A UTF-8 byte order mark in the base config silently downgraded `enforced`; it is stripped.
+- Turning tests into an `it.each` table, and Playwright's hooks and steps, gave false findings.
+- A non-UTF-8 test file read as deleted.
+- A new `.only` named the wrong test.
+- A folder could stand for a module.
+
 ## Measuring
 
-`bench/tamper-corpus.json` holds 27 labelled changes: 13 that must give a finding (each of the three kinds in JavaScript and in TypeScript) and 14 that must not (every honest edit in the table above). `bench/tamper-rates.mjs` runs each in a real git repo through `fscale verify --json` and counts caught, missed and false positives; `packages/cli/src/tamper.test.ts` asserts every label. The corpus was written together with the guard, so its counts show the guard does what this ADR says, not how often it is wrong on real changes: M26 builds a corpus that is not, and measures the false-positive and miss rates on it.
+`bench/tamper-corpus.json` holds 37 labelled changes: 19 that must give a finding (each of the four kinds in JavaScript and in TypeScript) and 18 that must not (every honest edit in the table above). `bench/tamper-rates.mjs` runs each in a real git repo through `fscale verify --json` and counts caught, missed and false positives; `packages/cli/src/tamper.test.ts` asserts every label. The corpus was written together with the guard, so its counts show the guard does what this ADR says, not how often it is wrong on real changes: M26 builds a corpus that is not, and measures the false-positive and miss rates on it.
 
 ## Consequences
 

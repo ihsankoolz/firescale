@@ -125,7 +125,10 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 2. **The comparison**: net counts over all the changed test files together. Fewer tests is `test-deleted`, more skipped or focused tests is `test-skipped`, fewer assertions is `assertion-removed`; each finding names the file and line (on the base for what was deleted). A test deleted together with every repo module it uses (its subject) is left out.
 3. **The base and the policy**: the base blame-aware verify resolves; `verify.tamper` (`off`, `evaluated`, `enforced`) read from the base commit's `firescale.config.json` only. A change that turns it off, or on, does not affect itself.
 4. **Report-only by default**: findings are listed and named in the headline (`verify: OK - tamper guard: 3 report-only findings`); with `"enforced"` on the base, verify fails "at the tamper guard" and the stop hook blocks. `--json` has a `tamper` object (schema 6, a new optional field).
-5. **A labelled corpus** (`bench/tamper-corpus.json`, 27 cases, 13 to catch and 14 honest edits) run by `tamper.test.ts` and counted by `bench/tamper-rates.mjs`: 17 of 17 findings caught, 0 false positives (`bench/RESULTS.md`).
+5. **A labelled corpus** (`bench/tamper-corpus.json`, 37 cases, 19 to catch and 18 honest edits) run by `tamper.test.ts` and counted by `bench/tamper-rates.mjs`: 24 of 24 findings caught, 0 false positives (`bench/RESULTS.md`).
+6. **A file it cannot read is a finding** (`not-checked`), never taken as clean.
+
+**Independent review before the pull request** reproduced two bypasses, both fixed with corpus cases: one line of newer TypeScript that tree-sitter cannot parse dropped the file from the counts, so a deleted test passed `enforced` (now a `not-checked` finding that blocks); and a subject renamed rather than deleted excused the deletion of its test (renames no longer count, and a subject whose names live on in the change is not deleted). Also fixed: `it.fails`, `.runIf`, `test.fail`, `expect.soft`, `expect.poll`, `expect.assertions` and `expect.hasAssertions` are read; a long call chain no longer overflows the stack; a byte order mark in the base config no longer downgrades `enforced`; `it.each` tables, Playwright hooks and non-UTF-8 files no longer give false findings; a new `.only` names the right test. Admitted in the ADR: `if (false)` around a test, an early `return`, `expect(true).toBe(true)`, tests made in a loop, and a moved or missing base.
 
 **Prior art** (ADR 0042): trustbut (a diff-based classifier with a labelled pilot, no measured rate) and skylos's done gate (tree-sitter for JS/TS, matches tests by similarity, no published rate) are the closest; goodhart turned out to be an RL reward-config analyser, not prior art for this.
 
@@ -138,9 +141,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 - **A file with syntax errors is "not checked"** on both sides, and listed.
 - Without a base (outside git, a clean default branch without upstream) the guard does not run.
 
-**Measured:** the binary grew 66,784 B (+0.8%, 8,796,912 to 8,863,696 B); no grammar was added. Build times (86 s before, 68 s after) were each taken once with other work running, so the difference is noise.
+**Measured:** the binary grew 89,568 B (+1.0%, 8,796,912 to 8,886,480 B); no grammar was added. Build times (86 s before, 69 s after) were each taken once with other work running, so the difference is noise.
 
-**Tests changed on purpose, none weakened:** `verify.test.ts` pins the error that lists every `verify` key; the list now has `tamper`.
+**Tests changed on purpose, none weakened:** `verify.test.ts` pins the error that lists every `verify` key; the list now has `tamper`. In `tamper.test.ts`, an unreadable file was first expected to give no finding; after the review it must give a `not-checked` finding, which is stricter.
 
 ## M22 — Faster generated CI and a shared cache
 
