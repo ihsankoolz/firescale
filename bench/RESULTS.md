@@ -2,6 +2,34 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## M23: the tamper guard
+
+Measured on 2026-11-13 on the build machine (Linux x64, 4 cores).
+
+### The labelled corpus
+
+`node bench/tamper-rates.mjs --bin target/debug/fscale` runs the 27 cases of `bench/tamper-corpus.json` (ADR 0042) through `fscale verify --json`, each in its own git repo:
+
+| Kind              | Cases that must give it | Caught | Missed |
+| ----------------- | ----------------------- | ------ | ------ |
+| test-deleted      | 3                       | 3      | 0      |
+| test-skipped      | 6                       | 6      | 0      |
+| assertion-removed | 8                       | 8      | 0      |
+
+- 13 cases must give at least one finding (17 findings in all); 14 must give none.
+- **False positives on the corpus: 0.** No not-a-finding case gave a finding (0 of 14), and no caught case gave a kind it does not have.
+- The not-a-finding cases are the honest edits ADR 0042 lists: a renamed test and suite, a test moved to another file, a test file renamed, a test split in two, stricter assertions (`toStrictEqual`, `assert.strictEqual`), a reformatted file, an assertion moved into a helper in the same file, tests deleted with the module they test (whole file, and one test in a kept file), tests added, a skipped test turned back on, a change outside the tests.
+- These counts show the guard does what the ADR says on cases written alongside it. They are not a measured false-positive rate on real changes; M26 measures that on a corpus that was not.
+
+### Binary size and build time
+
+| Release build of `fscale`                      | Before M23 (`1b98a8d`) | After M23                      |
+| ---------------------------------------------- | ---------------------- | ------------------------------ |
+| Binary size                                    | 8,796,912 B            | 8,863,696 B (+66,784 B, +0.8%) |
+| Clean `cargo build --release -p firescale-cli` | 86 s                   | 68 s                           |
+
+M23 adds no grammar (ADR 0042): the 66 KB are the guard's own code. The two build times were each measured once, with other work running on the machine, so their difference is noise; ADR 0033 measured what tree-sitter itself costs (51 s to 69 s, 3.9 MB to 8.2 MB).
+
 ## M21: blame-aware verify and the stop hook
 
 Release build, Linux x64 local container (4 vCPUs), Node 22, 2026-11-13, `bench/blame-bench.mjs --runs 30`. Each repo is on a `feature` branch off `main`, with one change. "Cold" empties the base store (`.firescale/base/`) before each run, so the base commit is checked out in a worktree and the step runs there; "warm" keeps it, so the base result is read back.

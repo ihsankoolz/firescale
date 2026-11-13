@@ -44,6 +44,7 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - Definition of done (from M7 on): `pnpm fscale verify`. The agent hooks in `.claude/`, `.codex/` and `.cursor/` run it when you try to stop.
 - Verify latency benchmark: `cargo build --release -p firescale-cli`, then `node bench/verify-bench.mjs`
 - Blame-aware verify and stop hook latency: `cargo build --release -p firescale-cli`, then `node bench/blame-bench.mjs`
+- Tamper guard on its labelled corpus (caught, missed, false positives): `pnpm build`, then `node bench/tamper-rates.mjs`
 
 ## Hard rules
 

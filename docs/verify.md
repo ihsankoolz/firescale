@@ -104,6 +104,18 @@ Compared with the base commit 3f2a9c1 (main): 1 step with the same inputs as on 
 
 When every failure is pre-existing, verify exits 0 with the result `pre-existing` and the headline `verify: OK - no new failures; pre-existing (fails on the base commit 3f2a9c1 too): lint`. It never reads as a plain `OK`. The stop hook lets an agent stop then, since nothing it did broke.
 
+## The tamper guard
+
+With a base commit, verify also compares the **test files the change touches** with the base (ADR 0042): JavaScript and TypeScript files named `*.test.*` or `*.spec.*`, or in a `__tests__`, `test`, `tests` or `spec` folder. Each is parsed with tree-sitter on the base and now, and three things are counted over all of them together:
+
+- **tests** (`it`, `test` and their forms, by `describe` path and title): fewer than on the base is `test-deleted`;
+- **skipped and focused tests** (`.skip`, `.todo`, `x…`, a skipped `describe`; `.only`): more than on the base is `test-skipped`;
+- **assertions** (`expect(…)`, `assert(…)`, `assert.…(…)`): fewer than on the base is `assertion-removed`.
+
+Because the counts are net over the whole change and come from the syntax tree, a renamed test, a test moved to another file, a test split in two, a reformatted file and an assertion replaced by a stricter one are not findings. A test deleted together with every module of the repo it uses is not counted. A file with syntax errors is listed as not checked.
+
+Findings are **report-only** by default: they are listed with file and line (a deleted test or assertion at its line on the base commit), and the headline says how many (`verify: OK - tamper guard: 3 report-only findings`). To make them fail verify, set `"tamper": "enforced"` under `verify` in the config. **The setting is read from the base commit**, never from the working tree, so a change cannot turn the guard off, or on, for itself: it takes effect once merged. `"off"` turns it off.
+
 ## The step cache
 
 A lint, typecheck or test step that **passed** is remembered on this machine, in `.firescale/steps/`, and is not run again while nothing it depends on has changed (ADR 0036). Only passes are kept: a step that failed, needs setup, timed out, was stopped or skipped always runs again.

@@ -22,6 +22,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M23) The tamper guard is report-only until the default branch's config says `"tamper": "enforced"`** (ADR 0042). Say if new repos from `fscale init` should start enforced.
+- **(M23) Net counts can miss one swap**: a test deleted while an unrelated one is added. Test-by-test matching (skylos's approach) would catch it at the cost of a similarity threshold.
 - **(M22) Laptops do not read the shared cache** (ADR 0041, PLAN "Later").
 - **(M22) The generated workflow runs `--jobs 2`**: edit it if your projects share a test database.
 - **(M22) I added `docs.github.com` to your Default cloud environment's allowed hosts** to read GitHub's docs. Remove it in the environment settings if you prefer.
@@ -114,6 +116,31 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M23 — Tamper guard: design and the first language
+
+**Built** (ADR 0042, `docs/verify.md` "The tamper guard"):
+
+1. **The reader** (`crates/core/src/tamper.rs`): each changed JS/TS test file (`*.test.*`, `*.spec.*`, or in `__tests__`, `test`, `tests`, `spec`) is parsed with the tree-sitter grammars M17 added, on the base commit (`git show`) and in the working tree. It reads every test (`it`, `test` and their forms) by `describe` path and title, whether it is skipped (`.skip`, `.todo`, `.skipIf`, `.fixme`, `x…`, a skipped suite) or focused (`.only`, `f…`), and every assertion (`expect(…)`, `assert(…)`, `assert.…(…)`, once per chain). Comments and strings are not code, so a commented-out assertion counts as removed.
+2. **The comparison**: net counts over all the changed test files together. Fewer tests is `test-deleted`, more skipped or focused tests is `test-skipped`, fewer assertions is `assertion-removed`; each finding names the file and line (on the base for what was deleted). A test deleted together with every repo module it uses (its subject) is left out.
+3. **The base and the policy**: the base blame-aware verify resolves; `verify.tamper` (`off`, `evaluated`, `enforced`) read from the base commit's `firescale.config.json` only. A change that turns it off, or on, does not affect itself.
+4. **Report-only by default**: findings are listed and named in the headline (`verify: OK - tamper guard: 3 report-only findings`); with `"enforced"` on the base, verify fails "at the tamper guard" and the stop hook blocks. `--json` has a `tamper` object (schema 6, a new optional field).
+5. **A labelled corpus** (`bench/tamper-corpus.json`, 27 cases, 13 to catch and 14 honest edits) run by `tamper.test.ts` and counted by `bench/tamper-rates.mjs`: 17 of 17 findings caught, 0 false positives (`bench/RESULTS.md`).
+
+**Prior art** (ADR 0042): trustbut (a diff-based classifier with a labelled pilot, no measured rate) and skylos's done gate (tree-sitter for JS/TS, matches tests by similarity, no published rate) are the closest; goodhart turned out to be an RL reward-config analyser, not prior art for this.
+
+**Decided on your behalf:**
+
+- **Net counts, not test-by-test matching.** A rename, a move and a split need no similarity threshold; the cost is that deleting one test while adding an unrelated one is not reported.
+- **"Deleted with its subject"** means: the test is gone, it uses names imported from repo modules, and every one of those modules is deleted in the same change. A test that uses no imported name (it builds its own data) is never excused.
+- **`.only` counts as `test-skipped`**, since it stops the file's other tests from running.
+- **Assertions are `expect`, `assert` and `assert.*` only.** `should`, `t.is` and custom helpers are not counted (a miss, never a false positive). An assertion moved into a helper module outside the test folders counts as removed (a false positive).
+- **A file with syntax errors is "not checked"** on both sides, and listed.
+- Without a base (outside git, a clean default branch without upstream) the guard does not run.
+
+**Measured:** the binary grew 66,784 B (+0.8%, 8,796,912 to 8,863,696 B); no grammar was added. Build times (86 s before, 68 s after) were each taken once with other work running, so the difference is noise.
+
+**Tests changed on purpose, none weakened:** `verify.test.ts` pins the error that lists every `verify` key; the list now has `tamper`.
 
 ## M22 — Faster generated CI and a shared cache
 

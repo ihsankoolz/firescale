@@ -544,7 +544,9 @@ Decisions in ADR 0041, with what GitHub's docs said on 2026-11-13. The pull requ
 
 ---
 
-## M23 — Tamper guard: design and the first language ☐
+## M23 — Tamper guard: design and the first language ☑
+
+Decisions in ADR 0042: net counts over the changed test files, from tree-sitter syntax trees of the base and the working tree; the policy (`verify.tamper`) from the base commit's config; report-only unless that says `enforced`. A test deleted with every module it uses is not counted. No new grammar.
 
 **Build**
 
@@ -556,9 +558,9 @@ Decisions in ADR 0041, with what GitHub's docs said on 2026-11-13. The pull requ
 
 **Done when**
 
-- ☐ Skipping a test, deleting a test and removing an assertion are each caught in JavaScript and TypeScript fixture repos.
-- ☐ Moving a test to another file, renaming it, and adding tests are not findings.
-- ☐ Binary size and build time before and after are in `bench/RESULTS.md`.
+- ☑ Skipping a test, deleting a test and removing an assertion are each caught in JavaScript and TypeScript fixture repos.
+- ☑ Moving a test to another file, renaming it, and adding tests are not findings.
+- ☑ Binary size and build time before and after are in `bench/RESULTS.md`.
 
 ---
 
