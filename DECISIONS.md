@@ -8,8 +8,6 @@ Nothing is owed. The last open item, M6's npm install test on Windows, passed on
 
 History: GitHub Actions stopped starting jobs on 2026-11-11 (the account's monthly limit), so M6 was merged on Linux results only, and M7's first two runs did not execute. Both were made up later the same day. If jobs ever end within seconds with no logs again, list here what is unproven on macOS or Windows.
 
-**Owed from M17:** tree-sitter is C code. The two release targets that are cross-compiled (macOS x64 on an Arm runner, Windows Arm64 on an x64 runner) have not built it yet; CI builds only the runner's own target. The first Release run (tag `v0.2.1` or later) proves them; if one fails, the fix is in the release workflow, not in the code.
-
 Still not measured anywhere: verify latency on macOS and Windows. The `bench` job runs the 50k-file check benchmark, not `bench/verify-bench.mjs`.
 
 ## Real repos used for testing
@@ -96,6 +94,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 ## M17 follow-up — files that affect no project, and the cross-compiled builds
 
 **Built** (ADR 0034): a changed file that no project owns and that cannot change a build or a test affects no project with `verify --affected`: Markdown, text files (not requirement or constraint lists, not `CMakeLists.txt`), a licence, and anything under the root `docs/`. `check` still runs, and a note names the files. Every other unowned file still runs everything. Tests: `a_root_readme_change_affects_no_project_but_an_unowned_root_script_affects_all` and "runs no project for a root README change, but everything for an unowned root script" in `graph.test.ts`.
+
+**Proven: the cross-compiled release builds compile tree-sitter.** The Release workflow, started by hand on the M17 branch (run 43376342929, 2026-11-13, commit `73d44c2`), built all six platforms with nothing published: `darwin-x64` (cross-compiled on an Arm runner) and `win32-arm64` (cross-compiled on an x64 runner) passed, as did the four native builds and their npm smoke tests. Nothing to fix; no tag was needed.
 
 ## M17 — Project graph and affected verify
 
