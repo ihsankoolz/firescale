@@ -1652,6 +1652,12 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
                 ..Affected::default()
             }
         }
+        Changed::Shallow(note) => {
+            return Affected {
+                everything: Some(note.clone()),
+                ..Affected::default()
+            }
+        }
         Changed::Files(files) => files,
     };
     let mut result = Affected {

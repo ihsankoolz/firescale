@@ -39,6 +39,7 @@ use firescale_core::runs::RunRecord;
 use firescale_core::sarif::format_sarif;
 use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
+use firescale_core::sharedcache::{CiRun, SharedCache};
 use firescale_core::stepcache::{CacheSettings, StepCache};
 use firescale_core::verify::{
     check_project_folders, format_verify_human, format_verify_json, format_verify_plan,
@@ -92,6 +93,9 @@ Options:
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
+  --shared-cache <dir>
+                   verify, in GitHub Actions only: use step results that CI on the
+                   default branch kept in <dir>, and keep them there on a push to it
   --progress       verify: print progress on stderr even when it is not a terminal
   --no-progress    verify: print no progress, even in a terminal
   --cwd <dir>      Run as if started in <dir>
@@ -126,6 +130,7 @@ struct Args {
     /// `--progress` (true) or `--no-progress` (false).
     progress: Option<bool>,
     jobs: Option<String>,
+    shared_cache: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -184,7 +189,8 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     _ => args.json = true,
                 }
             }
-            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs" => {
+            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs"
+            | "--shared-cache" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -201,6 +207,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--bin" => args.bin = Some(value),
                     "--packs" => args.packs = Some(value),
                     "--jobs" => args.jobs = Some(value),
+                    "--shared-cache" => args.shared_cache = Some(value),
                     _ => args.cwd = Some(value),
                 }
             }
@@ -271,11 +278,15 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let mut notes = selection.notes;
     if args.affected {
         let changed = changed_files(root, args.base.as_deref())?;
-        if changed == Changed::Everything {
-            notes.push(
+        match &changed {
+            Changed::Everything => notes.push(
                 "note: --affected found no commit to compare with, so every file counts as changed."
                     .to_owned(),
-            );
+            ),
+            Changed::Shallow(note) => notes.push(format!(
+                "note: --affected: {note}. Every file counts as changed."
+            )),
+            Changed::Files(_) => {}
         }
         narrow_report(&mut report, &detect_facts(root)?, &changed);
     }
@@ -902,6 +913,7 @@ fn verify_plan(
         Changed::Everything => notes.push(
             "--affected found no commit to compare with (not a git repo, or no commit yet), so every project ran.".to_owned(),
         ),
+        Changed::Shallow(note) => notes.push(format!("--affected: {note}. Every project ran.")),
         Changed::Files(files) if files.is_empty() && base.is_none() => {
             set.everything = Some(
                 "nothing changed since the last commit and no --base was given, so there is nothing to compare with".to_owned(),
@@ -1060,6 +1072,44 @@ fn verify_report(
             .then(|| build_graph(root, &facts))
     });
     let read_env = |name: &str| firescale_core::stepcache::process_env(name);
+    // In GitHub Actions every key also holds the workflow file, and the
+    // shared cache of CI is read and, on the default branch, written
+    // (ADR 0041). Laptops never read it.
+    let ci = CiRun::from_env(&|name| env::var(name).ok(), root);
+    let mut shared_note = None;
+    let shared = match (&args.shared_cache, &ci) {
+        (Some(dir), Some(run)) => {
+            let dir = Path::new(dir);
+            let dir = normalize(&if dir.is_absolute() {
+                dir.to_path_buf()
+            } else {
+                root.join(dir)
+            });
+            let root_path = normalize(root);
+            let firescale = root_path.join(".firescale");
+            // The records' own folder only: never the repo, a folder above
+            // it, or firescale's other folders.
+            let unsafe_dir = root_path.starts_with(&dir)
+                || (dir.starts_with(&firescale) && !dir.starts_with(firescale.join("shared")));
+            if unsafe_dir {
+                shared_note = Some(format!(
+                    "--shared-cache {} was not used: it must be a folder of its own, such as .firescale/shared, not the repo, a folder above it, or another firescale folder.",
+                    args.shared_cache.as_deref().unwrap_or_default()
+                ));
+                None
+            } else {
+                if !run.writes() && run.default_ref().is_none() {
+                    shared_note = Some("--shared-cache: the event names no default branch, so no shared step result is used.".to_owned());
+                }
+                Some(SharedCache::new(dir, run.clone()))
+            }
+        }
+        (Some(_), None) => {
+            shared_note = Some("--shared-cache is used only in GitHub Actions (GITHUB_ACTIONS=true); on this machine the shared cache is neither read nor written.".to_owned());
+            None
+        }
+        (None, _) => None,
+    };
     let cache = StepCache::new(
         root,
         graph,
@@ -1070,7 +1120,8 @@ fn verify_report(
             machine: firescale_core::stepcache::this_machine(),
             read_env: &read_env,
         },
-    );
+    )
+    .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
     let options = RunOptions {
         stop: &STOP,
         progress: progress.as_ref(),
@@ -1137,6 +1188,7 @@ fn verify_report(
         say("stopped: every command verify started has been stopped");
     }
     let mut notes = outcome.warnings;
+    verify.notes.extend(shared_note);
     // FSCALE_LOG=cache shows, per step, whether its result came from the cache.
     if env::var("FSCALE_LOG").is_ok_and(|value| value.split(',').any(|part| part == "cache")) {
         notes.extend(cache.log());

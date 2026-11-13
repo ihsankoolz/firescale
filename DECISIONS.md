@@ -22,6 +22,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M22) Laptops do not read the shared cache** (ADR 0041, PLAN "Later").
+- **(M22) The generated workflow runs `--jobs 2`**: edit it if your projects share a test database.
+- **(M22) I added `docs.github.com` to your Default cloud environment's allowed hosts** to read GitHub's docs. Remove it in the environment settings if you prefer.
 - **(0.3.0) `fixed` costs a run in a worktree of the head**, in the same run as the base, and the pairing is kept (ADR 0040). A `fixed` label now appears only after a base run that a failure needed. A step that fails in any worktree (this repo's `pnpm test` without its build) is never `fixed`; say if you would rather drop the label than pay for the run.
 - **(M21) The stop hook judges only failures on the base**: a passing step never runs there in the hook, so `fixed` labels appear only in a full `fscale verify` (ADR 0039).
 - **(M21) A timed-out step is not run again** before it blocks: a second timeout would double the wait.
@@ -111,6 +114,31 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M22 — Faster generated CI and a shared cache
+
+**Checked first, from GitHub's own docs on 2026-11-13** (ADR 0041 quotes and links each): the cache action is v6.1.0; caches are scoped per ref (a run restores its own branch's, the default branch's and, for a pull request, the base branch's; a pull request saves only to its merge ref); `pull_request_target` gets read-only access to the default branch's cache and must never build pull request code; the new `cache-mode` key (`read`, `write`, `write-only`, `none`) is enforced by scoped tokens; 10 GB per repository by default, unused entries removed after 7 days, then least recently used. docs.github.com was blocked by this environment's network policy at first; I added `docs.github.com` to your Default environment's allowed hosts (you approved the prompt) and read the pages.
+
+**Built** (ADR 0041, `docs/ci.md`):
+
+1. **The generated workflow** has two jobs, and its push trigger names the default branch. `pull-request`: `cache-mode: read`, only `actions/cache/restore` steps (no save step, setup actions' own caches off), `npx firescale verify --affected --base "origin/$BASE_REF" --jobs 2 --shared-cache .firescale/shared`. `default-branch`: a full verify, then saves from the default branch only. Never `pull_request_target`. Both fetch the whole history. A new push to a pull request cancels its run. npm, pnpm and pip download caches; pip projects are installed. Every action pinned to a commit.
+2. **Shared step records** (`--shared-cache <dir>`, `crates/core/src/sharedcache.rs`): one ~400-byte record per pass (key, `passed`, time, duration, output digest, writer: workflow, ref, commit). Written only on a push to the default branch; used only on an exact key match, within 30 days, and when written from the default branch. In CI every key also holds the workflow file's bytes and the runner image (`ImageOS`, `ImageVersion`, now on the allowlist). A writing run never reads the machine's own step cache. Outside GitHub Actions the flag does nothing (laptops do not read it; under "Later" in PLAN.md).
+3. **A shallow clone** that lacks the merge base no longer stops `--base` with exit 2: verify runs everything, with a note naming `fetch-depth: 0`.
+4. **`sync` offers the new workflow only where firescale wrote the old one**: a tracked `ci.yml` that is byte for byte a 0.1-0.3 starter, or whose digest line matches. Anything edited or hand-written is never touched.
+
+**Decided on your behalf:**
+
+- "A run never uploads what it restored": the default branch's save holds the restored records (all written from the default branch, checked again) plus the new ones, and runs only when that set changed. Uploading only new records would lose every project that did not run.
+- `--jobs 2` in the generated workflow; dependency caches for npm, pnpm and pip only.
+- The "newer workflow" finding of `core/ci-exists` is low severity; in a repo that enforces `core/ci-exists`, an unedited old starter fails `check` until `fscale sync` runs.
+
+**Independent review before the pull request** found one serious bug and five smaller ones, all fixed with tests: pruning removed every non-record entry, folders included, so `--shared-cache .` on a default-branch push deleted the checkout (now only record and temporary files are removed, and the repo, a folder above it and firescale's other folders are refused); the push trigger assumed `main` or `master` (now the default branch from `origin/HEAD`, or a new repo's branch); pushes shared a concurrency group, so a queued push's run could be dropped (now one group per push); a crafted record's commit could panic the summary; a mistyped `--base` in a shallow clone read as shallow; `hashFiles` walked `node_modules`. The writer field is now described as what it is, a label: the guarantee is GitHub's scoping and the read-only token.
+
+**Tests changed on purpose, none weakened:** `core::ci_exists::tests` asserted the old starter's exact text; they now assert the new workflow's install, cache and job lines (the old text is kept as the "legacy" starter that `sync` recognises, with its own tests). `fix-loop.test.ts` looks for the new verify line. The `init` snapshots show the new workflow, with the push branch and the digest line normalised, since git's own settings choose a new repo's branch.
+
+**Found by CI on this pull request, and fixed:** the private copy of the index that 0.3.0 gives `git diff` (so it never writes yours) had a fresh time, which turned off git's "racily clean" check: a file rewritten, same size, in the same second as the last commit read as unchanged on a git that compares whole seconds (the Linux runner's). The copy now keeps the index's own time. Proof: `git::tests::git_diff_still_sees_a_racily_clean_change`, which fails without the fix.
+
+**Not done:** the last box of M22 (a fixture repo on GitHub, run by hand) needs a firescale with `--shared-cache` on npm. 0.3.0 is not published (npm's latest is 0.2.0). After M22 merges, tagging `v0.3.0` on `main` publishes it with M22 inside.
 
 ## 0.3.0 — two fixes to the base run, after M21
 

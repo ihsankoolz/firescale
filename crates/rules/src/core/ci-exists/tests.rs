@@ -336,22 +336,77 @@ mod untracked_ci {
 mod fixed_repo {
     use super::*;
 
+    /// The pull request job: from its header to the blank line before the
+    /// next job.
+    fn pull_request_job(text: &str) -> &str {
+        let start = text.find("  pull-request:\n").unwrap();
+        let end = text[start..].find("\n\n").unwrap();
+        &text[start..start + end]
+    }
+
     #[test]
-    fn an_empty_repo_gets_the_starter_workflow_and_it_is_tracked() {
+    fn an_empty_repo_gets_the_workflow_and_it_is_tracked() {
         let f = Fixture::new(&[], Track::All).unwrap();
         let result = fix(&f);
         assert_eq!(result.changed_files, [STARTER]);
-        assert_eq!(
-            result.notes,
-            ["Review .github/workflows/ci.yml: it runs `npx firescale verify`. Add anything your project needs before that step (services, secrets, other toolchains)."]
-        );
-        assert_eq!(f.read(STARTER).unwrap(), format!("{HEAD}{TAIL}"));
+        assert_eq!(result.notes.len(), 1);
+        assert!(result.notes[0].starts_with("Review .github/workflows/ci.yml"));
+        let text = f.read(STARTER).unwrap();
+        assert!(super::super::workflow::firescale_wrote(&text));
+        assert!(text.contains("      - run: npx firescale verify --affected --base \"origin/$BASE_REF\" --jobs 2 --shared-cache .firescale/shared\n"));
+        assert!(text.contains(
+            "      - run: npx firescale verify --jobs 2 --shared-cache .firescale/shared\n"
+        ));
+        assert!(!text.contains("setup-python"));
+        assert!(!text.contains("npm ci"));
         assert_eq!(f.tracked().unwrap(), [STARTER]);
         assert!(check(&f).is_empty());
     }
 
     #[test]
-    fn npm_with_a_lockfile_installs_with_npm_ci() {
+    fn the_pull_request_job_restores_and_can_never_save() {
+        let f = Fixture::new(
+            &[
+                ("package.json", "{\"name\":\"demo\"}\n"),
+                ("package-lock.json", "{}\n"),
+                ("svc/requirements.txt", "requests\n"),
+                ("svc/main.py", "x = 1\n"),
+                ("svc/pytest.ini", ""),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        fix(&f);
+        let text = f.read(STARTER).unwrap();
+        let job = pull_request_job(&text);
+        assert!(job.contains("    cache-mode: read\n"));
+        assert!(job.contains("actions/cache/restore@"));
+        assert!(!job.contains("actions/cache@"));
+        assert!(!job.contains("actions/cache/save@"));
+        // The setup actions save their own caches in a post step: off here.
+        assert!(job.contains("package-manager-cache: false"));
+        assert!(!job.contains("cache: npm") && !job.contains("cache: pip"));
+        assert!(!text.contains("pull_request_target"));
+        // Saves only in the job for pushes, and only on the default branch.
+        assert_eq!(text.matches("actions/cache/save@").count(), 3);
+        assert_eq!(
+            text.matches("github.ref_name == github.event.repository.default_branch")
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn both_jobs_fetch_the_whole_history_and_pull_requests_cancel_superseded_runs() {
+        let f = Fixture::new(&[], Track::All).unwrap();
+        fix(&f);
+        let text = f.read(STARTER).unwrap();
+        assert_eq!(text.matches("          fetch-depth: 0\n").count(), 2);
+        assert!(text.contains("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"));
+    }
+
+    #[test]
+    fn npm_with_a_lockfile_installs_with_npm_ci_and_caches_npm_downloads() {
         let f = Fixture::new(
             &[
                 ("package.json", "{\"name\":\"demo\"}\n"),
@@ -361,10 +416,9 @@ mod fixed_repo {
         )
         .unwrap();
         assert_eq!(fix(&f).notes.len(), 1);
-        assert_eq!(
-            f.read(STARTER).unwrap(),
-            format!("{HEAD}      - run: npm ci\n{TAIL}")
-        );
+        let text = f.read(STARTER).unwrap();
+        assert_eq!(text.matches("      - run: npm ci\n").count(), 2);
+        assert!(text.contains("run: echo \"dir=$(npm config get cache)\" >> \"$GITHUB_OUTPUT\""));
         assert!(check(&f).is_empty());
     }
 
@@ -380,8 +434,11 @@ mod fixed_repo {
         .unwrap();
         fix(&f);
         assert_eq!(
-            f.read(STARTER).unwrap(),
-            format!("{HEAD}      - run: npm install\n{TAIL}")
+            f.read(STARTER)
+                .unwrap()
+                .matches("      - run: npm install\n")
+                .count(),
+            2
         );
     }
 
@@ -396,11 +453,35 @@ mod fixed_repo {
         )
         .unwrap();
         fix(&f);
-        assert_eq!(
-            f.read(STARTER).unwrap(),
-            format!("{HEAD}      - run: npm install --global pnpm\n      - run: pnpm install --frozen-lockfile\n{TAIL}")
-        );
+        let text = f.read(STARTER).unwrap();
+        let job = pull_request_job(&text);
+        let pnpm = job.find("- run: npm install --global pnpm").unwrap();
+        let store = job.find("pnpm store path --silent").unwrap();
+        let install = job.find("- run: pnpm install --frozen-lockfile").unwrap();
+        assert!(pnpm < store && store < install);
         assert!(check(&f).is_empty());
+    }
+
+    #[test]
+    fn python_projects_install_with_pip_into_the_runner_s_python() {
+        let f = Fixture::new(
+            &[
+                ("svc/requirements.txt", "requests\n"),
+                ("svc/requirements-dev.txt", "pytest\n"),
+                ("svc/main.py", "x = 1\n"),
+                ("svc/pytest.ini", ""),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        fix(&f);
+        let text = f.read(STARTER).unwrap();
+        assert_eq!(text.matches("actions/setup-python@").count(), 2);
+        assert_eq!(
+            text.matches("      - run: python -m pip install -r requirements.txt -r requirements-dev.txt\n        working-directory: svc\n").count(),
+            2
+        );
+        assert!(text.contains("python-version: \"3.x\""));
     }
 
     #[test]
@@ -415,8 +496,11 @@ mod fixed_repo {
             assert_eq!(result.notes.len(), 2, "{manager}");
             assert!(result.notes[1].contains("no install step"), "{manager}");
             assert_eq!(
-                f.read(STARTER).unwrap(),
-                format!("{HEAD}      # Add the step that installs your dependencies here.\n{TAIL}"),
+                f.read(STARTER)
+                    .unwrap()
+                    .matches("      # Add the step that installs your dependencies here.\n")
+                    .count(),
+                2,
                 "{manager}"
             );
             assert!(check(&f).is_empty(), "{manager}");
@@ -544,5 +628,175 @@ mod never_overwrites {
         let f = Fixture::new(&[(STARTER, PUSH_ONLY)], Track::All).unwrap();
         assert_untouched(&f, &[STARTER]);
         assert_eq!(f.read(STARTER).unwrap(), PUSH_ONLY);
+    }
+}
+
+mod sync_offers_the_newer_workflow {
+    use super::*;
+
+    #[test]
+    fn an_old_starter_nobody_edited_is_offered_the_new_workflow() {
+        for (extra, install) in [
+            (None, ""),
+            (Some(("package-lock.json", "{}\n")), "      - run: npm ci\n"),
+        ] {
+            let mut files = vec![(STARTER, format!("{HEAD}{install}{TAIL}"))];
+            files.push(("package.json", "{\"name\":\"demo\"}\n".to_owned()));
+            if let Some((name, text)) = extra {
+                files.push((name, text.to_owned()));
+            }
+            let borrowed: Vec<(&str, &str)> = files
+                .iter()
+                .map(|(name, text)| (*name, text.as_str()))
+                .collect();
+            let f = Fixture::new(&borrowed, Track::All).unwrap();
+            let d = check(&f);
+            assert_eq!(d.len(), 1, "{install}");
+            assert_eq!(d[0].fixable, Fixable::Deterministic);
+            assert_eq!(d[0].severity, Some(Severity::Low));
+            assert!(d[0].message.contains("`fscale sync` replaces it"));
+            let result = fix(&f);
+            assert_eq!(result.changed_files, [STARTER]);
+            let text = f.read(STARTER).unwrap();
+            assert!(text.contains("cache-mode: read"));
+            assert!(super::super::workflow::firescale_wrote(&text));
+            assert!(check(&f).is_empty());
+            // Idempotent.
+            assert!(fix(&f).changed_files.is_empty());
+        }
+    }
+
+    #[test]
+    fn an_old_starter_with_crlf_line_endings_counts_as_unedited() {
+        let text = format!("{HEAD}{TAIL}").replace('\n', "\r\n");
+        let f = Fixture::new(&[(STARTER, text.as_str())], Track::All).unwrap();
+        assert_eq!(check(&f).len(), 1);
+    }
+
+    #[test]
+    fn an_edited_starter_is_never_rewritten() {
+        let edited = format!("{HEAD}      - run: make setup\n{TAIL}");
+        let f = Fixture::new(&[(STARTER, edited.as_str())], Track::All).unwrap();
+        assert!(check(&f).is_empty());
+        assert!(fix(&f).changed_files.is_empty());
+        assert_eq!(f.read(STARTER).unwrap(), edited);
+    }
+
+    #[test]
+    fn an_edited_new_workflow_is_never_rewritten() {
+        let f = Fixture::new(&[], Track::All).unwrap();
+        fix(&f);
+        let text = f.read(STARTER).unwrap().replace("--jobs 2", "--jobs 4");
+        std::fs::write(
+            f.root().join(".github").join("workflows").join("ci.yml"),
+            &text,
+        )
+        .unwrap();
+        assert!(!super::super::workflow::firescale_wrote(&text));
+        assert!(check(&f).is_empty());
+        assert!(fix(&f).changed_files.is_empty());
+        assert_eq!(f.read(STARTER).unwrap(), text);
+    }
+
+    #[test]
+    fn a_hand_written_workflow_is_never_offered_anything() {
+        let f = Fixture::new(&[(STARTER, PR_WORKFLOW)], Track::All).unwrap();
+        assert!(check(&f).is_empty());
+        assert!(fix(&f).changed_files.is_empty());
+        assert_eq!(f.read(STARTER).unwrap(), PR_WORKFLOW);
+    }
+
+    #[test]
+    fn an_untracked_old_starter_is_not_offered_anything() {
+        let f = Fixture::new(&[(STARTER, &format!("{HEAD}{TAIL}"))], Track::None).unwrap();
+        assert!(fix(&f).changed_files.is_empty());
+        assert_eq!(f.read(STARTER).unwrap(), format!("{HEAD}{TAIL}"));
+    }
+}
+
+mod the_push_trigger {
+    use super::*;
+
+    fn git(f: &Fixture, args: &[&str]) {
+        let out = firescale_core::git::run_git(f.root(), args).unwrap();
+        assert_eq!(out.code, 0, "git {args:?}: {}", out.stderr);
+    }
+
+    #[test]
+    fn a_new_repo_runs_pushes_on_its_own_branch() {
+        let f = Fixture::new(&[], Track::All).unwrap();
+        git(&f, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
+        fix(&f);
+        let text = f.read(STARTER).unwrap();
+        assert!(text.contains("  push:\n    branches: [trunk]\n"), "{text}");
+    }
+
+    #[test]
+    fn the_remote_s_default_branch_wins() {
+        let f = Fixture::new(&[("a.txt", "a\n")], Track::All).unwrap();
+        git(
+            &f,
+            &[
+                "-c",
+                "user.name=f",
+                "-c",
+                "user.email=f@example.invalid",
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "-m",
+                "a",
+            ],
+        );
+        git(&f, &["update-ref", "refs/remotes/origin/develop", "HEAD"]);
+        git(
+            &f,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/develop",
+            ],
+        );
+        git(&f, &["checkout", "--quiet", "-b", "feature"]);
+        fix(&f);
+        assert!(f
+            .read(STARTER)
+            .unwrap()
+            .contains("  push:\n    branches: [develop]\n"));
+    }
+
+    #[test]
+    fn with_several_branches_and_no_remote_it_falls_back_to_main_and_master() {
+        let f = Fixture::new(&[("a.txt", "a\n")], Track::All).unwrap();
+        git(
+            &f,
+            &[
+                "-c",
+                "user.name=f",
+                "-c",
+                "user.email=f@example.invalid",
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "-m",
+                "a",
+            ],
+        );
+        git(&f, &["checkout", "--quiet", "-b", "feature"]);
+        fix(&f);
+        assert!(f
+            .read(STARTER)
+            .unwrap()
+            .contains("  push:\n    branches: [main, master]\n"));
+    }
+
+    #[test]
+    fn each_push_has_its_own_concurrency_group() {
+        let f = Fixture::new(&[], Track::All).unwrap();
+        fix(&f);
+        assert!(f
+            .read(STARTER)
+            .unwrap()
+            .contains("  group: ci-${{ github.event.pull_request.number || github.run_id }}\n"));
     }
 }

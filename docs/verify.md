@@ -1,6 +1,6 @@
 # fscale verify
 
-`fscale verify [--affected] [--base <ref>] [--dry-run] [--json] [--jobs <n>] [--no-cache] [--progress | --no-progress]` is the one command that says whether work is done. People, CI and agent hooks all call it. It runs these steps in order:
+`fscale verify [--affected] [--base <ref>] [--dry-run] [--json] [--jobs <n>] [--no-cache] [--shared-cache <dir>] [--progress | --no-progress]` is the one command that says whether work is done. People, CI and agent hooks all call it. It runs these steps in order:
 
 1. `check`: the firescale rules, exactly as `fscale check` runs them. It fails when an enforced rule has violations. **When `check` fails, nothing else runs.**
 2. `lint`, `typecheck` and `test` at the repo root.
@@ -112,7 +112,7 @@ The key of a pass is a hash of the firescale version, the step, its folder and c
 
 - **The bytes of the files it can read, as they are now.** Its project's folder, the projects and shared folders it depends on in the project graph ([graph.md](graph.md)), the files directly in each folder above those, and every file that belongs to no project. The files are the tracked ones (uncommitted changes included) and the untracked ones git does not ignore. Bytes, not text: a CRLF checkout is a different key, never a wrong hit. The repo root's own steps cover the whole repo.
 - **The tools and what is installed.** The program the command starts (found on the PATH, by its path, size and time, without running it), the version of known tools by their exact name (Node and its package managers, Python and its managers, Cargo, Go) and of the runtime behind them, the package manager's marker in `node_modules`, and the `pyvenv.cfg` and packages of a `.venv`. A script of the repo is never run for a version.
-- **The OS, the CPU architecture, and the values of a fixed list of environment variables** (`CI`, `NODE_PATH`, `PYTEST_ADDOPTS`, `NODE_ENV`, `NODE_OPTIONS`, `TZ`, `LANG`, `LC_ALL`, `PYTHONPATH`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `PYENV_VERSION`, `RUSTFLAGS`, `RUSTUP_TOOLCHAIN`, `CARGO_BUILD_TARGET`, `GOFLAGS`, `GOOS`, `GOARCH`, `CGO_ENABLED`, `GOTOOLCHAIN`, `JAVA_HOME`). Their values are hashed and never written down. No other variable is read.
+- **The OS, the CPU architecture, and the values of a fixed list of environment variables** (`CI`, `NODE_PATH`, `PYTEST_ADDOPTS`, `NODE_ENV`, `NODE_OPTIONS`, `TZ`, `LANG`, `LC_ALL`, `PYTHONPATH`, `PYTHONHASHSEED`, `VIRTUAL_ENV`, `PYENV_VERSION`, `RUSTFLAGS`, `RUSTUP_TOOLCHAIN`, `CARGO_BUILD_TARGET`, `GOFLAGS`, `GOOS`, `GOARCH`, `CGO_ENABLED`, `GOTOOLCHAIN`, `JAVA_HOME`, and `ImageOS` and `ImageVersion`, which GitHub-hosted runners set to their image). In GitHub Actions the key also holds the bytes of the workflow file the run comes from ([ci.md](ci.md)). Their values are hashed and never written down. No other variable is read.
 
 Each step is keyed on the files as they are when it starts, so a step whose files an earlier step rewrote runs again.
 
@@ -143,6 +143,10 @@ In `--json` such a step keeps the status `passed`, has `durationMs: 0` and a `ca
 - `--no-cache` runs every step and still stores the passes.
 - `FSCALE_LOG=cache fscale verify` prints, per step, `hit`, `miss`, `not cached` with the reason, `stored` or `not stored`.
 - A file git ignores is not in the key: a generated file or a `.env` a test reads can change without a miss. Use `--no-cache` after changing one.
+
+### The shared cache of CI
+
+`--shared-cache <dir>` is for GitHub Actions only: the workflow `fscale init` writes passes it ([ci.md](ci.md), ADR 0041). After a miss in this machine's cache, a step whose whole key matches a record in `<dir>` that CI on the default branch wrote is served from it, and reads `passed from the shared cache of CI (kept by the default branch at abc1234)`; in JSON its `cache` has `sharedFrom`. On a push to the default branch, every pass is written to `<dir>` as a small record (key, result, time, duration, a digest of the output, and who wrote it), and that run never takes a pass from this machine's own cache. Anywhere else, nothing is written. In CI every key also holds the workflow file's bytes and the runner image (`ImageOS`, `ImageVersion`). Outside GitHub Actions the flag does nothing but say so: laptops do not read the shared cache.
 
 ## Running on slow, real projects
 

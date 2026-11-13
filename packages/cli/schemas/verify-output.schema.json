@@ -185,6 +185,10 @@
               "ranAt": {
                 "description": "When it ran, in UTC: 2026-11-13T07:06:00Z.",
                 "type": "string"
+              },
+              "sharedFrom": {
+                "description": "For a result from the shared cache of CI (ADR 0041, --shared-cache in GitHub Actions): the commit of the default branch whose run kept it.",
+                "type": "string"
               }
             }
           },

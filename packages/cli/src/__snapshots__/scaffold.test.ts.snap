@@ -18,29 +18,91 @@ core/ci-exists
 
 --- /dev/null
 +++ b/.github/workflows/ci.yml
-@@ -0,0 +1,22 @@
-+# Created by firescale (core/ci-exists). This file belongs to your team:
-+# edit it freely. firescale will not rewrite it.
+@@ -0,0 +1,84 @@
++# Created by firescale (core/ci-exists). \`fscale sync\` replaces this file
++# with a newer one only while it is exactly as firescale wrote it (the
++# digest on the last line says so). Once you edit it, it is yours, and
++# firescale never rewrites it.
 +name: CI
 +
 +on:
 +  pull_request:
 +  push:
-+    branches: [main, master]
++    branches: [<branch>]
 +
 +permissions:
 +  contents: read
 +
++# A new push to a pull request cancels its run in progress. Each push
++# to a branch has a group of its own, so it is never cancelled: it
++# keeps the shared cache up to date.
++concurrency:
++  group: ci-\${{ github.event.pull_request.number || github.run_id }}
++  cancel-in-progress: \${{ github.event_name == 'pull_request' }}
++
 +jobs:
-+  verify:
++  # Pull requests: only the projects the change reaches, judged against
++  # the base branch. This job restores caches and can never save them.
++  pull-request:
++    if: github.event_name == 'pull_request'
 +    runs-on: ubuntu-latest
++    cache-mode: read
 +    steps:
 +      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          # The whole history, so the merge base with the base branch is here.
++          fetch-depth: 0
++      - id: image
++        run: echo "id=\${ImageOS:-unknown}-\${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 +      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
 +        with:
 +          node-version: 24
++          # Its cache saves in a post step; the caches below are explicit.
++          package-manager-cache: false
++      - id: firescale-cache
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: .firescale/shared
++          key: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-\${{ github.sha }}
++          restore-keys: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-
 +      # Runs check, lint, typecheck and test.
-+      - run: npx firescale verify
++      - run: npx firescale verify --affected --base "origin/$BASE_REF" --jobs 2 --shared-cache .firescale/shared
++        env:
++          BASE_REF: \${{ github.base_ref }}
++
++  # Pushes: everything. On the default branch it also saves the caches
++  # that pull requests restore.
++  default-branch:
++    if: github.event_name == 'push'
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          # The whole history, so the merge base with the base branch is here.
++          fetch-depth: 0
++      - id: image
++        run: echo "id=\${ImageOS:-unknown}-\${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: 24
++          # Its cache saves in a post step; the caches below are explicit.
++          package-manager-cache: false
++      - id: firescale-cache
++        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: .firescale/shared
++          key: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-\${{ github.sha }}
++          restore-keys: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-
++      # Runs check, lint, typecheck and test.
++      - run: npx firescale verify --jobs 2 --shared-cache .firescale/shared
++      # Saved from the default branch only: what pull requests may trust.
++      # Not saved when it holds just what was restored.
++      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        if: \${{ !cancelled() && github.ref_name == github.event.repository.default_branch && hashFiles('.firescale/shared/*.json') != '' && !endsWith(steps.firescale-cache.outputs.cache-matched-key, hashFiles('.firescale/shared/*.json')) }}
++        with:
++          path: .firescale/shared
++          key: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-\${{ hashFiles('.firescale/shared/*.json') }}
++# firescale-workflow: <digest>
 
 core/gitignore-basics
   would create .gitignore
@@ -80,7 +142,7 @@ Left for you afterwards: 2 violations that a fix cannot repair. A person or an a
     How to fix: fscale explain core/scripts-present
 
 To review afterwards:
-  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 "
 `;
@@ -109,7 +171,7 @@ Left for you: 2 violations that a fix cannot repair. A person or an agent has to
     How to fix: fscale explain core/scripts-present
 
 To review:
-  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 
 Next: review the changes with \`git status\` and \`git diff\`, then commit them.
@@ -137,7 +199,7 @@ Done: 4 changes.
 Left for you: no violations.
 
 To review:
-  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 
 Next: review the changes with \`git status\` and \`git diff\`, then commit them.
@@ -228,7 +290,7 @@ To review:
   agent-ready/agents-md: AGENTS.md lists the repo's commands. Describe the project and its conventions above the firescale block.
   agent-ready/verify-hook: Codex runs a project's hooks only in a trusted project, and only after you approve the hook once in Codex (and again after it changes).
   agent-ready/agent-permissions: .cursor/cli.json follows Cursor's CLI permission format as far as it could be checked; Cursor's own docs could not be read when it was written. Check it once in Cursor.
-  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\`. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 
 Next: review the changes with \`git status\` and \`git diff\`, then commit them.

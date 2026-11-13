@@ -107,7 +107,20 @@ impl IndexCopy {
         let copy =
             std::env::temp_dir().join(format!("firescale-index-{}-{nanos}", std::process::id()));
         std::fs::copy(&index, &copy).ok()?;
-        Some(Self(copy))
+        let copied = Self(copy);
+        // Keep the index's own time: git takes an entry whose time is not
+        // older than the index file as "racily clean" and compares its
+        // content. A fresh time on the copy would hide a file rewritten,
+        // same size, in the same second as the last commit.
+        let modified = std::fs::metadata(&index)
+            .and_then(|meta| meta.modified())
+            .ok()?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&copied.0)
+            .and_then(|file| file.set_modified(modified))
+            .ok()?;
+        Some(copied)
     }
 }
 
@@ -309,6 +322,45 @@ impl Git {
     }
 }
 
+/// True when the repo at `cwd` is a shallow clone: its history stops
+/// before the first commit, so a merge base may be missing (ADR 0041).
+#[must_use]
+pub fn is_shallow(cwd: &Path) -> bool {
+    run_git(cwd, &["rev-parse", "--is-shallow-repository"])
+        .is_ok_and(|out| out.code == 0 && out.stdout.trim() == "true")
+}
+
+/// True when `rev` names a commit in the repo at `cwd`.
+#[must_use]
+pub fn resolves(cwd: &Path, rev: &str) -> bool {
+    run_git(
+        cwd,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ],
+    )
+    .is_ok_and(|out| out.code == 0)
+}
+
+/// True when `base` names a commit, but this shallow clone does not hold
+/// its merge base with `HEAD`. A name that does not resolve is a typo, not
+/// a shallow clone.
+#[must_use]
+pub fn shallow_without_merge_base(cwd: &Path, base: &str) -> bool {
+    is_shallow(cwd) && resolves(cwd, base)
+}
+
+/// The note for a base that a shallow clone cannot compare with.
+#[must_use]
+pub fn shallow_note(base: &str) -> String {
+    format!(
+        "this clone is shallow, so it does not hold the merge base with {base}; fetch the full history (in GitHub Actions: actions/checkout with fetch-depth: 0)"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +412,72 @@ mod tests {
         assert_eq!(out.code, 0);
         assert_eq!(out.stdout, "", "the content is the same");
         assert_eq!(std::fs::read(&index).unwrap(), before);
+    }
+
+    #[test]
+    fn git_diff_still_sees_a_racily_clean_change() {
+        let fixture = Fixture::new(&[("a.txt", "one\n")], Track::All).unwrap();
+        let root = fixture.root();
+        let out = run_git(
+            root,
+            &[
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "-m",
+                "base",
+            ],
+        )
+        .unwrap();
+        assert_eq!(out.code, 0, "{}", out.stderr);
+        let file = root.join("a.txt");
+        let index = root.join(".git").join("index");
+        let set = |path: &std::path::Path, when: std::time::SystemTime| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_modified(when)
+                .unwrap();
+        };
+        // An entry that is clean and not smudged: the file is older than
+        // the index git writes now.
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        set(&file, past);
+        let refreshed = run_git_env(
+            root,
+            &["update-index", "--refresh"],
+            &[("GIT_OPTIONAL_LOCKS", "1")],
+        )
+        .unwrap();
+        assert_eq!(refreshed.code, 0, "{}", refreshed.stderr);
+        // Same size, same time as the entry, and the index no newer than it:
+        // only git's racy check, which reads the index file's own time, can
+        // tell the file changed.
+        std::fs::write(&file, "two\n").unwrap();
+        set(&file, past);
+        set(&index, past);
+        // Compare stat data as a git built without nanoseconds does: size
+        // and whole seconds only.
+        let out = run_git(
+            root,
+            &[
+                "-c",
+                "core.checkStat=minimal",
+                "-c",
+                "core.trustctime=false",
+                "diff",
+                "--name-only",
+                "HEAD",
+            ],
+        )
+        .unwrap();
+        assert_eq!(out.stdout.trim(), "a.txt");
     }
 }

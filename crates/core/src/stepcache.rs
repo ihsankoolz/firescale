@@ -51,7 +51,7 @@ pub const MAX_ENTRIES: usize = 500;
 
 /// The environment variables whose values are part of a key. Their values
 /// are hashed and never written down. No other variable is read.
-pub const ENV_ALLOWLIST: [&str; 21] = [
+pub const ENV_ALLOWLIST: [&str; 23] = [
     "CI",
     "NODE_PATH",
     "PYTEST_ADDOPTS",
@@ -73,6 +73,9 @@ pub const ENV_ALLOWLIST: [&str; 21] = [
     "CGO_ENABLED",
     "GOTOOLCHAIN",
     "JAVA_HOME",
+    // The image of a GitHub-hosted runner (ADR 0041).
+    "ImageOS",
+    "ImageVersion",
 ];
 
 /// One file of the working tree, as the key sees it.
@@ -945,6 +948,13 @@ pub struct Entry {
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tests: Option<crate::verify::TestCounts>,
+    /// A blake3 digest of the step's output, for the shared cache's record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_digest: Option<String>,
+    /// For a hit from the shared cache of CI: the commit of the default
+    /// branch that wrote it. Never stored.
+    #[serde(skip)]
+    pub shared_from: Option<String>,
 }
 
 /// The cache folder of a repo.
@@ -1105,6 +1115,11 @@ pub struct StepCache<'a> {
     tools: ToolVersions<'a>,
     read_env: &'a (dyn Fn(&str) -> Option<String> + Sync),
     scopes: std::sync::Mutex<HashMap<UnitSlot, UnitScope>>,
+    /// The shared cache of CI, read on a miss and written on the default
+    /// branch (ADR 0041).
+    shared: Option<crate::sharedcache::SharedCache>,
+    /// Added to every key in CI: the workflow file's digest.
+    salt: Option<String>,
     base_tree: std::sync::Mutex<Option<(String, BaseTree)>>,
     log: std::sync::Mutex<Vec<String>>,
     pending: std::sync::Mutex<Vec<(Scope, String, Entry)>>,
@@ -1155,9 +1170,35 @@ impl<'a> StepCache<'a> {
             tools: ToolVersions::new(settings.machine),
             read_env: settings.read_env,
             scopes: std::sync::Mutex::new(HashMap::new()),
+            shared: None,
+            salt: None,
             base_tree: std::sync::Mutex::new(None),
             log: std::sync::Mutex::new(Vec::new()),
             pending: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Adds what CI adds to every key (the workflow file's digest), and the
+    /// shared cache to read on a miss and, on the default branch, to write
+    /// (ADR 0041).
+    #[must_use]
+    pub fn with_ci(
+        mut self,
+        salt: Option<String>,
+        shared: Option<crate::sharedcache::SharedCache>,
+    ) -> Self {
+        self.salt = salt;
+        self.shared = shared;
+        self
+    }
+
+    /// The key with what CI adds to it.
+    fn salted(&self, key: String) -> String {
+        match &self.salt {
+            None => key,
+            Some(salt) => blake3::hash(format!("{key}\0{salt}").as_bytes())
+                .to_hex()
+                .to_string(),
         }
     }
 
@@ -1242,16 +1283,48 @@ impl<'a> StepCache<'a> {
             &self.tools,
             self.read_env,
         )?;
+        let key = self.salted(key);
         Ok(CacheKey { key, files })
     }
 
-    /// The stored pass for `key`, unless reading is off.
+    /// The stored pass for `key`, unless reading is off: this machine's,
+    /// else a record of the shared cache of CI (ADR 0041).
     #[must_use]
     pub fn hit(&self, key: &CacheKey) -> Option<Entry> {
         if !self.read {
             return None;
         }
-        lookup(&self.root, &key.key)
+        // A run that writes the shared cache never takes a pass from this
+        // machine's own cache: on a runner that is kept between jobs it may
+        // come from a pull request's run, and the record would vouch for it.
+        let writes = self.shared.as_ref().is_some_and(|shared| shared.writes());
+        if !writes {
+            if let Some(entry) = lookup(&self.root, &key.key) {
+                return Some(entry);
+            }
+        }
+        let shared = self.shared.as_ref()?;
+        match shared.lookup(&key.key) {
+            Ok(record) => Some(Entry {
+                format: FORMAT,
+                key: record.key,
+                step: String::new(),
+                project: None,
+                command: String::new(),
+                duration_ms: record.duration_ms,
+                ran_at: record.time,
+                detail: String::new(),
+                tests: None,
+                output_digest: Some(record.output_digest),
+                shared_from: Some(record.writer.commit),
+            }),
+            Err(refusal) => {
+                if refusal != "no record" {
+                    self.note(format!("cache: shared record not used: {refusal}"));
+                }
+                None
+            }
+        }
     }
 
     /// Keeps a pass, to be stored at the end of the run if the files it
@@ -1371,7 +1444,7 @@ impl<'a> StepCache<'a> {
             &self.tools,
             self.read_env,
         )
-        .map(|key| format!("base-{key}"))
+        .map(|key| format!("base-{}", self.salted(key)))
     }
 
     /// The lockfiles and requirements lists among `changed` (the paths that
@@ -1502,6 +1575,19 @@ impl<'a> StepCache<'a> {
                             stored += 1;
                             self.note(format!("cache: stored {place}"));
                         }
+                        if let Some(shared) = self.shared.as_ref().filter(|shared| shared.writes())
+                        {
+                            let digest = entry.output_digest.as_deref().unwrap_or("");
+                            match shared.write(&entry.key, entry.ran_at, entry.duration_ms, digest)
+                            {
+                                Ok(()) => {
+                                    self.note(format!("cache: shared record written for {place}"))
+                                }
+                                Err(error) => self.note(format!(
+                                    "cache: shared record not written for {place}: {error}"
+                                )),
+                            }
+                        }
                     }
                     _ => self.note(format!(
                         "cache: not stored {place}: files it depends on changed while verify ran"
@@ -1510,6 +1596,14 @@ impl<'a> StepCache<'a> {
             }
         }
         clean(&self.root);
+        if let Some(shared) = &self.shared {
+            let removed = shared.prune();
+            if removed > 0 {
+                self.note(format!(
+                    "cache: removed {removed} shared files that were not usable records"
+                ));
+            }
+        }
         stored
     }
 
@@ -1705,6 +1799,29 @@ mod tests {
     }
 
     #[test]
+    fn what_ci_adds_changes_every_key() {
+        let fixture = Fixture::new(&[("a.js", "1\n")], Track::NoGit).unwrap();
+        let settings = |read_env: &'static (dyn Fn(&str) -> Option<String> + Sync)| CacheSettings {
+            version: "1.0.0",
+            read: true,
+            sets_ci: true,
+            machine: this_machine(),
+            read_env,
+        };
+        let none: &'static (dyn Fn(&str) -> Option<String> + Sync) = &|_| None;
+        let key = |salt: Option<&str>| {
+            StepCache::new(fixture.root(), None, &settings(none))
+                .with_ci(salt.map(str::to_owned), None)
+                .key(None, None, "test", "node -e 0", fixture.root())
+                .unwrap()
+                .key
+        };
+        assert_eq!(key(None), key(None));
+        assert_ne!(key(None), key(Some("ci-workflow\0a")));
+        assert_ne!(key(Some("ci-workflow\0a")), key(Some("ci-workflow\0b")));
+    }
+
+    #[test]
     fn an_unreadable_input_is_never_cached() {
         let snapshot = Snapshot {
             files: BTreeMap::from([(
@@ -1798,6 +1915,8 @@ mod tests {
             ran_at: now_secs(),
             detail: String::new(),
             tests: None,
+            output_digest: None,
+            shared_from: None,
         };
         for key in ["a", "b", "c", "d"] {
             store(root, &entry(key)).unwrap();
@@ -1935,6 +2054,8 @@ mod tests {
             ran_at: now_secs() - MAX_AGE.as_secs() - 10,
             detail: String::new(),
             tests: None,
+            output_digest: None,
+            shared_from: None,
         };
         store(fixture.root(), &entry).unwrap();
         assert!(lookup(fixture.root(), "k").is_none());
