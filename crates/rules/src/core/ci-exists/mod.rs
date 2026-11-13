@@ -295,7 +295,49 @@ pub(crate) fn create_starter(ctx: &RuleContext) -> Result<FixResult> {
 fn current_setup(ctx: &RuleContext) -> Result<workflow::Setup> {
     let facts = detect_facts(ctx.root())?;
     let has_python_version = on_disk(ctx.root(), ".python-version").is_file();
-    Ok(workflow::Setup::from_facts(&facts, has_python_version))
+    let mut setup = workflow::Setup::from_facts(&facts, has_python_version);
+    setup.default_branch = default_branch(ctx)?;
+    Ok(setup)
+}
+
+/// The repo's default branch, when it can be told: `origin/HEAD`, else the
+/// branch of a repo that has no other branch yet (a new repo). `None`
+/// otherwise, and for a name that would need quoting in YAML.
+fn default_branch(ctx: &RuleContext) -> Result<Option<String>> {
+    if !ctx.git().is_repo()? {
+        return Ok(None);
+    }
+    let line = |args: &[&str]| -> Option<String> {
+        firescale_core::git::run_git(ctx.root(), args)
+            .ok()
+            .filter(|out| out.code == 0)
+            .map(|out| out.stdout.trim().to_owned())
+    };
+    let remote = line(&[
+        "symbolic-ref",
+        "--quiet",
+        "--short",
+        "refs/remotes/origin/HEAD",
+    ])
+    .and_then(|head| head.strip_prefix("origin/").map(str::to_owned));
+    let branch = match remote {
+        Some(branch) => Some(branch),
+        None => {
+            let branches = line(&["for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+                .unwrap_or_default();
+            if branches.lines().count() <= 1 {
+                ctx.git().current_branch()?
+            } else {
+                None
+            }
+        }
+    };
+    Ok(branch.filter(|name| {
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/'))
+    }))
 }
 
 /// The workflow firescale would write now, when the tracked starter is one

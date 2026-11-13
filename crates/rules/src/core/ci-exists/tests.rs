@@ -713,3 +713,90 @@ mod sync_offers_the_newer_workflow {
         assert_eq!(f.read(STARTER).unwrap(), format!("{HEAD}{TAIL}"));
     }
 }
+
+mod the_push_trigger {
+    use super::*;
+
+    fn git(f: &Fixture, args: &[&str]) {
+        let out = firescale_core::git::run_git(f.root(), args).unwrap();
+        assert_eq!(out.code, 0, "git {args:?}: {}", out.stderr);
+    }
+
+    #[test]
+    fn a_new_repo_runs_pushes_on_its_own_branch() {
+        let f = Fixture::new(&[], Track::All).unwrap();
+        git(&f, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
+        fix(&f);
+        let text = f.read(STARTER).unwrap();
+        assert!(text.contains("  push:\n    branches: [trunk]\n"), "{text}");
+    }
+
+    #[test]
+    fn the_remote_s_default_branch_wins() {
+        let f = Fixture::new(&[("a.txt", "a\n")], Track::All).unwrap();
+        git(
+            &f,
+            &[
+                "-c",
+                "user.name=f",
+                "-c",
+                "user.email=f@example.invalid",
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "-m",
+                "a",
+            ],
+        );
+        git(&f, &["update-ref", "refs/remotes/origin/develop", "HEAD"]);
+        git(
+            &f,
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/develop",
+            ],
+        );
+        git(&f, &["checkout", "--quiet", "-b", "feature"]);
+        fix(&f);
+        assert!(f
+            .read(STARTER)
+            .unwrap()
+            .contains("  push:\n    branches: [develop]\n"));
+    }
+
+    #[test]
+    fn with_several_branches_and_no_remote_it_falls_back_to_main_and_master() {
+        let f = Fixture::new(&[("a.txt", "a\n")], Track::All).unwrap();
+        git(
+            &f,
+            &[
+                "-c",
+                "user.name=f",
+                "-c",
+                "user.email=f@example.invalid",
+                "commit",
+                "--quiet",
+                "--no-verify",
+                "-m",
+                "a",
+            ],
+        );
+        git(&f, &["checkout", "--quiet", "-b", "feature"]);
+        fix(&f);
+        assert!(f
+            .read(STARTER)
+            .unwrap()
+            .contains("  push:\n    branches: [main, master]\n"));
+    }
+
+    #[test]
+    fn each_push_has_its_own_concurrency_group() {
+        let f = Fixture::new(&[], Track::All).unwrap();
+        fix(&f);
+        assert!(f
+            .read(STARTER)
+            .unwrap()
+            .contains("  group: ci-${{ github.event.pull_request.number || github.run_id }}\n"));
+    }
+}

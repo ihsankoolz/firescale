@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { commitAll, EXIT_OK, runCli } from './test-helpers.js';
+import { commitAll, EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
 
 // Faster generated CI and a shared cache (M22, ADR 0041).
 
@@ -88,9 +88,9 @@ describe('the generated workflow', () => {
     expect(saves.find((save) => save.includes(`path: ${SHARED}`))).toContain(
       `!endsWith(steps.firescale-cache.outputs.cache-matched-key, hashFiles('${SHARED}/*.json'))`,
     );
-    // A new push to a pull request cancels its run in progress; a push to a branch does not.
+    // A new push to a pull request cancels its run in progress; each push has a group of its own.
     expect(workflow).toContain(
-      "concurrency:\n  group: ci-${{ github.event.pull_request.number || github.ref }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+      "concurrency:\n  group: ci-${{ github.event.pull_request.number || github.run_id }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
     );
     // Every action is pinned to a commit.
     for (const match of workflow.matchAll(/uses: (\S+)/g)) {
@@ -278,6 +278,27 @@ describe('the shared cache of CI', () => {
     );
   });
 
+  it('never deletes anything but records, and refuses the repo or a folder above it', async () => {
+    const { root } = await sharedRepo();
+    const push = await github(root, 'push', 'refs/heads/main');
+    for (const dir of ['.', '..', '.firescale', '.firescale/steps']) {
+      const result = await runCli(['verify', '--json', '--shared-cache', dir], root, push);
+      expect(result.code, result.stderr).toBe(EXIT_OK);
+      const report = JSON.parse(result.stdout) as { notes?: string[] };
+      expect(report.notes?.join('\n')).toContain(`--shared-cache ${dir} was not used`);
+    }
+    expect((await runGit(root, ['status', '--porcelain'])).stdout).toBe('');
+    expect(await readFile(path.join(root, 'src.txt'), 'utf8')).toBe('one\n');
+    // In a folder of its own, files that are not records are left alone.
+    const own = path.join(root, 'records');
+    await mkdir(path.join(own, 'keep'), { recursive: true });
+    await writeFile(path.join(own, 'notes.txt'), 'mine\n');
+    await writeFile(path.join(own, 'keep', 'a.json'), '{}');
+    await runCli(['verify', '--shared-cache', 'records'], root, push);
+    expect(await readFile(path.join(own, 'notes.txt'), 'utf8')).toBe('mine\n');
+    expect(await readFile(path.join(own, 'keep', 'a.json'), 'utf8')).toBe('{}');
+  });
+
   it('is neither read nor written on a laptop', async () => {
     const { root, runs, records } = await sharedRepo();
     await verifyJson(root, await github(root, 'push', 'refs/heads/main'));
@@ -367,6 +388,10 @@ describe('a shallow clone', () => {
     expect(report.base?.compared).toBe(false);
     expect(report.base?.reason).toContain('fetch-depth: 0');
     expect(report.notes?.join('\n')).toContain('this clone is shallow');
+    // A name that does not resolve is a typo, not a shallow clone.
+    const typo = await runCli(['verify', '--affected', '--base', 'origin/mian'], clone);
+    expect(typo.code).toBe(EXIT_USAGE);
+    expect(typo.stderr).toContain('--base "origin/mian" is not a commit');
 
     // With the whole history (fetch-depth: 0), only a is affected and there is a base.
     expect((await runGit(clone, ['fetch', '--quiet', '--unshallow', 'origin'])).code).toBe(0);

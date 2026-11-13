@@ -1080,15 +1080,29 @@ fn verify_report(
     let shared = match (&args.shared_cache, &ci) {
         (Some(dir), Some(run)) => {
             let dir = Path::new(dir);
-            let dir = if dir.is_absolute() {
+            let dir = normalize(&if dir.is_absolute() {
                 dir.to_path_buf()
             } else {
                 root.join(dir)
-            };
-            if !run.writes() && run.default_ref().is_none() {
-                shared_note = Some("--shared-cache: the event names no default branch, so no shared step result is used.".to_owned());
+            });
+            let root_path = normalize(root);
+            let firescale = root_path.join(".firescale");
+            // The records' own folder only: never the repo, a folder above
+            // it, or firescale's other folders.
+            let unsafe_dir = root_path.starts_with(&dir)
+                || (dir.starts_with(&firescale) && !dir.starts_with(firescale.join("shared")));
+            if unsafe_dir {
+                shared_note = Some(format!(
+                    "--shared-cache {} was not used: it must be a folder of its own, such as .firescale/shared, not the repo, a folder above it, or another firescale folder.",
+                    args.shared_cache.as_deref().unwrap_or_default()
+                ));
+                None
+            } else {
+                if !run.writes() && run.default_ref().is_none() {
+                    shared_note = Some("--shared-cache: the event names no default branch, so no shared step result is used.".to_owned());
+                }
+                Some(SharedCache::new(dir, run.clone()))
             }
-            Some(SharedCache::new(dir, run.clone()))
         }
         (Some(_), None) => {
             shared_note = Some("--shared-cache is used only in GitHub Actions (GITHUB_ACTIONS=true); on this machine the shared cache is neither read nor written.".to_owned());

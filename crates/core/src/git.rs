@@ -317,6 +317,29 @@ pub fn is_shallow(cwd: &Path) -> bool {
         .is_ok_and(|out| out.code == 0 && out.stdout.trim() == "true")
 }
 
+/// True when `rev` names a commit in the repo at `cwd`.
+#[must_use]
+pub fn resolves(cwd: &Path, rev: &str) -> bool {
+    run_git(
+        cwd,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{rev}^{{commit}}"),
+        ],
+    )
+    .is_ok_and(|out| out.code == 0)
+}
+
+/// True when `base` names a commit, but this shallow clone does not hold
+/// its merge base with `HEAD`. A name that does not resolve is a typo, not
+/// a shallow clone.
+#[must_use]
+pub fn shallow_without_merge_base(cwd: &Path, base: &str) -> bool {
+    is_shallow(cwd) && resolves(cwd, base)
+}
+
 /// The note for a base that a shallow clone cannot compare with.
 #[must_use]
 pub fn shallow_note(base: &str) -> String {

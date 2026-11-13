@@ -104,9 +104,18 @@ async function exists(file: string): Promise<boolean> {
   );
 }
 
-/** The command's output with the repo's own path replaced, so it can be compared across machines. */
+/**
+ * The command's output with the repo's own path replaced, so it can be
+ * compared across machines. The workflow's push branch is the new repo's
+ * branch, which git's own settings choose (`main` or `master`), and the
+ * digest line covers it; both are replaced too. The digest itself is tested
+ * in `core::ci_exists::tests`.
+ */
 const portable = (stdout: string, repo: FixtureRepo): string =>
-  stdout.replaceAll(repo.root.replaceAll('\\', '/'), '<root>');
+  stdout
+    .replaceAll(repo.root.replaceAll('\\', '/'), '<root>')
+    .replace(/^(\+ {4}branches: \[)[\w./-]+(\])$/m, '$1<branch>$2')
+    .replace(/^(\+# firescale-workflow: )[0-9a-f]{32}$/m, '$1<digest>');
 
 /** Symbolic links need a privilege on Windows that CI runners and most people do not have. */
 const LINKS = process.platform !== 'win32';

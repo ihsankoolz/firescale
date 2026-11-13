@@ -298,12 +298,13 @@ impl SharedCache {
         })
     }
 
-    /// On a run that writes: removes every file that is not a record this
-    /// run may use (another format, another writer, too old, unreadable,
-    /// or not a record at all), and the oldest records beyond
-    /// [`MAX_RECORDS`]. So the folder the workflow saves holds nothing but
-    /// usable records written from the default branch. Returns how many
-    /// files were removed.
+    /// On a run that writes: removes each record file (`<key>.json`) this
+    /// run may not use (another format, another writer, too old,
+    /// unreadable), temporary files a killed run left (`.<key>.<pid>.tmp`),
+    /// and the oldest records beyond [`MAX_RECORDS`]. Nothing else is ever
+    /// removed: no folder, no link, no file of another name, so a folder
+    /// given by mistake loses nothing that is not a record. Returns how
+    /// many files were removed.
     pub fn prune(&self) -> usize {
         if !self.writes() {
             return 0;
@@ -315,25 +316,36 @@ impl SharedCache {
         let mut removed = 0;
         let mut kept: Vec<(u64, PathBuf)> = Vec::new();
         for entry in entries.filter_map(Result::ok) {
+            // A plain file only: the entry's own type, never what a link
+            // points to.
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
-            let key = name.strip_suffix(".json").unwrap_or_default();
-            let usable = entry
-                .file_type()
-                .is_ok_and(|kind| kind.is_file())
-                .then(|| fs::read_to_string(&path).ok())
-                .flatten()
+            if let Some(temp) = name
+                .strip_prefix('.')
+                .and_then(|rest| rest.strip_suffix(".tmp"))
+            {
+                let ours = temp.split_once('.').is_some_and(|(key, pid)| {
+                    is_key(key) && pid.bytes().all(|b| b.is_ascii_digit())
+                });
+                if ours && fs::remove_file(&path).is_ok() {
+                    removed += 1;
+                }
+                continue;
+            }
+            let Some(key) = name.strip_suffix(".json").filter(|key| is_key(key)) else {
+                continue;
+            };
+            let usable = fs::read_to_string(&path)
+                .ok()
                 .and_then(|text| serde_json::from_str::<Record>(&text).ok())
-                .filter(|record| is_key(key) && self.refusal(record, key, now).is_none());
+                .filter(|record| self.refusal(record, key, now).is_none());
             match usable {
                 Some(record) => kept.push((record.time, path)),
                 None => {
-                    let gone = if path.is_dir() {
-                        fs::remove_dir_all(&path)
-                    } else {
-                        fs::remove_file(&path)
-                    };
-                    if gone.is_ok() {
+                    if fs::remove_file(&path).is_ok() {
                         removed += 1;
                     }
                 }
@@ -501,7 +513,12 @@ mod tests {
         let main = SharedCache::new(dir.clone(), ci(temp.path(), "push", "refs/heads/main"));
         main.write(KEY, now_secs(), 1, "d").unwrap();
         fs::write(dir.join("cd34.json"), "not json").unwrap();
+        fs::write(dir.join(".cd34.123.tmp"), "half").unwrap();
+        // Not records: never touched.
         fs::write(dir.join("notes.txt"), "x").unwrap();
+        fs::write(dir.join("config.json"), "{}").unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src").join("a.json"), "{}").unwrap();
         let mut foreign: Record =
             serde_json::from_str(&fs::read_to_string(dir.join("ab12.json")).unwrap()).unwrap();
         foreign.key = "ef56".to_owned();
@@ -517,11 +534,13 @@ mod tests {
         );
         assert_eq!(pull.prune(), 0);
         assert_eq!(main.prune(), 3);
-        let left: Vec<String> = fs::read_dir(&dir)
+        let mut left: Vec<String> = fs::read_dir(&dir)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(left, vec!["ab12.json".to_owned()]);
+        left.sort();
+        assert_eq!(left, ["ab12.json", "config.json", "notes.txt", "src"]);
+        assert!(dir.join("src").join("a.json").is_file());
     }
 
     #[test]

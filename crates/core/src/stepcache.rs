@@ -1799,6 +1799,29 @@ mod tests {
     }
 
     #[test]
+    fn what_ci_adds_changes_every_key() {
+        let fixture = Fixture::new(&[("a.js", "1\n")], Track::NoGit).unwrap();
+        let settings = |read_env: &'static (dyn Fn(&str) -> Option<String> + Sync)| CacheSettings {
+            version: "1.0.0",
+            read: true,
+            sets_ci: true,
+            machine: this_machine(),
+            read_env,
+        };
+        let none: &'static (dyn Fn(&str) -> Option<String> + Sync) = &|_| None;
+        let key = |salt: Option<&str>| {
+            StepCache::new(fixture.root(), None, &settings(none))
+                .with_ci(salt.map(str::to_owned), None)
+                .key(None, None, "test", "node -e 0", fixture.root())
+                .unwrap()
+                .key
+        };
+        assert_eq!(key(None), key(None));
+        assert_ne!(key(None), key(Some("ci-workflow\0a")));
+        assert_ne!(key(Some("ci-workflow\0a")), key(Some("ci-workflow\0b")));
+    }
+
+    #[test]
     fn an_unreadable_input_is_never_cached() {
         let snapshot = Snapshot {
             files: BTreeMap::from([(

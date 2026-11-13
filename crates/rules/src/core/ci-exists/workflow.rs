@@ -56,6 +56,9 @@ pub(crate) struct Setup {
     pub python_other: Vec<String>,
     /// A `.python-version` at the root, which setup-python reads.
     pub python_version_file: bool,
+    /// The branch pushes run on: the default branch when it is known,
+    /// else `main` and `master`.
+    pub default_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +106,7 @@ impl Setup {
             python,
             python_other,
             python_version_file: has_python_version,
+            default_branch: None,
         }
     }
 
@@ -169,13 +173,14 @@ fn download_caches(setup: &Setup) -> Vec<DownloadCache> {
                     id: "npm",
                     find_dir: "npm config get cache",
                     key: "npm",
-                    files: "'**/package-lock.json', '**/npm-shrinkwrap.json'",
+                    files:
+                        "'**/package-lock.json', '**/npm-shrinkwrap.json', '!**/node_modules/**'",
                 }),
                 "pnpm" => caches.push(DownloadCache {
                     id: "pnpm",
                     find_dir: "pnpm store path --silent",
                     key: "pnpm",
-                    files: "'**/pnpm-lock.yaml'",
+                    files: "'**/pnpm-lock.yaml', '!**/node_modules/**'",
                 }),
                 _ => {}
             }
@@ -186,7 +191,7 @@ fn download_caches(setup: &Setup) -> Vec<DownloadCache> {
             id: "pip",
             find_dir: "python -m pip cache dir",
             key: "pip",
-            files: "'**/requirements*.txt', '**/pyproject.toml'",
+            files: "'**/requirements*.txt', '**/pyproject.toml', '!**/node_modules/**', '!**/.venv/**'",
         });
     }
     caches
@@ -372,6 +377,10 @@ fn job(lines: &mut Lines, setup: &Setup, kind: Job) {
 /// The workflow for `setup`. LF line endings; the last line is its digest.
 pub(crate) fn workflow(setup: &Setup) -> String {
     let mut lines = Lines(Vec::new());
+    let branches = setup
+        .default_branch
+        .as_deref()
+        .map_or_else(|| "main, master".to_owned(), str::to_owned);
     for line in [
         "# Created by firescale (core/ci-exists). `fscale sync` replaces this file",
         "# with a newer one only while it is exactly as firescale wrote it (the",
@@ -382,15 +391,16 @@ pub(crate) fn workflow(setup: &Setup) -> String {
         "on:",
         "  pull_request:",
         "  push:",
-        "    branches: [main, master]",
+        &format!("    branches: [{branches}]"),
         "",
         "permissions:",
         "  contents: read",
         "",
-        "# A new push to a pull request cancels its run in progress. Pushes to a",
-        "# branch are never cancelled: they keep the shared cache up to date.",
+        "# A new push to a pull request cancels its run in progress. Each push",
+        "# to a branch has a group of its own, so it is never cancelled: it",
+        "# keeps the shared cache up to date.",
         "concurrency:",
-        "  group: ci-${{ github.event.pull_request.number || github.ref }}",
+        "  group: ci-${{ github.event.pull_request.number || github.run_id }}",
         "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
         "",
         "jobs:",

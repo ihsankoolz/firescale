@@ -65,7 +65,7 @@ pub fn changed_files(root: &Path, base: Option<&str>) -> Result<Changed> {
             ],
         )?
         else {
-            if crate::git::is_shallow(root) {
+            if crate::git::shallow_without_merge_base(root, base) {
                 return Ok(Changed::Shallow(crate::git::shallow_note(base)));
             }
             return Err(Error::user(format!(

@@ -256,7 +256,7 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
         }
     };
     let Some(commit) = git_line(root, &["merge-base", "HEAD", &reference]) else {
-        if crate::git::is_shallow(root) {
+        if crate::git::shallow_without_merge_base(root, &reference) {
             return Ok(BaseChoice::Nothing(crate::git::shallow_note(&reference)));
         }
         if given.is_some() {

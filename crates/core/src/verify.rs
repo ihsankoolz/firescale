@@ -2491,7 +2491,7 @@ fn cached_or_run(
             Some(commit) => (
                 format!(
                     "the shared cache of CI (kept by the default branch at {})",
-                    &commit[..commit.len().min(7)]
+                    commit.chars().take(7).collect::<String>()
                 ),
                 "shared hit",
             ),

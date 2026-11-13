@@ -18,7 +18,7 @@ core/ci-exists
 
 --- /dev/null
 +++ b/.github/workflows/ci.yml
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,84 @@
 +# Created by firescale (core/ci-exists). \`fscale sync\` replaces this file
 +# with a newer one only while it is exactly as firescale wrote it (the
 +# digest on the last line says so). Once you edit it, it is yours, and
@@ -28,15 +28,16 @@ core/ci-exists
 +on:
 +  pull_request:
 +  push:
-+    branches: [main, master]
++    branches: [<branch>]
 +
 +permissions:
 +  contents: read
 +
-+# A new push to a pull request cancels its run in progress. Pushes to a
-+# branch are never cancelled: they keep the shared cache up to date.
++# A new push to a pull request cancels its run in progress. Each push
++# to a branch has a group of its own, so it is never cancelled: it
++# keeps the shared cache up to date.
 +concurrency:
-+  group: ci-\${{ github.event.pull_request.number || github.ref }}
++  group: ci-\${{ github.event.pull_request.number || github.run_id }}
 +  cancel-in-progress: \${{ github.event_name == 'pull_request' }}
 +
 +jobs:
@@ -101,7 +102,7 @@ core/ci-exists
 +        with:
 +          path: .firescale/shared
 +          key: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-\${{ hashFiles('.firescale/shared/*.json') }}
-+# firescale-workflow: b2d3366028d1dd2395b792583a69c207
++# firescale-workflow: <digest>
 
 core/gitignore-basics
   would create .gitignore
