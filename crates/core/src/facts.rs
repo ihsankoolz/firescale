@@ -429,6 +429,26 @@ pub(crate) const LOCKFILE_NAMES: [&str; 10] = [
     "yarn.lock",
 ];
 
+/// True for a file that fixes which dependencies get installed: a lockfile,
+/// or a pip requirements or constraints list (`requirements*.txt`,
+/// `constraints*.txt`, or a `.txt` in a folder named `requirements`).
+/// When one differs between the base commit and the head, the head's
+/// installed dependencies do not stand for the base's (ADR 0037, ADR 0040).
+#[must_use]
+pub fn is_dependency_list(path: &str) -> bool {
+    let path = path.replace('\\', "/");
+    let mut parts = path.rsplit('/');
+    let name = parts.next().unwrap_or_default();
+    let in_requirements = parts.next() == Some("requirements");
+    LOCKFILE_NAMES.contains(&name)
+        || (Path::new(name)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
+            && (name.starts_with("requirements")
+                || name.starts_with("constraints")
+                || in_requirements))
+}
+
 /// `dir` is repo-relative with forward slashes, `.` for the repo root.
 fn in_dir(dir: &str, file: &str) -> String {
     if dir == "." {
@@ -3584,6 +3604,29 @@ mod tests {
         if !cfg!(windows) {
             assert_eq!(shell_quote("/a/$b/python"), "'/a/$b/python'");
             assert_eq!(shell_quote("/a/it's/python"), "\"/a/it's/python\"");
+        }
+    }
+
+    #[test]
+    fn dependency_lists_are_lockfiles_and_requirements_lists() {
+        for path in [
+            "pnpm-lock.yaml",
+            "a/package-lock.json",
+            "backend/auth/requirements.txt",
+            "requirements-dev.txt",
+            "constraints.txt",
+            "requirements/base.txt",
+            "svc\\uv.lock",
+        ] {
+            assert!(is_dependency_list(path), "{path}");
+        }
+        for path in [
+            "package.json",
+            "notes.txt",
+            "requirements.md",
+            "docs/README.md",
+        ] {
+            assert!(!is_dependency_list(path), "{path}");
         }
     }
 }

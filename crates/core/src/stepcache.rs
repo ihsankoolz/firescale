@@ -1348,8 +1348,7 @@ impl<'a> StepCache<'a> {
             }
         }
         for (path, (state, _)) in &snapshot.files {
-            let name = path.rsplit('/').next().unwrap_or(path);
-            if crate::facts::LOCKFILE_NAMES.contains(&name) {
+            if crate::facts::is_dependency_list(path) {
                 files.update(format!("head-lock\0{path}\0{state:?}\n").as_bytes());
             }
         }
@@ -1370,6 +1369,36 @@ impl<'a> StepCache<'a> {
             self.read_env,
         )
         .map(|key| format!("base-{key}"))
+    }
+
+    /// The lockfiles and requirements lists among `changed` (the paths that
+    /// differ between the base commit and the head) that the step's key
+    /// covers: the whole repo for a step the cache does not key. When one
+    /// is there, the head's installed dependencies do not stand for the
+    /// base's for this step (ADR 0040).
+    #[must_use]
+    pub fn changed_dependencies(
+        &self,
+        folder: Option<&str>,
+        kind: Option<&str>,
+        dir: &Path,
+        changed: &BTreeSet<String>,
+    ) -> Vec<String> {
+        let snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let scope = self
+            .scope(folder, kind, dir, &snapshot)
+            .unwrap_or_else(|_| Scope::whole_repo());
+        let owned = &self.digests.owned;
+        changed
+            .iter()
+            .filter(|path| crate::facts::is_dependency_list(path))
+            .filter(|path| covers(&scope, owned, path))
+            .cloned()
+            .collect()
     }
 
     /// The files of the base commit under the root, with their blob ids.
