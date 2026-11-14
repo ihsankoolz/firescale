@@ -194,6 +194,7 @@ try {
   const cliPublished = without(cliManifest, ['scripts', 'devDependencies']);
   await writeManifest(cliDir, {
     ...cliPublished,
+    files: [...cliPublished.files, 'agents'],
     version,
     dependencies: { '@firescale/sdk': version },
     optionalDependencies: Object.fromEntries(
@@ -206,6 +207,12 @@ try {
       filter: folder === 'dist' ? builtFrom(path.join(root, 'packages', 'cli', 'src')) : notTest,
     });
   }
+  // The agent adapters (M28) ship inside firescale, beside its host:
+  // `fscale fix --agent claude|codex` starts `agents/cli.js` with Node.
+  await cp(path.join(root, 'packages', 'agents', 'dist'), path.join(cliDir, 'agents'), {
+    recursive: true,
+    filter: builtFrom(path.join(root, 'packages', 'agents', 'src')),
+  });
   await copyFile(license, path.join(cliDir, 'LICENSE'));
   await copyFile(path.join(root, 'README.md'), path.join(cliDir, 'README.md'));
 

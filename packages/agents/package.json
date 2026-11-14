@@ -2,7 +2,17 @@
   "name": "@firescale/agents",
   "version": "0.4.0",
   "private": true,
-  "description": "Agent adapters and the guarded fix runner for firescale.",
+  "description": "Agent adapters for firescale's guarded fix runner: Claude Code and Codex behind one protocol.",
   "license": "MIT",
-  "type": "module"
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "bin": {
+    "firescale-agents": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
 }

@@ -22,6 +22,10 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M28) The manual test with a real agent is open** (ADR 0048, "Manual checks"): run `fscale fix --agent claude` and `--agent codex` on a scratch repo with one real violation, and check the unverified items (Claude Code's JSON result fields; Codex's `--sandbox workspace-write` and the `-c` key). A deliberate real run was not allowed in the build session. One real `claude -p` (Claude Code 2.1.325) did run by accident, through a test that left the stand-in off the PATH; it passed, but with an earlier flag set and no output kept.
+- **(M28) A Codex run cannot be told what not to read or run** (`codex exec` has no flags for it, and runs a shell): it is refused where the repo's own settings deny anything, and warned about everywhere else. Say if `--agent codex` should be refused outright until Codex can be limited.
+- **(M28) Claude Code runs with `--restricted`, which loads no settings file**: your own user-level deny rules do not apply to a run (the runner's and the repo's do), and edits are allowed without asking even where the repo's `defaultMode` would ask. Say if your user-level rules should be read and passed on too.
+- **(M28) On Windows the adapters need the agent as an `.exe`**: an npm-installed `claude.cmd` or `codex.cmd` is not started (Node will not run a `.cmd` without a shell). Say if a `.cmd` path is wanted.
 - **(M26) Approvals are GitHub reviews by someone other than the author** (ADR 0046). A solo owner cannot approve their own pull request, so a changed snapshot or expected value blocks their own pull requests while `verify.tamper` is `enforced`; merge as an admin, or say if you want another approver source (it must be one an agent with your token cannot use).
 - **(M26) `COLLABORATOR` counts as write access**, as GitHub's `author_association` reports it; a collaborator invited read-only has it too. Say if the workflow should check the exact permission (it needs a wider token).
 - **(M26) 42 of 98 held-out cheats are missed** (assertions weakened in place, golden files, test selection in config, hook files edited, mocks and conftest hooks). Say which of these you want detectors for; fixing them makes that corpus development data, and a new held-out set is needed to measure again.
@@ -132,6 +136,25 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M28 — Agent adapters and `fscale ledger`
+
+**Built** (ADR 0048, `docs/fix.md`):
+
+1. **Claude Code and Codex adapters** in `packages/agents` (TypeScript), each a program speaking ADR 0047's protocol, started with Node per run and shipped in the `firescale` npm package as `agents/`. `fscale fix --agent claude|codex`.
+2. **Claude Code**: `claude -p --output-format json --max-turns --max-budget-usd --permission-mode dontAsk --restricted --no-session-persistence --settings '{"disableAllHooks":true}' --strict-mcp-config --tools --allowedTools --disallowedTools`, prompt on standard input; cost and turns from the result. Flags from the docs and from `claude --help` of 2.1.325.
+3. **Codex**: `codex exec --json --ephemeral --ignore-user-config --skip-git-repo-check --sandbox workspace-write -c sandbox_workspace_write.network_access=false -`, from its source at `rust-v0.169.0`; turns from the events; no cost reported.
+4. **Unverified items are printed** under `Agent:` in every run's output and listed in docs/fix.md and ADR 0048 with the checks for you.
+5. **Tests against stand-ins**: `fscale-fake-cli` (testkit) copied onto the PATH as `claude` or `codex`; every argument pinned; end-to-end runs through `fscale fix --agent`.
+6. **`fscale ledger [--json]`**: runs, passes, pass rate, reported cost, failures by reason, per rule and per agent; damaged lines skipped and named; schema `packages/cli/schemas/ledger-output.schema.json`.
+
+**Decided on your behalf** (ADR 0048):
+
+- **"Called through the bridge" read as "started with Node like the bridge's host"**, but one process per run, not a request to the shared host, so the time limit and Ctrl+C stop the agent's whole tree.
+- **`--restricted` in place of `--setting-sources user`** for Claude Code: no settings files at all, and file tools confined to the worktree. Your own Claude Code settings are not applied to a run either; the runner passes the repo's deny rules itself.
+- **The adapters ship inside `firescale`**, not as a published `@firescale/agents`.
+
+**Not testable here:** a real agent run (the open box above); Codex is not installed in the build environment.
 
 ## M27 — Guarded agent runner
 

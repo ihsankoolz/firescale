@@ -70,6 +70,7 @@ Usage:
   fscale sync [--check]        Repair drift: run the fixes again
   fscale verify [options]      Check, then lint, typecheck and test: the definition of done
   fscale tamper [options]      Only the tamper guard: what the change weakens, against the base
+  fscale ledger [--json]       Sum the agent fix runs: runs, pass rate and cost, per rule and agent
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
   fscale graph [--explain]     Print the project graph; --explain says where each edge comes from
@@ -83,7 +84,7 @@ Usage:
 
 Options:
   --rules <glob>   check, fix: only matching rules, e.g. \"core/*\" (comma-separated)
-  --json           check, verify, facts, graph, doctor: print JSON (see docs/)
+  --json           check, verify, facts, graph, doctor, ledger: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>;
@@ -104,7 +105,8 @@ Options:
   --packs <list>   init: rule packs to turn on, comma-separated (default: core,agent-ready)
   --force          init: run in a folder that is not empty (nothing is overwritten)
   --check          sync: change nothing, and exit 1 when sync would change something
-  --agent <name>   hooks: claude, codex or cursor; fix: the agent to run (fake, the stand-in)
+  --agent <name>   hooks: claude, codex or cursor; fix: the agent to run (claude, codex,
+                   or fake, the stand-in the tests use)
   --rule <id>      fix --agent: the rule to fix (default: the first with violations a
                    deterministic fix cannot repair)
   --all            hooks install: every supported agent
@@ -1276,6 +1278,36 @@ fn with_pr_base(root: &Path, args: &Args) -> Result<Args> {
     Ok(args)
 }
 
+/// `fscale ledger [--json]`: the agent fix runs summed (M28, ADR 0048).
+/// Damaged lines are skipped and named; the exit code is 0 either way.
+fn ledger_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
+    if !extra.is_empty() {
+        return Err(Error::usage(format!(
+            "ledger takes no arguments, got \"{}\". Run `fscale ledger` or `fscale ledger --json`.",
+            extra.join(" ")
+        )));
+    }
+    let path = root.join(".firescale").join("ledger.jsonl");
+    let text = match std::fs::read(&path) {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(Error::user(format!(
+                "could not read {} ({error}). Check its permissions.",
+                path.display()
+            )))
+        }
+    };
+    let summary = firescale_core::ledger::summarise(".firescale/ledger.jsonl", text.as_deref());
+    if args.json {
+        let mut json = serde_json::to_string_pretty(&summary)
+            .map_err(|error| Error::internal(error.to_string()))?;
+        json.push('\n');
+        return Ok(Output::ok(json));
+    }
+    Ok(Output::ok(firescale_core::ledger::format_human(&summary)))
+}
+
 /// `fscale tamper`: the tamper guard alone (ADR 0045). It runs nothing from
 /// the repo: it reads the base commit, and the working tree or (with
 /// `--head` or `--pr-base`) a commit, from git's objects.
@@ -1652,6 +1684,7 @@ fn run() -> Result<Output> {
         "schema" => schema(&root, rest),
         "verify" => verify(&root, &args, rest),
         "tamper" => tamper_command(&root, &args, rest),
+        "ledger" => ledger_command(&root, &args, rest),
         "hooks" => hooks(&root, &args, rest),
         _ => Err(Error::usage(format!("unknown command \"{command}\"."))),
     }

@@ -228,6 +228,16 @@ async function main() {
     `exit ${v2.code}\n${v2.stdout}\n${v2.stderr}`,
   );
 
+  // The agent adapters ship in firescale (M28): they load, and know their
+  // agents. No agent is started (an unknown name is refused first).
+  const adapters = path.join(project, 'node_modules', 'firescale', 'agents', 'cli.js');
+  const loaded = run(process.execPath, [adapters, 'no-such-agent', '--version'], { cwd: project });
+  check(
+    'the agent adapters are installed and load',
+    existsSync(adapters) && loaded.code === 2 && loaded.stderr.includes('Known: claude, codex'),
+    `exit ${loaded.code}\n${loaded.stdout}\n${loaded.stderr}`,
+  );
+
   // c: check in a git repo with a tracked .env.
   const repo = path.join(project, 'repo');
   mkdirSync(repo);

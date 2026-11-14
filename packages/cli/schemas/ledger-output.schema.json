@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ihsankoolz/firescale/blob/main/packages/cli/schemas/ledger-output.schema.json",
+  "title": "fscale ledger --json",
+  "description": "The agent fix runs of .firescale/ledger.jsonl summed: runs, passes, pass rate and reported cost, in total, per rule and per agent (ADR 0048).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "file",
+    "found",
+    "runs",
+    "passed",
+    "costUsd",
+    "costReportedRuns",
+    "reasons",
+    "byRule",
+    "byAgent",
+    "damagedLines"
+  ],
+  "definitions": {
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "runs", "passed", "passRate", "costUsd", "costReportedRuns", "reasons"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passRate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "costUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "costReportedRuns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasons": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "file": {
+      "const": ".firescale/ledger.jsonl"
+    },
+    "found": {
+      "type": "boolean",
+      "description": "False when the repo has no ledger yet."
+    },
+    "runs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "passed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "passRate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "costUsd": {
+      "type": "number",
+      "minimum": 0
+    },
+    "costReportedRuns": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "reasons": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "byRule": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/group"
+      }
+    },
+    "byAgent": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/group"
+      }
+    },
+    "damagedLines": {
+      "description": "1-based numbers of the lines that could not be read; they count nowhere.",
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}

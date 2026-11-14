@@ -323,36 +323,116 @@ pub fn agent_env() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// How long an agent's `--version` and sign-in check may take.
+const PREFLIGHT_SECS: u64 = 60;
+
+/// Runs a short command with no input and waits at most `secs` for it;
+/// `Ok(None)` when it did not finish, and it is then killed. Its output is
+/// read on threads, so a full pipe cannot stall it.
+fn output_within(
+    command: &mut Command,
+    secs: u64,
+) -> std::io::Result<Option<std::process::Output>> {
+    use std::io::Read;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let read = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = read(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = read(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    Ok(Some(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    }))
+}
+
 impl Adapter for ProgramAdapter {
     fn name(&self) -> &str {
         &self.name
     }
 
     fn preflight(&self) -> std::result::Result<String, String> {
-        let installed = Command::new(&self.program)
-            .args(&self.args)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|_| format!("the {} agent is not installed ({} was not found). Install it, or pick another with --agent.", self.name, self.program.display()))?;
+        // Through Node (the claude and codex adapters) a missing program is
+        // Node, not the agent.
+        let missing = |error: std::io::Error| {
+            if self.args.is_empty() {
+                format!("the {} agent is not installed ({} was not found: {error}). Install it, or pick another with --agent.", self.name, self.program.display())
+            } else {
+                format!("could not start Node (\"{}\": {error}), which runs the {} adapter. Install Node 22.18 or newer and make sure it is on your PATH, or set FSCALE_NODE.", self.program.display(), self.name)
+            }
+        };
+        let installed = output_within(
+            Command::new(&self.program).args(&self.args).arg("--version"),
+            PREFLIGHT_SECS,
+        )
+        .map_err(missing)?
+        .ok_or_else(|| {
+            format!(
+                "the {} agent did not answer --version within {PREFLIGHT_SECS} s. Check its install.",
+                self.name
+            )
+        })?;
         if !installed.status.success() {
+            let why = String::from_utf8_lossy(&installed.stderr)
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| format!(" ({})", line.trim().chars().take(200).collect::<String>()))
+                .unwrap_or_default();
             return Err(format!(
-                "the {} agent did not answer --version. Check its install.",
+                "the {} agent did not answer --version{why}. Check its install.",
                 self.name
             ));
         }
         let version = String::from_utf8_lossy(&installed.stdout).trim().to_owned();
-        let auth = Command::new(&self.program)
-            .args(&self.args)
-            .args(["auth", "status"])
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| {
-                format!(
-                    "the {} agent's sign-in could not be checked ({error}).",
-                    self.name
-                )
-            })?;
+        let auth = output_within(
+            Command::new(&self.program).args(&self.args).args(["auth", "status"]),
+            PREFLIGHT_SECS,
+        )
+        .map_err(|error| {
+            format!(
+                "the {} agent's sign-in could not be checked ({error}).",
+                self.name
+            )
+        })?
+        .ok_or_else(|| {
+            format!(
+                "the {} agent's sign-in check did not finish within {PREFLIGHT_SECS} s. Run its own sign-in status command to see why.",
+                self.name
+            )
+        })?;
         if !auth.status.success() {
             return Err(format!(
                 "the {} agent is not signed in. Sign in with its own CLI first.",

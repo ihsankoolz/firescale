@@ -62,7 +62,26 @@ A custom TypeScript rule's `fix()` runs in the Node host, through the SDK. The S
 
 Exit code 0 when the run passed (or there was nothing to fix), 1 when it failed, 2 when it was refused before it started.
 
-The agents: `fake` (the stand-in the tests use, `crates/testkit/src/fake_agent.rs`); Claude Code and Codex come with M28.
+### The agents
+
+| `--agent` | Runs                                                                                                                                                                                                                                                                       | Cost in the ledger                              |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `claude`  | `claude -p --output-format json --max-turns <n> --max-budget-usd <usd> --permission-mode dontAsk --restricted --no-session-persistence --settings '{"disableAllHooks":true}' --strict-mcp-config --tools … --allowedTools … --disallowedTools …`, prompt on standard input | yes, `total_cost_usd` as Claude Code reports it |
+| `codex`   | `codex exec --json --ephemeral --ignore-user-config --skip-git-repo-check --sandbox workspace-write -c sandbox_workspace_write.network_access=false -`, prompt on standard input                                                                                           | no: Codex reports tokens, not money             |
+| `fake`    | the stand-in the tests use, `crates/testkit/src/fake_agent.rs`                                                                                                                                                                                                             | what its scenario says                          |
+
+The adapters are TypeScript (`packages/agents`, shipped in the `firescale` npm package as `agents/`), started with Node (`FSCALE_NODE`; `FSCALE_AGENTS` points at another `cli.js`). Where each flag was confirmed, and what was not, is in ADR 0048. **Unverified** (printed under `Agent:` in every run's output too):
+
+- `claude`: the fields of the JSON result of `claude -p --output-format json` (`total_cost_usd`, `num_turns`, `is_error`, `subtype`). The docs list them for the SDK's result message. If they differ, a run that worked reads as failed, and its cost is missing.
+- `codex`: `--sandbox workspace-write` and `-c sandbox_workspace_write.network_access=false` (Codex's documentation could not be reached; its shared options were not read).
+
+**Codex cannot be limited like Claude Code.** `codex exec` takes no list of tools, commands or paths to deny, and it runs shell commands and reads files as its sandbox allows, your untracked `.env` files included. So `--agent codex` is refused in a repo whose own agent settings deny anything, and every Codex run prints a warning. The diff guard, the re-check and the time limit still hold what it writes.
+
+What to check by hand before you trust a real agent: see "Manual checks" in ADR 0048.
+
+## `fscale ledger`
+
+`fscale ledger [--json]` sums `.firescale/ledger.jsonl`: runs, passes, pass rate and the cost the agents reported, in total, per rule and per agent, with failed runs counted by reason. A line it cannot read (not JSON, a field missing, a cost below 0, a line cut short) is skipped and named by its number; the exit code is 0 either way. Cost is only what agents reported: `$0.42 (2 of 3 runs)` means one run reported none. The JSON shape: [packages/cli/schemas/ledger-output.schema.json](../packages/cli/schemas/ledger-output.schema.json).
 
 ## Limits
 

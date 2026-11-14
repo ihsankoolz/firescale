@@ -17,15 +17,41 @@ use firescale_core::config::load_config;
 use firescale_core::explain::rule_skill;
 use firescale_core::git::run_git;
 use firescale_core::model::Fixable;
-use firescale_core::node::NodeHost;
+use firescale_core::node::{NodeHost, NODE_ENV};
 use firescale_core::select::select_rules;
 use firescale_core::tamper;
 use firescale_core::{version, Error, Result};
 
 use crate::{Args, Output, EXIT_OK, EXIT_VIOLATIONS};
 
-/// The agents `--agent` names. Only `fake` is wired in M27; the Claude
-/// Code and Codex adapters arrive in M28.
+/// Overrides the path of the agent adapters' entry point (`agents/cli.js`).
+const AGENTS_ENV: &str = "FSCALE_AGENTS";
+
+/// Looks for the adapters next to the binary, as the Node host is found:
+/// this repo's dev layout (`target/<profile>/fscale` beside
+/// `packages/agents`) and an npm install (`node_modules/firescale/agents`).
+fn agents_script_near_exe() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    exe.ancestors().skip(1).take(5).find_map(|dir| {
+        [
+            dir.join("packages")
+                .join("agents")
+                .join("dist")
+                .join("cli.js"),
+            dir.join("firescale").join("agents").join("cli.js"),
+            dir.join("node_modules")
+                .join("firescale")
+                .join("agents")
+                .join("cli.js"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+    })
+}
+
+/// The agents `--agent` names: `fake`, the stand-in the tests use, and the
+/// Claude Code and Codex adapters (M28, ADR 0048), TypeScript programs
+/// started with Node that speak the same protocol.
 fn adapter(name: &str) -> Result<Box<dyn Adapter>> {
     match name {
         "fake" => {
@@ -37,11 +63,24 @@ fn adapter(name: &str) -> Result<Box<dyn Adapter>> {
                 args: Vec::new(),
             }))
         }
-        "claude" | "codex" | "gemini" => Err(Error::usage(format!(
-            "the {name} adapter is not built yet (M28). `--agent fake` runs the stand-in agent the tests use."
-        ))),
+        "claude" | "codex" => {
+            let script = env::var_os(AGENTS_ENV)
+                .map(PathBuf::from)
+                .or_else(agents_script_near_exe)
+                .ok_or_else(|| {
+                    Error::user(format!(
+                        "the {name} adapter was not found beside fscale. Install firescale from npm (it ships the adapters in `agents/`), or set {AGENTS_ENV} to the adapters' `cli.js`."
+                    ))
+                })?;
+            let node = env::var_os(NODE_ENV).map_or_else(|| PathBuf::from("node"), PathBuf::from);
+            Ok(Box::new(ProgramAdapter {
+                name: name.to_owned(),
+                program: node,
+                args: vec![script.to_string_lossy().into_owned(), name.to_owned()],
+            }))
+        }
         other => Err(Error::usage(format!(
-            "unknown agent \"{other}\". Pass --agent fake (the stand-in), or claude or codex once their adapters exist."
+            "unknown agent \"{other}\". Pass --agent claude, codex, or fake (the stand-in the tests use)."
         ))),
     }
 }
@@ -62,7 +101,9 @@ fn limits(root: &Path) -> (u32, f64, u64) {
     };
     (
         get("maxTurns").map_or(30, |v| v.clamp(1.0, 1000.0) as u32),
-        get("maxCostUsd").map_or(2.0, |v| v.max(0.0)),
+        get("maxCostUsd")
+            .filter(|v| *v > 0.0 && v.is_finite())
+            .map_or(2.0, |v| v),
         get("timeoutSeconds").map_or(900, |v| v.clamp(1.0, 86_400.0) as u64),
     )
 }
@@ -145,6 +186,25 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         return Err(Error::user(format!(
             "the repo's own agent settings let no agent edit files ({why}); an agent run never has wider permissions than they give."
         )));
+    }
+    // Codex's `exec` takes no list of tools, commands or paths to deny
+    // (ADR 0048): where the repo's own settings deny something, a Codex run
+    // would be wider than they allow.
+    if agent_name == "codex" {
+        let mut denied: Vec<&str> = limits_of_repo
+            .denied
+            .iter()
+            .chain(&limits_of_repo.denied_paths)
+            .map(String::as_str)
+            .collect();
+        denied.sort_unstable();
+        denied.dedup();
+        if !denied.is_empty() {
+            return Err(Error::user(format!(
+                "the repo's own agent settings deny {}, and Codex cannot be told to: `codex exec` takes no list of tools, commands or paths to deny, so a Codex run would have wider permissions than the repo gives. Use --agent claude, or remove those rules if Codex may do this.",
+                denied.iter().map(|d| format!("`{d}`")).collect::<Vec<_>>().join(", ")
+            )));
+        }
     }
 
     // The rule and its violations, checked now.
@@ -302,6 +362,9 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         ));
     }
     out.push_str(&format!("Agent: {}\n", version_line));
+    if agent_name == "codex" {
+        out.push_str("Warning: Codex runs with a shell and can read any file the sandbox allows, your untracked .env files included; firescale cannot pass it the denied commands and paths. The diff guard, the re-check and the time limit are what held this run (ADR 0048).\n");
+    }
 
     // 10. The ledger: codes and counts only.
     let entry = LedgerEntry {

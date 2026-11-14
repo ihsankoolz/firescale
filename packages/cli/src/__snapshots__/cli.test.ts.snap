@@ -13,6 +13,7 @@ Usage:
   fscale sync [--check]        Repair drift: run the fixes again
   fscale verify [options]      Check, then lint, typecheck and test: the definition of done
   fscale tamper [options]      Only the tamper guard: what the change weakens, against the base
+  fscale ledger [--json]       Sum the agent fix runs: runs, pass rate and cost, per rule and agent
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
   fscale graph [--explain]     Print the project graph; --explain says where each edge comes from
@@ -26,7 +27,7 @@ Usage:
 
 Options:
   --rules <glob>   check, fix: only matching rules, e.g. "core/*" (comma-separated)
-  --json           check, verify, facts, graph, doctor: print JSON (see docs/)
+  --json           check, verify, facts, graph, doctor, ledger: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>;
@@ -47,7 +48,8 @@ Options:
   --packs <list>   init: rule packs to turn on, comma-separated (default: core,agent-ready)
   --force          init: run in a folder that is not empty (nothing is overwritten)
   --check          sync: change nothing, and exit 1 when sync would change something
-  --agent <name>   hooks: claude, codex or cursor; fix: the agent to run (fake, the stand-in)
+  --agent <name>   hooks: claude, codex or cursor; fix: the agent to run (claude, codex,
+                   or fake, the stand-in the tests use)
   --rule <id>      fix --agent: the rule to fix (default: the first with violations a
                    deterministic fix cannot repair)
   --all            hooks install: every supported agent

@@ -662,6 +662,8 @@ Decisions in ADR 0047: an adapter is a program speaking a small protocol (`--ver
 
 ## M28 — Agent adapters and `fscale ledger` ☐ (finish and test locally)
 
+Decisions in ADR 0048: the adapters are TypeScript programs speaking ADR 0047's protocol, started with Node per run (so the time limit stops the agent's whole tree), shipped in the `firescale` npm package as `agents/`; every flag is pinned in tests against stand-ins for the agents' CLIs; what is not confirmed from the agent itself is printed in the run's output and listed with the checks for the owner.
+
 **Build**
 
 - `packages/agents`: the adapter interface plus Claude Code and Codex adapters, in TypeScript, called through the bridge. Confirm each CLI's flags from its current docs and pin them in tests.
@@ -670,9 +672,9 @@ Decisions in ADR 0047: an adapter is a program speaking a small protocol (`--ver
 
 **Done when**
 
-- ☐ `fscale ledger` summarises a fixture ledger, with a snapshot test, and copes with a damaged line.
-- ☐ A fake-agent run that reports a cost shows that cost in `fscale ledger`.
-- ☐ Manual local test: a real agent fixes one real violation end to end. Result noted in the PR.
+- ☑ `fscale ledger` summarises a fixture ledger, with a snapshot test, and copes with a damaged line (`ledger.test.ts`: four damaged lines skipped and named, CRLF, JSON against its schema).
+- ☑ A fake-agent run that reports a cost shows that cost in `fscale ledger` (`agent-adapters.test.ts`, "shows the cost a fake-agent run reported"; the Claude Code stand-in's cost too).
+- ☐ Manual local test: a real agent fixes one real violation end to end. Result noted in the PR. Open: a deliberate run was not allowed in the build session; the owner's checks are listed in ADR 0048, "Manual checks".
 
 ---
 
