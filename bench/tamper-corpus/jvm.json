@@ -1,0 +1,513 @@
+{
+  "about": "Labelled changes for the tamper guard in Java and Kotlin (M32, ADR 0052), in the format of bench/tamper-corpus.json. expect lists the kinds of finding a case must give; an empty list means none. The cases were written together with the readers: their counts show the guard does what its ADRs say, not a measured rate.",
+  "cases": [
+    {
+      "name": "java: a JUnit test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "addsPrices is gone and Cart still exists.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a test disabled with @Disabled",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nimport org.junit.jupiter.api.Disabled;\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    @Disabled(\"flaky\")\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a whole test class disabled",
+      "expect": ["test-skipped"],
+      "note": "@Disabled on the class turns off every test in it.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nimport org.junit.jupiter.api.Disabled;\n@Disabled\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a test made Linux-only with @EnabledOnOs",
+      "expect": ["test-skipped"],
+      "note": "A JUnit 5 condition runs the test only sometimes, like cfg_attr(…, ignore).",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nimport org.junit.jupiter.api.condition.EnabledOnOs;\nimport org.junit.jupiter.api.condition.OS;\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    @EnabledOnOs(OS.LINUX)\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a TestNG test turned off with enabled = false",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartNgTest.java": "package com.acme;\n\nimport static org.testng.Assert.assertEquals;\n\nimport org.testng.annotations.Test;\n\npublic class CartNgTest {\n    @Test\n    public void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        assertEquals(cart.total(), 2);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartNgTest.java": "package com.acme;\n\nimport static org.testng.Assert.assertEquals;\n\nimport org.testng.annotations.Test;\n\npublic class CartNgTest {\n    @Test(enabled = false)\n    public void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        assertEquals(cart.total(), 2);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: assumeTrue(false) put first in a test",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The test aborts before it runs anything, so its assertions never run either.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nimport org.junit.jupiter.api.Assumptions;\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Assumptions.assumeTrue(false);\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "void addsPrices() {} still counts as a test, but one that does nothing.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: an assertTrue removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: assertEquals(5, cart.total()) replaced by assertTrue(true)",
+      "expect": ["assertion-removed"],
+      "note": "assertTrue(true) cannot fail, so it is not an assertion.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertTrue(true);\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: assertions wrapped in if (false)",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        if (false) {\n            assertEquals(5, cart.total());\n            assertTrue(cart.total() > 0);\n        }\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: @ValueSource rows cut from three to one",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "A @ParameterizedTest weighs the rows of its literal @ValueSource array.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/PriceTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.params.ParameterizedTest;\nimport org.junit.jupiter.params.provider.ValueSource;\n\nclass PriceTest {\n    @ParameterizedTest\n    @ValueSource(ints = {1, 2, 3})\n    void acceptsPositivePrices(int price) {\n        Cart cart = new Cart();\n        cart.add(price);\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/PriceTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.params.ParameterizedTest;\nimport org.junit.jupiter.params.provider.ValueSource;\n\nclass PriceTest {\n    @ParameterizedTest\n    @ValueSource(ints = {1})\n    void acceptsPositivePrices(int price) {\n        Cart cart = new Cart();\n        cart.add(price);\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a @SuppressWarnings added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n\n    @SuppressWarnings(\"unchecked\")\n    java.util.List<String> names(Object raw) {\n        return (java.util.List<String>) raw;\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a // NOPMD added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total; // NOPMD - kept for serialisation\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "The closing brace of addsPrices is missing, so its tests cannot be counted.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n}\n"
+      }
+    },
+    {
+      "name": "java: a test renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void sumsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a test moved to another test class",
+      "expect": [],
+      "note": "One test fewer in CartTest.java, one more in CartTotalsTest.java.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n}\n",
+        "src/test/java/com/acme/CartTotalsTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTotalsTest {\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a test file reformatted",
+      "expect": [],
+      "note": "Line breaks and indentation change; the syntax tree counts do not.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest\n{\n  @Test void startsEmpty()\n  {\n    Cart cart = new Cart();\n    assertEquals(\n      0,\n      cart.total());\n  }\n  @Test void addsPrices()\n  {\n    Cart cart = new Cart(); cart.add(2); cart.add(3);\n    assertEquals(5, cart.total()); assertTrue(cart.total() > 0);\n  }\n}\n"
+      }
+    },
+    {
+      "name": "java: assertTrue(total > 0) replaced by an AssertJ isEqualTo",
+      "expect": [],
+      "note": "One assertion for one, and a stricter one.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nimport static org.assertj.core.api.Assertions.assertThat;\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertThat(cart.total()).isEqualTo(5);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a test class deleted together with its subject",
+      "expect": [],
+      "note": "Cart.java and CartTest.java are both gone. CartTest names Cart without an import: a class of its own package, found in src/main/java.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/main/java/com/acme/Cart.java": null,
+        "src/test/java/com/acme/CartTest.java": null
+      }
+    },
+    {
+      "name": "java: an @Disabled removed",
+      "expect": [],
+      "note": "A skipped test turned back on.",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nimport org.junit.jupiter.api.Disabled;\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    @Disabled\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nimport org.junit.jupiter.api.Disabled;\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "java: a @SuppressWarnings in a comment or a string",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n}\n",
+        "src/test/java/com/acme/CartTest.java": "package com.acme;\n\nimport static org.junit.jupiter.api.Assertions.assertEquals;\nimport static org.junit.jupiter.api.Assertions.assertTrue;\n\nimport org.junit.jupiter.api.Test;\n\nclass CartTest {\n    @Test\n    void startsEmpty() {\n        Cart cart = new Cart();\n        assertEquals(0, cart.total());\n    }\n\n    @Test\n    void addsPrices() {\n        Cart cart = new Cart();\n        cart.add(2);\n        cart.add(3);\n        assertEquals(5, cart.total());\n        assertTrue(cart.total() > 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/main/java/com/acme/Cart.java": "package com.acme;\n\npublic class Cart {\n    private int total;\n\n    public void add(int price) {\n        total += price;\n    }\n\n    public int total() {\n        return total;\n    }\n\n    // @SuppressWarnings(\"unchecked\") was needed here once\n    String why() {\n        return \"@SuppressWarnings(\\\"all\\\") // NOPMD\";\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a kotlin.test test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "addsPrices is gone and Cart still exists.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a test ignored with @Ignore",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\nimport kotlin.test.Ignore\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    @Ignore\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "fun addsPrices() {} still counts as a test, but one that does nothing.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: an assertTrue removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest test turned into xtest",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        xtest(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest test turned off with config(enabled = false)",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\").config(enabled = false) {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest test name given a ! prefix",
+      "expect": ["test-skipped"],
+      "note": "Kotest does not run a test whose name starts with !.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"!adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest test focused with f:",
+      "expect": ["test-skipped"],
+      "note": "A top-level test named f:… is the only one of its spec that runs.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"f:starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: cart.total() shouldBe 5 made 5 shouldBe 5",
+      "expect": ["assertion-removed"],
+      "note": "5 shouldBe 5 cannot fail, so it is not an assertion.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            5 shouldBe 5\n        }\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: a shouldBe after return@test",
+      "expect": ["assertion-removed"],
+      "note": "The labelled return leaves the test before its assertion.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            return@test\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: a @Suppress added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n\n    @Suppress(\"MagicNumber\")\n    fun discount(): Int = sum * 7 / 100\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a // ktlint-disable added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/main/kotlin/com/acme/Cart.kt": "// ktlint-disable filename\npackage com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "The closing brace of addsPrices is missing, so its tests cannot be counted.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a test renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun sumsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest test moved to another context",
+      "expect": [],
+      "note": "Its id changes from with prices::adds them to totals::adds them; the counts do not.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"totals\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: a test moved to another test class",
+      "expect": [],
+      "note": "One test fewer in CartTest.kt, one more in CartTotalsTest.kt.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n}\n",
+        "src/test/kotlin/com/acme/CartTotalsTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTotalsTest {\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest spec reformatted",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n  test(\"starts empty\") { Cart().total() shouldBe 0 }\n  context(\"with prices\") {\n    test(\"adds them\") {\n      val cart = Cart(); cart.add(2); cart.add(3)\n      cart.total() shouldBe\n        5\n    }\n  }\n})\n"
+      }
+    },
+    {
+      "name": "kotlin: assertTrue(total > 0) replaced by shouldBe",
+      "expect": [],
+      "note": "One assertion for one, and a stricter one.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\nimport io.kotest.matchers.shouldBe\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        cart.total() shouldBe 5\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a Kotest spec deleted together with its subject",
+      "expect": [],
+      "note": "Cart.kt and CartSpec.kt are both gone. CartSpec names Cart without an import: a class of its own package, found in src/main/kotlin.",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartSpec.kt": "package com.acme\n\nimport io.kotest.core.spec.style.FunSpec\nimport io.kotest.matchers.shouldBe\n\nclass CartSpec : FunSpec({\n    test(\"starts empty\") {\n        Cart().total() shouldBe 0\n    }\n\n    context(\"with prices\") {\n        test(\"adds them\") {\n            val cart = Cart()\n            cart.add(2)\n            cart.add(3)\n            cart.total() shouldBe 5\n        }\n    }\n})\n"
+      },
+      "head": {
+        "src/main/kotlin/com/acme/Cart.kt": null,
+        "src/test/kotlin/com/acme/CartSpec.kt": null
+      }
+    },
+    {
+      "name": "kotlin: a @Suppress in a string",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n}\n",
+        "src/test/kotlin/com/acme/CartTest.kt": "package com.acme\n\nimport kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CartTest {\n    @Test\n    fun startsEmpty() {\n        val cart = Cart()\n        assertEquals(0, cart.total())\n    }\n\n    @Test\n    fun addsPrices() {\n        val cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        assertEquals(5, cart.total())\n        assertTrue(cart.total() > 0)\n    }\n}\n"
+      },
+      "head": {
+        "src/main/kotlin/com/acme/Cart.kt": "package com.acme\n\nclass Cart {\n    private var sum = 0\n\n    fun add(price: Int) {\n        sum += price\n    }\n\n    fun total(): Int = sum\n\n    fun why(): String = \"@Suppress(\\\"MagicNumber\\\") // ktlint-disable\"\n}\n"
+      }
+    }
+  ]
+}
