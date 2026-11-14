@@ -143,3 +143,33 @@ fn a_package_main_in_a_doc_comment_is_not_a_program() {
     fix_all(&f);
     assert!(!f.read(".gitignore").unwrap_or_default().contains("/web"));
 }
+
+// Found in review: a Python project is not a new Go module.
+#[test]
+fn a_project_of_another_language_without_a_known_manifest_gets_nothing() {
+    for (manifest, code) in [
+        ("setup.py", "svc/app.py"),
+        ("Gemfile", "lib/app.rb"),
+        ("README.md", "src/index.ts"),
+    ] {
+        let f = fixture(&[(manifest, "x\n".to_owned()), (code, "x\n".to_owned())]);
+        assert_eq!(findings(&f), Vec::<Diagnostic>::new(), "{manifest} {code}");
+        assert_eq!(fix_all(&f), Vec::<String>::new(), "{manifest} {code}");
+    }
+}
+
+// Found in review: tools/go.mod is another module.
+#[test]
+fn a_nested_modules_files_are_not_the_root_modules() {
+    let f = fixture(&[
+        ("go.mod", "module example.com/app\n\ngo 1.26.0\n".to_owned()),
+        (
+            "tools/go.mod",
+            "module example.com/app/tools\n\ngo 1.26.0\n".to_owned(),
+        ),
+        ("tools/tools.go", "package tools\n".to_owned()),
+        ("tools/tools_test.go", "package tools\n".to_owned()),
+    ]);
+    let ids: Vec<String> = findings(&f).into_iter().map(|d| d.rule_id).collect();
+    assert!(ids.iter().any(|id| id == "go/entry"), "{ids:?}");
+}

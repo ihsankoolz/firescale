@@ -16,6 +16,11 @@ pub const ID: &str = "go/go-mod";
 
 pub struct GoMod;
 
+/// The `go` line an existing `go.mod` without one gets: what the go tool
+/// assumes when there is none ("If the go directive is missing, go 1.16 is
+/// assumed", the Go module reference).
+pub const EXISTING_GO_VERSION: &str = "1.16";
+
 /// The `go.mod` of a new module.
 #[must_use]
 pub fn new_go_mod() -> String {
@@ -74,6 +79,14 @@ impl BuiltinRule for GoMod {
             )]);
         };
         let mut found = Vec::new();
+        if text.starts_with('\u{feff}') {
+            found.push(finding(
+                "go.mod",
+                "go.mod starts with a byte order mark, which the go tool rejects (\"unexpected input character\"). Save it as UTF-8 without one.".to_owned(),
+                Fixable::Manual,
+            ));
+            return Ok(found);
+        }
         if module_path(&text).is_none() {
             found.push(finding(
                 "go.mod",
@@ -84,7 +97,7 @@ impl BuiltinRule for GoMod {
         if !has_go_line(&text) {
             found.push(finding(
                 "go.mod",
-                format!("go.mod has no go line: the go tool then assumes Go 1.16 and turns off newer language features. `fscale sync` adds `go {GO_VERSION}`."),
+                format!("go.mod has no go line, so the go tool assumes Go 1.16 and turns off newer language features. `fscale sync` writes `go {EXISTING_GO_VERSION}`, which keeps how the module builds today; raise it on purpose (`go mod tidy -go=1.26.0`) when the code is ready for the newer rules."),
                 Fixable::Deterministic,
             ));
         }
@@ -100,7 +113,7 @@ impl BuiltinRule for GoMod {
             create(ctx, "go.mod", &new_go_mod(), &mut result)?;
             return Ok(result);
         };
-        if has_go_line(&text) {
+        if has_go_line(&text) || text.starts_with('\u{feff}') {
             return Ok(result);
         }
         let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
@@ -114,11 +127,18 @@ impl BuiltinRule for GoMod {
                 before.push_str(eol);
             }
         }
-        let go_line = if module.is_some() {
-            format!("{eol}go {GO_VERSION}{eol}")
+        // What the go tool assumes today, never a newer version: moving an
+        // existing module from 1.16 to a later `go` line prunes its module
+        // graph and changes language rules, which can stop it building
+        // (found in review).
+        let mut go_line = if module.is_some() {
+            format!("{eol}go {EXISTING_GO_VERSION}{eol}")
         } else {
-            format!("go {GO_VERSION}{eol}")
+            format!("go {EXISTING_GO_VERSION}{eol}")
         };
+        if lines.get(at).is_some_and(|next| !next.trim().is_empty()) {
+            go_line.push_str(eol);
+        }
         lines.insert(at, go_line);
         ctx.write("go.mod", &lines.concat())?;
         result.changed_files.push("go.mod".to_owned());

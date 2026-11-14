@@ -15,6 +15,14 @@ fn requirements_read_from_lines_and_blocks() {
     ));
     assert!(!requires("module a\n\nrequire (\n)\n"));
     assert!(!requires("module a\n// require x v1\n"));
+    assert!(!requires("module a\n\nrequires x v1\n"));
+    // Found in review: a requirement replaced by a folder needs no checksum.
+    assert!(!requires(
+        "module a\n\nrequire example.com/lib v0.0.0\n\nreplace example.com/lib => ./lib\n"
+    ));
+    assert!(!requires("module a\n\nrequire (\n\texample.com/lib v0.0.0\n)\n\nreplace (\n\texample.com/lib v0.0.0 => ../lib\n)\n"));
+    assert!(requires("module a\n\nrequire (\n\texample.com/lib v0.0.0\n\tgolang.org/x/text v0.20.0\n)\n\nreplace example.com/lib => ./lib\n"));
+    assert!(requires("module a\n\nrequire example.com/lib v1.0.0\n\nreplace example.com/lib => example.com/fork v1.0.1\n"));
 }
 
 #[test]

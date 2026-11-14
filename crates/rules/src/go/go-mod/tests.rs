@@ -44,9 +44,7 @@ fn a_missing_go_line_is_added_after_the_module_line_in_the_files_line_endings() 
     f.fix(&GoMod, &Options::new()).unwrap();
     assert_eq!(
         f.read("go.mod").as_deref(),
-        Some(
-            "module example.com/tool\r\n\r\ngo 1.26.0\r\n\r\nrequire golang.org/x/text v0.20.0\r\n"
-        )
+        Some("module example.com/tool\r\n\r\ngo 1.16\r\n\r\nrequire golang.org/x/text v0.20.0\r\n")
     );
     assert!(f
         .fix(&GoMod, &Options::new())
@@ -58,7 +56,7 @@ fn a_missing_go_line_is_added_after_the_module_line_in_the_files_line_endings() 
     f.fix(&GoMod, &Options::new()).unwrap();
     assert_eq!(
         f.read("go.mod").as_deref(),
-        Some("module example.com/tool\n\ngo 1.26.0\n")
+        Some("module example.com/tool\n\ngo 1.16\n")
     );
 }
 
@@ -74,6 +72,37 @@ fn no_module_line_is_for_a_person() {
 fn another_stack_without_go_mod_is_left_alone() {
     let f = fixture(&[("package.json", "{ \"name\": \"web\" }\n".to_owned())]);
     assert!(f.check(&GoMod, &Options::new()).unwrap().is_empty());
+    assert!(f
+        .fix(&GoMod, &Options::new())
+        .unwrap()
+        .changed_files
+        .is_empty());
+}
+
+// Found in review: an existing module keeps how it builds.
+#[test]
+fn an_existing_module_gets_the_go_line_the_go_tool_assumes_and_one_blank_line_around_it() {
+    let f = with(
+        |_| false,
+        &[(
+            "go.mod",
+            "module example.com/old\nrequire rsc.io/quote v1.5.2\n",
+        )],
+    );
+    f.fix(&GoMod, &Options::new()).unwrap();
+    assert_eq!(
+        f.read("go.mod").as_deref(),
+        Some("module example.com/old\n\ngo 1.16\n\nrequire rsc.io/quote v1.5.2\n")
+    );
+}
+
+#[test]
+fn a_byte_order_mark_is_reported_and_left_alone() {
+    let f = with(|_| false, &[("go.mod", "\u{feff}module example.com/app\n")]);
+    let found = f.check(&GoMod, &Options::new()).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].fixable, Fixable::Manual);
+    assert!(found[0].message.contains("byte order mark"));
     assert!(f
         .fix(&GoMod, &Options::new())
         .unwrap()

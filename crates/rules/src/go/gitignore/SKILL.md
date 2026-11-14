@@ -9,9 +9,9 @@ description: Fixes violations of the firescale rule go/gitignore by ignoring wha
 
 `.gitignore` ignores what the go tool writes, which does not belong in git:
 
-- the program `go build ./...` writes at the root when the root package is `main`, named after the last element of the module path (`/app` for `example.com/app`);
+- the program `go build ./...` writes at the root when the root package is `main`, named after the last element of the module path (`/app` for `example.com/app`); not when a folder of that name is at the root (the line would hide it), nor for a `//go:build ignore` generator;
 - `*.exe` (programs built for Windows), `*.test` (test binaries from `go test -c`), `*.out` (coverage profiles such as `cover.out`);
-- `go.work` and `go.work.sum`: a local workspace the Go team advises not to commit.
+- `go.work` and `go.work.sum`: a local workspace the Go module reference advises not to commit. A `go.work` that is tracked, or that a line such as `!go.work` un-ignores, is the team's choice and is left as it is.
 
 ## Manual fix
 

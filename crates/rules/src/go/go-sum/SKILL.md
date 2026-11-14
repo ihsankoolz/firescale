@@ -7,7 +7,7 @@ description: Explains how to fix violations of the firescale rule go/go-sum, whi
 
 ## What this rule enforces and why
 
-When `go.mod` requires other modules, `go.sum` is committed beside it. It holds the checksums of every module the build uses: without it the go tool stops with "missing go.sum entry", and nothing checks that what it downloads on another machine is what was tested.
+When `go.mod` requires other modules, `go.sum` is committed beside it (a requirement a `replace` points to a folder needs none). It holds the checksums of every module the build uses: without it the go tool stops with "missing go.sum entry", and nothing checks that what it downloads on another machine is what was tested.
 
 ## Manual fix
 

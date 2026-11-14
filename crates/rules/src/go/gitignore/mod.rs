@@ -8,8 +8,11 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{applies, finding, go_files, module_path, package_name, program_name, MODULE};
+use super::{
+    applies, build_constrained, finding, go_files, module_path, package_name, program_name, MODULE,
+};
 use crate::core::gitignore_basics::is_covered;
+use firescale_core::walk::gitignore_covers_file;
 
 #[cfg(test)]
 mod tests;
@@ -28,35 +31,65 @@ pub const ENTRIES: [&str; 5] = ["*.exe", "*.test", "*.out", "go.work", "go.work.
 fn missing(ctx: &RuleContext, text: &str) -> Result<Vec<String>> {
     let mut wanted = Vec::new();
     if let Some(program) = root_program(ctx)? {
-        wanted.push(format!("/{program}"));
+        if !gitignore_covers_file(text, &program) && !negated(text, &program) {
+            wanted.push(format!("/{program}"));
+        }
     }
-    wanted.extend(ENTRIES.iter().map(|entry| (*entry).to_owned()));
-    Ok(wanted
-        .into_iter()
-        .filter(|line| !is_covered(text, line.trim_start_matches('/')))
-        .collect())
+    for entry in ENTRIES {
+        if is_covered(text, entry) || negated(text, entry) {
+            continue;
+        }
+        // A tracked `go.work` is the team's choice: the skill says to report
+        // it, and ignoring it would hide it (found in review).
+        let tracked_work =
+            entry.starts_with("go.work") && ctx.git().is_tracked(entry).unwrap_or(false);
+        if !tracked_work {
+            wanted.push(entry.to_owned());
+        }
+    }
+    Ok(wanted)
+}
+
+/// True when `text` has a line that un-ignores `entry` (`!go.work`,
+/// `!/go.work`): a person's choice, never reversed by a line added after it
+/// (found in review).
+fn negated(text: &str, entry: &str) -> bool {
+    text.lines().any(|line| {
+        line.trim()
+            .strip_prefix('!')
+            .is_some_and(|pattern| pattern.trim_start_matches('/') == entry)
+    })
 }
 
 /// The program `go build ./...` writes at the root, when the root package
 /// is `main` (or the module has no Go code yet: `go/entry` writes one).
 fn root_program(ctx: &RuleContext) -> Result<Option<String>> {
     let files = go_files(ctx)?;
+    // A file built only sometimes (a `//go:build ignore` generator that is
+    // `package main`) does not make the root a program (found in review).
     let main_at_root = files.is_empty()
         || files
             .iter()
             .filter(|file| !file.contains('/') && !file.ends_with("_test.go"))
             .any(|file| {
-                ctx.read(file)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|text| package_name(&text) == Some("main"))
+                ctx.read(file).ok().flatten().is_some_and(|text| {
+                    !build_constrained(&text) && package_name(&text) == Some("main")
+                })
             });
     if !main_at_root {
         return Ok(None);
     }
     let go_mod = ctx.read("go.mod")?;
     let module = go_mod.as_deref().map_or(Some(MODULE), module_path);
-    Ok(module.map(|module| program_name(module).to_owned()))
+    let Some(program) = module.map(|module| program_name(module).to_owned()) else {
+        return Ok(None);
+    };
+    // `/server` would also ignore a folder named server: never then (found
+    // in review: a module with a root program and a `server/` package).
+    if ctx.root().join(&program).is_dir() {
+        return Ok(None);
+    }
+    Ok(Some(program))
 }
 
 impl BuiltinRule for GoGitignore {
@@ -115,7 +148,11 @@ impl BuiltinRule for GoGitignore {
         } else {
             eol
         };
-        let mut block = vec!["# Go".to_owned()];
+        // The header once, also when a later run adds more lines.
+        let mut block = Vec::new();
+        if !current.lines().any(|line| line.trim() == "# Go") {
+            block.push("# Go".to_owned());
+        }
         block.extend(missing);
         ctx.write(
             ".gitignore",

@@ -16,10 +16,10 @@ pub const ID: &str = "go/go-sum";
 
 pub struct GoSum;
 
-/// True when `go.mod` requires a module: a `require` line or block with an
-/// entry.
-#[must_use]
-pub fn requires(go_mod: &str) -> bool {
+/// The directives of one kind in `go.mod`, from lines and blocks: each
+/// entry without the keyword and comments (`golang.org/x/text v0.20.0`).
+fn directives<'t>(go_mod: &'t str, keyword: &str) -> Vec<&'t str> {
+    let mut found = Vec::new();
     let mut in_block = false;
     for line in go_mod.lines() {
         let line = line.split("//").next().unwrap_or_default().trim();
@@ -27,25 +27,52 @@ pub fn requires(go_mod: &str) -> bool {
             if line == ")" {
                 in_block = false;
             } else if !line.is_empty() {
-                return true;
+                found.push(line);
             }
             continue;
         }
-        if let Some(rest) = line.strip_prefix("require") {
-            let rest = rest.trim();
-            if rest == "(" {
-                in_block = true;
-            } else if !rest
-                .trim_matches(|c| c == '(' || c == ')')
-                .trim()
-                .is_empty()
-            {
-                // `require x v1`, or a block on one line.
-                return true;
+        let Some(rest) = line.strip_prefix(keyword) else {
+            continue;
+        };
+        if !rest.starts_with([' ', '\t', '(']) {
+            continue;
+        }
+        let rest = rest.trim();
+        if rest == "(" {
+            in_block = true;
+        } else {
+            let inline = rest.trim_matches(|c| c == '(' || c == ')').trim();
+            if !inline.is_empty() {
+                found.push(inline);
             }
         }
     }
-    false
+    found
+}
+
+/// True when `go.mod` requires a module that needs a checksum: one no
+/// `replace` points to a folder (`replace example.com/lib => ./lib` needs
+/// none, and `go mod tidy` writes no `go.sum` for it; found in review).
+#[must_use]
+pub fn requires(go_mod: &str) -> bool {
+    let local: Vec<&str> = directives(go_mod, "replace")
+        .into_iter()
+        .filter_map(|entry| {
+            let (from, to) = entry.split_once("=>")?;
+            let to = to.trim();
+            let is_folder = to.starts_with("./")
+                || to.starts_with("../")
+                || to.starts_with('/')
+                || to.starts_with(".\\")
+                || to.starts_with("..\\")
+                || to.get(1..3) == Some(":\\");
+            is_folder.then(|| from.split_whitespace().next().unwrap_or_default())
+        })
+        .collect();
+    directives(go_mod, "require").into_iter().any(|entry| {
+        let module = entry.split_whitespace().next().unwrap_or_default();
+        !local.contains(&module)
+    })
 }
 
 impl BuiltinRule for GoSum {

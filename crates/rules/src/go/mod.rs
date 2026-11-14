@@ -44,18 +44,74 @@ pub const MODULE: &str = "example.com/app";
 
 /// Root files that mean the repo is another stack's: the pack applies to
 /// them only when they also have a `go.mod`.
-const OTHER_MANIFESTS: [&str; 10] = [
+const OTHER_MANIFESTS: [&str; 20] = [
     "package.json",
+    "deno.json",
+    "deno.jsonc",
     "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "setup.cfg",
+    "Pipfile",
     "Cargo.toml",
     "pom.xml",
     "build.gradle",
     "build.gradle.kts",
+    "build.sbt",
     "CMakeLists.txt",
+    "meson.build",
     "Package.swift",
     "pubspec.yaml",
-    "requirements.txt",
+    "Gemfile",
+    "composer.json",
+    "mix.exs",
 ];
+
+/// Source files of other languages: a repo with any is not a new Go module
+/// (found in review: a Python project with only `setup.py` and code in a
+/// folder would have been given a `go.mod`).
+const OTHER_CODE: [&str; 24] = [
+    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "rs", "java", "kt", "kts", "scala", "c", "h",
+    "cc", "cpp", "hpp", "cs", "fs", "swift", "rb", "php", "dart", "ex",
+];
+
+/// The same, as globs for the cache.
+const OTHER_CODE_GLOBS: [&str; 24] = [
+    "**/*.py",
+    "**/*.js",
+    "**/*.jsx",
+    "**/*.mjs",
+    "**/*.cjs",
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.rs",
+    "**/*.java",
+    "**/*.kt",
+    "**/*.kts",
+    "**/*.scala",
+    "**/*.c",
+    "**/*.h",
+    "**/*.cc",
+    "**/*.cpp",
+    "**/*.hpp",
+    "**/*.cs",
+    "**/*.fs",
+    "**/*.swift",
+    "**/*.rb",
+    "**/*.php",
+    "**/*.dart",
+    "**/*.ex",
+];
+
+/// True for a path the go tool looks at: not in a folder whose name starts
+/// with `.` or `_`, nor in `testdata` or `vendor`.
+fn go_sees(path: &str) -> bool {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    parts.pop();
+    parts
+        .iter()
+        .all(|folder| !folder.starts_with(['.', '_']) && !matches!(*folder, "testdata" | "vendor"))
+}
 
 /// True when the pack applies to the repo root: it has a `go.mod`, or it
 /// has no Go module anywhere and no manifest of another stack (a new
@@ -65,7 +121,17 @@ pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
     if any_exists(ctx, &["go.mod"]) {
         return Ok(true);
     }
-    Ok(!any_exists(ctx, &OTHER_MANIFESTS) && modules_below(ctx)?.is_empty())
+    if any_exists(ctx, &OTHER_MANIFESTS) {
+        return Ok(false);
+    }
+    let files = firescale_core::walk::walk_files(ctx.root())?;
+    let other_code = files.iter().any(|path| {
+        go_sees(path)
+            && path
+                .rsplit_once('.')
+                .is_some_and(|(_, extension)| OTHER_CODE.contains(&extension))
+    });
+    Ok(!other_code && modules_below(ctx)?.is_empty())
 }
 
 /// The folders below the root that hold a `go.mod`, as the go tool sees
@@ -73,13 +139,26 @@ pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
 pub(crate) fn modules_below(ctx: &RuleContext) -> Result<Vec<String>> {
     Ok(firescale_core::walk::walk_files(ctx.root())?
         .into_iter()
+        .filter(|path| go_sees(path))
         .filter_map(|path| path.strip_suffix("/go.mod").map(str::to_owned))
-        .filter(|folder| {
-            folder
-                .split('/')
-                .all(|part| !part.starts_with(['.', '_']) && !matches!(part, "testdata" | "vendor"))
-        })
         .collect())
+}
+
+/// True when a Go file has a build constraint (`//go:build …` or the old
+/// `// +build …`) before its package clause: it is built only sometimes,
+/// or never (`ignore`, a generator's `package main`; found in review).
+#[must_use]
+pub fn build_constrained(source: &str) -> bool {
+    for line in source.trim_start_matches('\u{feff}').lines() {
+        let line = line.trim();
+        if line.starts_with("//go:build") || line.starts_with("// +build") {
+            return true;
+        }
+        if line.starts_with("package") {
+            return false;
+        }
+    }
+    false
 }
 
 /// The package a Go file declares: its first line of code, after comments,
@@ -88,7 +167,7 @@ pub(crate) fn modules_below(ctx: &RuleContext) -> Result<Vec<String>> {
 #[must_use]
 pub fn package_name(source: &str) -> Option<&str> {
     let mut in_block = false;
-    for line in source.lines() {
+    for line in source.trim_start_matches('\u{feff}').lines() {
         let mut line = line.trim();
         if in_block {
             let Some(end) = line.find("*/") else {
@@ -121,7 +200,11 @@ pub fn package_name(source: &str) -> Option<&str> {
 /// What every rule of the pack reads besides its own files, for the cache.
 pub(crate) fn inputs(own: &[&str]) -> Vec<String> {
     let mut all: Vec<String> = own.iter().map(|s| (*s).to_owned()).collect();
-    for shared in ["go.mod", "**/go.mod"].into_iter().chain(OTHER_MANIFESTS) {
+    for shared in ["go.mod", "**/go.mod"]
+        .into_iter()
+        .chain(OTHER_MANIFESTS)
+        .chain(OTHER_CODE_GLOBS)
+    {
         if !all.iter().any(|a| a == shared) {
             all.push(shared.to_owned());
         }
@@ -162,18 +245,22 @@ pub fn program_name(module: &str) -> &str {
 /// The module's Go files, as the go tool sees them: not in a folder whose
 /// name starts with `.` or `_`, nor in `testdata` or `vendor`.
 pub(crate) fn go_files(ctx: &RuleContext) -> Result<Vec<String>> {
+    // A folder with its own `go.mod` is another module (found in review:
+    // `tools/go.mod`'s files counted as the root module's).
+    let nested: Vec<String> = modules_below(ctx)?
+        .into_iter()
+        .map(|folder| format!("{folder}/"))
+        .collect();
     Ok(firescale_core::walk::walk_files(ctx.root())?
         .into_iter()
         .filter(|path| {
-            let mut parts: Vec<&str> = path.split('/').collect();
-            let Some(name) = parts.pop() else {
-                return false;
-            };
+            let name = path.rsplit('/').next().unwrap_or(path);
             name.ends_with(".go")
                 && !name.starts_with(['.', '_'])
-                && parts.iter().all(|folder| {
-                    !folder.starts_with(['.', '_']) && !matches!(*folder, "testdata" | "vendor")
-                })
+                && go_sees(path)
+                && !nested
+                    .iter()
+                    .any(|folder| path.starts_with(folder.as_str()))
         })
         .collect())
 }
