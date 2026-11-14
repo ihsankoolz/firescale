@@ -7,7 +7,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 Long run started 2026-11-14 00:59 UTC: M25, M26, then M27, M28, M29, M30 in order, one pull request each, merged on green, restarting from main between them. **Stop after M30 is merged or at 2026-11-15 21:46 UTC, whichever comes first.** The version stays 0.4.0; never push a tag.
 
 - **Done:** M25 merged ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045).
-- **Now:** M26 (ADR 0046): approvals for changed snapshots and expected values (built, tested), the real-history run (1,350 commits, 711 findings labelled, false positives fixed, rerun labelled), the miss measurement on `bench/tamper-cheats.json`. Left: ADR 0046, docs, RESULTS, review, pull request.
+- **Now:** M26 (ADR 0046) is built, reviewed and measured; its pull request is open. Next: M27 (guarded agent runner). Agent CLI facts gathered for M27/M28: Claude Code flags confirmed from code.claude.com (CLI reference, headless, permissions; changelog 2.1.325); Codex docs host unreachable, flags read from its source at `rust-v0.169.0` (`codex-rs/exec/src/cli.rs`, `exec_events.rs`, `cli/src/login.rs`); `-c`, `--sandbox`, `--cd`, `--model` live in shared options not read, so mark them unverified.
 - **Branch:** milestones are pushed to `claude/beautiful-bardeen-gpgxyw` (the session's branch); after each merge the next milestone starts from `main` on a new local branch and is pushed to that same remote branch only once it holds just merged history (a force push is not allowed here, so if the remote branch has unmerged commits, use a new `m<N>-<name>` branch instead).
 - **Check-ins:** a scheduled check-in ("Read HANDOFF.md, 'In progress', and continue. Schedule the next check-in first.") is kept about 60 minutes ahead; renew it at the start of each milestone and hourly. Cancel it when the run ends.
 - **M26 data:** the clones are in the scratch folder (`history/`), re-creatable with `git clone --depth 400 --single-branch`; labels are in `bench/tamper-history.json`; the labelling brief is in ADR 0046.
@@ -36,6 +36,12 @@ Long run started 2026-11-14 00:59 UTC: M25, M26, then M27, M28, M29, M30 in orde
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on M26, for whoever touches approvals or the measured rates (ADR 0046):
+
+- Approval kinds: `Kind::needs_approval()` (`snapshot-changed`, `expected-changed`); `TamperReport.approvals` is `Some` only in `fscale tamper --pr-base` in a `pull_request_target` run (`--approvals <reviews.json>`, else no approvals); `blocks()`/`counts_against()` decide. Snapshot and pairing code: `tamper/approval.rs`; reviews parser: `approval::approvers`.
+- Real-history tools: `bench/tamper-history.mjs` (runs `fscale tamper --head c --base c^`), `bench/tamper-history.json` (findings, labels, reasons, before and after), `bench/tamper-history-report.mjs` (tables with Wilson intervals), `bench/tamper-misses.mjs` on the held-out `bench/tamper-cheats.json` (never tune a detector on it).
+- The false-positive fixes live in `tamper/mod.rs`: the `@ts-expect-error` directive in JS test files, `excused_skips` (only when no base test went away) and `converted`, `copied_from_base` (line-level only, same file kind, 50 lookups), `expected_changes` (within a test or a renamed one).
 
 Notes on M25, for whoever builds M26 or touches the tamper guard's config detectors (ADR 0045):
 

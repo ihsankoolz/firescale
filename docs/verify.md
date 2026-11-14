@@ -169,7 +169,7 @@ Findings are **report-only** by default: they are listed with file and line (a d
 
 In GitHub Actions, `--pr-base` (for `verify` and `tamper`) takes the base from the pull request event GitHub gives the run, never from a ref in the clone: the first parent of the merge commit GitHub made, or for `pull_request_target` the base branch and the pull request's head commit. If it cannot find them it fails rather than judging nothing. Locally the base comes from your refs, which an agent can move: there the guard is a tripwire, and CI's `tamper-guard` job ([ci.md](ci.md)) is where it is enforced (ADR 0045 lists what is and is not protected).
 
-How often it is wrong is measured in `bench/RESULTS.md` (ADR 0046): on 1,200 commits of eight public repos, 19.1% of findings were labelled false after the fixes that measurement led to (1.8% of commits had a false finding), and it missed 42 of 98 cheating changes written to test it. Read the limits there before the numbers.
+How often it is wrong is measured in `bench/RESULTS.md` (ADR 0046): on 1,200 commits of eight public repos, 20.5% of findings were labelled false after the fixes that measurement led to (2.0% of commits had a false finding), and it missed 42 of 98 cheating changes written to test it. Read the limits there before the numbers.
 
 ## The step cache
 

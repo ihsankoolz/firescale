@@ -9754,6 +9754,19 @@
           "reason": "#![allow(warnings)] newly added."
         },
         {
+          "id": "F61",
+          "repo": "axios/axios",
+          "language": "js",
+          "commit": "28e9b84ac59c034260c1927f4a0b7c022b6b0071",
+          "kind": "expected-changed",
+          "file": "tests/unit/estimateDataURLDecodedBytes.test.js",
+          "line": 14,
+          "onBase": false,
+          "what": "assert.strictEqual(estimateDataURLBufferAllocation(scheme + 'text/plain,payload'), 7) (on the base: assert.strictEqual(estimateDataURLBufferAllocation(scheme + 'text/plain,payload'), 0), line 14)",
+          "label": true,
+          "reason": "Existing assertion's expected value changed from 0 to 7."
+        },
+        {
           "id": "F92",
           "repo": "axios/axios",
           "language": "js",
@@ -9817,6 +9830,58 @@
           "what": "await assert.rejects( fetchAxios.get(`http://localhost:${server.address().port}/`, { maxContentLength: 512, }), (err) => { assert.strictEqual(err.code, 'ERR_BAD_RESPONSE'); assert.match(err.message, /",
           "label": false,
           "reason": "Only the request URL/port setup changed; expected values untouched."
+        },
+        {
+          "id": "F97",
+          "repo": "axios/axios",
+          "language": "js",
+          "commit": "d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "kind": "test-skipped",
+          "file": "tests/unit/adapters/fetch.test.js",
+          "line": 207,
+          "onBase": false,
+          "what": "supports fetch with nodejs > should pass a fully resolved Request and safe options to a custom fetch implementation",
+          "label": false,
+          "reason": "New test added; nothing skipped."
+        },
+        {
+          "id": "F98",
+          "repo": "axios/axios",
+          "language": "js",
+          "commit": "d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "kind": "test-skipped",
+          "file": "tests/unit/adapters/fetch.test.js",
+          "line": 261,
+          "onBase": false,
+          "what": "supports fetch with nodejs > should ignore Request options inherited only from Object.prototype",
+          "label": false,
+          "reason": "New test added; nothing skipped."
+        },
+        {
+          "id": "F99",
+          "repo": "axios/axios",
+          "language": "js",
+          "commit": "d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "kind": "test-skipped",
+          "file": "tests/unit/adapters/fetch.test.js",
+          "line": 287,
+          "onBase": false,
+          "what": "supports fetch with nodejs > should expose an unfollowed redirect response in Node when maxRedirects is zero",
+          "label": false,
+          "reason": "New test added; nothing skipped."
+        },
+        {
+          "id": "F100",
+          "repo": "axios/axios",
+          "language": "js",
+          "commit": "d19040bda7a8be2f82c3c6e1a5bc03917daee39a",
+          "kind": "test-skipped",
+          "file": "tests/unit/adapters/fetch.test.js",
+          "line": 1322,
+          "onBase": false,
+          "what": "supports fetch with nodejs > env config > should pass safe options when the Request object is unavailable",
+          "label": false,
+          "reason": "New test added; nothing skipped."
         },
         {
           "id": "F124",
@@ -11379,6 +11444,19 @@
           "reason": "@ts-expect-error asserts expected type error in a type fixture."
         },
         {
+          "id": "F254",
+          "repo": "honojs/hono",
+          "language": "ts",
+          "commit": "8b05c774ef1555c70f5ba5e2991b7e77cc3635cc",
+          "kind": "expected-changed",
+          "file": "src/middleware/serve-static/index.test.ts",
+          "line": 78,
+          "onBase": false,
+          "what": "expect(await res.text()).toBe(`Hello in ${path}`) (on the base: expect(await res.text()).toBe('Hello in static/炎.txt'), line 75)",
+          "label": false,
+          "reason": "Test parametrized; first case still expects same value, so no real expected change."
+        },
+        {
           "id": "F255",
           "repo": "honojs/hono",
           "language": "ts",
@@ -11405,6 +11483,19 @@
           "reason": "Lambda tests moved to adapters and run by ci-adapters on pull requests."
         },
         {
+          "id": "F264",
+          "repo": "honojs/hono",
+          "language": "ts",
+          "commit": "b877827fccde0be4ee78457ae8b65db2436139f9",
+          "kind": "suppression-added",
+          "file": "adapters/aws-lambda/src/types.ts",
+          "line": 1,
+          "onBase": false,
+          "what": "/* eslint-disable @typescript-eslint/no-explicit-any */ (eslint-range:@typescript-eslint/no-explicit-any)",
+          "label": false,
+          "reason": "Copied from existing src/adapter code that keeps it; no new weakening."
+        },
+        {
           "id": "F280",
           "repo": "honojs/hono",
           "language": "ts",
@@ -11427,6 +11518,19 @@
           "line": 1,
           "onBase": false,
           "what": "/* eslint-disable @typescript-eslint/no-explicit-any */ (eslint-range:@typescript-eslint/no-explicit-any)",
+          "label": false,
+          "reason": "Copied from existing src/adapter code that keeps it; no new weakening."
+        },
+        {
+          "id": "F288",
+          "repo": "honojs/hono",
+          "language": "ts",
+          "commit": "fc2343dbad8af7ab82bc4a6c6907e57416aed878",
+          "kind": "suppression-added",
+          "file": "adapters/bun/src/serve-static.ts",
+          "line": 1,
+          "onBase": false,
+          "what": "/* eslint-disable @typescript-eslint/ban-ts-comment */ (eslint-range:@typescript-eslint/ban-ts-comment)",
           "label": false,
           "reason": "Copied from existing src/adapter code that keeps it; no new weakening."
         },
@@ -12211,6 +12315,19 @@
           "reason": "Existing assertion's expected value changed."
         },
         {
+          "id": "F361",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "7e13ee3d78a21a0a04b3aa9456e0a9142f879137",
+          "kind": "test-skipped",
+          "file": "crates/core/src/stepcache.rs",
+          "line": 2164,
+          "onBase": false,
+          "what": "tests::the_version_of_npm_is_read_from_npm_cmd_beside_a_shell_script",
+          "label": false,
+          "reason": "New Windows-only test added with cfg(windows); nothing existing was skipped."
+        },
+        {
           "id": "F362",
           "repo": "ihsankoolz/firescale",
           "language": "this",
@@ -12471,6 +12588,19 @@
           "reason": "Stored snapshot rewritten."
         },
         {
+          "id": "F382",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "60ab2c7e89a44d0c8a7f43eaaf1b1afea983191b",
+          "kind": "test-skipped",
+          "file": "crates/core/src/blame.rs",
+          "line": 2085,
+          "onBase": false,
+          "what": "tests::the_head_overlay_never_writes_through_a_link_the_commit_holds",
+          "label": false,
+          "reason": "New cfg(unix) test added; no existing test was skipped."
+        },
+        {
           "id": "F383",
           "repo": "ihsankoolz/firescale",
           "language": "this",
@@ -12521,6 +12651,19 @@
           "what": "assert_eq!(TestRunner::of(\"cargo build\", None), None) (on the base: assert_eq!(TestRunner::of(\"cargo test\", None), None), line 443)",
           "label": true,
           "reason": "Expected input literal changed (cargo test now recognised)."
+        },
+        {
+          "id": "F388",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "28115665ff400b4244233d59ae1d1e9b8e2332b2",
+          "kind": "test-skipped",
+          "file": "crates/core/src/blame.rs",
+          "line": 1419,
+          "onBase": false,
+          "what": "tests::a_node_modules_with_a_workspace_link_is_never_linked",
+          "label": false,
+          "reason": "New cfg(unix) test added; no existing test was skipped."
         },
         {
           "id": "F389",
@@ -12768,6 +12911,45 @@
           "what": "expect(result.stderr).toBe( 'fscale: firescale.config.json: unknown verify step \"tests\". Allowed steps: lint, typecheck, test; other keys: timeout, ci, failOnSkipped, stopWhenServiceDown, stopAfterErr",
           "label": true,
           "reason": "Expected error string gained stopAfterErrors."
+        },
+        {
+          "id": "F412",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "50018c257fcd6bf9ba95ffb7501c190288256471",
+          "kind": "expected-changed",
+          "file": "crates/core/src/verify.rs",
+          "line": 4033,
+          "onBase": false,
+          "what": "assert_eq!( evidence, \"every test so far has errored (0 passed, 0 failed, 4 errors), the output names it, and .env.example (POSTGRES_SERVER) lists it\" ) (on the base: assert_eq!( evidence, \"every test",
+          "label": true,
+          "reason": "Expected evidence string in existing assert_eq changed."
+        },
+        {
+          "id": "F413",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "50018c257fcd6bf9ba95ffb7501c190288256471",
+          "kind": "expected-changed",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 530,
+          "onBase": false,
+          "what": "expect(Date.now() - before).toBeLessThan(20_000) (on the base: expect(Date.now() - before).toBeLessThan(25000), line 456)",
+          "label": false,
+          "reason": "The old test was replaced by a different test; 20_000 is a new assertion, not an edited 25000."
+        },
+        {
+          "id": "F414",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "50018c257fcd6bf9ba95ffb7501c190288256471",
+          "kind": "expected-changed",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 535,
+          "onBase": false,
+          "what": "expect(result.stdout).toContain('stopped early after') (on the base: expect(result.stdout).toContain(`while PostgreSQL on localhost:${port} was not running`), line 468)",
+          "label": false,
+          "reason": "'stopped early after' belongs to a new test, not an edit of the old assertion."
         },
         {
           "id": "F415",
@@ -13186,6 +13368,32 @@
           "reason": "Expected substring changed."
         },
         {
+          "id": "M1",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "e100a588a15503275e5a5022a7ecd41510e18d71",
+          "kind": "snapshot-changed",
+          "file": "packages/cli/src/__snapshots__/core-pack.test.ts.snap",
+          "line": 3,
+          "onBase": false,
+          "what": "snapshot `the agent-ready pack > reports an empty repo as not agent-ready, and passes once sync has run 1` was rewritten",
+          "label": true,
+          "reason": "Existing test's snapshot content was substantially rewritten (test title also renamed), so the stored expected output changed."
+        },
+        {
+          "id": "M2",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "e100a588a15503275e5a5022a7ecd41510e18d71",
+          "kind": "snapshot-changed",
+          "file": "packages/cli/src/__snapshots__/scaffold.test.ts.snap",
+          "line": 147,
+          "onBase": false,
+          "what": "snapshot `fscale init > turns on core and agent-ready by default and leaves nothing for a person 1` was rewritten",
+          "label": true,
+          "reason": "Existing init test's snapshot was rewritten to a different output (renamed test, new content), a real change to the stored value."
+        },
+        {
           "id": "F448",
           "repo": "ihsankoolz/firescale",
           "language": "this",
@@ -13199,6 +13407,58 @@
           "reason": "Expected rule count changed from 12 to 14."
         },
         {
+          "id": "F449",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "e100a588a15503275e5a5022a7ecd41510e18d71",
+          "kind": "expected-changed",
+          "file": "packages/cli/src/core-pack.test.ts",
+          "line": 63,
+          "onBase": false,
+          "what": "expect(after.stdout).toBe('OK: 6 rules checked, no violations.\\n') (on the base: expect(after.stdout).toBe('OK: 4 rules checked, no violations.\\n'), line 62)",
+          "label": true,
+          "reason": "Expected rule count changed from 4 to 6."
+        },
+        {
+          "id": "F450",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "e100a588a15503275e5a5022a7ecd41510e18d71",
+          "kind": "expected-changed",
+          "file": "packages/cli/src/scaffold.test.ts",
+          "line": 148,
+          "onBase": false,
+          "what": "expect(result.stdout).toContain('Left for you: no violations.') (on the base: expect(result.stdout).toContain(` ${rule}\\n`), line 136)",
+          "label": true,
+          "reason": "Existing stdout expectation replaced with a different literal."
+        },
+        {
+          "id": "F451",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "a7601eeb5b6d9933c7c875c94cae9ae5bf44ac4e",
+          "kind": "expected-changed",
+          "file": "crates/rules/src/agent-ready/agents-md/tests.rs",
+          "line": 87,
+          "onBase": false,
+          "what": "assert!(found[0].message.contains(\"has no firescale block\")) (on the base: assert!(found[0].message.contains(\"No AGENTS.md\")), line 73)",
+          "label": false,
+          "reason": "Paired wrong lines: new message check sits in a new test; old 'No AGENTS.md' line was in another test."
+        },
+        {
+          "id": "F452",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "a7601eeb5b6d9933c7c875c94cae9ae5bf44ac4e",
+          "kind": "expected-changed",
+          "file": "crates/rules/src/agent-ready/agents-md/tests.rs",
+          "line": 99,
+          "onBase": false,
+          "what": "assert!(found[0].message.contains(\"out of date\")) (on the base: assert!(found[0].message.contains(\"cannot be read\")), line 100)",
+          "label": false,
+          "reason": "Paired wrong lines: 'out of date' is in a new test; the old 'cannot be read' test is a different one."
+        },
+        {
           "id": "N10",
           "repo": "ihsankoolz/firescale",
           "language": "this",
@@ -13210,6 +13470,45 @@
           "what": "assert!(found[0].message.contains(\"`fscale sync` adds it\")) (on the base: assert!(found[0] .message .contains(\"fscale hooks install --agent codex\")), line 95)",
           "label": true,
           "reason": "Expected message substring changed to the fscale sync text in an existing assert."
+        },
+        {
+          "id": "F454",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "cd139829dca117543abd70ac2d5b9d130e7d8b1c",
+          "kind": "expected-changed",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 452,
+          "onBase": false,
+          "what": "expect(Date.now() - before).toBeLessThan(25000) (on the base: expect(Date.now() - before).toBeLessThan(20000), line 450)",
+          "label": true,
+          "reason": "Time bound changed from 20000 to 25000 in the same test."
+        },
+        {
+          "id": "F455",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "cd139829dca117543abd70ac2d5b9d130e7d8b1c",
+          "kind": "expected-changed",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 458,
+          "onBase": false,
+          "what": "expect(step?.status).toBe('failed') (on the base: expect(step?.status).toBe('setup-needed'), line 454)",
+          "label": true,
+          "reason": "Expected status changed from setup-needed to failed."
+        },
+        {
+          "id": "F456",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "cd139829dca117543abd70ac2d5b9d130e7d8b1c",
+          "kind": "expected-changed",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 459,
+          "onBase": false,
+          "what": "expect(result.stderr).toMatch( new RegExp( `\\\\[verify\\\\] test: LIKELY SETUP, seen while running: PostgreSQL on localhost:${port} is not running \\\\(every test so far has errored \\\\(0 passed, 0 failed, ",
+          "label": true,
+          "reason": "Expected stderr text changed from SETUP NEEDED to LIKELY SETUP."
         },
         {
           "id": "F457",
@@ -13249,6 +13548,58 @@
           "what": "tests::commands_left_by_a_killed_run_are_named_with_how_to_stop_them",
           "label": true,
           "reason": "Existing test gained #[cfg(unix)], so it no longer runs on Windows."
+        },
+        {
+          "id": "F460",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "de684d4bc29829ef1890dfbd6b77bc6848a2614e",
+          "kind": "test-skipped",
+          "file": "crates/core/src/runs.rs",
+          "line": 359,
+          "onBase": false,
+          "what": "tests::on_windows_a_reused_process_id_is_never_named_for_stopping",
+          "label": false,
+          "reason": "New test with #[cfg(windows)]; not an existing test disabled."
+        },
+        {
+          "id": "F461",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "de684d4bc29829ef1890dfbd6b77bc6848a2614e",
+          "kind": "test-skipped",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 159,
+          "onBase": false,
+          "what": "stopping verify stops every process it started > on a second Ctrl+C, kills the commands at once and ends without waiting",
+          "label": false,
+          "reason": "New test added with skipIf(WINDOWS)."
+        },
+        {
+          "id": "F462",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "de684d4bc29829ef1890dfbd6b77bc6848a2614e",
+          "kind": "test-skipped",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 186,
+          "onBase": false,
+          "what": "stopping verify stops every process it started > on Ctrl+Break sent to %s (%s), stops the whole job and prints the summary of what finished",
+          "label": false,
+          "reason": "Test was already runIf(WINDOWS); only parameterised."
+        },
+        {
+          "id": "F463",
+          "repo": "ihsankoolz/firescale",
+          "language": "this",
+          "commit": "de684d4bc29829ef1890dfbd6b77bc6848a2614e",
+          "kind": "test-skipped",
+          "file": "packages/cli/src/verify-run.test.ts",
+          "line": 186,
+          "onBase": false,
+          "what": "stopping verify stops every process it started > on Ctrl+Break sent to %s (%s), stops the whole job and prints the summary of what finished > WINDOWS",
+          "label": false,
+          "reason": "Test was already runIf(WINDOWS); only parameterised."
         },
         {
           "id": "F464",

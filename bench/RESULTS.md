@@ -4,11 +4,11 @@ Numbers are wall-clock times for the whole process, measured with `bench/startup
 
 ## M26: the tamper guard measured on real history and on cheating changes
 
-Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build. Method, limits and what was fixed: ADR 0046. **Read the limits before the numbers**: each finding was labelled once, by a fresh subagent that saw the commit's diff and a neutral statement of the claim (not the guard's code or reasoning); eight labellers, 721 labels, no second labeller and no human check; eight popular, well-kept repos, 150 recent non-merge commits each; the config and CI kinds were hardly exercised; the "after" rate is on the same commits the fixes were developed against, so it is optimistic.
+Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build. Method, limits and what was fixed: ADR 0046. **Read the limits before the numbers**: each finding was labelled once, by a fresh subagent that saw the commit's diff and a neutral statement of the claim (not the guard's code or reasoning); nine labellers, 723 labels, no second labeller and no human check; eight popular, well-kept repos, 150 recent non-merge commits each; the config and CI kinds were hardly exercised; the "after" rate is on the same commits the fixes were developed against, so it is optimistic.
 
 ### False positives on real history
 
-`node bench/tamper-history.mjs …` over 1,200 commits of eight public repos and 150 of this repo (shallow clones, read-only, nothing of theirs run), then `node bench/tamper-history-report.mjs` on `bench/tamper-history.json` (every finding with its label and the labeller's reason). Rates with 95% Wilson intervals. "Before" is the guard as M26 first ran it; "after" is after the false-positive fixes of ADR 0046.
+`node bench/tamper-history.mjs …` over 1,200 commits of eight public repos and 150 of this repo (shallow clones, read-only, nothing of theirs run), then `node bench/tamper-history-report.mjs` on `bench/tamper-history.json` (every finding with its label and the labeller's reason). Rates with 95% Wilson intervals. "Before" is the guard as M26 first ran it; "after" is after the false-positive fixes of ADR 0046 and the review's corrections. The tables by kind cover all nine repos, this one included.
 
 #### Before
 
@@ -38,25 +38,25 @@ Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build.
 | Language                     | Repos                                                                                                                       | Commits | Commits with findings | Findings | False | False-positive rate (95% interval) | Commits with a false finding (95% interval) |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------- | -------- | ----- | ---------------------------------- | ------------------------------------------- |
 | Rust                         | BurntSushi/ripgrep, clap-rs/clap                                                                                            | 300     | 4                     | 35       | 5     | 14.3% (6.3–29.4%)                  | 1 of 300, 0.3% (0.1–1.9%)                   |
-| JavaScript                   | axios/axios, expressjs/express                                                                                              | 300     | 4                     | 17       | 7     | 41.2% (21.6–64.0%)                 | 2 of 300, 0.7% (0.2–2.4%)                   |
+| JavaScript                   | axios/axios, expressjs/express                                                                                              | 300     | 6                     | 22       | 11    | 50.0% (30.7–69.3%)                 | 3 of 300, 1.0% (0.3–2.9%)                   |
 | Python                       | encode/httpx, pallets/flask                                                                                                 | 300     | 40                    | 168      | 38    | 22.6% (16.9–29.5%)                 | 11 of 300, 3.7% (2.1–6.4%)                  |
-| TypeScript                   | honojs/hono, sindresorhus/ky                                                                                                | 300     | 56                    | 152      | 21    | 13.8% (9.2–20.2%)                  | 8 of 300, 2.7% (1.4–5.2%)                   |
-| This repo (Rust, TypeScript) | ihsankoolz/firescale                                                                                                        | 150     | 43                    | 133      | 0     | 0.0% (0.0–2.8%)                    | 0 of 150, 0.0% (0.0–2.5%)                   |
-| All public repos             | BurntSushi/ripgrep, axios/axios, clap-rs/clap, encode/httpx, expressjs/express, honojs/hono, pallets/flask, sindresorhus/ky | 1200    | 104                   | 372      | 71    | 19.1% (15.4–23.4%)                 | 22 of 1200, 1.8% (1.2–2.8%)                 |
+| TypeScript                   | honojs/hono, sindresorhus/ky                                                                                                | 300     | 57                    | 155      | 24    | 15.5% (10.6–22.0%)                 | 9 of 300, 3.0% (1.6–5.6%)                   |
+| This repo (Rust, TypeScript) | ihsankoolz/firescale                                                                                                        | 150     | 46                    | 152      | 11    | 7.2% (4.1–12.5%)                   | 6 of 150, 4.0% (1.8–8.5%)                   |
+| All public repos             | BurntSushi/ripgrep, axios/axios, clap-rs/clap, encode/httpx, expressjs/express, honojs/hono, pallets/flask, sindresorhus/ky | 1200    | 107                   | 380      | 78    | 20.5% (16.8–24.9%)                 | 24 of 1200, 2.0% (1.3–3.0%)                 |
 
 | Kind              | Findings | False | False-positive rate (95% interval) |
 | ----------------- | -------- | ----- | ---------------------------------- |
 | assertion-removed | 110      | 36    | 32.7% (24.7–41.9%)                 |
 | ci-weakened       | 4        | 4     | 100.0% (51.0–100.0%)               |
-| expected-changed  | 116      | 6     | 5.2% (2.4–10.8%)                   |
+| expected-changed  | 128      | 11    | 8.6% (4.9–14.7%)                   |
 | not-checked       | 1        | 0     | 0.0% (0.0–79.3%)                   |
 | rule-disabled     | 5        | 0     | 0.0% (0.0–43.4%)                   |
-| snapshot-changed  | 61       | 0     | 0.0% (0.0–5.9%)                    |
-| suppression-added | 160      | 13    | 8.1% (4.8–13.4%)                   |
+| snapshot-changed  | 63       | 0     | 0.0% (0.0–5.7%)                    |
+| suppression-added | 162      | 15    | 9.3% (5.7–14.7%)                   |
 | test-deleted      | 47       | 12    | 25.5% (15.3–39.5%)                 |
-| test-skipped      | 1        | 0     | 0.0% (0.0–79.3%)                   |
+| test-skipped      | 12       | 11    | 91.7% (64.6–98.5%)                 |
 
-The fixes also stopped 66 findings labelled true (13.5%, 10.7–16.8% of 490): 26 new conditional tests (labeller disagreement), 22 `@ts-expect-error` in runtime test files (ADR 0046 decides these are assertions), 18 expected-value pairs now kept within one test.
+The fixes also stopped 59 findings labelled true (12.0%, 9.5–15.2% of 490): 26 new conditional tests (labeller disagreement), 22 `@ts-expect-error` in runtime test files (ADR 0046 decides these are assertions), 11 expected-value pairs now kept within one test or a renamed one.
 
 ### Misses on cheating changes
 
@@ -79,7 +79,7 @@ Miss rate 42 of 98, 42.9% (95% interval 33.5–52.7%); not caught outright (miss
 
 ### The labelled corpus (fixture counts)
 
-`node bench/tamper-rates.mjs`: 249 cases (136 to catch, 113 not), 0 missed, 0 false positives. Written with the guard: it shows the guard does what its ADRs say, not a rate.
+`node bench/tamper-rates.mjs`: 255 cases (142 to catch, 113 not), 0 missed, 0 false positives. Written with the guard: it shows the guard does what its ADRs say, not a rate.
 
 ## M25: the tamper guard's config and CI detectors
 

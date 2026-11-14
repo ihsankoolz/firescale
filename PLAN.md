@@ -637,7 +637,7 @@ Decisions in ADR 0046: `snapshot-changed` and `expected-changed` need a person's
 
 - ☑ A changed snapshot and a changed expected value each block until approved, proven by tests (`tamper-approvals.test.ts`, "a changed expected / snapshot: blocks until a person approves the pull request on GitHub").
 - ☑ An approval written by the change under review does not count, proven by a test (same file, "does not count an approval the change could make itself": files and trailers in the change, the author's own review, an older commit, no write access, a bot, a dismissed approval, `--approvals` outside `pull_request_target`).
-- ☑ The false-positive rate and the miss rate on the corpus are recorded in `bench/RESULTS.md`: on 1,200 public commits 36.3% of findings false before the fixes and 19.1% after, with intervals per language; 42 of 98 held-out cheats missed; the limits beside them.
+- ☑ The false-positive rate and the miss rate on the corpus are recorded in `bench/RESULTS.md`: on 1,200 public commits 36.3% of findings false before the fixes and 20.5% after, with intervals per language; 42 of 98 held-out cheats missed; the limits beside them.
 
 ---
 
