@@ -42,8 +42,8 @@ impl Tally {
             self.cost_usd = ((self.cost_usd + cost) * 1e6).round() / 1e6;
             self.cost_reported_runs += 1;
         }
-        #[allow(clippy::cast_precision_loss)]
-        let rate = self.passed as f64 / self.runs as f64;
+        let count = |n: usize| f64::from(u32::try_from(n).unwrap_or(u32::MAX));
+        let rate = count(self.passed) / count(self.runs);
         self.pass_rate = Some(rate);
     }
 }
