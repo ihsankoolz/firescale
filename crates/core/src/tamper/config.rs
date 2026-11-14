@@ -143,7 +143,8 @@ pub(crate) struct Located {
 /// Compares the measures of the base and of the working tree, key by key,
 /// and names each place where the working tree is less strict.
 pub(crate) fn compare(base: &[Located], head: &[Located]) -> Vec<Finding> {
-    let mut keys: BTreeMap<(Kind, &str), (Vec<&Located>, Vec<&Located>)> = BTreeMap::new();
+    type Sides<'a> = (Vec<&'a Located>, Vec<&'a Located>);
+    let mut keys: BTreeMap<(Kind, &str), Sides<'_>> = BTreeMap::new();
     for located in base {
         keys.entry((located.measure.kind, located.measure.key.as_str()))
             .or_default()

@@ -1959,7 +1959,7 @@
         "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
       },
       "head": {
-        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m \"work in progress\"\"\n  }\n}\n"
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m 'work in progress'\"\n  }\n}\n"
       }
     },
     {

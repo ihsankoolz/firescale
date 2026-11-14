@@ -599,7 +599,9 @@ pub fn guard_at(
     wanted.dedup();
     let mut on_base = crate::git::files_at(root, &base.commit, &wanted);
     // The head side: from disk, or from the head commit's objects.
-    let in_head: Option<(BTreeMap<String, Vec<u8>>, BTreeSet<String>)> = match head {
+    // The head commit's files that are wanted, and every path it holds.
+    type InHead = (BTreeMap<String, Vec<u8>>, BTreeSet<String>);
+    let in_head: Option<InHead> = match head {
         Head::WorkingTree => None,
         Head::Commit(commit) => Some((
             crate::git::files_at(root, commit, &wanted),

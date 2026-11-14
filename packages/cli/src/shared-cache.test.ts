@@ -59,7 +59,7 @@ describe('the generated workflow', () => {
     // pull_request_target only starts the tamper guard (ADR 0045), which
     // runs no code of the pull request, holds no cache step and can write
     // nothing.
-    const target = [...all].filter(([, body]) => body.includes('pull_request_target'));
+    const target = [...all].filter(([, body]) => body.includes("== 'pull_request_target'"));
     expect(target.map(([name]) => name)).toEqual(['tamper-guard']);
     const guard = all.get('tamper-guard') ?? '';
     expect(guard).toMatch(/^ {4}cache-mode: none$/m);
@@ -104,7 +104,7 @@ describe('the generated workflow', () => {
     );
     // A new push to a pull request cancels its run in progress; each push has a group of its own.
     expect(workflow).toContain(
-      "concurrency:\n  group: ci-${{ github.event.pull_request.number || github.run_id }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+      "concurrency:\n  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}\n  cancel-in-progress: ${{ github.event_name != 'push' }}\n",
     );
     // Every action is pinned to a commit.
     for (const match of workflow.matchAll(/uses: (\S+)/g)) {

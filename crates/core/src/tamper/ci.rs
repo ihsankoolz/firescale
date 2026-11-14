@@ -94,10 +94,8 @@ fn never_fails(fields: &[&Entry]) -> Option<String> {
                     return Some(format!("continue-on-error: {}", entry.value.as_text()));
                 }
             }
-            Some("if") => {
-                if literal(&entry.value) == Some(false) {
-                    return Some(format!("if: {}", entry.value.as_text()));
-                }
+            Some("if") if literal(&entry.value) == Some(false) => {
+                return Some(format!("if: {}", entry.value.as_text()));
             }
             _ => {}
         }
@@ -247,12 +245,9 @@ fn commands(line: &str) -> Vec<(String, String)> {
 /// `|| exit 0`, `|| echo …`, `; true`.
 fn swallowed(rest: &str) -> Option<String> {
     let rest = rest.trim_start();
-    let (operator, tail) = if let Some(tail) = rest.strip_prefix("||") {
-        ("||", tail)
-    } else if let Some(tail) = rest.strip_prefix(';') {
-        (";", tail)
-    } else {
-        return None;
+    let (operator, tail) = match rest.strip_prefix("||") {
+        Some(tail) => ("||", tail),
+        None => (";", rest.strip_prefix(';')?),
     };
     let next: Vec<&str> = tail.split_whitespace().take(2).collect();
     let swallow = match next.as_slice() {

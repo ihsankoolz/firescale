@@ -643,7 +643,6 @@ mod yaml {
                 .filter(|(head, _)| head.starts_with('!') || head.starts_with('&'))
                 .map_or(rest, |(_, tail)| tail.trim_start());
             if rest.starts_with('|') || rest.starts_with('>') {
-                let folded = rest.starts_with('>');
                 // Every raw line after this one that is more indented than
                 // the key, or blank, until one that is not.
                 let mut body: Vec<&str> = Vec::new();
@@ -681,11 +680,9 @@ mod yaml {
                 {
                     self.at += 1;
                 }
-                let text = if folded {
-                    body.join("\n")
-                } else {
-                    body.join("\n")
-                };
+                // Folded (`>`) or literal (`|`): the lines are kept as they are,
+                // which is all the detectors need.
+                let text = body.join("\n");
                 self.entries.push(Entry {
                     path: path.clone(),
                     value: Scalar::Str(text),
@@ -950,10 +947,10 @@ mod toml {
             let mut value = line[eq + 1..].trim().to_owned();
             // A multi-line string or array goes on until it closes.
             loop {
-                if value.starts_with("\"\"\"") && !closes(&value, "\"\"\"") {
-                } else if value.starts_with("'''") && !closes(&value, "'''") {
-                } else if (value.starts_with('[') || value.starts_with('{')) && !balanced(&value) {
-                } else {
+                let open = (value.starts_with("\"\"\"") && !closes(&value, "\"\"\""))
+                    || (value.starts_with("'''") && !closes(&value, "'''"))
+                    || ((value.starts_with('[') || value.starts_with('{')) && !balanced(&value));
+                if !open {
                     break;
                 }
                 let Some(next) = lines.get(index) else {

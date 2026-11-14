@@ -368,13 +368,17 @@ describe('the policy keys come from the base commit too', () => {
           'test-skipped',
           'assertion-removed',
           'suppression-added',
+          'coverage-lowered',
+          'ci-weakened',
+          'no-verify',
+          'rule-disabled',
           'not-checked',
         ],
       },
     ]);
     const human = await runCli(['verify', '--no-cache'], root);
     expect(human.stdout).toContain(
-      'verify.tamper.allow on the base commit leaves out src/legacy/old.test.ts (test deleted, test skipped, assertion removed, suppression added, not checked).',
+      'verify.tamper.allow on the base commit leaves out src/legacy/old.test.ts (test deleted, test skipped, assertion removed, suppression added, coverage lowered, CI weakened, hooks skipped, rule turned off, not checked).',
     );
   });
 

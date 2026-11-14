@@ -13,8 +13,9 @@ use crate::{Error, Result};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PullRequest {
     /// The tip of the base branch the change goes into: the first parent of
-    /// the merge commit GitHub made for a `pull_request` run, or
-    /// `GITHUB_SHA` for a `pull_request_target` run.
+    /// the merge commit GitHub made for a `pull_request` run; for a
+    /// `pull_request_target` run, `GITHUB_SHA` (the default branch) when the
+    /// event's base commit is part of it, else that base commit.
     pub base_tip: String,
     /// The pull request's last commit (`pull_request.head.sha`).
     pub head: String,
@@ -97,8 +98,15 @@ pub fn pull_request(root: &Path, read: &dyn Fn(&str) -> Option<String>) -> Resul
         )));
     };
     let base_tip = if event == "pull_request_target" {
-        // The run is for the base branch's last commit.
-        checked_out.clone()
+        // The run is for the default branch's last commit (GitHub's docs):
+        // the base branch when the pull request goes into the default
+        // branch, else the event's base commit. Nothing of the pull request
+        // has run in that job, so neither can have been moved.
+        if is_ancestor(root, &base_sha, &checked_out) {
+            checked_out.clone()
+        } else {
+            base_sha.clone()
+        }
     } else if checked_parents.len() == 2 && checked_parents[1] == head {
         // The merge GitHub made: its first parent is the base branch.
         checked_parents[0].clone()

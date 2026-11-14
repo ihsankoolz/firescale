@@ -18,7 +18,7 @@ core/ci-exists
 
 --- /dev/null
 +++ b/.github/workflows/ci.yml
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,110 @@
 +# Created by firescale (core/ci-exists). \`fscale sync\` replaces this file
 +# with a newer one only while it is exactly as firescale wrote it (the
 +# digest on the last line says so). Once you edit it, it is yours, and
@@ -27,6 +27,8 @@ core/ci-exists
 +
 +on:
 +  pull_request:
++  # Only for the tamper-guard job, which runs no code of the pull request.
++  pull_request_target:
 +  push:
 +    branches: [<branch>]
 +
@@ -37,8 +39,8 @@ core/ci-exists
 +# to a branch has a group of its own, so it is never cancelled: it
 +# keeps the shared cache up to date.
 +concurrency:
-+  group: ci-\${{ github.event.pull_request.number || github.run_id }}
-+  cancel-in-progress: \${{ github.event_name == 'pull_request' }}
++  group: ci-\${{ github.event_name }}-\${{ github.event.pull_request.number || github.run_id }}
++  cancel-in-progress: \${{ github.event_name != 'push' }}
 +
 +jobs:
 +  # Pull requests: only the projects the change reaches, judged against
@@ -66,9 +68,8 @@ core/ci-exists
 +          key: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-\${{ github.sha }}
 +          restore-keys: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-
 +      # Runs check, lint, typecheck and test.
-+      - run: npx firescale verify --affected --base "origin/$BASE_REF" --jobs 2 --shared-cache .firescale/shared
-+        env:
-+          BASE_REF: \${{ github.base_ref }}
++      # The base is the one GitHub's event names, not a ref in the clone.
++      - run: npx firescale verify --affected --pr-base --jobs 2 --shared-cache .firescale/shared
 +
 +  # Pushes: everything. On the default branch it also saves the caches
 +  # that pull requests restore.
@@ -102,6 +103,31 @@ core/ci-exists
 +        with:
 +          path: .firescale/shared
 +          key: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-\${{ hashFiles('.firescale/shared/*.json') }}
++
++  # The tamper guard. On pull_request_target GitHub runs this job as the
++  # base branch's copy of this file has it, so a pull request cannot edit
++  # or remove it. It runs no code from the pull request: it checks out the
++  # base branch, fetches the pull request's commits as git objects, and
++  # compares them with the base GitHub names. Keep it that way: never check
++  # out the pull request's files here, install them or run them.
++  tamper-guard:
++    if: github.event_name == 'pull_request_target'
++    runs-on: ubuntu-latest
++    cache-mode: none
++    permissions:
++      contents: read
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          fetch-depth: 0
++      - run: git fetch --no-tags origin "$HEAD_SHA"
++        env:
++          HEAD_SHA: \${{ github.event.pull_request.head.sha }}
++      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
++        with:
++          node-version: 24
++          package-manager-cache: false
++      - run: npx --yes firescale@0.4.0 tamper --pr-base
 +# firescale-workflow: <digest>
 
 core/gitignore-basics
