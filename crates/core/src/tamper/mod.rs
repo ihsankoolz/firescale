@@ -22,7 +22,13 @@
 //!   cannot loosen the guard for itself.
 //! - Findings are report-only unless the base's policy is `enforced`.
 
+mod ci;
+mod config;
+mod coverage;
+mod formats;
 mod js;
+mod lintconfig;
+mod noverify;
 mod policy;
 mod python;
 mod reach;
@@ -241,6 +247,15 @@ pub enum Kind {
     AssertionRemoved,
     /// More lint suppressions of a rule than on the base.
     SuppressionAdded,
+    /// A coverage threshold lower than on the base, or gone (M25).
+    CoverageLowered,
+    /// A CI check step removed, or made unable to fail (M25).
+    CiWeakened,
+    /// More ways to skip git hooks (`--no-verify`) than on the base (M25).
+    NoVerify,
+    /// A lint or type-check rule turned off or made weaker in a config file
+    /// (M25).
+    RuleDisabled,
     /// A changed test file tree-sitter cannot read, on the base or now: its
     /// tests and assertions could not be compared.
     NotChecked,
@@ -254,6 +269,10 @@ impl Kind {
             Self::TestSkipped => "test skipped",
             Self::AssertionRemoved => "assertion removed",
             Self::SuppressionAdded => "suppression added",
+            Self::CoverageLowered => "coverage lowered",
+            Self::CiWeakened => "CI weakened",
+            Self::NoVerify => "hooks skipped",
+            Self::RuleDisabled => "rule turned off",
             Self::NotChecked => "not checked",
         }
     }
@@ -415,8 +434,31 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
         .iter()
         .filter_map(|path| Language::of(path).map(|language| (path, language)))
         .collect();
-    let wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
+    // Config and CI files the detectors of M25 read (ADR 0045).
+    let configs: Vec<&String> = changed
+        .iter()
+        .filter(|path| config::is_config(path))
+        .collect();
+    let mut wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
+    wanted.extend(configs.iter().map(|path| path.as_str()));
+    wanted.sort_unstable();
+    wanted.dedup();
     let mut on_base = crate::git::files_at(root, &base.commit, &wanted);
+    let config_files: Vec<Changed> = configs
+        .iter()
+        .map(|path| Changed {
+            path: (*path).clone(),
+            language: Language::Python,
+            base: on_base
+                .get(path.as_str())
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+            head: match fs::read(on_disk(path)) {
+                Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(()),
+            },
+        })
+        .collect();
     let files: Vec<Changed> = sources
         .into_iter()
         .map(|(path, language)| Changed {
@@ -458,14 +500,22 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     }
 
     // Files the base's `allow` leaves out, for the kinds it names.
-    const KINDS: [Kind; 5] = [
+    const KINDS: [Kind; 9] = [
         Kind::TestDeleted,
         Kind::TestSkipped,
         Kind::AssertionRemoved,
         Kind::SuppressionAdded,
+        Kind::CoverageLowered,
+        Kind::CiWeakened,
+        Kind::NoVerify,
+        Kind::RuleDisabled,
         Kind::NotChecked,
     ];
-    for file in &files {
+    for file in files.iter().chain(
+        config_files
+            .iter()
+            .filter(|file| Language::of(&file.path).is_none()),
+    ) {
         let kinds: Vec<Kind> = KINDS
             .into_iter()
             .filter(|kind| policy.allows(&file.path, *kind))
@@ -502,6 +552,64 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
                 head_suppressions.push((file.path.clone(), found));
             }
         }
+    }
+
+    // Coverage thresholds, CI steps, hook skips and rules in config files,
+    // compared per key over the whole change.
+    let mut config_findings: Vec<Finding> = Vec::new();
+    {
+        let mut base_measures: Vec<config::Located> = Vec::new();
+        let mut head_measures: Vec<config::Located> = Vec::new();
+        for file in &config_files {
+            let sides = [
+                (file.base.as_ref().map(|text| Ok(Some(text.as_str()))), true),
+                (Some(file.head.as_ref().map(|text| text.as_deref())), false),
+            ];
+            for (side, is_base) in sides {
+                let Some(side) = side else { continue };
+                let measures = match side {
+                    Ok(Some(text)) => config::measures_of(&file.path, text),
+                    Ok(None) => Ok(Vec::new()),
+                    Err(()) => Err(1),
+                };
+                match measures {
+                    Ok(measures) => {
+                        let target = if is_base {
+                            &mut base_measures
+                        } else {
+                            &mut head_measures
+                        };
+                        target.extend(
+                            measures
+                                .into_iter()
+                                .filter(|measure| !allows(&file.path, measure.kind))
+                                .map(|measure| config::Located {
+                                    file: file.path.clone(),
+                                    measure,
+                                }),
+                        );
+                    }
+                    Err(line) => {
+                        if !allows(&file.path, Kind::NotChecked)
+                            && !report.not_checked.contains(&file.path)
+                        {
+                            report.not_checked.push(file.path.clone());
+                            config_findings.push(Finding {
+                                kind: Kind::NotChecked,
+                                file: file.path.clone(),
+                                line,
+                                on_base: is_base,
+                                what: "this config file cannot be read, so its settings were not compared".to_owned(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // A file that cannot be read on one side is compared on neither.
+        base_measures.retain(|located| !report.not_checked.contains(&located.file));
+        head_measures.retain(|located| !report.not_checked.contains(&located.file));
+        config_findings.extend(config::compare(&base_measures, &head_measures));
     }
 
     // The test files: by name or folder, by the base's `testPaths`, or (Rust)
@@ -704,6 +812,7 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     }
 
     let mut findings = not_checked;
+    findings.extend(config_findings);
     // Fewer tests: name those whose id is gone, up to the shortfall.
     if counts.head_tests < counts.base_tests {
         let mut left = head_ids.clone();
