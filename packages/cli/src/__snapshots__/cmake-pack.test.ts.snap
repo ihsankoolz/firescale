@@ -1,0 +1,114 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > .clang-format 1`] = `
+"---
+BasedOnStyle: Google
+"
+`;
+
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > CMakeLists.txt 1`] = `
+"cmake_minimum_required(VERSION 3.20)
+project(app VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+# compile_commands.json, for clangd and clang-tidy (Makefile and Ninja builds).
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# The code, as a library the program and the tests both link.
+add_library(app_lib src/greeting.cpp)
+target_include_directories(app_lib PUBLIC src)
+if(MSVC)
+  target_compile_options(app_lib PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(app_lib PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(app src/main.cpp)
+target_link_libraries(app PRIVATE app_lib)
+
+# \`ctest --test-dir build\` runs every test added here.
+enable_testing()
+add_executable(app_test tests/greeting_test.cpp)
+target_link_libraries(app_test PRIVATE app_lib)
+add_test(NAME app_test COMMAND app_test)
+
+# \`cmake --build build --target lint\` checks the formatting of every source
+# file against .clang-format.
+file(GLOB_RECURSE LINTED CONFIGURE_DEPENDS
+  src/*.cpp src/*.hpp tests/*.cpp tests/*.hpp)
+find_program(CLANG_FORMAT clang-format)
+if(CLANG_FORMAT)
+  add_custom_target(lint
+    COMMAND "\${CLANG_FORMAT}" --dry-run --Werror \${LINTED}
+    WORKING_DIRECTORY "\${PROJECT_SOURCE_DIR}"
+    VERBATIM)
+else()
+  add_custom_target(lint
+    COMMAND "\${CMAKE_COMMAND}" -E echo "clang-format was not found on the PATH; install it to run the lint target"
+    COMMAND "\${CMAKE_COMMAND}" -E false
+    VERBATIM)
+endif()
+"
+`;
+
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > src/greeting.cpp 1`] = `
+"#include "greeting.hpp"
+
+#include <string>
+#include <string_view>
+
+namespace app {
+
+std::string greeting(std::string_view name) {
+  return "Hello, " + std::string(name) + "!";
+}
+
+}  // namespace app
+"
+`;
+
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > src/greeting.hpp 1`] = `
+"#pragma once
+
+#include <string>
+#include <string_view>
+
+namespace app {
+
+// Returns the message the program prints.
+std::string greeting(std::string_view name);
+
+}  // namespace app
+"
+`;
+
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > src/main.cpp 1`] = `
+"#include <iostream>
+
+#include "greeting.hpp"
+
+int main() {
+  std::cout << app::greeting("world") << '\\n';
+  return 0;
+}
+"
+`;
+
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > tests/greeting_test.cpp 1`] = `
+"#include "greeting.hpp"
+
+#include <cstdlib>
+#include <iostream>
+
+int main() {
+  const auto got = app::greeting("world");
+  if (got != "Hello, world!") {
+    std::cerr << "greeting(\\"world\\") was \\"" << got << "\\"\\n";
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
+}
+"
+`;
