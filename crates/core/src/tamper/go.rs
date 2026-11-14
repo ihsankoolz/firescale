@@ -29,8 +29,8 @@
 //!   object made by `assert.New(t)`, of a suite's own assertion methods
 //!   (`s.Equal(…)`, `s.Require().NoError(…)`); quicktest's `qt.Assert` and
 //!   `qt.Check`; gomega's `Expect(…).To(…)`, `Ω(…).Should(…)`. Not one that
-//!   never runs (`if false`, after a `return` or an unconditional skip) or
-//!   cannot fail (`assert.True(t, true)`, `assert.Equal(t, 1, 1)`,
+//!   never runs (`if false`, after a `return` or an unconditional skip, in
+//!   a file under `//go:build ignore`) or cannot fail (`assert.True(t, true)`, `assert.Equal(t, 1, 1)`,
 //!   `Expect(true).To(BeTrue())`).
 //! - Imports: each import's name and path. A test file's subject is the
 //!   file it is named after (`pricing_test.go` tests `pricing.go`): the
@@ -1050,7 +1050,10 @@ pub(super) fn read(source: &str) -> TestFile {
                 let Some(check) = assertion(node, src, &names, suite.as_deref()) else {
                     return true;
                 };
-                if dead.why(node).is_some() || cannot_fail(node, check, src) {
+                if constraint == Some(true)
+                    || dead.why(node).is_some()
+                    || cannot_fail(node, check, src)
+                {
                     return false;
                 }
                 let whole = text(node, src);
@@ -1606,6 +1609,8 @@ func TestIfFalse(t *testing.T) {
             "//go:build integration\n\npackage db\n\nfunc TestQuery(t *testing.T) { t.Fail() }\n",
         );
         assert_eq!(ids(&gated), [("TestQuery", true, None, 1)]);
+        // Built only sometimes: its assertions count; never built: not.
+        assert_eq!(shapes(&gated), ["t.Fail()"]);
         let old = read(
             "// +build integration\n\npackage db\n\nfunc TestQuery(t *testing.T) { t.Fail() }\n",
         );
@@ -1618,6 +1623,7 @@ func TestIfFalse(t *testing.T) {
                 ("TestQuery/a", true, Some(NEVER_BUILT), 1),
             ]
         );
+        assert!(ignored.assertions.is_empty());
         let after =
             read("package db\n\n//go:build ignore\nfunc TestQuery(t *testing.T) { t.Fail() }\n");
         assert_eq!(ids(&after), [("TestQuery", false, None, 1)]);
