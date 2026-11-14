@@ -6,10 +6,11 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 Long run started 2026-11-14 00:59 UTC: M25, M26, then M27, M28, M29, M30 in order, one pull request each, merged on green, restarting from main between them. **Stop after M30 is merged or at 2026-11-15 21:46 UTC, whichever comes first.** The version stays 0.4.0; never push a tag.
 
-- **Now:** M25 (ADR 0045) is built and committed; an independent review of its diff is running; then the pull request.
+- **Done:** M25 merged ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045).
+- **Now:** M26 (ADR 0046): approvals for changed snapshots and expected values (built, tested), the real-history run (1,350 commits, 711 findings labelled, false positives fixed, rerun labelled), the miss measurement on `bench/tamper-cheats.json`. Left: ADR 0046, docs, RESULTS, review, pull request.
 - **Branch:** milestones are pushed to `claude/beautiful-bardeen-gpgxyw` (the session's branch); after each merge the next milestone starts from `main` on a new local branch and is pushed to that same remote branch only once it holds just merged history (a force push is not allowed here, so if the remote branch has unmerged commits, use a new `m<N>-<name>` branch instead).
 - **Check-ins:** a scheduled check-in ("Read HANDOFF.md, 'In progress', and continue. Schedule the next check-in first.") is kept about 60 minutes ahead; renew it at the start of each milestone and hourly. Cancel it when the run ends.
-- **M26 prep (not committed):** real repos cloned shallow, read-only, into the scratch folder; the history runner and labelling-packet scripts are in the scratch folder too; a fresh subagent is writing the cheating-change corpus there.
+- **M26 data:** the clones are in the scratch folder (`history/`), re-creatable with `git clone --depth 400 --single-branch`; labels are in `bench/tamper-history.json`; the labelling brief is in ADR 0046.
 - **0.4.0 is still ready to tag** (`RELEASING.md`). Check whether `v0.3.0` was ever tagged first.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
