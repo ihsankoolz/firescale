@@ -790,6 +790,9 @@ pub fn guard_at(
         // A file that cannot be read on one side is compared on neither.
         base_measures.retain(|located| !report.not_checked.contains(&located.file));
         head_measures.retain(|located| !report.not_checked.contains(&located.file));
+        // Checks the working tree still turns on by implication (M25).
+        let implied = lintconfig::implied(&base_measures, &head_measures);
+        head_measures.extend(implied);
         config_findings.extend(config::compare(&base_measures, &head_measures));
     }
 

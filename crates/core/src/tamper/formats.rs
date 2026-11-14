@@ -160,7 +160,22 @@ pub fn read(format: Format, source: &str) -> Result<Vec<Entry>, usize> {
         Format::Yaml => yaml::read(source),
         Format::Toml => toml::read(source),
         Format::Ini => Ok(ini::read(source)),
-        Format::Js(dialect) => js::read(source, dialect),
+        Format::Js(dialect) => js::read_roots(source, dialect).map(|roots| roots.concat()),
+    }
+}
+
+/// The entries of a file in groups, one for each outermost JavaScript
+/// object or array literal (so two configs passed to one call, such as
+/// `tseslint.config({ … }, { … })`, stay apart although their paths look
+/// alike), or one group for any other format.
+///
+/// # Errors
+///
+/// The line of the first thing the reader cannot make sense of.
+pub fn read_roots(format: Format, source: &str) -> Result<Vec<Vec<Entry>>, usize> {
+    match format {
+        Format::Js(dialect) => js::read_roots(source.trim_start_matches('\u{feff}'), dialect),
+        _ => read(format, source).map(|entries| vec![entries]),
     }
 }
 
@@ -1279,7 +1294,7 @@ mod js {
     use super::{parse, text, Entry, JsDialect, Node, Scalar};
     use crate::imports::walk;
 
-    pub(super) fn read(source: &str, dialect: JsDialect) -> Result<Vec<Entry>, usize> {
+    pub(super) fn read_roots(source: &str, dialect: JsDialect) -> Result<Vec<Vec<Entry>>, usize> {
         let language = match dialect {
             JsDialect::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             JsDialect::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
@@ -1296,15 +1311,17 @@ mod js {
             });
             return Err(line);
         }
-        let mut entries = Vec::new();
+        let mut roots = Vec::new();
         walk(root, |node| {
             if matches!(node.kind(), "object" | "array") {
+                let mut entries = Vec::new();
                 literal(node, source, &mut Vec::new(), &mut entries, 0);
+                roots.push(entries);
                 return false;
             }
             true
         });
-        Ok(entries)
+        Ok(roots)
     }
 
     fn key_text(node: Node<'_>, source: &str) -> String {
@@ -1582,6 +1599,22 @@ mod tests {
         assert!(has(&entries, "coverageThreshold.global.lines", "80", 11));
         assert!(has(&entries, "coverageThreshold.global.branches", "-1", 11));
         assert!(read(Format::Js(JsDialect::Tsx), "export default { a: ").is_err());
+    }
+
+    #[test]
+    fn reads_each_outermost_js_literal_as_a_root_of_its_own() {
+        let source = "export default tseslint.config(\n  { files: [\"a.js\"], rules: { eqeqeq: \"off\" } },\n  { rules: { eqeqeq: \"error\" } },\n);\n";
+        let roots = read_roots(Format::Js(JsDialect::Tsx), source).expect("readable");
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0][0].path, ["files", "[0]"]);
+        assert_eq!(roots[1][0].keys(), "rules.eqeqeq");
+        assert_eq!(roots[1][0].line, 3);
+        assert_eq!(
+            read_roots(Format::Json, "{\"a\": 1}")
+                .expect("readable")
+                .len(),
+            1
+        );
     }
 
     #[test]

@@ -2155,6 +2155,307 @@
       "head": {
         "tarpaulin.toml": "[coverage]\nfail-under = 80\nout = [\"Html\"]\n"
       }
+    },
+    {
+      "name": "lint: eslint rule turned off",
+      "expect": ["rule-disabled"],
+      "note": "\"no-console\" goes from \"error\" to \"off\" in .eslintrc.json.",
+      "base": {
+        ".eslintrc.json": "{\n  \"root\": true,\n  \"extends\": [\"eslint:recommended\"],\n  \"rules\": {\n    \"no-console\": \"error\",\n    \"eqeqeq\": [\"error\", \"always\"]\n  },\n  \"overrides\": [\n    {\n      \"files\": [\"*.test.js\"],\n      \"rules\": { \"no-unused-expressions\": \"off\" }\n    }\n  ]\n}\n"
+      },
+      "head": {
+        ".eslintrc.json": "{\n  \"root\": true,\n  \"extends\": [\"eslint:recommended\"],\n  \"rules\": {\n    \"no-console\": \"off\",\n    \"eqeqeq\": [\"error\", \"always\"]\n  },\n  \"overrides\": [\n    {\n      \"files\": [\"*.test.js\"],\n      \"rules\": { \"no-unused-expressions\": \"off\" }\n    }\n  ]\n}\n"
+      }
+    },
+    {
+      "name": "lint: eslint flat config block turns a rule off for some files",
+      "expect": ["rule-disabled"],
+      "note": "A new block at the end of eslint.config.js turns eqeqeq off for src/legacy; the rule is still on for the rest.",
+      "base": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      },
+      "head": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n  {\n    files: [\"src/legacy/**/*.js\"],\n    rules: { eqeqeq: \"off\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: eslint rule lowered to warn",
+      "expect": ["rule-disabled"],
+      "note": "An error that blocks becomes a warning that does not.",
+      "base": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      },
+      "head": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"warn\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: biome rule turned off",
+      "expect": ["rule-disabled"],
+      "note": "noExplicitAny set to off, in the object form with a level.",
+      "base": {
+        "biome.json": "{\n  \"linter\": {\n    \"enabled\": true,\n    \"rules\": {\n      \"recommended\": true,\n      \"suspicious\": { \"noExplicitAny\": \"error\" }\n    }\n  }\n}\n"
+      },
+      "head": {
+        "biome.json": "{\n  \"linter\": {\n    \"enabled\": true,\n    \"rules\": {\n      \"recommended\": true,\n      \"suspicious\": { \"noExplicitAny\": { \"level\": \"off\" } }\n    }\n  }\n}\n"
+      }
+    },
+    {
+      "name": "lint: ruff rule ignored",
+      "expect": ["rule-disabled"],
+      "note": "B008 joins the ignore list in pyproject.toml.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\", \"B008\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff per-file ignore added",
+      "expect": ["rule-disabled"],
+      "note": "A per-file-ignores entry turns S101 and B011 off for the tests: two codes, two findings of one kind.",
+      "base": {
+        "ruff.toml": "line-length = 100\n\n[lint]\nselect = [\"E\", \"F\", \"B\", \"S\"]\n"
+      },
+      "head": {
+        "ruff.toml": "line-length = 100\n\n[lint]\nselect = [\"E\", \"F\", \"B\", \"S\"]\n\n[lint.per-file-ignores]\n\"tests/**\" = [\"S101\", \"B011\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff rule group unselected",
+      "expect": ["rule-disabled"],
+      "note": "B is no longer selected, and no other selected prefix covers it.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"UP\"]\nignore = [\"E501\"]\n"
+      }
+    },
+    {
+      "name": "lint: flake8 code ignored",
+      "expect": ["rule-disabled"],
+      "note": "extend-ignore grows by W605 in setup.cfg.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = shop\n\n[flake8]\nmax-line-length = 100\nextend-ignore = E203\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = shop\n\n[flake8]\nmax-line-length = 100\nextend-ignore = E203, W605\n"
+      }
+    },
+    {
+      "name": "lint: mypy strict turned off",
+      "expect": ["rule-disabled"],
+      "note": "strict = True becomes False in mypy.ini.",
+      "base": {
+        "mypy.ini": "[mypy]\npython_version = 3.12\nstrict = True\nwarn_unreachable = True\n\n[mypy-tests.*]\ndisallow_untyped_defs = False\n"
+      },
+      "head": {
+        "mypy.ini": "[mypy]\npython_version = 3.12\nstrict = False\nwarn_unreachable = True\n\n[mypy-tests.*]\ndisallow_untyped_defs = False\n"
+      }
+    },
+    {
+      "name": "lint: mypy errors ignored for a module",
+      "expect": ["rule-disabled"],
+      "note": "A new [[tool.mypy.overrides]] entry sets ignore_errors for the payments package.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\n\n[tool.mypy]\nstrict = true\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\n\n[tool.mypy]\nstrict = true\n\n[[tool.mypy.overrides]]\nmodule = \"shop.payments.*\"\nignore_errors = true\n"
+      }
+    },
+    {
+      "name": "lint: pyright mode lowered to basic",
+      "expect": ["rule-disabled"],
+      "note": "typeCheckingMode strict becomes basic in pyrightconfig.json.",
+      "base": {
+        "pyrightconfig.json": "{\n  \"include\": [\"src\"],\n  \"typeCheckingMode\": \"strict\"\n}\n"
+      },
+      "head": {
+        "pyrightconfig.json": "{\n  \"include\": [\"src\"],\n  \"typeCheckingMode\": \"basic\"\n}\n"
+      }
+    },
+    {
+      "name": "lint: cargo lint allowed",
+      "expect": ["rule-disabled"],
+      "note": "clippy::unwrap_used goes from deny to allow in [lints.clippy].",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"allow\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      }
+    },
+    {
+      "name": "lint: cargo lint newly allowed",
+      "expect": ["rule-disabled"],
+      "note": "A new allow for a rustc lint is a weakening; a new warn or deny would not be.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\ndead_code = \"allow\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      }
+    },
+    {
+      "name": "lint: tsconfig strict removed",
+      "expect": ["rule-disabled"],
+      "note": "TypeScript's default is not strict, so removing \"strict\": true turns its checks off.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      },
+      "head": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      }
+    },
+    {
+      "name": "lint: tsconfig strict check turned off under strict",
+      "expect": ["rule-disabled"],
+      "note": "strictNullChecks false overrides what strict turns on.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      },
+      "head": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"strictNullChecks\": false,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      }
+    },
+    {
+      "name": "lint: eslintrc migrated to eslint.config.js",
+      "expect": [],
+      "note": "The same rules at the same levels and scopes, in the flat format; *.test.js and **/*.test.js are one scope.",
+      "base": {
+        ".eslintrc.json": "{\n  \"root\": true,\n  \"extends\": [\"eslint:recommended\"],\n  \"rules\": {\n    \"no-console\": \"error\",\n    \"eqeqeq\": [\"error\", \"always\"]\n  },\n  \"overrides\": [\n    {\n      \"files\": [\"*.test.js\"],\n      \"rules\": { \"no-unused-expressions\": \"off\" }\n    }\n  ]\n}\n"
+      },
+      "head": {
+        ".eslintrc.json": null,
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: eslint rules made stricter",
+      "expect": [],
+      "note": "A rule raised to error and a new rule at warn: a new warn may as well turn a rule on.",
+      "base": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      },
+      "head": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      \"no-var\": \"warn\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"error\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: biome config moved to biome.jsonc",
+      "expect": [],
+      "note": "Renamed, with a comment; the settings are the same.",
+      "base": {
+        "biome.json": "{\n  \"linter\": {\n    \"rules\": { \"suspicious\": { \"noExplicitAny\": \"error\" } }\n  }\n}\n"
+      },
+      "head": {
+        "biome.json": null,
+        "biome.jsonc": "{\n  // lint settings\n  \"linter\": {\n    \"rules\": { \"suspicious\": { \"noExplicitAny\": \"error\" } }\n  }\n}\n"
+      }
+    },
+    {
+      "name": "lint: ruff rule selected",
+      "expect": [],
+      "note": "extend-select adds SIM: stricter.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nextend-select = [\"SIM\"]\nignore = [\"E501\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff config moved to ruff.toml",
+      "expect": [],
+      "note": "The same select and ignore, from [tool.ruff.lint] to ruff.toml's [lint], ignore spelled extend-ignore.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n",
+        "ruff.toml": "line-length = 100\n\n[lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nextend-ignore = [\"E501\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff codes folded into ALL",
+      "expect": [],
+      "note": "Every code selected before is still selected by ALL.",
+      "base": {
+        "ruff.toml": "[lint]\nselect = [\"E4\", \"E7\", \"F401\", \"B\"]\n"
+      },
+      "head": {
+        "ruff.toml": "[lint]\nselect = [\"ALL\"]\n"
+      }
+    },
+    {
+      "name": "lint: flake8 ignore removed",
+      "expect": [],
+      "note": "Fewer ignored codes is stricter.",
+      "base": {
+        ".flake8": "[flake8]\nextend-ignore = E203, W503\n"
+      },
+      "head": {
+        ".flake8": "[flake8]\nextend-ignore = E203\n"
+      }
+    },
+    {
+      "name": "lint: mypy config moved to pyproject.toml",
+      "expect": [],
+      "note": "mypy.ini's sections become [tool.mypy] and an overrides entry.",
+      "base": {
+        "mypy.ini": "[mypy]\npython_version = 3.12\nstrict = True\nwarn_unreachable = True\n\n[mypy-tests.*]\ndisallow_untyped_defs = False\n"
+      },
+      "head": {
+        "mypy.ini": null,
+        "pyproject.toml": "[project]\nname = \"shop\"\n\n[tool.mypy]\npython_version = \"3.12\"\nstrict = true\nwarn_unreachable = true\n\n[[tool.mypy.overrides]]\nmodule = \"tests.*\"\ndisallow_untyped_defs = false\n"
+      }
+    },
+    {
+      "name": "lint: mypy flags folded into strict",
+      "expect": [],
+      "note": "strict turns on every flag that is gone.",
+      "base": {
+        "mypy.ini": "[mypy]\ndisallow_untyped_defs = True\ncheck_untyped_defs = True\nwarn_return_any = True\n"
+      },
+      "head": {
+        "mypy.ini": "[mypy]\nstrict = True\n"
+      }
+    },
+    {
+      "name": "lint: cargo lint denied",
+      "expect": [],
+      "note": "A lint group raised to deny and a new warn: stricter.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"deny\", priority = -1 }\nexpect_used = \"warn\"\n"
+      }
+    },
+    {
+      "name": "lint: tsconfig made stricter",
+      "expect": [],
+      "note": "New checks on, and the strict-family flags folded into strict.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"noImplicitAny\": true,\n    \"strictNullChecks\": true\n  }\n}\n"
+      },
+      "head": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUnusedLocals\": true,\n    \"exactOptionalPropertyTypes\": true\n  }\n}\n"
+      }
+    },
+    {
+      "name": "lint: a looser tsconfig for scripts added",
+      "expect": [],
+      "note": "Each tsconfig is compared with itself: a new one that checks less is normal.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      },
+      "head": {
+        "tsconfig.scripts.json": "{\n  \"compilerOptions\": { \"checkJs\": false, \"noUnusedLocals\": false },\n  \"include\": [\"scripts\"]\n}\n"
+      }
     }
   ]
 }
