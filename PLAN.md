@@ -678,7 +678,16 @@ Decisions in ADR 0048: the adapters are TypeScript programs speaking ADR 0047's 
 
 ---
 
-## M29 — Stack pack: Supabase ☐
+## M29 — Stack pack: Supabase ☐ (one box open)
+
+Decisions in ADR 0049: eight rules from the CLI's source at v3.1.0 and Supabase's docs, checked against the CLI 3.1.0 where it runs without Docker.
+
+**Done when**
+
+- ☑ `fscale init --packs core,supabase` in an empty folder yields a repo where the pack reports no violations (`supabase-pack.test.ts`, with `core,nextjs,supabase` too).
+- ☐ In that repo, the stack's own install and build or test commands succeed. Run by hand on 2026-11-14: `npm install`, `npx supabase --version`, `npx supabase migration new` succeed and the config loads; `supabase start` and `supabase test db` need Docker images, which could not be pulled in the build session. Open until `npx supabase start && npx supabase test db` is run.
+- ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (the `[inbucket]` rename).
+- ☑ Every fix is idempotent, proven by tests (`crates/rules/src/supabase/tests.rs`: every fix run twice; `sync` twice after `init`).
 
 ## M30 — Stack pack: Expo ☐
 

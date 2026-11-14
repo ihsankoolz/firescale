@@ -102,3 +102,18 @@ Opt-in: add `"python"` to `packs`, or `fscale init --packs core,python`. It work
 | `python/pytest-config` | A project with tests has a pytest config in its folder or above.                                      | medium   | yes |
 | `python/ruff-config`   | A project that declares ruff has a ruff config in its folder or above.                                | low      | yes |
 | `python/gitignore`     | `.gitignore` ignores `__pycache__/`, `.venv/`, `venv/`, `.pytest_cache/` and `.ruff_cache/`.          | medium   | yes |
+
+## The `supabase` pack
+
+Opt-in: add `"supabase"` to `packs`, or `fscale init --packs core,supabase`. It works on the Supabase CLI project at the repo root (`supabase/`); a workspace whose project is in a subfolder gets one finding pointing there and nothing written. Its fixes build a starter and repair what is missing, never editing a migration or replacing a file a person wrote (ADR 0049).
+
+| Rule                         | What it checks                                                                                                | Severity | Fix   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `supabase/package-json`      | The Supabase CLI (`supabase`) is a dev dependency.                                                            | high     | yes   |
+| `supabase/config`            | `supabase/config.toml` exists and sets `project_id`.                                                          | high     | yes   |
+| `supabase/local-smtp`        | No `[inbucket]` table, which CLI v3 refuses (it is `[local_smtp]` now).                                       | high     | yes   |
+| `supabase/gitignore`         | `supabase/.branches` and `supabase/.temp`, the CLI's local state, are ignored.                                | medium   | yes   |
+| `supabase/migration-names`   | Every SQL file in `supabase/migrations` is `<timestamp>_<name>.sql`, no version twice (the CLI skips others). | high     | no    |
+| `supabase/rls`               | Every table the migrations create in a schema the API exposes has row level security enabled.                 | high     | agent |
+| `supabase/db-tests`          | `supabase/tests` has a pgTAP test for `supabase test db`; a new project gets one that checks RLS.             | low      | yes   |
+| `supabase/public-secret-key` | No Supabase secret or service-role key is named with a client prefix (`NEXT_PUBLIC_`, `VITE_`, …).            | high     | no    |
