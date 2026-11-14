@@ -145,9 +145,10 @@ pub fn plugin_artifact<'d>(elements: &[Element], plugin: &Element, document: &'d
         .map_or("", |element| element.text(document))
 }
 
-/// The children of `project/build/plugins/plugin` (and of
-/// `pluginManagement`) whose plugin is `artifact`: their configuration
-/// element names.
+/// The settings of the plugin `artifact` under `project/build/plugins` or
+/// `pluginManagement`: the names of the children of its `configuration`, or
+/// of an execution's (found on jsoup, whose compiler settings are in its
+/// executions).
 #[must_use]
 pub fn plugin_settings(elements: &[Element], document: &str, artifact: &str) -> Vec<String> {
     let plugins = [
@@ -162,15 +163,18 @@ pub fn plugin_settings(elements: &[Element], document: &str, artifact: &str) -> 
         if plugin_artifact(elements, plugin, document) != artifact {
             continue;
         }
-        let configuration = format!("{}/configuration/", plugin.at());
+        let own = format!("{}/configuration/", plugin.at());
+        let executions = format!("{}/executions/execution/configuration/", plugin.at());
         for element in elements
             .iter()
             .filter(|e| e.start > plugin.start && e.end <= plugin.end)
         {
-            if let Some(name) = element.at().strip_prefix(&configuration) {
-                if !name.contains('/') {
-                    found.push(name.to_owned());
-                }
+            let at = element.at();
+            let name = at
+                .strip_prefix(&own)
+                .or_else(|| at.strip_prefix(&executions));
+            if let Some(name) = name.filter(|name| !name.contains('/')) {
+                found.push(name.to_owned());
             }
         }
     }
@@ -238,6 +242,16 @@ mod tests {
         assert_eq!(
             plugin_settings(&elements, pom, "maven-resources-plugin"),
             ["encoding"]
+        );
+    }
+
+    #[test]
+    fn an_executions_settings_are_its_plugins() {
+        let pom = "<project><build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><executions><execution><configuration><source>8</source></configuration></execution></executions></plugin></plugins></build></project>";
+        let elements = elements(pom).unwrap();
+        assert_eq!(
+            plugin_settings(&elements, pom, "maven-compiler-plugin"),
+            ["source"]
         );
     }
 }
