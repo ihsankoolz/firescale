@@ -584,6 +584,19 @@
       }
     },
     {
+      "name": "go: a setup loop's list trimmed",
+      "expect": [],
+      "note": "A loop that writes fixture files and fails on an error is setup, not a table of cases.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n\t\"testing\"\n)\n\nfunc TestLoad(t *testing.T) {\n\tdir := t.TempDir()\n\tfor _, name := range []string{\"a.json\", \"b.json\", \"c.json\"} {\n\t\tif err := os.WriteFile(filepath.Join(dir, name), []byte(\"{}\"), 0o600); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}\n\t}\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n\t\"testing\"\n)\n\nfunc TestLoad(t *testing.T) {\n\tdir := t.TempDir()\n\tfor _, name := range []string{\"a.json\", \"b.json\"} {\n\t\tif err := os.WriteFile(filepath.Join(dir, name), []byte(\"{}\"), 0o600); err != nil {\n\t\t\tt.Fatal(err)\n\t\t}\n\t}\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n"
+      }
+    },
+    {
       "name": "go: a slow test skipped in short mode",
       "expect": [],
       "note": "t.Skip inside if testing.Short() { … }: the test still runs in a normal go test.",
