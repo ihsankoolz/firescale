@@ -37,14 +37,33 @@ pub const APP_JS: &str = "import { StatusBar } from 'expo-status-bar';\nimport {
 /// A module path resolved as Expo and Metro would: as it is, with an
 /// extension (a platform one too, `index.ios.js`), or as a folder's index.
 fn resolves(ctx: &RuleContext, path: &str) -> bool {
-    let path = path.trim_start_matches("./").replace('\\', "/");
-    let file = |p: &str| {
-        p.split('/')
-            .fold(ctx.root().to_path_buf(), |dir, part| dir.join(part))
-            .is_file()
+    resolves_with(ctx, path, &EXTENSIONS)
+}
+
+/// A file at `path` below `root` whose name matches in letter case too:
+/// on Windows and macOS `App.json` would otherwise find `app.json`.
+fn exact_file(root: &std::path::Path, path: &str) -> bool {
+    let full = path
+        .split('/')
+        .fold(root.to_path_buf(), |dir, part| dir.join(part));
+    if !full.is_file() {
+        return false;
+    }
+    let (Some(parent), Some(name)) = (full.parent(), full.file_name()) else {
+        return false;
     };
+    std::fs::read_dir(parent).is_ok_and(|entries| {
+        entries
+            .filter_map(std::result::Result::ok)
+            .any(|e| e.file_name() == name)
+    })
+}
+
+fn resolves_with(ctx: &RuleContext, path: &str, extensions: &[&str]) -> bool {
+    let path = path.trim_start_matches("./").replace('\\', "/");
+    let file = |p: &str| exact_file(ctx.root(), p);
     let with_ext = |stem: &str| {
-        EXTENSIONS.iter().any(|ext| {
+        extensions.iter().any(|ext| {
             file(&format!("{stem}.{ext}"))
                 || PLATFORMS
                     .iter()
@@ -54,8 +73,9 @@ fn resolves(ctx: &RuleContext, path: &str) -> bool {
     file(&path) || with_ext(&path) || with_ext(&format!("{path}/index"))
 }
 
+/// `App` as `expo/AppEntry` imports it: a code file, not `App.json`.
 fn has_app(ctx: &RuleContext) -> bool {
-    resolves(ctx, "App")
+    resolves_with(ctx, "App", &EXTENSIONS[..6])
 }
 
 /// The folder Expo Router reads routes from: a `root` set for the

@@ -183,3 +183,13 @@ fn platform_files_and_package_mains_resolve() {
         Fixable::Agent
     );
 }
+
+#[test]
+fn app_json_is_not_app_whatever_the_file_systems_letter_case() {
+    // Windows CI: `App.json` found `app.json` (review of M30's CI).
+    let f = app_without(|p| p == "App.tsx" || p == "index.ts");
+    assert_eq!(
+        f.check(&Entry, &Options::new()).unwrap()[0].fixable,
+        Fixable::Deterministic
+    );
+}
