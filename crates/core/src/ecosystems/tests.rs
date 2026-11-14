@@ -598,25 +598,36 @@ fn an_ios_app_with_one_macos_target_still_builds_for_ios() {
     assert_eq!(project.commands.test, None);
 }
 
-// ADR 0055: the cmake pack's starter has a `lint` target, built as the lint
-// step; clang-format is then a tool `fscale doctor` checks.
+// ADR 0055: the cmake pack's starter has a top-level `lint` target, built
+// as the lint step; clang-format is then a tool `fscale doctor` checks.
 #[test]
 fn a_cmake_lint_target_is_the_lint_step() {
-    let starter = "cmake_minimum_required(VERSION 3.20)\nproject(app LANGUAGES CXX)\nfind_program(CLANG_FORMAT clang-format)\nif(CLANG_FORMAT)\n  add_custom_target(lint\n    COMMAND x)\nendif()\n";
-    let project = only_project(&[("CMakeLists.txt", starter)]);
+    let starter = "cmake_minimum_required(VERSION 3.20)\nproject(app LANGUAGES CXX)\nadd_custom_target(lint\n  COMMAND \"${CMAKE_COMMAND}\" -P \"${PROJECT_SOURCE_DIR}/cmake/lint.cmake\"\n  VERBATIM)\n";
+    let f = fixture(&[
+        ("CMakeLists.txt", starter),
+        (
+            "cmake/lint.cmake",
+            "find_program(CLANG_FORMAT NAMES clang-format)\n",
+        ),
+    ]);
+    let project = &detect_facts_with(f.root(), None).unwrap().projects[0];
     assert_eq!(
         project.commands.lint.as_deref(),
         Some("cmake -S . -B build && cmake --build build --config Debug --target lint")
     );
-    let f = fixture(&[("CMakeLists.txt", starter)]);
     let cmake = ecosystem("cmake").unwrap();
     let tools: Vec<&str> = (cmake.doctor)(&Folder::read(f.root(), "."))
         .iter()
         .map(|tool| tool.programs[0])
         .collect();
     assert_eq!(tools, ["cmake", "cc", "clang-format"]);
+    // Found in review: a target only some configurations have, one in a
+    // comment or a string, and another name.
     for text in [
-        "project(x)\n# add_custom_target(lint COMMAND x)\n",
+        "project(x)\nif(CLANG_TIDY)\n  add_custom_target(lint COMMAND x)\nendif()\n",
+        "project(x)\n#[[ add_custom_target(lint COMMAND x) ]]\n",
+        "project(x)\nmessage(\"add_custom_target(lint)\")\n",
+        "project(x)\nadd_custom_target(LINT COMMAND x)\n",
         "project(x)\nadd_custom_target(linter COMMAND x)\n",
         "project(x)\nadd_custom_target(format COMMAND lint)\n",
     ] {

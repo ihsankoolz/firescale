@@ -10,6 +10,7 @@ pub mod agentrun;
 pub mod blame;
 pub mod cache;
 pub mod check;
+pub mod cmake;
 pub mod config;
 pub mod diff;
 pub mod doctor;

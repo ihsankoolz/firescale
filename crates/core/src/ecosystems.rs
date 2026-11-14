@@ -880,25 +880,20 @@ fn c_package_manager(f: &Folder) -> Option<String> {
     }
 }
 
-/// True when a `CMakeLists.txt` adds a custom target named `lint` (the
-/// cmake pack's starter checks formatting with it, ADR 0055): `fscale
-/// verify` builds it as the lint step.
-fn cmake_lint_target(text: &str) -> bool {
-    text.lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .any(|line| {
-            let lower = line.to_ascii_lowercase();
-            lower.match_indices("add_custom_target").any(|(at, word)| {
-                lower[at + word.len()..]
-                    .trim_start()
-                    .strip_prefix('(')
-                    .and_then(|rest| rest.trim_start().strip_prefix("lint"))
-                    .is_some_and(|after| {
-                        after.is_empty()
-                            || after.starts_with(|c: char| c.is_whitespace() || c == ')')
-                    })
-            })
+/// True when a `CMakeLists.txt` adds a custom target named `lint` at its
+/// top level (the cmake pack's starter checks formatting with it, ADR
+/// 0055): `fscale verify` builds it as the lint step. One in an `if()`
+/// block may not exist when the build is configured, and building a
+/// missing target fails (found in review); names are case-sensitive, and
+/// comments and strings do not count.
+pub(crate) fn cmake_lint_target(text: &str) -> bool {
+    crate::cmake::commands(text).is_some_and(|commands| {
+        commands.iter().any(|command| {
+            command.name == "add_custom_target"
+                && command.top_level()
+                && command.args.first().is_some_and(|name| name == "lint")
         })
+    })
 }
 
 const CLANG_FORMAT: Tool = Tool {
@@ -974,9 +969,12 @@ const CMAKE: Ecosystem = Ecosystem {
             },
             C_COMPILER,
         ];
-        if f
-            .text("CMakeLists.txt")
-            .is_some_and(|text| cmake_lint_target(&text) && text.contains("clang-format"))
+        // The starter's lint target runs `cmake/lint.cmake`, which runs
+        // clang-format.
+        let lists = f.text("CMakeLists.txt").unwrap_or_default();
+        let script = f.text("cmake/lint.cmake").unwrap_or_default();
+        if cmake_lint_target(&lists)
+            && (lists.contains("clang-format") || script.contains("clang-format"))
         {
             tools.push(CLANG_FORMAT);
         }

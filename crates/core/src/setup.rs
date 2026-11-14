@@ -1600,6 +1600,10 @@ mod tests {
         let output = "clang-format was not found on the PATH; install it to run the lint target\ngmake[3]: *** [CMakeFiles/lint.dir/build.make:71: CMakeFiles/lint] Error 1\ngmake: *** [Makefile:174: lint] Error 2\n";
         let p = problem(output, 2).unwrap();
         assert_eq!(p.missing_program.as_deref(), Some("clang-format"));
+        // As `cmake -P` prints it from cmake/lint.cmake.
+        let script = "-- Configuring done (0.2s)\nCMake Error at /p/cmake/lint.cmake:7 (message):\n  clang-format was not found on the PATH; install it to run the lint target\n\n\ngmake[3]: *** [CMakeFiles/lint.dir/build.make:70: CMakeFiles/lint] Error 1\n";
+        let p = problem(script, 2).unwrap();
+        assert_eq!(p.missing_program.as_deref(), Some("clang-format"));
         assert!(problem(
             "error: code should be clang-formatted [-Wclang-format-violations]\n",
             2

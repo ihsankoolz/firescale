@@ -1,4 +1,5 @@
-//! A small reader of CMake's command syntax (ADR 0055).
+//! A small reader of CMake's command syntax (ADR 0055), for the cmake
+//! pack's rules and for finding a CMake project's `lint` target.
 //!
 //! A CMake file is a list of command invocations, `name(arguments)`, with
 //! comments (`# …` and bracket comments `#[[ … ]]`), quoted arguments
@@ -19,13 +20,34 @@ pub struct Command {
     /// Its arguments as written, without quotes or brackets. A nested
     /// parenthesis is an argument of its own (`(` or `)`).
     pub args: Vec<String>,
+    /// How deep it is in blocks: 0 at the top of the file, 1 inside an
+    /// `if()`, `foreach()`, `while()`, `function()`, `macro()` or `block()`,
+    /// and so on. The command that opens or closes a block is outside it.
+    pub depth: usize,
     /// Where its name starts.
     pub start: usize,
     /// After its closing parenthesis.
     pub end: usize,
 }
 
+/// Commands that open a block, and the ones that close each.
+const BLOCKS: [(&str, &str); 6] = [
+    ("if", "endif"),
+    ("foreach", "endforeach"),
+    ("while", "endwhile"),
+    ("function", "endfunction"),
+    ("macro", "endmacro"),
+    ("block", "endblock"),
+];
+
 impl Command {
+    /// True when it runs every time the file is read: at the top, not in a
+    /// block.
+    #[must_use]
+    pub fn top_level(&self) -> bool {
+        self.depth == 0
+    }
+
     /// True when any argument is `word`, ignoring case.
     #[must_use]
     pub fn has_arg(&self, word: &str) -> bool {
@@ -73,7 +95,10 @@ fn skip_comment(text: &str, at: usize) -> Option<usize> {
 #[must_use]
 pub fn commands(text: &str) -> Option<Vec<Command>> {
     let bytes = text.as_bytes();
-    let mut found = Vec::new();
+    let mut found: Vec<Command> = Vec::new();
+    let mut depth = 0usize;
+    // CMake needs a line ending after a command before the next one.
+    let mut line_ended = true;
     let mut at = 0;
     // A byte-order mark is not part of the first command's name.
     if text.starts_with('\u{feff}') {
@@ -82,10 +107,14 @@ pub fn commands(text: &str) -> Option<Vec<Command>> {
     while at < bytes.len() {
         let byte = bytes[at];
         if byte.is_ascii_whitespace() {
+            line_ended |= byte == b'\n';
             at += 1;
         } else if byte == b'#' {
             at = skip_comment(text, at)?;
         } else if byte.is_ascii_alphabetic() || byte == b'_' {
+            if !line_ended {
+                return None;
+            }
             let start = at;
             while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
                 at += 1;
@@ -98,12 +127,23 @@ pub fn commands(text: &str) -> Option<Vec<Command>> {
                 return None;
             }
             let (args, end) = arguments(text, at + 1)?;
+            let closes = BLOCKS.iter().any(|(_, close)| *close == name);
+            let opens = BLOCKS.iter().any(|(open, _)| *open == name);
+            let continues = matches!(name.as_str(), "else" | "elseif");
+            if closes || continues {
+                depth = depth.checked_sub(1)?;
+            }
             found.push(Command {
                 name,
                 args,
+                depth,
                 start,
                 end,
             });
+            if opens || continues {
+                depth += 1;
+            }
+            line_ended = false;
             at = end;
         } else {
             return None;
@@ -176,12 +216,29 @@ fn arguments(text: &str, mut at: usize) -> Option<(Vec<String>, usize)> {
 
 /// The version a `cmake_minimum_required(VERSION …)` asks for, as written,
 /// and the one CMake takes its policies from, as (major, minor): the
-/// minimum, or with a range (`3.5...3.10`) its maximum.
+/// minimum, or with a range (`3.5...3.10`) its maximum. The first call at
+/// the top of the file; with none there, the newest of those in blocks
+/// (`if(CMAKE_VERSION VERSION_LESS 3.12)` picks one by the CMake running:
+/// found in review).
 #[must_use]
 pub fn required_version(commands: &[Command]) -> Option<(String, (u32, u32))> {
-    let call = commands
+    let calls: Vec<(String, (u32, u32))> = commands
         .iter()
-        .find(|command| command.name == "cmake_minimum_required")?;
+        .filter(|command| command.name == "cmake_minimum_required" && command.top_level())
+        .take(1)
+        .filter_map(version_of)
+        .collect();
+    if let Some(first) = calls.into_iter().next() {
+        return Some(first);
+    }
+    commands
+        .iter()
+        .filter(|command| command.name == "cmake_minimum_required")
+        .filter_map(version_of)
+        .max_by_key(|(_, version)| *version)
+}
+
+fn version_of(call: &Command) -> Option<(String, (u32, u32))> {
     let at = call
         .args
         .iter()
@@ -194,7 +251,7 @@ pub fn required_version(commands: &[Command]) -> Option<(String, (u32, u32))> {
     Some((written, (major, minor)))
 }
 
-/// The languages a `project()` call enables, in upper case: those after
+/// The languages a `project()` call enables, as written: those after
 /// `LANGUAGES`, or in the older form those after the name; C and CXX when
 /// it names none (CMake's default), nothing for `NONE`.
 #[must_use]
@@ -220,10 +277,11 @@ pub fn project_languages(project: &Command) -> Vec<String> {
     if listed.is_empty() {
         return vec!["C".to_owned(), "CXX".to_owned()];
     }
+    // Language names are case-sensitive: `cxx` is no language.
     listed
         .into_iter()
         .filter(|language| language.as_str() != "NONE")
-        .map(|language| language.to_ascii_uppercase())
+        .cloned()
         .collect()
 }
 
@@ -260,6 +318,38 @@ mod tests {
             &text[all[2].start..all[2].end],
             "project (app # a comment ) here\n  LANGUAGES CXX)"
         );
+    }
+
+    #[test]
+    fn blocks_have_depth_and_a_line_holds_one_command() {
+        let text = "if(A)\n  project(x)\nelseif(B)\n  function(f)\n    add_test(NAME t COMMAND t)\n  endfunction()\nelse()\nendif()\nproject(y)\n";
+        let depths: Vec<(String, usize)> = commands(text)
+            .unwrap()
+            .into_iter()
+            .map(|command| (command.name, command.depth))
+            .collect();
+        let expected = [
+            ("if", 0),
+            ("project", 1),
+            ("elseif", 0),
+            ("function", 1),
+            ("add_test", 2),
+            ("endfunction", 1),
+            ("else", 0),
+            ("endif", 0),
+            ("project", 0),
+        ];
+        assert_eq!(
+            depths,
+            expected.map(|(name, depth)| (name.to_owned(), depth))
+        );
+        // CMake: "Expected a newline".
+        assert_eq!(commands("project(x) set(A 1)\n"), None);
+        assert_eq!(
+            names("project(x) #[[ c ]] # d\nset(A 1)\n"),
+            ["project", "set"]
+        );
+        assert_eq!(commands("endif()\n"), None);
     }
 
     #[test]
@@ -302,7 +392,7 @@ mod tests {
             "C,CXX"
         );
         assert_eq!(languages("project(x C)"), "C");
-        assert_eq!(languages("project(x cxx)"), "CXX");
+        assert_eq!(languages("project(x cxx)"), "cxx");
         assert_eq!(languages("project(x NONE)"), "");
     }
 
@@ -328,5 +418,13 @@ mod tests {
         );
         assert_eq!(version("cmake_minimum_required(VERSION ${V})"), None);
         assert_eq!(version("project(x)"), None);
+        assert_eq!(
+            version("if(CMAKE_VERSION VERSION_LESS 3.12)\n  cmake_minimum_required(VERSION 3.1)\nelse()\n  cmake_minimum_required(VERSION 3.12)\nendif()\n"),
+            Some((3, 12))
+        );
+        assert_eq!(
+            version("cmake_minimum_required(VERSION 3.20)\nif(X)\n  cmake_minimum_required(VERSION 2.8)\nendif()\n"),
+            Some((3, 20))
+        );
     }
 }

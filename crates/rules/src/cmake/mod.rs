@@ -20,7 +20,7 @@ pub mod lists;
 #[path = "minimum-version/mod.rs"]
 pub mod minimum_version;
 pub mod standard;
-pub mod syntax;
+pub use firescale_core::cmake as syntax;
 #[path = "tests/mod.rs"]
 pub mod test_files;
 
@@ -44,6 +44,25 @@ pub const C_CODE: [&str; 13] = [
 /// The C++ ones: a `.h` header may be C.
 pub const CXX_CODE: [&str; 11] = [
     "cc", "cpp", "cxx", "c++", "hh", "hpp", "hxx", "h++", "ipp", "ixx", "cppm",
+];
+
+/// Other native code (CUDA, Arduino sketches, Objective-C): a repo with
+/// any is not new to native code, and gets no starter (found in review).
+const OTHER_NATIVE: [&str; 5] = ["cu", "cuh", "ino", "m", "mm"];
+
+/// Folders that hold other projects' code by convention. Their tests and
+/// standards are not the project's (found in review: a vendored GoogleTest
+/// registers tests).
+const VENDORED: [&str; 9] = [
+    "third_party",
+    "thirdparty",
+    "third-party",
+    "3rdparty",
+    "3rd_party",
+    "external",
+    "externals",
+    "extern",
+    "deps",
 ];
 
 /// Root files of C and C++ builds other than CMake: a repo with one of
@@ -84,11 +103,46 @@ fn extension(path: &str) -> &str {
         .map_or("", |(_, extension)| extension)
 }
 
-/// The C or C++ files the pack reads, and whether any is C++.
+/// The paths of the repo's git submodules, from `.gitmodules`.
+fn submodules(ctx: &RuleContext) -> Result<Vec<String>> {
+    Ok(ctx
+        .read(".gitmodules")?
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| {
+                    let (key, value) = line.split_once('=')?;
+                    (key.trim() == "path").then(|| {
+                        value
+                            .trim()
+                            .trim_matches('"')
+                            .trim_end_matches('/')
+                            .to_owned()
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// True for a path that is the project's own: read by the pack, and not in
+/// a vendored folder or a git submodule.
+fn own_path(path: &str, submodules: &[String]) -> bool {
+    read_path(path)
+        && !path
+            .rsplit_once('/')
+            .is_some_and(|(folders, _)| folders.split('/').any(|f| VENDORED.contains(&f)))
+        && !submodules.iter().any(|module| {
+            path.strip_prefix(module.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+}
+
+/// The project's own C or C++ files, and whether any is C++.
 pub(crate) fn code(ctx: &RuleContext) -> Result<(Vec<String>, bool)> {
+    let modules = submodules(ctx)?;
     let files: Vec<String> = firescale_core::walk::walk_files(ctx.root())?
         .into_iter()
-        .filter(|path| read_path(path) && C_CODE.contains(&extension(path)))
+        .filter(|path| own_path(path, &modules) && C_CODE.contains(&extension(path)))
         .collect();
     let cxx = files.iter().any(|path| CXX_CODE.contains(&extension(path)));
     Ok((files, cxx))
@@ -122,6 +176,27 @@ pub(crate) fn all_commands(ctx: &RuleContext) -> Result<Vec<(String, Vec<syntax:
     Ok(out)
 }
 
+/// [`all_commands`] of the project's own CMake files: not vendored, not
+/// in a submodule.
+pub(crate) fn own_commands(ctx: &RuleContext) -> Result<Vec<(String, Vec<syntax::Command>)>> {
+    let modules = submodules(ctx)?;
+    Ok(all_commands(ctx)?
+        .into_iter()
+        .filter(|(path, _)| own_path(path, &modules))
+        .collect())
+}
+
+/// True when the repo has any native code the pack reads: C, C++, CUDA,
+/// Arduino or Objective-C, vendored or not.
+fn any_native_code(ctx: &RuleContext) -> Result<bool> {
+    Ok(firescale_core::walk::walk_files(ctx.root())?
+        .iter()
+        .any(|path| {
+            read_path(path)
+                && (C_CODE.contains(&extension(path)) || OTHER_NATIVE.contains(&extension(path)))
+        }))
+}
+
 /// The folders below the root that hold a `CMakeLists.txt`.
 pub(crate) fn lists_below(ctx: &RuleContext) -> Result<Vec<String>> {
     Ok(cmake_files(ctx)?
@@ -131,32 +206,39 @@ pub(crate) fn lists_below(ctx: &RuleContext) -> Result<Vec<String>> {
 }
 
 /// True when the root has a C or C++ build other than CMake, or a Visual
-/// Studio solution or project.
+/// Studio solution or project at the root or one folder down (found in
+/// review: `win/x.vcxproj`).
 fn other_c_build(ctx: &RuleContext) -> Result<bool> {
     if any_exists(ctx, &OTHER_C_BUILDS) {
         return Ok(true);
     }
-    let Ok(entries) = std::fs::read_dir(ctx.root()) else {
-        return Ok(false);
-    };
-    Ok(entries.flatten().any(|entry| {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        matches!(extension(&name), "sln" | "slnx" | "vcxproj")
-    }))
+    Ok(firescale_core::walk::walk_files(ctx.root())?
+        .iter()
+        .filter(|path| path.matches('/').count() <= 1)
+        .any(|path| matches!(extension(path), "sln" | "slnx" | "vcxproj")))
 }
 
-/// True when the pack applies to the repo root: it has a `CMakeLists.txt`,
-/// or it is new to C and C++ (no code at all, no other stack's manifest, no
+/// True when the root `CMakeLists.txt` is a CMake project's, as ADR 0051's
+/// project support reads it: not a Python, Node or Rust native extension
+/// built through CMake, nor a Swift package that also has a CMake build
+/// (found in review: a scikit-build-core project got findings).
+fn root_is_cmake(ctx: &RuleContext) -> bool {
+    firescale_core::ecosystems::ecosystem("cmake").is_some_and(|cmake| {
+        (cmake.marks)(&firescale_core::ecosystems::Folder::read(ctx.root(), "."))
+    })
+}
+
+/// True when the pack applies to the repo root: it has a `CMakeLists.txt`
+/// that is a CMake project's, or it is new to C and C++ (no code at all, no other stack's manifest, no
 /// other C build, and no `CMakeLists.txt` in a subfolder). A repo whose
 /// code is built another way is never given a `CMakeLists.txt`.
 pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
     if any_exists(ctx, &["CMakeLists.txt"]) {
-        return Ok(true);
+        return Ok(root_is_cmake(ctx));
     }
     Ok(!other_stack(ctx, &["CMakeLists.txt"], &[])?
         && !other_c_build(ctx)?
-        && code(ctx)?.0.is_empty()
+        && !any_native_code(ctx)?
         && lists_below(ctx)?.is_empty())
 }
 
@@ -186,7 +268,23 @@ pub(crate) fn inputs(own: &[&str]) -> Vec<String> {
             "*.slnx".to_owned(),
             "*.vcxproj".to_owned(),
         ])
-        .chain(C_CODE.iter().map(|extension| format!("**/*.{extension}")))
+        .chain([
+            ".gitmodules".to_owned(),
+            "*/*.sln".to_owned(),
+            "*/*.slnx".to_owned(),
+            "*/*.vcxproj".to_owned(),
+            "pyproject.toml".to_owned(),
+            "setup.py".to_owned(),
+            "package.json".to_owned(),
+            "Cargo.toml".to_owned(),
+            "Package.swift".to_owned(),
+        ])
+        .chain(
+            C_CODE
+                .iter()
+                .chain(OTHER_NATIVE.iter())
+                .map(|extension| format!("**/*.{extension}")),
+        )
         .chain(other_stack_inputs());
     for input in shared {
         if !all.contains(&input) {
