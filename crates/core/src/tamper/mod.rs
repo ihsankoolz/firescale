@@ -1298,16 +1298,16 @@ pub fn guard_at(
         .map(|skip| skip.weight)
         .sum();
     let added_tests = counts.head_tests.saturating_sub(counts.base_tests);
-    // Only while no test of the base went away: a test renamed and skipped
-    // has a new id too, and must not pass for a new test (found in review).
-    let gone_any = base_ids
+    // Less one for each run of a base test that went away: a test renamed
+    // and skipped has a new id too, and must not pass for a new test (found
+    // in review). At most that many of the new skipped tests can be such
+    // (found on real history, M32: Humanizer renamed one test and added six
+    // more under the `#if NET6_0_OR_GREATER` its file already had).
+    let gone_runs = base_ids
         .iter()
-        .any(|(id, _, _)| !head_ids.contains_key(id.as_str()));
-    let excused_skips = if gone_any {
-        0
-    } else {
-        new_skipped.min(added_tests)
-    };
+        .filter(|(id, _, _)| !head_ids.contains_key(id.as_str()))
+        .count();
+    let excused_skips = new_skipped.saturating_sub(gone_runs).min(added_tests);
     // Tests the base had, run there, and skipped now (less those the base
     // skipped and the change runs again) are counted on their own, so a new
     // skipped test cannot hide an old one made to not run.

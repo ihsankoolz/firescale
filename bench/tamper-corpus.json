@@ -5430,6 +5430,30 @@
       "head": {
         "tests/App.Tests/GenderTests.cs": "using Xunit;\n\npublic class GenderTests\n{\n    [Fact]\n    public void EveryGenderHasAWord()\n    {\n        foreach (var name in Names.All)\n        {\n#if NET5_0_OR_GREATER\n            foreach (var gender in Enum.GetValues<Gender>())\n#else\n            foreach (var gender in (Gender[])Enum.GetValues(typeof(Gender)))\n#endif\n            {\n                Assert.NotNull(Words.For(name, gender));\n                Assert.NotEmpty(Words.For(name, gender));\n                Assert.DoesNotContain(\" \", Words.For(name, gender));\n            }\n        }\n    }\n}\n"
       }
+    },
+    {
+      "name": "cs: a test renamed and new tests added under the file's #if",
+      "expect": [],
+      "note": "Humanizer: every test of the file is under `#if NET6_0_OR_GREATER`; one is renamed and two are added under the same `#if`. At most one new conditional test can be the renamed one, so the other two are excused (ADR 0052).",
+      "base": {
+        "src/Clock.cs": "public static class Clock { public static string Say(string s) => s; }\n",
+        "tests/App.Tests/ClockTests.cs": "using Xunit;\n\npublic class ClockTests\n{\n#if NET6_0_OR_GREATER\n    [Fact]\n    public void Noon() => Assert.Equal(\"Noon\", Clock.Say(\"Noon\"));\n\n    [Fact]\n    public void Midnight() => Assert.Equal(\"Midnight\", Clock.Say(\"Midnight\"));\n\n#endif\n}\n"
+      },
+      "head": {
+        "tests/App.Tests/ClockTests.cs": "using Xunit;\n\npublic class ClockTests\n{\n#if NET6_0_OR_GREATER\n    [Fact]\n    public void Noon() => Assert.Equal(\"Noon\", Clock.Say(\"Noon\"));\n\n    [Fact]\n    public void MidnightExactly() => Assert.Equal(\"Midnight\", Clock.Say(\"Midnight\"));\n\n    [Fact]\n    public void QuarterPast() => Assert.Equal(\"QuarterPast\", Clock.Say(\"QuarterPast\"));\n\n    [Fact]\n    public void HalfPast() => Assert.Equal(\"HalfPast\", Clock.Say(\"HalfPast\"));\n\n#endif\n}\n"
+      }
+    },
+    {
+      "name": "cs: a test renamed and skipped while a conditional test is added",
+      "expect": ["test-skipped"],
+      "note": "Renaming a test while skipping it gives it a new id; one new conditional test beside it does not excuse it (ADR 0046, 0052).",
+      "base": {
+        "src/Clock.cs": "public static class Clock { public static string Say(string s) => s; }\n",
+        "tests/App.Tests/ClockTests.cs": "using Xunit;\n\npublic class ClockTests\n{\n    [Fact]\n    public void Noon() => Assert.Equal(\"Noon\", Clock.Say(\"Noon\"));\n\n    [Fact]\n    public void Midnight() => Assert.Equal(\"Midnight\", Clock.Say(\"Midnight\"));\n\n}\n"
+      },
+      "head": {
+        "tests/App.Tests/ClockTests.cs": "using Xunit;\n\npublic class ClockTests\n{\n    [Fact]\n    public void Noon() => Assert.Equal(\"Noon\", Clock.Say(\"Noon\"));\n\n    [Fact(Skip = \"flaky\")]\n    public void MidnightExactly() => Assert.Equal(\"Midnight\", Clock.Say(\"Midnight\"));\n\n#if NET6_0_OR_GREATER\n    [Fact]\n    public void QuarterPast() => Assert.Equal(\"QuarterPast\", Clock.Say(\"QuarterPast\"));\n#endif\n}\n"
+      }
     }
   ]
 }
