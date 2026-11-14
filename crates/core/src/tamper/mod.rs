@@ -23,12 +23,18 @@
 //! - Findings are report-only unless the base's policy is `enforced`.
 
 pub mod approval;
+mod cfamily;
 mod ci;
 mod config;
 mod coverage;
+mod csharp;
+mod dart;
 mod formats;
 pub mod github;
+mod go;
+mod java;
 mod js;
+mod kotlin;
 mod lintconfig;
 mod noverify;
 mod policy;
@@ -36,6 +42,7 @@ mod python;
 mod reach;
 mod rust;
 mod suppress;
+mod swift;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -59,6 +66,22 @@ pub enum Language {
     Python,
     /// Rust: `#[test]` and its forms.
     Rust,
+    /// Java: JUnit and TestNG (M32).
+    Java,
+    /// Kotlin: JUnit, kotlin.test and Kotest (M32).
+    Kotlin,
+    /// Swift: XCTest and Swift Testing (M32).
+    Swift,
+    /// C: Unity, CMocka, Check, plain `assert` (M32).
+    C,
+    /// C++: GoogleTest and Catch2 (M32).
+    Cpp,
+    /// C#: xUnit, NUnit and MSTest (M32).
+    CSharp,
+    /// Go: `testing` and testify (M32).
+    Go,
+    /// Dart: `package:test` and `flutter_test` (M32).
+    Dart,
 }
 
 impl Language {
@@ -72,6 +95,15 @@ impl Language {
         match extension.as_str() {
             "py" => Some(Self::Python),
             "rs" => Some(Self::Rust),
+            "java" => Some(Self::Java),
+            "kt" => Some(Self::Kotlin),
+            "swift" => Some(Self::Swift),
+            "c" => Some(Self::C),
+            // A header may be C or C++: the C++ grammar reads both.
+            "cc" | "cpp" | "cxx" | "c++" | "h" | "hh" | "hpp" | "hxx" => Some(Self::Cpp),
+            "cs" => Some(Self::CSharp),
+            "go" => Some(Self::Go),
+            "dart" => Some(Self::Dart),
             _ => None,
         }
     }
@@ -84,6 +116,14 @@ pub fn read_test_file(source: &str, language: Language) -> TestFile {
         Language::Js(dialect) => js::read(source, dialect),
         Language::Python => python::read(source),
         Language::Rust => rust::read(source),
+        Language::Java => java::read(source),
+        Language::Kotlin => kotlin::read(source),
+        Language::Swift => swift::read(source),
+        Language::C => cfamily::read(source, false),
+        Language::Cpp => cfamily::read(source, true),
+        Language::CSharp => csharp::read(source),
+        Language::Go => go::read(source),
+        Language::Dart => dart::read(source),
     }
 }
 
@@ -98,6 +138,13 @@ pub fn is_test_path(path: &str) -> bool {
         Some(Language::Js(_)) => js::is_test_path(path),
         Some(Language::Python) => python::is_test_path(path),
         Some(Language::Rust) => rust::is_test_path(path),
+        Some(Language::Java) => java::is_test_path(path),
+        Some(Language::Kotlin) => kotlin::is_test_path(path),
+        Some(Language::Swift) => swift::is_test_path(path),
+        Some(Language::C | Language::Cpp) => cfamily::is_test_path(path),
+        Some(Language::CSharp) => csharp::is_test_path(path),
+        Some(Language::Go) => go::is_test_path(path),
+        Some(Language::Dart) => dart::is_test_path(path),
         None => false,
     }
 }
@@ -106,7 +153,18 @@ pub fn is_test_path(path: &str) -> bool {
 /// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code.
 #[must_use]
 pub fn holds_tests(source: &str, language: Language) -> bool {
-    language == Language::Rust && rust::holds_tests(source)
+    match language {
+        Language::Rust => rust::holds_tests(source),
+        Language::Java => java::holds_tests(source),
+        Language::Kotlin => kotlin::holds_tests(source),
+        Language::Swift => swift::holds_tests(source),
+        Language::C => cfamily::holds_tests(source, false),
+        Language::Cpp => cfamily::holds_tests(source, true),
+        Language::CSharp => csharp::holds_tests(source),
+        Language::Go => go::holds_tests(source),
+        Language::Dart => dart::holds_tests(source),
+        Language::Js(_) | Language::Python => false,
+    }
 }
 
 /// The repo path an import of `spec` in the file `from` names, among the
@@ -124,7 +182,15 @@ fn resolve(
     match language {
         Language::Js(_) => js::resolve(from, spec, exists),
         Language::Python => python::resolve(from, spec, exists),
-        Language::Rust => None,
+        Language::Rust
+        | Language::Java
+        | Language::Kotlin
+        | Language::Swift
+        | Language::C
+        | Language::Cpp
+        | Language::CSharp
+        | Language::Go
+        | Language::Dart => None,
     }
 }
 

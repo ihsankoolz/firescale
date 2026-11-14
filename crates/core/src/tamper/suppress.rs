@@ -33,11 +33,24 @@ pub struct Suppression {
 /// The suppressions in a source file.
 #[must_use]
 pub fn suppressions(source: &str, language: Language) -> Vec<Suppression> {
+    // The languages of M32 read their own (ADR 0052).
+    match language {
+        Language::Java => return super::java::suppressions(source),
+        Language::Kotlin => return super::kotlin::suppressions(source),
+        Language::Swift => return super::swift::suppressions(source),
+        Language::C => return super::cfamily::suppressions(source, false),
+        Language::Cpp => return super::cfamily::suppressions(source, true),
+        Language::CSharp => return super::csharp::suppressions(source),
+        Language::Go => return super::go::suppressions(source),
+        Language::Dart => return super::dart::suppressions(source),
+        Language::Js(_) | Language::Python | Language::Rust => {}
+    }
     let grammar: tree_sitter::Language = match language {
         Language::Js(JsDialect::TypeScript) => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::Js(JsDialect::Tsx) => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+        _ => return Vec::new(),
     };
     let Some(tree) = parse(source, &grammar) else {
         return Vec::new();
