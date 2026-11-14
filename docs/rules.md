@@ -131,3 +131,15 @@ Opt-in: add `"expo"` to `packs`, or `fscale init --packs core,expo`. It works on
 | `expo/eslint`            | ESLint is set up with `eslint-config-expo`, so `expo lint` runs as it is (an app linting with Biome or another linter passes).                     | medium   | yes |
 | `expo/gitignore`         | `.gitignore` ignores `.expo/`, `dist/`, `.env*.local` and app-signing keys.                                                                        | medium   | yes |
 | `expo/public-env-secret` | No `EXPO_PUBLIC_` variable is named like a secret (`SECRET`, `PRIVATE_KEY`, `SERVICE_ROLE`, a final `PASSWORD`).                                   | high     | no  |
+
+## The `go` pack
+
+Opt-in: add `"go"` to `packs`, or `fscale init --packs core,go`. It works on a Go module at the repo root (a repo with another stack's manifest or code and no `go.mod` is left alone, and modules in subfolders get one finding); its fixes build a starter (`go.mod` with `go 1.26.0`, a `main` package and its test) and repair what is missing, never replacing a file a person wrote (ADR 0053). `go build ./...`, `go vet ./...` and `go test ./...` are its build, lint and test commands (ADR 0051).
+
+| Rule           | What it checks                                                                                                                                   | Severity | Fix |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | --- |
+| `go/go-mod`    | The root has a `go.mod` with a `module` line and a `go` line (an existing one gets `go 1.16`, which the go tool assumes).                        | high     | yes |
+| `go/entry`     | The module has Go code (where the go tool looks: not in `testdata`, `vendor`, or folders starting with `.` or `_`).                              | high     | yes |
+| `go/tests`     | A module with Go code has a `_test.go` file.                                                                                                     | medium   | no  |
+| `go/go-sum`    | A module that requires other modules has a `go.sum`.                                                                                             | high     | no  |
+| `go/gitignore` | `.gitignore` ignores the root program `go build` writes (`/app` for `example.com/app`), `*.exe`, `*.test`, `*.out`, `go.work` and `go.work.sum`. | medium   | yes |

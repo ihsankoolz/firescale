@@ -170,9 +170,36 @@ pub fn gitignore_covers(text: &str, path: &str) -> bool {
         .is_ignore()
 }
 
+/// True when a gitignore's `text` ignores the file `path` itself: a
+/// folder-only line (`app/`) does not ignore a file named `app` (the go
+/// pack's program, found in review).
+#[must_use]
+pub fn gitignore_covers_file(text: &str, path: &str) -> bool {
+    let root = Path::new("/");
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        let _ = builder.add_line(None, line.trim_end_matches('\r'));
+    }
+    let Ok(matcher) = builder.build() else {
+        return false;
+    };
+    matcher
+        .matched_path_or_any_parents(root.join(path.trim_start_matches('/')), false)
+        .is_ignore()
+}
+
 #[cfg(test)]
 mod covers_tests {
-    use super::gitignore_covers;
+    use super::{gitignore_covers, gitignore_covers_file};
+
+    #[test]
+    fn a_folder_only_line_does_not_cover_a_file() {
+        assert!(gitignore_covers_file("/app\n", "app"));
+        assert!(gitignore_covers_file("app\n", "app"));
+        assert!(!gitignore_covers_file("app/\n", "app"));
+        assert!(!gitignore_covers_file("/app\n!/app\n", "app"));
+        assert!(gitignore_covers("app/\n", "app"));
+    }
 
     #[test]
     fn reads_gitignore_lines_as_git_does() {

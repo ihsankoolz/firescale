@@ -42,6 +42,14 @@ M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull requ
 - Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
 - Test by hand: the starter on a device or simulator (`npx expo start`), and `npx expo-doctor` with the network.
 
+## M33 — Stack pack: Go
+
+**Built** (ADR 0053, `docs/rules.md`): five rules; `fscale init --packs core,go` writes `go.mod` (`module example.com/app`, `go 1.26.0`), `main.go` and `main_test.go`, and Go's `.gitignore` lines; a missing `go.sum` or test file is named for a person or an agent.
+
+**Decided on your behalf** (ADR 0053): `go 1.26.0`, the older of Go's two supported releases, rather than the local version `go mod init` writes, for a new module, and `go 1.16` (what the go tool assumes) for an existing `go.mod` without a `go` line; the fixed module path `example.com/app`, to be changed; `go.work` ignored, as the Go module reference advises; modules in subfolders are not checked.
+
+**Proof:** the starter built, vetted, tested and ran here (Go 1.24.7 fetching the 1.26.0 toolchain), and `fscale verify` passed in it; cobra, gin and microservices-demo were read correctly after two fixes; a fresh review found five ways the pack could damage or misread a repo, all fixed with tests.
+
 ## M32 — Tamper guard: Java, Kotlin, Swift, Dart, C, C++, C# and Go
 
 **Built** (ADR 0052, `docs/verify.md`): a tamper-guard reader per language, with each one's test frameworks, skips, assertions and suppressions; eight grammar crates, pinned; parse errors that cannot hide a test no longer make a file "not checked"; a removed assertion is named in its own test rather than as a copy elsewhere; new conditional tests are excused but for one per base test that went away.
