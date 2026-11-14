@@ -1149,8 +1149,11 @@ pub fn guard_at(
     let mut head_skips: Vec<Skip<'_>> = Vec::new();
     let mut base_focus: BTreeSet<String> = BTreeSet::new();
     let mut head_focus: Vec<(String, usize, String)> = Vec::new();
-    let mut base_shapes: Vec<(String, String, String, usize)> = Vec::new();
+    // Each assertion of the base: its shape, text, file, line and test.
+    let mut base_shapes: Vec<(String, String, String, usize, String)> = Vec::new();
     let mut head_shapes: BTreeMap<String, usize> = BTreeMap::new();
+    // The same, by file and test: which one went is named by its test first.
+    let mut head_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     let counts = &mut report.counts;
     for (file, base_file, head_file) in &pairs {
         let path = &file.path;
@@ -1204,12 +1207,14 @@ pub fn guard_at(
                     continue;
                 }
                 counts.base_assertions += assertion.weight;
+                let test = test_id(read, assertion);
                 for _ in 0..assertion.weight {
                     base_shapes.push((
                         assertion.shape.clone(),
                         assertion.text.clone(),
                         path.clone(),
                         assertion.line,
+                        test.clone(),
                     ));
                 }
             }
@@ -1240,6 +1245,13 @@ pub fn guard_at(
                 for assertion in &read.assertions {
                     counts.head_assertions += assertion.weight;
                     *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
+                    *head_in_test
+                        .entry((
+                            assertion.shape.clone(),
+                            path.clone(),
+                            test_id(read, assertion),
+                        ))
+                        .or_default() += assertion.weight;
                 }
             }
         }
@@ -1373,10 +1385,29 @@ pub fn guard_at(
         });
     }
     // Fewer assertions: name those whose text is gone, up to the shortfall.
+    // The same text kept in the same test pairs first, then anywhere: a
+    // copy the change kept in another test is not taken for the one it
+    // removed (found on real history: Alamofire commented out the first of
+    // several identical assertions, and the last was named).
     if counts.head_assertions < counts.base_assertions {
         let mut left = head_shapes;
-        let mut missing: Vec<&(String, String, String, usize)> = Vec::new();
-        for entry in &base_shapes {
+        let mut in_test = head_in_test;
+        let mut kept = vec![false; base_shapes.len()];
+        for (index, (shape, _, file, _, test)) in base_shapes.iter().enumerate() {
+            let key = (shape.clone(), file.clone(), test.clone());
+            if let Some(count) = in_test.get_mut(&key).filter(|count| **count > 0) {
+                *count -= 1;
+                if let Some(total) = left.get_mut(shape) {
+                    *total = total.saturating_sub(1);
+                }
+                kept[index] = true;
+            }
+        }
+        let mut missing: Vec<&(String, String, String, usize, String)> = Vec::new();
+        for (entry, kept) in base_shapes.iter().zip(kept) {
+            if kept {
+                continue;
+            }
             match left.get_mut(&entry.0) {
                 Some(count) if *count > 0 => *count -= 1,
                 _ => missing.push(entry),
@@ -1384,7 +1415,7 @@ pub fn guard_at(
         }
         let shortfall = counts.base_assertions - counts.head_assertions;
         let mut named: BTreeSet<(&String, usize)> = BTreeSet::new();
-        for (_, shown, file, line) in missing.into_iter().take(shortfall) {
+        for (_, shown, file, line, _) in missing.into_iter().take(shortfall) {
             if named.insert((file, *line)) {
                 findings.push(Finding {
                     kind: Kind::AssertionRemoved,
@@ -1605,6 +1636,15 @@ pub fn approvals_from_reviews(reviews: &str, pr: &github::PullRequest) -> crate:
         head: pr.head.clone(),
         by,
     })
+}
+
+/// The id of the test an assertion is in, or "" outside any test.
+fn test_id(file: &TestFile, assertion: &Assertion) -> String {
+    assertion
+        .test
+        .and_then(|index| file.tests.get(index))
+        .map(|test| test.id.clone())
+        .unwrap_or_default()
 }
 
 /// The assertions of one file that the change rewrote in their values only:

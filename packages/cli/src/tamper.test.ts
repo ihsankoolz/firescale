@@ -224,6 +224,39 @@ describe('what a finding says', () => {
     );
   });
 
+  // Found on real history (M32, ADR 0052): Alamofire commented out the first
+  // of several identical assertions, and the last copy, still there, was named.
+  it('names the assertion that went, not a copy of it in another test', async () => {
+    const test = (name: string, body: string): string =>
+      `it("${name}", () => {\n  const cart = make();\n${body}});\n\n`;
+    const same = '  expect(cart.total()).toBe(0);\n';
+    const base = {
+      'src/cart.ts': 'export const make = () => ({ total: () => 0 });\n',
+      'src/cart.test.ts':
+        'import { make } from "./cart";\n\n' +
+        test('starts empty', same) +
+        test('stays empty', same) +
+        test('is empty again', same),
+    };
+    const head = {
+      'src/cart.test.ts':
+        'import { make } from "./cart";\n\n' +
+        test('starts empty', '') +
+        test('stays empty', same) +
+        test('is empty again', same),
+    };
+    const { tamper: report } = await tamper(await caseRepo(base, head));
+    expect(report?.findings).toEqual([
+      {
+        kind: 'assertion-removed',
+        file: 'src/cart.test.ts',
+        line: 5,
+        onBase: true,
+        what: 'expect(cart.total()).toBe(0)',
+      },
+    ]);
+  });
+
   it('makes a file it cannot parse a finding of its own, which blocks when enforced', async () => {
     const labelled = corpus.cases.find((c) => c.name === 'ts: a test deleted');
     if (!labelled) throw new Error('corpus case missing');
