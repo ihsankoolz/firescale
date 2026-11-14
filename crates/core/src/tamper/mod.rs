@@ -3,7 +3,8 @@
 //! checks, in JavaScript, TypeScript, Python (pytest and unittest), Rust,
 //! Java (JUnit and TestNG), Kotlin (JUnit, kotlin.test and Kotest), Swift
 //! (XCTest and Swift Testing), Dart (`package:test` and `flutter_test`), C
-//! (Unity, CMocka, Check, `assert`) and C++ (GoogleTest, Catch2, doctest).
+//! (Unity, CMocka, Check, `assert`), C++ (GoogleTest, Catch2, doctest), C#
+//! (xUnit, NUnit, MSTest) and Go (`testing`, testify).
 //!
 //! - It compares syntax trees, not diff lines: each changed test file is
 //!   parsed with tree-sitter on the base commit and in the working tree, and
@@ -145,8 +146,11 @@ pub fn read_test_file(source: &str, language: Language) -> TestFile {
 /// (`Tests/`, `AppTests/`, `AppUITests/`); Dart `*_test.dart` or in `test`,
 /// `integration_test`; C and C++ `*_test.c`, `*_test.cc`, `*_unittest.cc`,
 /// `test_*.c`, `*Test.cpp`, `*Tests.cpp` or in `test`, `tests`,
-/// `unittest(s)`. A file elsewhere is a test file when it holds tests
-/// ([`holds_tests`]); the policy can name more (`verify.tamper.testPaths`).
+/// `unittest(s)`; C# `*Tests.cs`, `*Test.cs` or in `test`, `tests`,
+/// `*.Tests`, `*.Test`, `*Tests` (a test project); Go `*_test.go` (not under
+/// `testdata` or a folder the go tool ignores). A file elsewhere is a test
+/// file when it holds tests ([`holds_tests`]); the policy can name more
+/// (`verify.tamper.testPaths`).
 #[must_use]
 pub fn is_test_path(path: &str) -> bool {
     match Language::of(path) {
@@ -206,7 +210,8 @@ fn resolve(
         Language::C | Language::Cpp => cfamily::resolve(from, spec, exists),
         // Kotlin reads Java classes and Java reads Kotlin ones.
         Language::Java | Language::Kotlin => java::resolve(from, spec, exists),
-        Language::Rust | Language::CSharp | Language::Go => None,
+        Language::Go => go::resolve(from, spec, exists),
+        Language::Rust | Language::CSharp => None,
     }
 }
 
