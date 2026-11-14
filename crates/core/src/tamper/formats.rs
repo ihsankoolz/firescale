@@ -594,7 +594,16 @@ mod yaml {
                     if let Some(next) = self.lines.get(self.at) {
                         // A sequence may sit at the key's own indentation.
                         let is_item = next.text == "-" || next.text.starts_with("- ");
-                        if next.indent > indent || (next.indent == indent && is_item) {
+                        // A value on the next line that is not a block of its
+                        // own: `needs:` then `  [a, b]`, a quoted or plain
+                        // scalar.
+                        let is_value =
+                            next.indent > indent && !is_item && split_key(next.text).is_none();
+                        if is_value {
+                            let (text, line) = (next.text, next.number);
+                            self.at += 1;
+                            self.scalar_value(text, line, indent, path)?;
+                        } else if next.indent > indent || (next.indent == indent && is_item) {
                             let inner = next.indent;
                             self.node(inner, path, depth + 1)?;
                         } else {
@@ -1504,6 +1513,15 @@ mod tests {
         ));
         assert!(has(&entries, "jobs.test.steps.[2].run", "cargo test", 19));
         assert!(has(&entries, "jobs.test.continue-on-error", "false", 9));
+    }
+
+    #[test]
+    fn reads_a_yaml_value_on_the_line_after_its_key() {
+        let source = "job:\n  needs:\n    [build, test,\n     lint]\n  name:\n    plain words\n    go on\n  runs-on: x\n";
+        let entries = flat(Format::Yaml, source);
+        assert!(has(&entries, "job.needs.[2]", "lint", 3));
+        assert!(has(&entries, "job.name", "plain words go on", 6));
+        assert!(has(&entries, "job.runs-on", "x", 8));
     }
 
     #[test]

@@ -33,6 +33,14 @@ M25 (the tamper guard's config and CI detectors, ADR 0045) is being built on the
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
 
+Notes on M25, for whoever builds M26 or touches the tamper guard's config detectors (ADR 0045):
+
+- Config detectors are `crates/core/src/tamper/{coverage,ci,noverify,lintconfig}.rs`, each `reads(path)` and `measures(path, text) -> Result<Vec<Measure>, line>`, listed in `config::DETECTORS`. `config::compare` does the rest (max or sum per key over the whole change). A new detector needs a `Kind` (keep `NotChecked` last), a corpus prefix with a caught and a not-a-finding case, and the prefix in `DETECTORS` in `tamper.test.ts` and the kind in `bench/tamper-rates.mjs`.
+- `tamper/formats.rs` flattens JSON(C), YAML, TOML, INI and JS literals to `Entry { path, value, line }`; `read_roots` keeps each outermost JS literal apart (lintconfig uses it).
+- `guard_at(root, base, &Head::Commit(sha), changed)` reads the head from git objects (`changed_between` lists the files); `fscale tamper --head <c> --base <c>^` is how to run the guard over history without a checkout.
+- `tamper::github::pull_request` reads GitHub's event; `--pr-base` errors rather than judging nothing. Every git command has `GIT_NO_REPLACE_OBJECTS=1` (`git.rs`).
+- The generated workflow's `tamper-guard` job must never check out, install or run the pull request's files; tests pin its exact steps.
+
 Notes on M24, for whoever builds M25 or touches the tamper guard (ADR 0044):
 
 - The guard is the folder `crates/core/src/tamper/`: `mod.rs` (types, `Language`, `guard`, `base_policy`), `js.rs`, `python.rs`, `rust.rs` (one reader each, same `TestFile` shape), `reach.rs` (`unreachable`, `does_nothing`, `constant`, driven by a per-language `Grammar`), `suppress.rs` (`suppressions`, keys `tool:rule`), `policy.rs` (`TamperPolicy::parse` for the working tree, `lenient` for the base).

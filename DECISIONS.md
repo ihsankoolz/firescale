@@ -22,6 +22,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M25) The generated workflow now has a `tamper-guard` job on `pull_request_target`** (ADR 0045), against ADR 0041's "never". To make it a gate, mark `tamper-guard` as a required check and set `verify.tamper` to `"enforced"` on the default branch. Say if you would rather keep `pull_request_target` out and accept that a pull request can edit the job that judges it.
+- **(M25) The job runs `npx --yes firescale@<version>`**, the version that wrote the file, from npm. The version is still 0.4.0, which has no `fscale tamper`, so the job works only once a release with M25 is published and `fscale sync` has written the workflow with that version. No release was made (you asked for none).
+- **(M25) A pull request can add a job named `tamper-guard` to its own workflow.** Branch protection matches required checks by name; look at the `pull_request_target` run.
 - **(M24) Lint suppressions are counted per rule over the whole change, not per file** as PLAN.md's M25 line said (ADR 0044): a function moved to another file keeps its `#[allow]` or `# noqa` without a finding. The cost: removing a suppression of a rule in one file while adding one of the same rule elsewhere is not reported.
 - **(M24) The suppression detector came forward from M25** at your request. Suppressions in linter config files (`.eslintrc` rules turned off, ruff's `ignore`, `Cargo.toml` `[lints]`) stay in M25 with the coverage thresholds.
 - **(M24) The Rust grammar adds 1.4 MB** to the binary (9.0 to 10.5 MB, +15.8%). Say if Rust should be read only when a repo has Rust in it (it would still be in the binary).
@@ -126,6 +129,32 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M25 — Tamper guard: config and CI
+
+**Built** (ADR 0045, `docs/verify.md` "The tamper guard", `docs/ci.md`):
+
+1. **Four detectors on one model** (`crates/core/src/tamper/config.rs`): each config file becomes named values where higher is stricter, compared per setting over the whole change, so a setting moved to another file (an ESLint config migrated to the flat format, `fail_under` moved to `pyproject.toml`, a CI step moved to another job) is not a finding.
+   - `coverage-lowered`: Jest, Vitest, nyc, c8, coverage.py, pytest-cov, tarpaulin, `cargo llvm-cov`, Codecov, in config files and on command lines.
+   - `ci-weakened`: GitHub Actions `run:` steps that check (tests, lint, type checks, `fscale verify`, `fscale tamper`) deleted, or made unable to fail (`continue-on-error`, `if: false`, `|| true`, `set +e`), or a workflow that stops running on pull requests. Read from the base's copy of the workflow too.
+   - `no-verify`: `--no-verify` on git commands, `git commit -n`, `core.hooksPath` pointed nowhere, in scripts, hooks and CI; and the agent stop hook that runs fscale removed.
+   - `rule-disabled`: ESLint, Biome, Ruff, Flake8, Pylint, mypy, Pyright, Cargo `[lints]`, `tsconfig.json`.
+2. **Small readers** for JSON (with comments), YAML, TOML, INI and JS/TS object literals (`tamper/formats.rs`); no new dependency.
+3. **`fscale tamper`**: the guard alone; with `--head <commit>` it reads a commit from git objects, checking out and running nothing.
+4. **`--pr-base`** (verify and tamper): the base from GitHub's pull request event, the first parent of the merge commit GitHub made, never a ref in the clone; it fails rather than judge nothing. Every git command sets `GIT_NO_REPLACE_OBJECTS=1`. Files hidden from git (`skip-worktree`, `assume-unchanged`) are compared anyway.
+5. **The generated workflow**: the `pull-request` job runs `verify --affected --pr-base`; a new `tamper-guard` job on `pull_request_target` runs `npx --yes firescale@<version> tamper --pr-base` from the default branch's copy of the file, with no cache, a read-only token, and none of the pull request's code.
+6. **Corpus**: 207 cases (60 new); 0 missed, 0 false positives. Fixture counts, not a rate.
+
+**How the work was split:** I wrote the reader, the model, the CI and hook-skip detectors, `fscale tamper`, `--pr-base` and the workflow job; two subagents wrote the coverage and lint-config detectors in their own worktrees against that model, and I merged their commits under your identity. A fresh subagent reviewed the whole diff before the pull request.
+
+**Decided on your behalf** (ADR 0045):
+
+- **`pull_request_target` for the tamper-guard job**, changing ADR 0041's "never". It is the only way a check is defined by the base branch rather than by the pull request. The job reads the pull request as git objects and runs a firescale pinned in the base's file; a test pins that it has no cache step, no `ref:`, a read-only token, and runs only `git fetch` and `fscale tamper`.
+- **Locally the guard is a tripwire, not a boundary**: an agent can move the base ref or work on a default branch with no upstream (ADR 0045 has the full table). CI's `tamper-guard` job is where it is enforced.
+- **Approval-free kinds**: all four new kinds are hard findings like the old ones (blocking only when `enforced`).
+- **A new ESLint `warn` is not a finding** (it may turn a rule on); a new `off`, any lowering, and a removed `error` are.
+- **Coverage floors are keyed per folder** (`… in services/api`), so two projects' floors are compared apart; a floor moved between a config file and a command-line flag reads as removed.
+- **`HUSKY=0` and pre-commit's `SKIP=`** are not counted: both are routine in CI.
 
 ## M24 — Tamper guard: Python and Rust, and its policy
 
