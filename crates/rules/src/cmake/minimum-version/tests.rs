@@ -65,3 +65,19 @@ fn old_versions_are_named_in_every_lists_file_and_ranges_count_by_their_end() {
     );
     assert!(found[1].message.contains("CMake 4 stops"));
 }
+
+// Found in review: a version check picks the call by the CMake running.
+#[test]
+fn a_call_in_a_version_check_is_not_the_one_cmake_4_takes() {
+    let f = with(
+        |_| false,
+        &[(
+            "CMakeLists.txt",
+            "if(CMAKE_VERSION VERSION_LESS 3.12)\n  cmake_minimum_required(VERSION 3.1)\nelse()\n  cmake_minimum_required(VERSION 3.12)\nendif()\nproject(x LANGUAGES CXX)\n",
+        )],
+    );
+    assert!(f
+        .check(&MinimumVersion, &Options::new())
+        .unwrap()
+        .is_empty());
+}

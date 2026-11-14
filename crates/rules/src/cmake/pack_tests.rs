@@ -154,3 +154,58 @@ fn build_output_is_not_the_projects() {
     ids.sort();
     assert_eq!(ids, ["cmake/standard", "cmake/tests"]);
 }
+
+// Found in review: native extensions of other stacks, CUDA and Arduino
+// code, and a Visual Studio project one folder down.
+#[test]
+fn native_code_of_other_stacks_or_builds_is_left_alone() {
+    for pairs in [
+        vec![
+            ("pyproject.toml", "[build-system]\nrequires = [\"scikit-build-core\", \"pybind11\"]\nbuild-backend = \"scikit_build_core.build\"\n"),
+            ("CMakeLists.txt", "cmake_minimum_required(VERSION 3.15)\nproject(ext LANGUAGES CXX)\npybind11_add_module(ext src/main.cpp)\n"),
+            ("src/main.cpp", "int x;\n"),
+        ],
+        vec![("kern.cu", "__global__ void k() {}\n"), ("build.sh", "nvcc kern.cu\n")],
+        vec![("Blink/Blink.ino", "void setup() {}\n")],
+        vec![("win/x.vcxproj", "<Project/>\n")],
+    ] {
+        let f = files(&pairs);
+        assert_eq!(findings(&f), Vec::<Diagnostic>::new(), "{pairs:?}");
+        assert_eq!(fix_all(&f), Vec::<String>::new(), "{pairs:?}");
+    }
+}
+
+// Found in review: a repo with its own .clang-format got the starter's
+// code in another style, which its lint target then failed.
+#[test]
+fn a_repos_own_clang_format_is_kept_and_named() {
+    let f = files(&[(".clang-format", "BasedOnStyle: Mozilla\nIndentWidth: 4\n")]);
+    fix_all(&f);
+    assert_eq!(
+        f.read(".clang-format").as_deref(),
+        Some("BasedOnStyle: Mozilla\nIndentWidth: 4\n")
+    );
+    let f = files(&[
+        (".clang-format", "BasedOnStyle: Mozilla\n"),
+        ("CMakeLists.txt", &super::lists::new_lists()),
+    ]);
+    let entry = findings(&f)
+        .into_iter()
+        .find(|d| d.rule_id == "cmake/entry")
+        .unwrap();
+    assert!(
+        entry.message.contains("its own .clang-format"),
+        "{}",
+        entry.message
+    );
+}
+
+#[test]
+fn a_missing_lint_script_is_written_back() {
+    let f = project_without(|p| p == super::lists::LINT_PATH);
+    let found = findings(&f);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].file, super::lists::LINT_PATH);
+    assert_eq!(fix_all(&f), vec![super::lists::LINT_PATH.to_owned()]);
+    assert_eq!(findings(&f), Vec::<Diagnostic>::new());
+}

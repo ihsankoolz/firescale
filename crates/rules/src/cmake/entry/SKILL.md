@@ -26,6 +26,7 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 ### REPORT
 
+- When the repo already had its own `.clang-format` (the finding says so), format the new files with it: `clang-format -i src/*.cpp src/*.hpp tests/*.cpp`.
 - Tell the user the starter is a placeholder: replace `greeting` and its test with the project's real code, and `app` with its name.
 
 ## Verify

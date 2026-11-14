@@ -3,11 +3,14 @@
 use firescale_core::testing::{Fixture, Track};
 
 use super::entry::FILES;
-use super::lists::new_lists;
+use super::lists::{new_lists, LINT_PATH, LINT_SCRIPT};
 
 /// A CMake project as `fscale init --packs core,cmake` leaves it.
 pub(crate) fn set_up() -> Vec<(&'static str, String)> {
-    let mut files = vec![("CMakeLists.txt", new_lists())];
+    let mut files = vec![
+        ("CMakeLists.txt", new_lists()),
+        (LINT_PATH, LINT_SCRIPT.to_owned()),
+    ];
     files.extend(
         FILES
             .iter()

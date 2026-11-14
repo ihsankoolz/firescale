@@ -41,6 +41,7 @@ async function snapshot(root: string): Promise<Map<string, string>> {
 
 const CMAKE_FILES = [
   'CMakeLists.txt',
+  'cmake/lint.cmake',
   '.clang-format',
   'src/greeting.hpp',
   'src/greeting.cpp',

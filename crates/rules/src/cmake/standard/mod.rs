@@ -10,7 +10,7 @@ use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
 use super::syntax::{project_languages, Command};
-use super::{all_commands, applies, code, finding, CXX_STANDARD};
+use super::{applies, code, finding, own_commands, CXX_STANDARD};
 
 #[cfg(test)]
 mod tests;
@@ -92,7 +92,8 @@ impl BuiltinRule for Standard {
         if !cxx || files.is_empty() {
             return Ok(Vec::new());
         }
-        let all = all_commands(ctx)?;
+        // The project's own files: a vendored library's standard is its own.
+        let all = own_commands(ctx)?;
         if !builds_cxx(&all) {
             return Ok(Vec::new());
         }

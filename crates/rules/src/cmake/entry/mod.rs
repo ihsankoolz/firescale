@@ -123,9 +123,21 @@ impl BuiltinRule for Entry {
         if !wants_starter_code(ctx)? {
             return Ok(Vec::new());
         }
+        // The code is in the starter's style; a repo's own .clang-format
+        // asks for another, and the lint target would fail on it (found in
+        // review).
+        let own_style = ctx
+            .read(".clang-format")?
+            .is_some_and(|text| text != FILES[0].1)
+            || ctx.root().join("_clang-format").exists();
+        let style = if own_style {
+            " The repo has its own .clang-format, which is kept: format the new files with it (`clang-format -i src/*.cpp src/*.hpp tests/*.cpp`), or the lint target fails on them."
+        } else {
+            ""
+        };
         Ok(vec![finding(
             "src/main.cpp",
-            "CMakeLists.txt builds src/main.cpp and the repo has no C or C++ code, so CMake stops (\"Cannot find source file\"). `fscale sync` writes the starter's code: a greeting library (src/greeting.hpp, src/greeting.cpp), the program (src/main.cpp), its test (tests/greeting_test.cpp) and the .clang-format the lint target checks.".to_owned(),
+            format!("CMakeLists.txt builds src/main.cpp and the repo has no C or C++ code, so CMake stops (\"Cannot find source file\"). `fscale sync` writes the starter's code: a greeting library (src/greeting.hpp, src/greeting.cpp), the program (src/main.cpp), its test (tests/greeting_test.cpp) and the .clang-format the lint target checks.{style}"),
             Fixable::Deterministic,
         )])
     }

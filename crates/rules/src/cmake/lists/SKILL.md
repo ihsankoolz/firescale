@@ -9,7 +9,7 @@ description: Fixes violations of the firescale rule cmake/lists by creating CMak
 
 The repo root has a `CMakeLists.txt` whose first command is `cmake_minimum_required`, and which calls `project()`. Without `cmake_minimum_required` CMake does not know which version's behaviour the project expects; called after `project()`, the languages are set up before the policies; without `project()`, the languages are set up with defaults. CMake warns in each case.
 
-A new project gets a `CMakeLists.txt` for CMake 3.20 or later: a C++20 library `app_lib` (`src/greeting.cpp`), the program `app` (`src/main.cpp`) and the test `app_test` (`tests/greeting_test.cpp`) linking it, warnings on (`-Wall -Wextra -Wpedantic`, or `/W4` with MSVC), `compile_commands.json` for clangd and clang-tidy, and a `lint` target that checks every source file's formatting with clang-format against `.clang-format`. `fscale verify` builds, lints and runs the tests through it.
+A new project gets a `CMakeLists.txt` for CMake 3.20 or later: a C++20 library `app_lib` (`src/greeting.cpp`), the program `app` (`src/main.cpp`) and the test `app_test` (`tests/greeting_test.cpp`) linking it, warnings on (`-Wall -Wextra -Wpedantic`, or `/W4` with MSVC), `compile_commands.json` for clangd and clang-tidy, and a `lint` target that runs `cmake/lint.cmake`: clang-format checks every C and C++ file under `src/` and `tests/` against `.clang-format`. Without clang-format the target says so, and `fscale verify` reports it as a setup need. `fscale verify` builds, lints and runs the tests through it.
 
 ## Manual fix
 
@@ -23,7 +23,7 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 ### DETERMINISTIC
 
-1. Run `fscale sync`. It creates `CMakeLists.txt` when there is none, and never edits one.
+1. Run `fscale sync`. It creates `CMakeLists.txt` when there is none, and `cmake/lint.cmake` when the `lint` target runs it and it is missing. It never edits either.
 
 ### REPORT
 
