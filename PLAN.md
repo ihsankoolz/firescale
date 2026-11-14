@@ -691,6 +691,15 @@ Decisions in ADR 0049: eight rules from the CLI's source at v3.1.0 and Supabase'
 
 ## M30 — Stack pack: Expo ☐
 
+Decisions in ADR 0050: seven rules from Expo's SDK 58 blank TypeScript template and CLI; the starter has no image files and ships ESLint so `expo lint` changes nothing.
+
+**Done when**
+
+- ☑ `fscale init --packs core,expo` in an empty folder yields a repo where the pack reports no violations (`expo-pack.test.ts`, with `core,expo,supabase` too).
+- ☑ In that repo, the stack's own install and build or test commands succeed. Run by hand on 2026-11-14 (output in the pull request): `npm install`, `npx tsc --noEmit`, `npx expo lint`, `EXPO_OFFLINE=1 npx expo install --check` and `EXPO_OFFLINE=1 npx expo export --platform android` all exit 0. Not run: a device or simulator, and `expo-doctor` (needs the network).
+- ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (a missing tsconfig.json).
+- ☑ Every fix is idempotent, proven by tests (each rule's `tests.rs` runs its fix twice; `sync` twice after `init`).
+
 One milestone and one pull request per pack, with the same "Build" and "Done when" lists as M15 and M16.
 
 ---

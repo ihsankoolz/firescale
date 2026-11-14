@@ -46,3 +46,23 @@ fn without_eslint_installed_it_is_for_an_agent_and_nothing_is_written() {
         .changed_files
         .is_empty());
 }
+
+#[test]
+fn an_app_that_lints_with_something_else_passes() {
+    let biome = with(|p| p == "eslint.config.js", &[("biome.json", "{}\n")]);
+    assert!(biome
+        .check(&EslintConfig, &Options::new())
+        .unwrap()
+        .is_empty());
+    let script = with(
+        |p| p == "eslint.config.js",
+        &[(
+            "package.json",
+            "{ \"dependencies\": { \"expo\": \"~58.0.25\" }, \"scripts\": { \"lint\": \"oxlint .\" } }\n",
+        )],
+    );
+    assert!(script
+        .check(&EslintConfig, &Options::new())
+        .unwrap()
+        .is_empty());
+}

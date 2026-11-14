@@ -34,7 +34,9 @@ fn missing_scripts_are_added_once() {
     assert!(f
         .read("package.json")
         .unwrap()
-        .contains("\"web\": \"expo start --web\""));
+        .contains("\"ios\": \"expo start --ios\""));
+    // web only with react-native-web.
+    assert!(!f.read("package.json").unwrap().contains("--web"));
     // lint only with eslint-config-expo.
     assert!(!f.read("package.json").unwrap().contains("expo lint"));
     assert!(f.check(&PackageJson, &Options::new()).unwrap().is_empty());
@@ -49,7 +51,7 @@ fn missing_scripts_are_added_once() {
 fn missing_react_native_is_for_expo_install_and_a_workspace_root_is_left_alone() {
     let f = fixture(&[(
         "package.json",
-        "{ \"dependencies\": { \"expo\": \"~58.0.25\", \"react\": \"19.3.0\" }, \"scripts\": { \"start\": \"expo start\", \"android\": \"a\", \"ios\": \"i\", \"web\": \"w\" } }\n".to_owned(),
+        "{ \"dependencies\": { \"expo\": \"~58.0.25\", \"react\": \"19.3.0\" }, \"scripts\": { \"start\": \"expo start\", \"android\": \"a\", \"ios\": \"i\" } }\n".to_owned(),
     )]);
     let found = f.check(&PackageJson, &Options::new()).unwrap();
     assert_eq!(found[0].fixable, Fixable::Agent);

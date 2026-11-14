@@ -35,14 +35,29 @@ pub const NAMES: [&str; 11] = [
 /// SDK 58), exactly.
 pub const CONFIG: &str = "// https://docs.expo.dev/guides/using-eslint/\nconst { defineConfig } = require('eslint/config');\nconst expoConfig = require('eslint-config-expo/flat');\n\nmodule.exports = defineConfig([\n  expoConfig,\n  {\n    ignores: ['dist/*'],\n  },\n]);\n";
 
+/// True when the app lints already: an ESLint config, Biome's config, or a
+/// `lint` script that runs something other than ESLint (review on a real
+/// app that lints with Biome).
 fn configured(ctx: &RuleContext, json: &serde_json::Value) -> bool {
-    any_exists(ctx, &NAMES) || json.get("eslintConfig").is_some()
+    let other_lint = json
+        .get("scripts")
+        .and_then(|s| s.get("lint"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|script| !script.contains("expo lint") && !script.contains("eslint"));
+    any_exists(ctx, &NAMES)
+        || any_exists(ctx, &["biome.json", "biome.jsonc"])
+        || json.get("eslintConfig").is_some()
+        || other_lint
 }
 
 impl BuiltinRule for EslintConfig {
     fn meta(&self) -> RuleMeta {
         let mut inputs: Vec<String> = NAMES.iter().map(|name| (*name).to_owned()).collect();
-        inputs.push("package.json".to_owned());
+        inputs.extend([
+            "package.json".to_owned(),
+            "biome.json".to_owned(),
+            "biome.jsonc".to_owned(),
+        ]);
         RuleMeta {
             id: ID.to_owned(),
             severity: Severity::Medium,

@@ -1,6 +1,6 @@
 //! `expo/package-json`: package.json depends on expo, react and
-//! react-native and has the start, android, ios and web scripts (and lint
-//! once eslint-config-expo is a dependency).
+//! react-native and has the start, android and ios scripts (web with
+//! react-native-web, lint with eslint-config-expo).
 
 use firescale_core::model::{
     Category, Diagnostic, Finding, FixResult, Fixable, RuleMeta, Severity,
@@ -26,6 +26,11 @@ fn missing_scripts(json: &Value) -> Map<String, Value> {
         if name == "lint" && !depends_on(json, "eslint-config-expo") {
             continue;
         }
+        // `web` only for an app that runs on the web (react-native-web):
+        // many apps are phone or TV only.
+        if name == "web" && !depends_on(json, "react-native-web") {
+            continue;
+        }
         if json
             .get("scripts")
             .and_then(|scripts| scripts.get(name))
@@ -43,7 +48,7 @@ impl BuiltinRule for PackageJson {
             id: ID.to_owned(),
             severity: Severity::High,
             category: Category::Reliability,
-            description: "package.json depends on expo, react and react-native, and has the start, android, ios and web scripts (and lint with eslint-config-expo).".to_owned(),
+            description: "package.json depends on expo, react and react-native, and has the start, android and ios scripts (web with react-native-web, lint with eslint-config-expo).".to_owned(),
             inputs: vec!["package.json".to_owned()],
             has_fix: true,
             after: Vec::new(),

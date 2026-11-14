@@ -22,6 +22,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M30) The Expo starter is the blank TypeScript template, not Expo Router, and has no images** (ADR 0050): app.json names no icon, adaptive icon or favicon, so store builds need them added. Say if you want the Router template (about 20 packages and 30 images) instead.
+- **(M30) The expo pack is not meant to be combined with the nextjs pack** (two React versions in one package.json). Nothing stops it; say if `init` should refuse the pair.
 - **(M29) `supabase test db` has not run on the starter** (ADR 0049): it needs `supabase start`, so Docker images, which could not be pulled in the build session. Run `npx supabase start && npx supabase test db` in a folder made by `fscale init --packs core,supabase`; the pgTAP test it adds has never run against a database.
 - **(M29) `supabase/rls` is left to an agent, not fixed**: a migration that only enables RLS would cut the app off its own data until policies exist. Say if you would rather have the deterministic `enable` and accept that.
 - **(M29) Exact pins** (`supabase` 3.1.0, `@supabase/supabase-js` 2.119.0) as for Next.js; Edge Functions and `seed.sql` are left out of the pack (ADR 0049 says why). With `core,nextjs,supabase`, package.json keeps Next.js's `engines` (`>=20.9.0`) though supabase-js wants Node 22.
@@ -139,6 +141,18 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M30 — Stack pack: Expo
+
+**Built** (ADR 0050, `docs/rules.md`): seven rules — `expo/package-json`, `app-config`, `entry`, `tsconfig`, `eslint`, `gitignore`, `public-env-secret` — from Expo's SDK 58 blank TypeScript template, CLI and docs source (docs.expo.dev was unreachable; its source in `expo/expo` was read). `init --packs core,expo` builds a starter the pack passes, and in it `npm install`, `tsc --noEmit`, `expo lint`, `expo install --check` (offline) and an offline Android `expo export` succeed.
+
+**Decided on your behalf** (ADR 0050):
+
+- **SDK 58 versions from the SDK's own lists**, not npm's latest (TypeScript 7, ESLint 10, React 19.3.1 do not match it).
+- **ESLint is shipped** with the exact file `expo lint` would write, so a lint run changes nothing and needs no network.
+- **`web` and `lint` scripts only when the app has react-native-web and eslint-config-expo**, and an app that lints with Biome or another linter passes `expo/eslint` (both from a false positive on a real app).
+
+**Real repo:** `streamyfin/streamyfin` (read-only copy): one true finding left (`.env*.local` not ignored), after two false ones were fixed.
 
 ## M29 — Stack pack: Supabase
 

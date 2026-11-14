@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule expo/package-json by giving 
 
 ## What this rule enforces and why
 
-`package.json` depends on `expo`, `react` and `react-native`, and has the `start`, `android`, `ios` and `web` scripts of Expo's templates (and `lint`, `expo lint`, once `eslint-config-expo` is a dependency). React and React Native must be the versions the Expo SDK was built with, so they are installed with `npx expo install`, never by hand.
+`package.json` depends on `expo`, `react` and `react-native`, and has the `start`, `android` and `ios` scripts of Expo's templates (`web` too when it depends on `react-native-web`, and `lint`, `expo lint`, once `eslint-config-expo` is a dependency). React and React Native must be the versions the Expo SDK was built with, so they are installed with `npx expo install`, never by hand.
 
 ## Manual fix
 

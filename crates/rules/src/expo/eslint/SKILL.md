@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule expo/eslint by setting up ES
 
 ## What this rule enforces and why
 
-An Expo app has an ESLint config (`eslint.config.*`, `.eslintrc.*` or `eslintConfig` in package.json). Without one, `npx expo lint` installs `eslint` and `eslint-config-expo`, writes `eslint.config.js` and adds a script before it lints: it changes the repo and needs the network, which a CI run or an agent's check should not.
+An Expo app has an ESLint config (`eslint.config.*`, `.eslintrc.*` or `eslintConfig` in package.json), unless it lints another way (`biome.json`, or a `lint` script that does not run ESLint). Without one, `npx expo lint` installs `eslint` and `eslint-config-expo`, writes `eslint.config.js` and adds a script before it lints: it changes the repo and needs the network, which a CI run or an agent's check should not.
 
 ## Manual fix
 
