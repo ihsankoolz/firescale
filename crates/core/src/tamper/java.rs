@@ -129,6 +129,7 @@ pub(super) const SKIPS_FIRST: &str = "its first statement skips it";
 /// Why a test whose body does nothing does not run.
 pub(super) const DOES_NOTHING: &str = "its body does nothing";
 
+/// No Java statement does nothing: an empty `;` is not a named node.
 fn never_noop(_statement: Node<'_>, _src: &[u8]) -> bool {
     false
 }
@@ -200,6 +201,7 @@ pub(super) struct Literal {
 }
 
 impl Literal {
+    /// A literal from its squeezed text, outer parentheses dropped.
     pub(super) fn new(raw: String, string: bool) -> Self {
         let mut text = raw.as_str();
         while text.len() >= 2 && text.starts_with('(') && text.ends_with(')') {
@@ -380,6 +382,7 @@ struct Marks {
     rows: usize,
 }
 
+/// Reads the annotations of a method or class.
 fn marks(declaration: Node<'_>, src: &[u8]) -> Marks {
     let mut found = Marks::default();
     for annotation in annotations(declaration) {
@@ -429,9 +432,29 @@ fn call_name<'s>(call: Node<'_>, src: &'s [u8]) -> &'s str {
         .map_or("", |name| text(name, src))
 }
 
-/// True for the name of a call that asserts.
-fn asserts(name: &str) -> bool {
-    name.starts_with("assert") || name == "fail" || VERIFIES.contains(&name)
+/// True for what `fail(…)` or `verify(…)` is called on when it is the
+/// assertion library's: nothing (a static import), `Assertions`, `Assert`,
+/// `Mockito`, `kotlin.test`. `signature.verify(data)` or `promise.fail(e)`
+/// is not an assertion.
+pub(super) fn library_receiver(receiver: Option<&str>) -> bool {
+    receiver.is_none_or(|receiver| {
+        let last = receiver.rsplit('.').next().unwrap_or(receiver);
+        last.contains("Assert") || matches!(last, "Mockito" | "BDDMockito" | "test")
+    })
+}
+
+/// True for a call that asserts: one named `assert…`, or `fail(…)` and
+/// Mockito's `verify(…)` called on their library.
+fn asserts(call: Node<'_>, src: &[u8]) -> bool {
+    let name = call_name(call, src);
+    if name.starts_with("assert") {
+        return true;
+    }
+    (name == "fail" || VERIFIES.contains(&name))
+        && library_receiver(
+            call.child_by_field_name("object")
+                .map(|object| text(object, src)),
+        )
 }
 
 /// The calls of a chain, outermost first: `assertThat(x).isEqualTo(3)` is
@@ -579,16 +602,17 @@ struct Around<'a> {
     names: Vec<&'a str>,
     skipped: bool,
     junit3: bool,
-    fields: BTreeSet<String>,
+    fields: Vec<&'a BTreeSet<String>>,
 }
 
 impl<'a> Around<'a> {
+    /// What the classes open around a method say.
     fn of(open: &'a [(usize, Scope)]) -> Self {
         let mut around = Self {
             names: Vec::new(),
             skipped: false,
             junit3: false,
-            fields: BTreeSet::new(),
+            fields: Vec::new(),
         };
         for (_, scope) in open {
             if let Scope::Class {
@@ -601,7 +625,7 @@ impl<'a> Around<'a> {
                 around.names.push(name);
                 around.skipped |= *skipped;
                 around.junit3 = *junit3;
-                around.fields.extend(fields.iter().cloned());
+                around.fields.push(fields);
             }
         }
         around
@@ -619,7 +643,7 @@ fn test_case(method: Node<'_>, src: &[u8], around: &Around<'_>) -> Option<TestCa
     }
     let skipped = own.skipped || around.skipped;
     let why = if skipped { None } else { not_run(method, src) };
-    let mut uses = around.fields.clone();
+    let mut uses: BTreeSet<String> = around.fields.iter().copied().flatten().cloned().collect();
     identifiers(method, src, &mut uses);
     let id = around
         .names
@@ -716,7 +740,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 }
                 let links = chain(node);
                 chained.extend(links.iter().skip(1).map(|link| link.id()));
-                if links.iter().any(|link| asserts(call_name(*link, src)))
+                if links.iter().any(|link| asserts(*link, src))
                     && dead.why(node).is_none()
                     && !cannot_fail(&links, src)
                 {
@@ -925,7 +949,7 @@ pub(super) fn is_test_path(path: &str) -> bool {
 }
 
 /// A cheap check that Java source may hold tests, before it is parsed: a
-/// test annotation, or a JUnit 3 `TestCase`.
+/// test annotation, or a class that extends JUnit 3's `TestCase`.
 pub(super) fn holds_tests(source: &str) -> bool {
     [
         "@Test",
@@ -933,7 +957,8 @@ pub(super) fn holds_tests(source: &str) -> bool {
         "@RepeatedTest",
         "@org.junit",
         "@org.testng",
-        "TestCase",
+        "extends TestCase",
+        "extends junit.framework.TestCase",
     ]
     .iter()
     .any(|needle| source.contains(needle))
@@ -1418,7 +1443,10 @@ class T {
         fail("must not get here");
         assert total() == 3 : "total";
         Assert.fail();
+        Mockito.verify(repository).load();
         when(repository.load()).thenReturn(cart);
+        signature.verify(data);
+        promise.fail(error);
         System.out.println(total());
     }
 }
@@ -1441,6 +1469,7 @@ class T {
                 "fail(\"mustnotgethere\")",
                 "asserttotal()==3:\"total\";",
                 "Assert.fail()",
+                "Mockito.verify(repository).load()",
             ]
         );
         assert!(file.assertions.iter().all(|a| a.test == Some(0)));
@@ -1674,6 +1703,7 @@ class CartTest {
             assert!(holds_tests(source), "{source}");
         }
         assert!(!holds_tests("class Cart { int total() { return 0; } }"));
+        assert!(!holds_tests("class TestCaseRunner { }"));
     }
 
     #[test]
