@@ -1,9 +1,9 @@
 //! The tamper guard (M23, M24, M32; ADR 0042, ADR 0044, ADR 0052): finds a
 //! change that passes verify by weakening its tests or silencing its
 //! checks, in JavaScript, TypeScript, Python (pytest and unittest), Rust,
-//! Swift (XCTest and Swift Testing), Dart (`package:test` and
-//! `flutter_test`), C (Unity, CMocka, Check, `assert`) and C++
-//! (GoogleTest, Catch2, doctest).
+//! Java (JUnit and TestNG), Kotlin (JUnit, kotlin.test and Kotest), Swift
+//! (XCTest and Swift Testing), Dart (`package:test` and `flutter_test`), C
+//! (Unity, CMocka, Check, `assert`) and C++ (GoogleTest, Catch2, doctest).
 //!
 //! - It compares syntax trees, not diff lines: each changed test file is
 //!   parsed with tree-sitter on the base commit and in the working tree, and
@@ -138,13 +138,15 @@ pub fn read_test_file(source: &str, language: Language) -> TestFile {
 /// True for a path the guard reads as a test file by its name or folder
 /// alone: JS/TS `*.test.*`, `*.spec.*` or in `__tests__`, `test`, `tests`,
 /// `spec`; Python `test_*.py`, `*_test.py` or in `test`, `tests`; Rust in
-/// `tests`; Swift `*Tests.swift`, `*Test.swift` or in `tests` or a folder
-/// ending in `Tests` (`Tests/`, `AppTests/`, `AppUITests/`); Dart
-/// `*_test.dart` or in `test`, `integration_test`; C and C++ `*_test.c`,
-/// `*_test.cc`, `*_unittest.cc`, `test_*.c`, `*Test.cpp`, `*Tests.cpp` or
-/// in `test`, `tests`, `unittest(s)`. A Rust, Swift, Dart, C or C++ file
-/// elsewhere is a test file when it holds tests ([`holds_tests`]); the
-/// policy can name more (`verify.tamper.testPaths`).
+/// `tests`; Java `*Test.java`, `*Tests.java`, `*IT.java`, `Test*.java` or
+/// in `src/test/`; Kotlin `*Test.kt`, `*Tests.kt`, `*Spec.kt` or in
+/// `src/test/`, `src/*Test/` (`androidTest`, `jvmTest`); Swift
+/// `*Tests.swift`, `*Test.swift` or in `tests` or a folder ending in `Tests`
+/// (`Tests/`, `AppTests/`, `AppUITests/`); Dart `*_test.dart` or in `test`,
+/// `integration_test`; C and C++ `*_test.c`, `*_test.cc`, `*_unittest.cc`,
+/// `test_*.c`, `*Test.cpp`, `*Tests.cpp` or in `test`, `tests`,
+/// `unittest(s)`. A file elsewhere is a test file when it holds tests
+/// ([`holds_tests`]); the policy can name more (`verify.tamper.testPaths`).
 #[must_use]
 pub fn is_test_path(path: &str) -> bool {
     match Language::of(path) {
@@ -163,10 +165,11 @@ pub fn is_test_path(path: &str) -> bool {
 }
 
 /// True for source that holds tests although its path does not say so:
-/// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code, Swift that
-/// imports XCTest or Testing and defines a test, Dart that imports
-/// `package:test` or `package:flutter_test` and calls `test`, a C or C++
-/// file that includes a test framework's header and defines a test.
+/// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code; Java and
+/// Kotlin test annotations (`@Test`) and Kotest specs; Swift that imports
+/// XCTest or Testing and defines a test; Dart that imports `package:test`
+/// or `package:flutter_test` and calls `test`; a C or C++ file that
+/// includes a test framework's header and defines a test.
 #[must_use]
 pub fn holds_tests(source: &str, language: Language) -> bool {
     match language {
