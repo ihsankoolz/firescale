@@ -137,6 +137,14 @@ With a base commit, verify also compares the **files the change touches** with t
 - **assertions** (`expect(…)`, `assert(…)`, `assert.…(…)`; Python `assert`, `self.assert…(…)`, `mock.assert_…(…)`, `pytest.raises`; Rust `assert!` and its forms): fewer than on the base is `assertion-removed`. An assertion that never runs (inside `if (false)`, after a `return`) or cannot fail (only literals that certainly pass: `expect(true).toBe(true)`, `assert True`, `assert!(true)`) does not count; one that certainly fails (`assert False`, `assert.fail(…)`, `assert!(false)`) marks a path that must not run and counts;
 - **lint suppressions**, in every changed JS/TS, Python and Rust file: `eslint-disable…`, `@ts-ignore`, `@ts-expect-error`, `biome-ignore`, `# noqa`, `# type: ignore`, `# pyright: ignore`, `# pylint: disable`, `#[allow(…)]`, `#[expect(…)]` and the like, per tool and rule: more of a rule than on the base is `suppression-added`.
 
+- **config and CI files** (ADR 0045), read on the base and now and compared per setting over the whole change, so a setting moved to another file is not a finding:
+  - `coverage-lowered`: a coverage floor lower or gone (Jest, Vitest, nyc, c8, coverage.py, pytest-cov, tarpaulin, `cargo llvm-cov`, Codecov), in config files or on command lines;
+  - `ci-weakened`: a check in a GitHub Actions workflow (tests, lint, type checks, `fscale verify`) deleted, or made unable to fail (`continue-on-error`, `if: false`, `|| true`, `set +e`), or a workflow that stops running on pull requests. Read from the base's copy of the workflow, so removing the verify step is a finding;
+  - `no-verify`: `--no-verify` on a git command, `git commit -n`, `core.hooksPath` pointed nowhere, in scripts, hooks and CI; or the agent stop hook that runs fscale removed from `.claude`, `.codex` or `.cursor` settings;
+  - `rule-disabled`: a lint or type-check rule turned off or lowered in ESLint, Biome, Ruff, Flake8, Pylint, mypy, Pyright, Cargo `[lints]` or `tsconfig.json`.
+
+Files git is told not to look at (`git update-index --skip-worktree` or `--assume-unchanged`) are compared all the same.
+
 Because the counts are net over the whole change and come from the syntax tree, a renamed test, a test moved to another file, a test split in two, a reformatted file, an assertion replaced by a stricter one, a suppression moved with its code and `@ts-ignore` turned into `@ts-expect-error` are not findings. A test deleted together with every module of the repo it uses is not counted. A changed test file tree-sitter cannot read is a `not-checked` finding of its own, never taken as clean.
 
 Findings are **report-only** by default: they are listed with file and line (a deleted test or assertion at its line on the base commit), and the headline says how many (`verify: OK - tamper guard: 3 report-only findings`). To make them fail verify, set `"tamper": "enforced"` under `verify` in the config. `"off"` turns it off. The object form adds protected test paths and allowed exceptions:
@@ -151,7 +159,13 @@ Findings are **report-only** by default: they are listed with file and line (a d
 }
 ```
 
-`testPaths` are globs of more files to read as test files. `allow` leaves files out of the counts, for every kind of finding or only the `kinds` listed (`test-deleted`, `test-skipped`, `assertion-removed`, `suppression-added`, `not-checked`); the summary and `--json` (`tamper.allowed`) name the files it left out. **All of it is read from the base commit**, never from the working tree, so a change cannot turn the guard off, widen `allow` or drop a test path for itself: a change to it takes effect once merged.
+`testPaths` are globs of more files to read as test files. `allow` leaves files out of the counts, for every kind of finding or only the `kinds` listed (`test-deleted`, `test-skipped`, `assertion-removed`, `suppression-added`, `coverage-lowered`, `ci-weakened`, `no-verify`, `rule-disabled`, `not-checked`); the summary and `--json` (`tamper.allowed`) name the files it left out. **All of it is read from the base commit**, never from the working tree, so a change cannot turn the guard off, widen `allow` or drop a test path for itself: a change to it takes effect once merged.
+
+### `fscale tamper`, and the base in CI
+
+`fscale tamper` runs the guard alone, with no step: against the working tree, or with `--head <commit>` against a commit read from git (nothing is checked out or run). `--json` prints the report; the exit code is 1 when the base's policy is `enforced` and there are findings.
+
+In GitHub Actions, `--pr-base` (for `verify` and `tamper`) takes the base from the pull request event GitHub gives the run, never from a ref in the clone: the first parent of the merge commit GitHub made, or for `pull_request_target` the base branch and the pull request's head commit. If it cannot find them it fails rather than judging nothing. Locally the base comes from your refs, which an agent can move: there the guard is a tripwire, and CI's `tamper-guard` job ([ci.md](ci.md)) is where it is enforced (ADR 0045 lists what is and is not protected).
 
 The counts in `bench/RESULTS.md` come from a labelled corpus written together with the guard. They show it does what ADR 0042 and ADR 0044 say; they are not a measured false-positive or miss rate (M26).
 

@@ -4,13 +4,15 @@
 
 ## What it does
 
-| Job              | Runs on                      | Verifies                                                       | Caches                                       |
-| ---------------- | ---------------------------- | -------------------------------------------------------------- | -------------------------------------------- |
-| `pull-request`   | every pull request           | `--affected --base origin/<base branch>`: only what it reaches | restores; can never save                     |
-| `default-branch` | pushes to the default branch | everything                                                     | restores; saves from the default branch only |
+| Job              | Runs on                                    | Verifies                                           | Caches                                       |
+| ---------------- | ------------------------------------------ | -------------------------------------------------- | -------------------------------------------- |
+| `pull-request`   | every pull request                         | `--affected --pr-base`: only what it reaches       | restores; can never save                     |
+| `default-branch` | pushes to the default branch               | everything                                         | restores; saves from the default branch only |
+| `tamper-guard`   | every pull request (`pull_request_target`) | `fscale tamper --pr-base`: what the change weakens | none                                         |
 
-- **Only what a pull request reaches.** `fscale verify --affected --base "origin/$BASE_REF"` runs the projects the change can affect ([affected.md](affected.md)) and judges each failure against the base branch ([verify.md](verify.md)): only new failures block.
-- **Full history.** Both jobs check out with `fetch-depth: 0`, so the merge base is in the clone. In a shallow clone that lacks it, verify runs every project and says to fetch the history.
+- **Only what a pull request reaches.** `fscale verify --affected --pr-base` runs the projects the change can affect ([affected.md](affected.md)) and judges each failure against the base branch ([verify.md](verify.md)): only new failures block. The base is the one GitHub's event names (the merge commit's first parent), not a ref in the clone that the change's install scripts could move.
+- **A tamper guard the pull request cannot change.** `tamper-guard` runs on `pull_request_target`, so GitHub takes it from the default branch's copy of the workflow: a pull request cannot edit or delete it. It checks out the base branch, fetches the pull request's commits as git objects, and runs `npx --yes firescale@<version> tamper --pr-base`. It never checks out, installs or runs the pull request's files, has no cache and a read-only token (ADR 0045). Mark it as a required check, and set `verify.tamper` to `"enforced"` on the default branch, to make it block.
+- **Full history.** All three jobs check out with `fetch-depth: 0`, so the merge base is in the clone. In a shallow clone that lacks it, verify runs every project and says to fetch the history.
 - **`--jobs 2`** runs two projects at once. If your projects share something that cannot be shared (one test database), edit the workflow.
 - **A superseded run is cancelled.** A new push to a pull request cancels its run in progress. Each push to the default branch has a concurrency group of its own, so its run is never cancelled.
 - **The push trigger** names your default branch (from `origin/HEAD`, or the branch of a new repo), else `main` and `master`.
@@ -31,7 +33,7 @@ A lint, typecheck or test step that passed on the default branch, and whose inpu
 - firescale writes records only on a push to the default branch, and uses only records whose writer is the default branch. A run that writes never takes a pass from the machine's own step cache, so a runner kept between jobs cannot carry a pull request's pass into a record.
 - The writer field is a label, not a proof: the guarantee is GitHub's scoping and the read-only token. A pull request that adds its own workflow could save into its own merge ref and fool only its own check, in plain sight in its diff.
 - `--shared-cache` removes only record files, never folders or other files, and refuses the repo, a folder above it and firescale's other folders.
-- The workflow never uses `pull_request_target`.
+- `pull_request_target` starts only `tamper-guard`, which has `cache-mode: none` and no cache step.
 
 ### What it does not do
 

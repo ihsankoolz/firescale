@@ -10,6 +10,7 @@ Usage:
   fscale adopt [--dry-run]     Bring an existing repo in: add what is missing, overwrite nothing
   fscale sync [--check]        Repair drift: run the fixes again
   fscale verify [options]      Check, then lint, typecheck and test: the definition of done
+  fscale tamper [options]      Only the tamper guard: what the change weakens, against the base
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
   fscale graph [--explain]     Print the project graph; --explain says where each edge comes from
@@ -26,7 +27,12 @@ Options:
   --json           check, verify, facts, graph, doctor: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
   --affected       check, verify: only what changed, and projects that depend on it
-  --base <ref>     With --affected: also count commits since the merge base with <ref>
+  --base <ref>     With --affected: also count commits since the merge base with <ref>;
+                   verify, tamper: compare with the merge base with <ref>
+  --pr-base        verify, tamper, in GitHub Actions: the base from the pull request
+                   event GitHub gives, never from refs in the clone
+  --head <commit>  tamper: compare <commit> (read from git, nothing checked out)
+                   instead of the working tree
   --explain        graph: show where each edge comes from
   --no-cache       check: run every rule again, ignoring .firescale/cache;
                    verify: run every step again (passes are still stored)

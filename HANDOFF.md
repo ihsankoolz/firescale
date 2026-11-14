@@ -4,10 +4,9 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Nothing is half-finished. This session built M24 (ADR 0044): the tamper guard for Python and Rust, the misses ADR 0042 admitted, lint suppressions and the policy keys. The version is still 0.4.0. **No tag has been pushed.**
+M25 (the tamper guard's config and CI detectors, ADR 0045) is being built on the branch `m25-tamper-config-ci`, started 2026-11-14. The version is still 0.4.0. **No tag has been pushed.**
 
-- **Branch:** `claude/confident-darwin-tylz8n`, merged through its pull request.
-- **Next:** M25 (the tamper guard's config and CI detectors: coverage thresholds, CI steps, `--no-verify`, rules turned off in linter config). Not started.
+- **Next after it:** M26 (approvals and measured rates). Then stop: M27 is not to be started in this session.
 - **0.4.0 is still ready to tag** (`RELEASING.md`). Check whether `v0.3.0` was ever tagged first.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
