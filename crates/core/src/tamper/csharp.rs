@@ -24,8 +24,9 @@
 //!   `StringAssert`, `FileAssert`, `DirectoryAssert`) other than those that
 //!   skip or group (`Ignore`, `Inconclusive`, `Pass`, `Skip`, `Multiple`,
 //!   `Warn`); a FluentAssertions chain (`x.Should().Be(…)`); a Shouldly
-//!   call (`x.ShouldBe(…)`, `Should.Throw(…)`); Moq's `Verify…` and
-//!   Verify's `Verify(…)`; NSubstitute's `Received()` chains; FakeItEasy's
+//!   call (`x.ShouldBe(…)`, `Should.Throw(…)`); Moq's `mock.Verify(…)`,
+//!   `VerifyAll()` and their kin (not any `x.Verify…()`); Verify's
+//!   snapshots (`Verify(…)`); NSubstitute's `Received()` chains; FakeItEasy's
 //!   `MustHaveHappened…`. Not one that never runs (`if (false)`, after a
 //!   `return`, under `#if false`) or cannot fail (`Assert.True(true)`,
 //!   `Assert.Equal(1, 1)`, `true.Should().BeTrue()`).
@@ -138,6 +139,17 @@ const SHOULDLY: [&str; 11] = [
     "ShouldHave",
     "ShouldSatisfy",
     "ShouldComplete",
+];
+
+/// Moq's checks of what a mock was called with.
+const MOQ_VERIFY: [&str; 7] = [
+    "Verify",
+    "VerifyAll",
+    "VerifyNoOtherCalls",
+    "VerifyGet",
+    "VerifySet",
+    "VerifyAdd",
+    "VerifyRemove",
 ];
 
 /// The nodes of a value that is the same on every run.
@@ -374,8 +386,11 @@ fn is_assertion(call: Node<'_>, src: &[u8]) -> bool {
         if name.starts_with("MustHaveHappened") || name.starts_with("MustNotHaveHappened") {
             return true;
         }
+        // Moq: `mock.Verify(…)`, `mock.VerifyAll()`; not any method whose
+        // name starts so (`signer.VerifySignature(…)`).
+        return MOQ_VERIFY.contains(&name);
     }
-    // Moq's `mock.Verify(…)`, `VerifyAll()`, Verify's `Verify(result)`.
+    // Verify's snapshots: `Verify(result)`, `VerifyJson(text)`.
     name.starts_with("Verify")
 }
 
@@ -1420,6 +1435,7 @@ public class IgnoredByReason { [Test] public void Inside() { Assert.True(a); } }
         x.Should();
         policy.ShouldRetry(3);
         mock.Setup(m => m.Run()).Verifiable();
+        signer.VerifySignature(token);
         Debug.Assert(ok);
     }
 }
