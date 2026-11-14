@@ -154,3 +154,15 @@ Opt-in: add `"maven"` to `packs`, or `fscale init --packs core,maven`. It works 
 | `maven/properties` | `pom.xml` sets `project.build.sourceEncoding` (the fix adds UTF-8) and the Java version to build for (for a person to choose). | medium   | yes |
 | `maven/entry`      | The project has Java code under `src/main/java` or `src/test/java` (an aggregator POM is not checked).                         | high     | yes |
 | `maven/tests`      | A project with Java code under `src/main` has a test under `src/test`.                                                         | medium   | no  |
+
+## The `cmake` pack
+
+Opt-in: add `"cmake"` to `packs`, or `fscale init --packs core,cmake`. It works on a C or C++ project built with CMake at the repo root (a repo of another stack, or whose C code is built another way, is left alone, and a project only in a subfolder gets one finding); its fixes build a starter (a `CMakeLists.txt` for C++20 with a library, a program, a test and a clang-format `lint` target, and its code) and add a missing root `enable_testing()`, never replacing a file a person wrote (ADR 0055). The checks read CMake's commands, so comments and strings do not count. `ctest` and, with the starter's `lint` target, `cmake --build build --target lint` are its test and lint commands (ADR 0051).
+
+| Rule                    | What it checks                                                                                                            | Severity | Fix |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------- | --- |
+| `cmake/lists`           | The root has a `CMakeLists.txt` that calls `cmake_minimum_required` before `project()`, and `project()`.                  | high     | yes |
+| `cmake/minimum-version` | No `CMakeLists.txt` asks for CMake before 3.10: CMake 4 stops below 3.5, and 3.31 and later warn below 3.10.              | high     | no  |
+| `cmake/standard`        | A build that compiles C++ sets the C++ standard (`CMAKE_CXX_STANDARD`, `cxx_std_*`, a `-std=` flag or a preset).          | medium   | no  |
+| `cmake/entry`           | The starter's `CMakeLists.txt`, in a repo with no C or C++ code, gets its code, test and `.clang-format`.                 | high     | yes |
+| `cmake/tests`           | A project with code registers a test and turns testing on in its root `CMakeLists.txt` (the fix adds `enable_testing()`). | medium   | yes |
