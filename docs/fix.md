@@ -45,6 +45,25 @@ The copy holds every file git does not ignore, plus every tracked file. Ignored 
 
 A custom TypeScript rule's `fix()` runs in the Node host, through the SDK. The SDK records every `ctx.files.write` and `ctx.git.untrack` call, and those records are what `fscale fix` reports. A fix that changes things by any other route (for example `node:fs` directly) still works, but its changes are not listed and a dry run cannot show them, so use the context. In a dry run the fix works on the scratch copy, while the pack itself is loaded from your repo.
 
+## `fscale fix --agent`
+
+`fscale fix --agent <name> [--rule <id>]` hands one rule's remaining violations, the ones its deterministic fix cannot repair, to a coding agent, under the guardrails of SPEC §7 (ADR 0047). Without `--rule` it takes the first rule with such a violation.
+
+1. **Pre-flight.** The agent's CLI answers `--version` and says it is signed in; the working tree is clean; no secret (`.env` and `.env.*` other than templates, `*.pem`, `*.key`, `secrets/`) is tracked. The repo's own agent settings must let an agent edit (`.codex/config.toml` `sandbox_mode = "read-only"` or Claude Code's `defaultMode: "plan"` stop it).
+2. **Isolation.** The agent works in a git worktree of `HEAD` on a new branch, `fscale/fix/<rule>-<time>`. Your branch, index and files are never touched.
+3. **Scoped prompt.** The rule's SKILL.md and that rule's diagnostics only.
+4. **Tool limits.** Read, search and edit files: no shell. Secrets and protected paths may be neither read nor written; `git push`, `git tag` and publishing are denied. Whatever the repo's `.claude/settings.json` denies is denied too: a run is never wider than the repo's own settings.
+5. **Budget.** `agent.maxTurns`, `agent.maxCostUsd` and `agent.timeoutSeconds` (config.md). The agent's process tree is stopped at the time limit; a run over turns or spend fails.
+6. **Controlled config.** The run tells the adapter not to load the repo's own agent hooks, settings or MCP servers. Pushes from inside the run go nowhere (`pushInsteadOf` points every URL at a path that does not exist).
+7. **Diff guard.** A change to a protected path (the secrets, `.git`, `firescale.config.*`, `.claude/`, `.codex/`, `.cursor/`, `.husky/`, `.firescale/`, `.mcp.json`, and `protectedPaths`), or to a file outside the rule's inputs and the files its violations name, fails the run.
+8. **Re-check.** The rule is checked again in the worktree; the tamper guard compares the change with `HEAD` (any finding fails, including a changed snapshot or expected value); and blame-aware `verify` runs against `HEAD`.
+9. **One commit.** A run that passes is one commit on its branch, under your git identity, with the trailers `Firescale-Rule`, `Firescale-Agent` and `Firescale-Outcome`. A run that fails is rolled back: its worktree and branch are removed. firescale never pushes, tags or publishes; review the branch and merge it yourself.
+10. **Ledger.** Every run appends one line to `.firescale/ledger.jsonl` ([docs/schemas/ledger-entry.schema.json](schemas/ledger-entry.schema.json)): rule, agent, pass or fail and why, files and lines changed, time, and cost and turns when the agent reports them. Never the prompt, a file's contents or the agent's own words.
+
+Exit code 0 when the run passed (or there was nothing to fix), 1 when it failed, 2 when it was refused before it started.
+
+The agents: `fake` (the stand-in the tests use, `crates/testkit/src/fake_agent.rs`); Claude Code and Codex come with M28.
+
 ## Limits
 
 - The diff shows all of a file's changes in a single hunk.

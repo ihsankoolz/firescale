@@ -1,0 +1,654 @@
+//! The guarded agent runner's pieces (M27, ADR 0047): the policy an agent
+//! runs under, the adapter interface, the post-run diff guard, the worktree
+//! a run works in, and the ledger. `fscale fix --agent` puts them together
+//! (`crates/cli/src/agentfix.rs`).
+//!
+//! An adapter is a program that speaks a small JSON protocol: the runner
+//! starts `<adapter> run <request.json>` and reads an [`AgentResult`], one
+//! JSON line, from its standard output. M27 ships one adapter, `fake`, a stand-in
+//! binary from the testkit, so tests and CI never call a real model; M28
+//! adds the Claude Code and Codex adapters behind the same interface.
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+use crate::git::run_git;
+use crate::process::{run_tree, Ending, Watch, STOP};
+use crate::{Error, Result};
+
+/// Paths no agent may read or write: secrets (SPEC §7, guardrail 4). The
+/// `.env` files are named one by one, so `.env.example` (a template the
+/// env-example rule edits) stays editable; [`is_secret`] judges any other
+/// `.env.*` a secret in the pre-flight and the diff guard.
+pub const SECRET_PATHS: [&str; 16] = [
+    ".env",
+    "**/.env",
+    ".env.local",
+    "**/.env.local",
+    ".env.*.local",
+    "**/.env.*.local",
+    ".env.development",
+    ".env.production",
+    ".env.staging",
+    ".env.test",
+    "*.pem",
+    "**/*.pem",
+    "*.key",
+    "**/*.key",
+    "**/secrets/**",
+    "**/id_rsa*",
+];
+
+/// True for a path that holds secrets: any `.env` or `.env.*` file that is
+/// not a template, and the [`SECRET_PATHS`].
+#[must_use]
+pub fn is_secret(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let env_file = name == ".env" || name.starts_with(".env.");
+    let named: Vec<String> = SECRET_PATHS.iter().map(|p| (*p).to_owned()).collect();
+    !is_example(path) && (env_file || matches_any(path, &named) || path.starts_with("secrets/"))
+}
+
+/// Paths a fix may never change (guardrail 7): the secrets, git itself,
+/// firescale's config, and the agents' own settings and hooks.
+pub const PROTECTED_PATHS: [&str; 9] = [
+    ".git/**",
+    "firescale.config.json",
+    "firescale.config.ts",
+    ".claude/**",
+    ".codex/**",
+    ".cursor/**",
+    ".husky/**",
+    ".firescale/**",
+    ".mcp.json",
+];
+
+/// Commands an agent may never run, whatever the repo allows: the runner
+/// never pushes, tags or publishes.
+pub const DENIED_COMMANDS: [&str; 7] = [
+    "git push",
+    "git tag",
+    "git remote",
+    "npm publish",
+    "pnpm publish",
+    "yarn publish",
+    "cargo publish",
+];
+
+/// What an agent may do in one run (guardrails 4, 5 and 6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Policy {
+    /// Tools the agent may use without asking: reading, searching and
+    /// editing files. No shell unless the repo allows it and the runner's
+    /// own list does too.
+    pub allowed_tools: Vec<String>,
+    /// Commands it may never run.
+    pub denied_commands: Vec<String>,
+    /// Paths it may neither read nor write.
+    pub denied_paths: Vec<String>,
+    /// Most agent turns.
+    pub max_turns: u32,
+    /// Most spend in US dollars, where the agent reports it.
+    pub max_cost_usd: f64,
+    /// Wall-clock limit, after which the runner stops the agent.
+    pub timeout_secs: u64,
+    /// Always false: the repo's own agent hooks, settings and MCP servers
+    /// are not loaded during a fix run (guardrail 6).
+    pub load_project_config: bool,
+}
+
+/// The tools of the runner's own strict list.
+pub const RUNNER_TOOLS: [&str; 5] = ["Read", "Glob", "Grep", "Edit", "Write"];
+
+/// What the repo's own agent settings take away (the runner never runs
+/// wider than they allow).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoLimits {
+    /// Tool rules the repo denies (`.claude/settings.json`
+    /// `permissions.deny`), kept as written.
+    pub denied: Vec<String>,
+    /// Tools the repo denies outright (a rule with no scope, `"Edit"`).
+    pub denied_tools: BTreeSet<String>,
+    /// The repo's settings let no agent edit files (Codex `sandbox_mode =
+    /// "read-only"`, Claude Code `defaultMode: "plan"`).
+    pub read_only: Option<String>,
+}
+
+/// Reads what the repo's agent settings deny: `.claude/settings.json` (and
+/// `settings.local.json`) `permissions.deny` and `defaultMode`, and
+/// `.codex/config.toml` `sandbox_mode`.
+#[must_use]
+pub fn repo_limits(root: &Path) -> RepoLimits {
+    let mut limits = RepoLimits::default();
+    for file in [".claude/settings.json", ".claude/settings.local.json"] {
+        let Ok(text) = fs::read_to_string(root.join(file)) else {
+            continue;
+        };
+        let Ok(value) =
+            serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}'))
+        else {
+            continue;
+        };
+        if let Some(deny) = value
+            .pointer("/permissions/deny")
+            .and_then(serde_json::Value::as_array)
+        {
+            for rule in deny.iter().filter_map(serde_json::Value::as_str) {
+                limits.denied.push(rule.to_owned());
+                if !rule.contains('(') {
+                    limits.denied_tools.insert(rule.to_owned());
+                }
+            }
+        }
+        if value
+            .pointer("/permissions/defaultMode")
+            .and_then(serde_json::Value::as_str)
+            == Some("plan")
+        {
+            limits.read_only = Some(format!("{file} sets permissions.defaultMode to \"plan\""));
+        }
+    }
+    if let Ok(text) = fs::read_to_string(root.join(".codex").join("config.toml")) {
+        let read_only = text.lines().any(|line| {
+            let line = line.trim();
+            line.starts_with("sandbox_mode") && line.contains("read-only")
+        });
+        if read_only {
+            limits.read_only =
+                Some(".codex/config.toml sets sandbox_mode to \"read-only\"".to_owned());
+        }
+    }
+    limits
+}
+
+impl Policy {
+    /// The runner's strict policy, narrowed by the repo's own limits: a tool
+    /// the repo denies is not allowed, and every rule the repo denies is
+    /// denied too.
+    #[must_use]
+    pub fn strict(
+        limits: &RepoLimits,
+        protected: &[String],
+        max_turns: u32,
+        max_cost_usd: f64,
+        timeout_secs: u64,
+    ) -> Self {
+        let mut denied_paths: Vec<String> = SECRET_PATHS.iter().map(|p| (*p).to_owned()).collect();
+        denied_paths.extend(protected.iter().cloned());
+        denied_paths.extend(PROTECTED_PATHS.iter().map(|p| (*p).to_owned()));
+        let mut denied_commands: Vec<String> =
+            DENIED_COMMANDS.iter().map(|c| (*c).to_owned()).collect();
+        denied_commands.extend(limits.denied.iter().cloned());
+        Self {
+            allowed_tools: RUNNER_TOOLS
+                .iter()
+                .filter(|tool| !limits.denied_tools.contains(**tool))
+                .map(|tool| (*tool).to_owned())
+                .collect(),
+            denied_commands,
+            denied_paths,
+            max_turns,
+            max_cost_usd,
+            timeout_secs,
+            load_project_config: false,
+        }
+    }
+}
+
+/// What the runner hands an adapter (guardrail 3: one rule's skill and its
+/// diagnostics, nothing else).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Request {
+    /// The worktree the agent works in: never the person's checkout.
+    pub cwd: String,
+    pub rule: String,
+    /// The rule's SKILL.md.
+    pub skill: String,
+    /// The rule's diagnostics, as `fscale check --json` gives them.
+    pub diagnostics: serde_json::Value,
+    /// The instruction, built from the two above.
+    pub prompt: String,
+    pub policy: Policy,
+}
+
+/// What an adapter reports back.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentResult {
+    /// The agent finished without an error of its own.
+    pub ok: bool,
+    /// Spend in US dollars, when the agent reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u32>,
+    /// A short reason when `ok` is false (never the agent's own text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// An agent CLI behind the JSON protocol.
+pub trait Adapter {
+    /// The name in the ledger and in commit trailers.
+    fn name(&self) -> &str;
+    /// Guardrail 1: the agent's CLI is installed and authenticated. `Err`
+    /// says what is missing and how to fix it.
+    ///
+    /// # Errors
+    ///
+    /// When it is not installed or not signed in.
+    fn preflight(&self) -> std::result::Result<String, String>;
+    /// Runs the agent on `request`. The runner stops it after the policy's
+    /// time limit.
+    ///
+    /// # Errors
+    ///
+    /// When the agent cannot be started or its answer cannot be read.
+    fn run(&self, request: &Request) -> Result<AgentResult>;
+}
+
+/// An adapter that is a program speaking the protocol: the request on its
+/// standard input, the result on its standard output.
+pub struct ProgramAdapter {
+    pub name: String,
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+/// The environment every agent process gets on top of the person's: git
+/// pushes go nowhere (`url.<nowhere>.pushInsteadOf` set empty matches every
+/// URL), git never asks for a password, and firescale's own hooks stay out.
+#[must_use]
+pub fn agent_env() -> Vec<(&'static str, String)> {
+    vec![
+        ("GIT_CONFIG_COUNT", "1".to_owned()),
+        (
+            "GIT_CONFIG_KEY_0",
+            "url.file:///firescale-runner-never-pushes/.pushInsteadOf".to_owned(),
+        ),
+        ("GIT_CONFIG_VALUE_0", String::new()),
+        ("GIT_TERMINAL_PROMPT", "0".to_owned()),
+        ("FSCALE_AGENT_RUN", "1".to_owned()),
+    ]
+}
+
+impl Adapter for ProgramAdapter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn preflight(&self) -> std::result::Result<String, String> {
+        let installed = Command::new(&self.program)
+            .args(&self.args)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|_| format!("the {} agent is not installed ({} was not found). Install it, or pick another with --agent.", self.name, self.program.display()))?;
+        if !installed.status.success() {
+            return Err(format!(
+                "the {} agent did not answer --version. Check its install.",
+                self.name
+            ));
+        }
+        let version = String::from_utf8_lossy(&installed.stdout).trim().to_owned();
+        let auth = Command::new(&self.program)
+            .args(&self.args)
+            .args(["auth", "status"])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| {
+                format!(
+                    "the {} agent's sign-in could not be checked ({error}).",
+                    self.name
+                )
+            })?;
+        if !auth.status.success() {
+            return Err(format!(
+                "the {} agent is not signed in. Sign in with its own CLI first.",
+                self.name
+            ));
+        }
+        Ok(version)
+    }
+
+    fn run(&self, request: &Request) -> Result<AgentResult> {
+        // The request goes in a file outside the repo, removed afterwards;
+        // the agent runs as a process tree that a time limit or Ctrl+C
+        // stops as a whole.
+        let file = std::env::temp_dir().join(format!(
+            "firescale-request-{}-{}.json",
+            std::process::id(),
+            request.rule.replace(['/', '\\'], "-")
+        ));
+        let body =
+            serde_json::to_vec(request).map_err(|error| Error::internal(error.to_string()))?;
+        fs::write(&file, body).map_err(|error| {
+            Error::user(format!("could not write the agent's request ({error})."))
+        })?;
+        let mut command = Command::new(&self.program);
+        command
+            .args(&self.args)
+            .arg("run")
+            .arg(&file)
+            .current_dir(&request.cwd)
+            .envs(agent_env());
+        let quiet = |_: Duration, _: Option<&str>, _: Option<u8>| {};
+        let watch = Watch {
+            timeout: Some(Duration::from_secs(request.policy.timeout_secs.max(1))),
+            idle: None,
+            stop: &STOP,
+            heartbeat: Duration::from_secs(3600),
+            on_heartbeat: &quiet,
+            command: "",
+            on_output: &|_| false,
+            on_spawn: &|_| {},
+        };
+        let finished = run_tree(command, &watch);
+        let _ = fs::remove_file(&file);
+        let finished = finished.map_err(|error| {
+            Error::user(format!(
+                "the {} agent could not be started ({error}).",
+                self.name
+            ))
+        })?;
+        let mut result = match finished.ending {
+            Ending::TimedOut => {
+                return Ok(AgentResult {
+                    ok: false,
+                    error: Some(format!(
+                        "stopped after the time limit of {} s",
+                        request.policy.timeout_secs
+                    )),
+                    ..AgentResult::default()
+                })
+            }
+            Ending::Stopped | Ending::GaveUp => {
+                return Ok(AgentResult {
+                    ok: false,
+                    error: Some("stopped".to_owned()),
+                    ..AgentResult::default()
+                })
+            }
+            Ending::Exited(code) => {
+                let text = String::from_utf8_lossy(&finished.stdout);
+                let last = text
+                    .lines()
+                    .rev()
+                    .find(|line| line.trim_start().starts_with('{'))
+                    .unwrap_or("");
+                let mut result: AgentResult = serde_json::from_str(last).unwrap_or(AgentResult {
+                    ok: false,
+                    error: Some("the agent's answer could not be read".to_owned()),
+                    ..AgentResult::default()
+                });
+                if code != Some(0) {
+                    result.ok = false;
+                    result.error.get_or_insert_with(|| {
+                        format!(
+                            "the agent exited with {}",
+                            code.map_or("a signal".to_owned(), |c| c.to_string())
+                        )
+                    });
+                }
+                result
+            }
+        };
+        // Keep only a short reason: never the agent's own words at length.
+        if let Some(error) = &mut result.error {
+            *error = error.chars().take(160).collect();
+        }
+        Ok(result)
+    }
+}
+
+/// True for a repo-relative path that one of `globs` names (`*` stays in
+/// a folder, `**` crosses them).
+#[must_use]
+pub fn matches_any(path: &str, globs: &[String]) -> bool {
+    let set = globs.iter().filter_map(|glob| {
+        globset::GlobBuilder::new(glob)
+            .literal_separator(true)
+            .build()
+            .ok()
+    });
+    let mut builder = globset::GlobSetBuilder::new();
+    for glob in set {
+        builder.add(glob);
+    }
+    builder.build().is_ok_and(|set| set.is_match(path))
+}
+
+/// Why a run's diff is rejected (guardrail 7), or `None`.
+#[must_use]
+pub fn diff_guard(
+    changed: &[String],
+    allowed: &[String],
+    extra_protected: &[String],
+) -> Option<String> {
+    let secrets: Vec<String> = SECRET_PATHS.iter().map(|p| (*p).to_owned()).collect();
+    let mut protected: Vec<String> = PROTECTED_PATHS.iter().map(|p| (*p).to_owned()).collect();
+    protected.extend(extra_protected.iter().cloned());
+    let hit = |path: &&String| {
+        (matches_any(path, &secrets) && !is_example(path)) || matches_any(path, &protected)
+    };
+    if let Some(path) = changed.iter().find(hit) {
+        return Some(format!("it changed the protected path {path}"));
+    }
+    changed
+        .iter()
+        .find(|path| !matches_any(path, allowed))
+        .map(|path| format!("it changed {path}, outside what the rule may change"))
+}
+
+/// A template of a secret file, not a secret: `.env.example`,
+/// `.env.sample`, `.env.template`, `config.dist`.
+#[must_use]
+pub fn is_example(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    [".example", ".sample", ".template", ".dist"]
+        .iter()
+        .any(|end| name.ends_with(end))
+}
+
+/// One line of `.firescale/ledger.jsonl` (guardrail 10). Never the prompt,
+/// a file's contents or anything the agent wrote: only what is listed here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerEntry {
+    pub schema: u32,
+    /// RFC 3339, UTC, seconds.
+    pub time: String,
+    pub rule: String,
+    pub agent: String,
+    /// `pass` (committed) or `fail` (rolled back).
+    pub result: String,
+    /// Why a run failed, as one of a fixed set of codes (a refusal before
+    /// the run writes no line): `agent-error`, `over-budget`, `timeout`, `diff-guard`, `no-change`,
+    /// `still-failing`, `tamper`, `verify`, `pushed-or-tagged`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub files_changed: usize,
+    pub lines_changed: usize,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u32>,
+}
+
+pub const LEDGER: &str = ".firescale/ledger.jsonl";
+
+/// Appends one entry to the repo's ledger.
+///
+/// # Errors
+///
+/// When the file cannot be written.
+pub fn append_ledger(root: &Path, entry: &LedgerEntry) -> Result<()> {
+    let path = root.join(".firescale").join("ledger.jsonl");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            Error::user(format!("could not create {} ({error}).", parent.display()))
+        })?;
+    }
+    let mut line =
+        serde_json::to_string(entry).map_err(|error| Error::internal(error.to_string()))?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| Error::user(format!("could not write {} ({error}).", path.display())))?;
+    file.write_all(line.as_bytes())
+        .map_err(|error| Error::user(format!("could not write {} ({error}).", path.display())))
+}
+
+/// The current time, RFC 3339 in UTC to the second, without a date crate.
+#[must_use]
+pub fn now_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let days = secs / 86_400;
+    let rest = secs % 86_400;
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let day_of_year = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        (rest % 3600) / 60,
+        rest % 60
+    )
+}
+
+/// A worktree on a new branch, for one run (guardrail 2). Removed, with
+/// its branch, when the run is rolled back.
+pub struct RunWorktree {
+    pub root: PathBuf,
+    pub path: PathBuf,
+    pub branch: String,
+}
+
+impl RunWorktree {
+    /// Adds a worktree of `HEAD` on the new branch `branch`, in the
+    /// system's temporary folder.
+    ///
+    /// # Errors
+    ///
+    /// When git cannot add it.
+    pub fn add(root: &Path, branch: &str) -> Result<Self> {
+        let path = std::env::temp_dir().join(format!(
+            "firescale-run-{}-{}",
+            std::process::id(),
+            branch.replace(['/', '\\'], "-")
+        ));
+        let target = path.to_string_lossy().into_owned();
+        let out = run_git(
+            root,
+            &["worktree", "add", "--quiet", "-b", branch, &target, "HEAD"],
+        )?;
+        if out.code != 0 {
+            return Err(Error::user(format!(
+                "could not create a worktree on the branch {branch}: {}",
+                out.stderr.trim()
+            )));
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            path,
+            branch: branch.to_owned(),
+        })
+    }
+
+    /// Removes the worktree and its branch: the run is rolled back.
+    pub fn roll_back(self) {
+        let target = self.path.to_string_lossy().into_owned();
+        let _ = run_git(&self.root, &["worktree", "remove", "--force", &target]);
+        let _ = run_git(&self.root, &["branch", "-D", &self.branch]);
+    }
+
+    /// Removes the worktree and keeps its branch with the run's commit.
+    pub fn keep_branch(self) {
+        let target = self.path.to_string_lossy().into_owned();
+        let _ = run_git(&self.root, &["worktree", "remove", "--force", &target]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_policy_never_allows_more_than_the_repo() {
+        let limits = RepoLimits {
+            denied: vec!["Bash(curl *)".to_owned(), "Write".to_owned()],
+            denied_tools: ["Write".to_owned()].into_iter().collect(),
+            read_only: None,
+        };
+        let policy = Policy::strict(&limits, &[], 10, 1.0, 60);
+        assert!(!policy.allowed_tools.contains(&"Write".to_owned()));
+        assert!(policy.allowed_tools.contains(&"Edit".to_owned()));
+        assert!(policy.denied_commands.contains(&"Bash(curl *)".to_owned()));
+        assert!(policy.denied_commands.contains(&"git push".to_owned()));
+        assert!(policy.denied_paths.contains(&".env".to_owned()));
+        assert!(
+            is_secret(".env.production")
+                && is_secret("api/.env.staging.local")
+                && is_secret("certs/a.pem")
+        );
+        assert!(!is_secret(".env.example") && !is_secret("src/env.ts"));
+        assert!(!policy.load_project_config);
+    }
+
+    #[test]
+    fn the_diff_guard_rejects_protected_and_unrelated_paths() {
+        let allowed = vec!["**/.env.example".to_owned(), "src/**".to_owned()];
+        assert_eq!(
+            diff_guard(&[".env.example".to_owned()], &allowed, &[]),
+            None
+        );
+        assert!(diff_guard(&[".env".to_owned()], &allowed, &[])
+            .unwrap()
+            .contains("protected"));
+        assert!(diff_guard(
+            &["firescale.config.json".to_owned()],
+            &["**".to_owned()],
+            &[]
+        )
+        .unwrap()
+        .contains("protected"));
+        assert!(diff_guard(
+            &[".claude/settings.json".to_owned()],
+            &["**".to_owned()],
+            &[]
+        )
+        .unwrap()
+        .contains("protected"));
+        assert!(diff_guard(&["README.md".to_owned()], &allowed, &[])
+            .unwrap()
+            .contains("outside"));
+    }
+
+    #[test]
+    fn dates_are_utc() {
+        let now = now_utc();
+        assert_eq!(now.len(), 20);
+        assert!(now.ends_with('Z'));
+        assert!(now.starts_with("20"));
+    }
+}

@@ -171,6 +171,7 @@ dependencies = [
 name = "firescale-testkit"
 version = "0.4.0"
 dependencies = [
+ "serde_json",
  "windows-sys",
 ]
 

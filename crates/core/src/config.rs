@@ -22,7 +22,14 @@ pub const JSON_CONFIG: &str = "firescale.config.json";
 /// Status of a rule that the config does not mention.
 pub const DEFAULT_STATUS: Status = Status::Evaluated;
 
-const TOP_LEVEL_KEYS: [&str; 5] = ["$schema", "packs", "rules", "protectedPaths", "verify"];
+const TOP_LEVEL_KEYS: [&str; 6] = [
+    "$schema",
+    "packs",
+    "rules",
+    "protectedPaths",
+    "verify",
+    "agent",
+];
 
 /// Where a rule's code lives.
 pub enum RuleSource<'a> {
@@ -181,7 +188,7 @@ pub fn resolve_config<'a>(
         .find(|key| !TOP_LEVEL_KEYS.contains(&key.as_str()))
     {
         return Err(Error::user(format!(
-            "{name}: unknown key \"{key}\". Allowed keys: packs, rules, protectedPaths, verify."
+            "{name}: unknown key \"{key}\". Allowed keys: packs, rules, protectedPaths, verify, agent."
         )));
     }
 
@@ -290,6 +297,7 @@ pub fn resolve_config<'a>(
     };
 
     let verify = parse_verify(name, object.get("verify"))?;
+    check_agent(name, object.get("agent"))?;
 
     rules.sort_by(|a, b| a.meta.id.cmp(&b.meta.id));
     Ok(ResolvedConfig {
@@ -670,6 +678,42 @@ pub fn load_verify_config(root: &Path) -> Result<VerifyConfig> {
     parse_verify(JSON_CONFIG, raw.get("verify"))
 }
 
+/// Checks the shape of `agent` (the limits of `fscale fix --agent`, M27):
+/// `maxTurns` and `timeoutSeconds` whole numbers of at least 1,
+/// `maxCostUsd` a number of at least 0.
+fn check_agent(name: &str, value: Option<&Value>) -> Result<()> {
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(());
+    };
+    let Some(object) = value.as_object() else {
+        return Err(Error::user(format!(
+            "{name}: \"agent\" must be an object, such as {{ \"maxTurns\": 30, \"maxCostUsd\": 2, \"timeoutSeconds\": 900 }}."
+        )));
+    };
+    for (key, value) in object {
+        let ok = match key.as_str() {
+            "maxTurns" | "timeoutSeconds" => value.as_u64().is_some_and(|n| n >= 1),
+            "maxCostUsd" => value.as_f64().is_some_and(|n| n >= 0.0),
+            other => {
+                return Err(Error::user(format!(
+                    "{name}: unknown key \"{other}\" in agent. Allowed keys: maxTurns, maxCostUsd, timeoutSeconds."
+                )))
+            }
+        };
+        if !ok {
+            return Err(Error::user(format!(
+                "{name}: agent.{key} must be {}.",
+                if key == "maxCostUsd" {
+                    "a number of 0 or more"
+                } else {
+                    "a whole number of 1 or more"
+                }
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -785,6 +829,30 @@ mod tests {
         let options_only =
             resolve(&json!({ "rules": { RULE: { "options": {} } } }), &packs).unwrap();
         assert_eq!(options_only.rules[0].status, Status::Evaluated);
+    }
+
+    #[test]
+    fn checks_the_agent_limits() {
+        assert!(check_agent(
+            "c",
+            Some(&json!({ "maxTurns": 5, "maxCostUsd": 0.5, "timeoutSeconds": 60 }))
+        )
+        .is_ok());
+        for (value, text) in [
+            (json!([]), "\"agent\" must be an object"),
+            (
+                json!({ "maxTurns": 0 }),
+                "agent.maxTurns must be a whole number of 1 or more",
+            ),
+            (
+                json!({ "maxCostUsd": -1 }),
+                "agent.maxCostUsd must be a number of 0 or more",
+            ),
+            (json!({ "model": "x" }), "unknown key \"model\" in agent"),
+        ] {
+            let error = check_agent("c", Some(&value)).unwrap_err();
+            assert!(error.message().contains(text), "{}", error.message());
+        }
     }
 
     #[test]

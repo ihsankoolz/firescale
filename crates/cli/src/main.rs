@@ -1,5 +1,6 @@
 //! The `fscale` command.
 
+mod agentfix;
 mod scaffold;
 
 use std::collections::BTreeSet;
@@ -62,6 +63,8 @@ const HELP: &str = "fscale - knock the scale off a repo, and prove it's clean.
 Usage:
   fscale check [options]       Run rules and report violations
   fscale fix [options]         Apply deterministic fixes
+  fscale fix --agent <name> [--rule <id>]
+                               Hand one rule's remaining violations to an agent, with guardrails
   fscale init [--packs <list>] Start a repo in an empty folder: config, then every fix
   fscale adopt [--dry-run]     Bring an existing repo in: add what is missing, overwrite nothing
   fscale sync [--check]        Repair drift: run the fixes again
@@ -101,7 +104,9 @@ Options:
   --packs <list>   init: rule packs to turn on, comma-separated (default: core,agent-ready)
   --force          init: run in a folder that is not empty (nothing is overwritten)
   --check          sync: change nothing, and exit 1 when sync would change something
-  --agent <name>   hooks: claude, codex or cursor
+  --agent <name>   hooks: claude, codex or cursor; fix: the agent to run (fake, the stand-in)
+  --rule <id>      fix --agent: the rule to fix (default: the first with violations a
+                   deterministic fix cannot repair)
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
@@ -149,6 +154,8 @@ struct Args {
     head: Option<String>,
     /// `--approvals <file>`: the pull request's reviews from GitHub (M26).
     approvals: Option<String>,
+    /// `--rule <id>`: fix --agent works on this rule (M27).
+    rule: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -209,7 +216,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 }
             }
             "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs"
-            | "--shared-cache" | "--head" | "--approvals" => {
+            | "--shared-cache" | "--head" | "--approvals" | "--rule" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -229,6 +236,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--shared-cache" => args.shared_cache = Some(value),
                     "--head" => args.head = Some(value),
                     "--approvals" => args.approvals = Some(value),
+                    "--rule" => args.rule = Some(value),
                     _ => args.cwd = Some(value),
                 }
             }
@@ -560,6 +568,20 @@ fn fix(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             "fix takes no arguments, got \"{}\".",
             extra.join(" ")
         )));
+    }
+    // One rule's violations handed to an agent, with guardrails (M27).
+    if let Some(agent) = &args.agent {
+        if args.dry_run {
+            return Err(Error::usage(
+                "fix --agent has no --dry-run: its run happens in a worktree of its own and is rolled back unless it passes.",
+            ));
+        }
+        return agentfix::fix_with_agent(root, args, agent);
+    }
+    if args.rule.is_some() {
+        return Err(Error::usage(
+            "--rule goes with --agent. To fix some rules deterministically, use --rules <glob>.",
+        ));
     }
     let packs = firescale_rules::builtin_packs();
     let mut host = NodeHost::new(root);

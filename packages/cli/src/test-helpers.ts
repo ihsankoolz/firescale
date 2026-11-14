@@ -33,6 +33,12 @@ export const NODE_STUB = path.join(
  * The stand-in for a virtual environment's `python` built next to the
  * `fscale` binary (see crates/testkit/src/python_stub.rs).
  */
+/** The stand-in agent of the guarded runner's tests (M27): never a real model. */
+export const FAKE_AGENT = path.join(
+  path.dirname(BIN),
+  process.platform === 'win32' ? 'fscale-fake-agent.exe' : 'fscale-fake-agent',
+);
+
 export const PYTHON_STUB = path.join(
   path.dirname(BIN),
   process.platform === 'win32' ? 'fscale-python-stub.exe' : 'fscale-python-stub',
