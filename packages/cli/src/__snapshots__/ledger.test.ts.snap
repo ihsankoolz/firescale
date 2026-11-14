@@ -1,0 +1,89 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale ledger > prints JSON that matches its schema 1`] = `
+{
+  "byAgent": [
+    {
+      "costReportedRuns": 3,
+      "costUsd": 0.47,
+      "name": "claude",
+      "passRate": 0.6666666666666666,
+      "passed": 2,
+      "reasons": {
+        "tamper": 1,
+      },
+      "runs": 3,
+    },
+    {
+      "costReportedRuns": 0,
+      "costUsd": 0,
+      "name": "codex",
+      "passRate": 0.5,
+      "passed": 1,
+      "reasons": {
+        "timeout": 1,
+      },
+      "runs": 2,
+    },
+  ],
+  "byRule": [
+    {
+      "costReportedRuns": 2,
+      "costUsd": 0.42,
+      "name": "core/env-example",
+      "passRate": 0.6666666666666666,
+      "passed": 2,
+      "reasons": {
+        "tamper": 1,
+      },
+      "runs": 3,
+    },
+    {
+      "costReportedRuns": 1,
+      "costUsd": 0.05,
+      "name": "core/readme-setup",
+      "passRate": 0.5,
+      "passed": 1,
+      "reasons": {
+        "timeout": 1,
+      },
+      "runs": 2,
+    },
+  ],
+  "costReportedRuns": 3,
+  "costUsd": 0.47,
+  "damagedLines": [
+    4,
+    7,
+    8,
+    10,
+  ],
+  "file": ".firescale/ledger.jsonl",
+  "found": true,
+  "passRate": 0.6,
+  "passed": 3,
+  "reasons": {
+    "tamper": 1,
+    "timeout": 1,
+  },
+  "runs": 5,
+  "schema": 1,
+}
+`;
+
+exports[`fscale ledger > sums runs, pass rate and cost per rule and per agent, and names damaged lines 1`] = `
+".firescale/ledger.jsonl: 5 runs, 3 passed (60%), cost $0.47 (3 of 5 runs)
+
+rule               runs  passed  rate  cost
+core/env-example      3       2   67%  $0.42 (2 of 3 runs)  failed: tamper 1
+core/readme-setup     2       1   50%  $0.05 (1 of 2 runs)  failed: timeout 1
+
+agent   runs  passed  rate  cost
+claude     3       2   67%  $0.47  failed: tamper 1
+codex      2       1   50%  -  failed: timeout 1
+
+Skipped 4 lines that could not be read (lines 4, 7, 8, 10). Each line must be one run as docs/schemas/ledger-entry.schema.json describes; delete or repair the line to count it.
+
+Cost is what each agent reported; - means none did.
+"
+`;

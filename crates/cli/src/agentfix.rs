@@ -17,15 +17,41 @@ use firescale_core::config::load_config;
 use firescale_core::explain::rule_skill;
 use firescale_core::git::run_git;
 use firescale_core::model::Fixable;
-use firescale_core::node::NodeHost;
+use firescale_core::node::{NodeHost, NODE_ENV};
 use firescale_core::select::select_rules;
 use firescale_core::tamper;
 use firescale_core::{version, Error, Result};
 
 use crate::{Args, Output, EXIT_OK, EXIT_VIOLATIONS};
 
-/// The agents `--agent` names. Only `fake` is wired in M27; the Claude
-/// Code and Codex adapters arrive in M28.
+/// Overrides the path of the agent adapters' entry point (`agents/cli.js`).
+const AGENTS_ENV: &str = "FSCALE_AGENTS";
+
+/// Looks for the adapters next to the binary, as the Node host is found:
+/// this repo's dev layout (`target/<profile>/fscale` beside
+/// `packages/agents`) and an npm install (`node_modules/firescale/agents`).
+fn agents_script_near_exe() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    exe.ancestors().skip(1).take(5).find_map(|dir| {
+        [
+            dir.join("packages")
+                .join("agents")
+                .join("dist")
+                .join("cli.js"),
+            dir.join("firescale").join("agents").join("cli.js"),
+            dir.join("node_modules")
+                .join("firescale")
+                .join("agents")
+                .join("cli.js"),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+    })
+}
+
+/// The agents `--agent` names: `fake`, the stand-in the tests use, and the
+/// Claude Code and Codex adapters (M28, ADR 0048), TypeScript programs
+/// started with Node that speak the same protocol.
 fn adapter(name: &str) -> Result<Box<dyn Adapter>> {
     match name {
         "fake" => {
@@ -37,11 +63,24 @@ fn adapter(name: &str) -> Result<Box<dyn Adapter>> {
                 args: Vec::new(),
             }))
         }
-        "claude" | "codex" | "gemini" => Err(Error::usage(format!(
-            "the {name} adapter is not built yet (M28). `--agent fake` runs the stand-in agent the tests use."
-        ))),
+        "claude" | "codex" => {
+            let script = env::var_os(AGENTS_ENV)
+                .map(PathBuf::from)
+                .or_else(agents_script_near_exe)
+                .ok_or_else(|| {
+                    Error::user(format!(
+                        "the {name} adapter was not found beside fscale. Install firescale from npm (it ships the adapters in `agents/`), or set {AGENTS_ENV} to the adapters' `cli.js`."
+                    ))
+                })?;
+            let node = env::var_os(NODE_ENV).map_or_else(|| PathBuf::from("node"), PathBuf::from);
+            Ok(Box::new(ProgramAdapter {
+                name: name.to_owned(),
+                program: node,
+                args: vec![script.to_string_lossy().into_owned(), name.to_owned()],
+            }))
+        }
         other => Err(Error::usage(format!(
-            "unknown agent \"{other}\". Pass --agent fake (the stand-in), or claude or codex once their adapters exist."
+            "unknown agent \"{other}\". Pass --agent claude, codex, or fake (the stand-in the tests use)."
         ))),
     }
 }

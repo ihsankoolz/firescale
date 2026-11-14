@@ -130,9 +130,15 @@ describe('npm packaging', () => {
       'dist/generators/workspace-package.js',
       'dist/generators/validate.js',
       'dist/generators/types.js',
+      // The agent adapters (M28).
+      'agents/cli.js',
+      'agents/claude.js',
+      'agents/codex.js',
+      'agents/protocol.js',
       'schemas/check-output.schema.json',
       'schemas/doctor-output.schema.json',
       'schemas/graph-output.schema.json',
+      'schemas/ledger-output.schema.json',
       'schemas/verify-output.schema.json',
     ]) {
       expect(await exists(path.join(extracted['firescale'] ?? '', file)), file).toBe(true);

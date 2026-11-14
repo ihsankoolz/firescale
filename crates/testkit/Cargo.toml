@@ -39,6 +39,13 @@ path = "src/ctrl_break.rs"
 name = "fscale-fake-agent"
 path = "src/fake_agent.rs"
 
+# A stand-in for an agent's own CLI (`claude`, `codex`), copied onto the
+# PATH under that name in the adapter tests (M28): logs its arguments and
+# standard input, prints a canned answer, and makes canned edits.
+[[bin]]
+name = "fscale-fake-cli"
+path = "src/fake_cli.rs"
+
 [dependencies]
 serde_json.workspace = true
 
