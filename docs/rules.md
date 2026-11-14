@@ -2,16 +2,16 @@
 
 The `core` pack is on by default. Every rule is report-only (`evaluated`) until you set it to `enforced` in your config. `fscale explain <rule>` prints the full description and how to fix a violation; ADR 0012 records exactly what each rule treats as a violation.
 
-| Rule                        | Checks                                                                      | Severity | `fscale fix` |
-| --------------------------- | --------------------------------------------------------------------------- | -------- | ------------ |
-| `core/no-committed-env`     | No `.env` files are tracked by git, except examples such as `.env.example`. | blocker  | yes          |
-| `core/no-secrets-in-source` | No well-known key or token formats in tracked files.                        | blocker  | no           |
-| `core/single-lockfile`      | Exactly one JavaScript lockfile, matching `packageManager`.                 | high     | no           |
-| `core/gitignore-basics`     | `.gitignore` exists and covers the detected languages.                      | medium   | yes          |
-| `core/ci-exists`            | A CI workflow exists and runs on pull requests.                             | medium   | yes¹         |
-| `core/env-example`          | Env vars read in code are listed in the nearest `.env.example`.             | medium   | yes          |
-| `core/scripts-present`      | `package.json` has `lint`, `test` and `build` scripts.                      | medium   | no           |
-| `core/readme-setup`         | The README shows how to install and how to run.                             | low      | yes¹         |
+| Rule                        | Checks                                                                                                                                                                         | Severity | `fscale fix` |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------------ |
+| `core/no-committed-env`     | No `.env` files are tracked by git, except examples such as `.env.example`.                                                                                                    | blocker  | yes          |
+| `core/no-secrets-in-source` | No well-known key or token formats in tracked files.                                                                                                                           | blocker  | no           |
+| `core/single-lockfile`      | Exactly one JavaScript lockfile, matching `packageManager`.                                                                                                                    | high     | no           |
+| `core/gitignore-basics`     | `.gitignore` exists and covers the detected languages and the build output of a project at the root (Maven, Gradle, CMake, .NET and the like; ADR 0051), read as git reads it. | medium   | yes          |
+| `core/ci-exists`            | A CI workflow exists and runs on pull requests.                                                                                                                                | medium   | yes¹         |
+| `core/env-example`          | Env vars read in code are listed in the nearest `.env.example`.                                                                                                                | medium   | yes          |
+| `core/scripts-present`      | `package.json` has `lint`, `test` and `build` scripts.                                                                                                                         | medium   | no           |
+| `core/readme-setup`         | The README shows how to install and how to run.                                                                                                                                | low      | yes¹         |
 
 ¹ Only creates a file that is absent: a starter `.github/workflows/ci.yml` when the repo has no CI config at all, and a skeleton `README.md` when the repo root has no README of any kind. The new file is staged with `git add`. A file that exists on disk is never overwritten or edited, so a workflow without a pull request trigger, or a README without install and run steps, is left for a person or an agent.
 

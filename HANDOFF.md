@@ -7,6 +7,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 Long run of 2026-11-14 (started 00:59 UTC): M25, M26, M27, M28, M29 and M30, one pull request each, merged on green on Linux, macOS and Windows. **Finished: M30 is the last; nothing of the run is in progress once its pull request is merged.** The version stays 0.4.0; no tag was pushed. What was built, what needs your decision and what to test by hand is at the top of DECISIONS.md ("Review of the long run").
 
 - **Merged:** M25 ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045), M26 ([#38](https://github.com/ihsankoolz/firescale/pull/38), ADR 0046), M27 ([#39](https://github.com/ihsankoolz/firescale/pull/39), ADR 0047), M28 ([#40](https://github.com/ihsankoolz/firescale/pull/40), ADR 0048), M29 ([#41](https://github.com/ihsankoolz/firescale/pull/41), ADR 0049); M30 ([#42](https://github.com/ihsankoolz/firescale/pull/42), ADR 0050) is the last pull request.
+- **After the run:** M31 (ADR 0051), ecosystems for Java, Kotlin, Android, Swift, Xcode, C, C++, .NET and Dart, asked for by the owner.
 - **Boxes left open on purpose:** M28's manual real-agent test; M29's `supabase start` and `supabase test db` (Docker). Each is listed with its steps in DECISIONS.md.
 - **Next in PLAN.md:** nothing after M30 is numbered; see PLAN.md "Later".
 - **Branch:** milestones are pushed to `claude/beautiful-bardeen-gpgxyw` (the session's branch); after each merge the next milestone starts from `main` on a new local branch (a force push is not allowed here).

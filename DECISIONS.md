@@ -2,6 +2,14 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## M31 — Ecosystems: Java, Kotlin, Android, Swift, Xcode, C, C++, .NET, Dart
+
+**Built** (ADR 0051, `docs/facts.md`): one table of ecosystems found by a marker file, read by facts, verify, doctor, setup, the step cache and the gitignore rule; Maven, Gradle, SwiftPM, Xcode, CMake, Meson, .NET, Dart/Flutter and Make added; gitignore lines read with git's matcher; the stack packs' shared helpers in one module.
+
+**Decided on your behalf** (ADR 0051): members of a root Maven, Gradle, CMake, Meson or .NET build are not separate projects; a Flutter app owns its platform folders; with Swift and CMake in one folder the sources decide; Xcode builds for a generic simulator with no signing, and iOS tests wait for a `verify.test` naming a simulator; C and C++ lint is never guessed.
+
+**Proof:** real `fscale verify` runs on Maven, Gradle, CMake, Meson and Make projects; five real repos read correctly after fixing what each showed.
+
 ## Review of the long run
 
 M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
@@ -62,6 +70,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M31) Swift, Xcode, .NET and Flutter commands have not run anywhere** (ADR 0051): their tools are not in the build environment. Try `fscale verify` in one repo of each; Xcode tests need `verify.test` with a simulator for iOS apps.
+- **(M31) `core/gitignore-basics` now asks for build output of a root project of the new kinds** (`target` for Maven, `.gradle` and `build` for Gradle, `build` for CMake, `bin` and `obj` for .NET, `.build` for Swift, `.dart_tool`), and reads gitignore lines as git does. Repos that relied on a name match may see a finding change.
 - **(M30) The Expo starter is the blank TypeScript template, not Expo Router, and has no images** (ADR 0050): app.json names no icon, adaptive icon or favicon, so store builds need them added. Say if you want the Router template (about 20 packages and 30 images) instead.
 - **(M30) The expo pack is not meant to be combined with the nextjs pack** (two React versions in one package.json). Nothing stops it; say if `init` should refuse the pair.
 - **(M29) `supabase test db` has not run on the starter** (ADR 0049): it needs `supabase start`, so Docker images, which could not be pulled in the build session. Run `npx supabase start && npx supabase test db` in a folder made by `fscale init --packs core,supabase`; the pgTAP test it adds has never run against a database.
