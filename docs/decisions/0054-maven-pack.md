@@ -35,12 +35,23 @@ From Maven Central's metadata, Maven's and JUnit's documentation, and **checked 
 - **Tests**: each rule's `tests.rs` (passing, failing, fixed, the fix run twice, CRLF, profiles, comments, a parent, a self-closing `<properties/>`), the pack's tests (an empty folder built by the fixes, a second run changes nothing, other stacks left alone), and `packages/cli/src/maven-pack.test.ts` (`init` with snapshots, `sync` changes nothing, the starter's facts with its lint command, `adopt --dry-run` on a set-up project and on one missing its encoding).
 - **Real repos**, shallow clones, read-only, the pack alone: apache/commons-lang (a parent), spring-projects/spring-petclinic (Spring Boot's parent), google/guava (an aggregator) and jhy/jsoup get no finding; square/okhttp, a Gradle repo, got a finding about the test fixture `maven-tests/pom.xml` in the first pass and gets none now (the go pack had the same flaw and is fixed with it).
 
+## After the review
+
+A fresh subagent tried the pack on 19 POM layouts (checking each result with `mvn -B validate` and the effective `project.build.sourceEncoding`) and on eight real projects (junit4, gson, jsoup, commons-cli, fastjson2, metrics, jackson-databind, maven-archetypes, all without a finding). It found, all fixed with tests:
+
+- **The `maven/properties` fix broke valid POMs.** It read lines, not elements: with `<properties>` and its content on one line, or a POM on one line, it wrote outside the block or after `</project>`; with no project `<dependencies>`, a plugin's `<dependencies>` was its anchor, so a `<properties>` block landed inside a `<plugin>`; and a plugin's `<configuration><properties>` was taken for the project's. **A small reader of the POM's element structure** (`maven/xml.rs`: paths and byte ranges, skipping comments, CDATA, processing instructions and the doctype, and returning nothing for a document it cannot follow) now finds `project/properties` and the project-level anchors exactly; the fix inserts at element boundaries, one step deeper than the parent with the file's own step (tabs, four spaces); a POM it cannot read, a self-closing `<properties/>` or a prefixed `pom:project` (which Maven rejects, run here) is left to a person. All 19 layouts now give a POM Maven accepts with UTF-8 sources, and a second run changes nothing.
+- **Values anywhere in the file counted**: an antrun `<target>`, a resources plugin's `<encoding>`, a profile's property, or flatten-maven-plugin's `<pomElements><parent>` setting hid a missing Java version, encoding or coordinates. They are read by path now: the project's own properties and coordinates, and the compiler plugin's own configuration (also in an execution's, as jsoup sets it).
+- **Groovy-DSL Gradle, Ant and Bazel Java repos were given a Maven starter**: `settings.gradle`, `build.xml` and Bazel's files are other stacks now (for every pack).
+- **A Kotlin, Scala or Groovy project was given a Java starter**: their sources are a project's code.
+- A non-ASCII POM on one line could make the rule panic; the reader works on element boundaries only.
+
 ## Not checked, and limits
 
 - Gradle projects: no pack (above).
 - Modules of a multi-module build are not checked one by one; an aggregator's root is checked for its coordinates and properties only.
 - The Java version is checked for presence, not against the JDKs the project's CI uses.
-- `maven/tests` reads Java files only: a project tested in Kotlin or Groovy under `src/test` gets a finding.
+- `maven/tests` and `maven/entry` read Java, Kotlin, Scala and Groovy sources under `src/main` and `src/test`; a custom `<sourceDirectory>` elsewhere is not read.
+- The POM reader is not a full XML parser: entities and a DTD's defaults are not expanded.
 - Windows and macOS: the starter was built on Linux only; the rules are text, and CI runs the tests on all three.
 
 ## Consequences

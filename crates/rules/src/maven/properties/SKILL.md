@@ -25,7 +25,7 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 ### DETERMINISTIC
 
-1. Run `fscale sync`. It adds the encoding line to the project's `<properties>`, or a `<properties>` block when there is none, in the file's indentation and line endings.
+1. Run `fscale sync`. It adds the encoding line to the project's `<properties>`, or a `<properties>` block when there is none, in the file's indentation and line endings. A POM it cannot read, a self-closing `<properties/>`, or a POM whose elements carry a namespace prefix is left to you (the finding then says "manual").
 
 ### REPORT
 
