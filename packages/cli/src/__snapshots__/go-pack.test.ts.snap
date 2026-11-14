@@ -1,0 +1,50 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > .gitignore 1`] = `
+"# Generated files and dependencies
+# Go
+/app
+*.exe
+*.test
+*.out
+go.work
+go.work.sum
+"
+`;
+
+exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > go.mod 1`] = `
+"module example.com/app
+
+go 1.26.0
+"
+`;
+
+exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > main.go 1`] = `
+"// Command app is the starting point of this module.
+package main
+
+import "fmt"
+
+// Greeting returns the message the program prints.
+func Greeting(name string) string {
+	return fmt.Sprintf("Hello, %s!", name)
+}
+
+func main() {
+	fmt.Println(Greeting("world"))
+}
+"
+`;
+
+exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > main_test.go 1`] = `
+"package main
+
+import "testing"
+
+func TestGreeting(t *testing.T) {
+	if got, want := Greeting("world"), "Hello, world!"; got != want {
+		t.Errorf("Greeting(%q) = %q, want %q", "world", got, want)
+	}
+}
+"
+`;
