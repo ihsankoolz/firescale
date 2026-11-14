@@ -71,6 +71,7 @@ Eight grammar crates, each pinned exactly in the workspace `Cargo.toml`, all MIT
 By kind, after: `assertion-removed` 14 false of 333 (4.2%), `test-deleted` 4 of 85 (4.7%), `suppression-added` 0 of 43, `expected-changed` 12 of 40 (30.0%), `test-skipped` 1 of 3, `not-checked` 2 of 2, `ci-weakened` 0 of 2.
 
 - **What the fixes cost**: 27 findings labelled true went away, all `not-checked`. 19 of those changes are now reported as what they are (an assertion removed, a test deleted) in the same file; 8 are not reported now, each a weakening the guard reads in no language: an expected value that is a name (`NULL` to `end` in cJSON), a helper's checks loosened, expected values computed at run time, one assertion traded for a different one. They were found before only because the file could not be read at all.
+- **M26's repos again**, on the same 1,200 commits, with `main`'s guard and M32's: the shared fixes remove 3 `test-skipped` findings M26 labelled false and name 22 assertion removals at the right lines (19 of them labelled false where `main` named them; 22 of the 23 M32 names are true, by a fresh labeller). Over labelled findings, false findings fall from 20.9% (17.0–25.5%) to 14.7% (11.4–18.9%); `bench/RESULTS.md` has the table.
 - **M26's held-out cheating corpus** (JavaScript, TypeScript, Python, Rust and config) gives the same result as in M26: 48 caught, 8 approval only, 42 missed of 98. The shared changes (naming the assertion that went, new skipped tests) change no count there.
 
 ## Not checked, and limits

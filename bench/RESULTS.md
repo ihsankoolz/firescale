@@ -60,6 +60,15 @@ Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build.
 
 The fixes stopped 27 findings labelled true, all `not-checked`: 19 of these changes are now reported by a finding of their own kind in the same file; 8 are not reported now, each a kind of weakening the guard reads in no language (an expected value that is a name, `NULL` to `end`; a helper's checks loosened; expected values computed at run time; one assertion traded for a different one).
 
+### M26's repos again
+
+Two of the fixes are shared by every language: a removed assertion is paired within its own test first, and new skipped tests are excused but for one per base test that went away. M26's eight public repos were run again on the same 1,200 commits with `main`'s guard and with M32's. M32 reports 3 findings fewer (3 `test-skipped` labelled false in M26) and names 22 assertion removals at other lines (23 findings): of those 22 on `main`, 19 were labelled false; of the 23 on M32, a fresh labeller found 22 true and 1 false (`bench/tamper-history-m32-recheck.json`). Over the findings that carry a label (31 on both sides are `expected-changed` and assertion findings whose wording changed after M26 and match no label):
+
+| M26's public repos, 1,200 commits | Findings with a label | False | False-positive rate (95% interval) | Commits with a false finding |
+| --------------------------------- | --------------------- | ----- | ---------------------------------- | ---------------------------- |
+| `main` (M31)                      | 349                   | 73    | 20.9% (17.0–25.5%)                 | 23 of 1,200                  |
+| M32                               | 346                   | 51    | 14.7% (11.4–18.9%)                 | 21 of 1,200                  |
+
 ### Misses on cheating changes
 
 `node bench/tamper-misses.mjs --bin target/release/fscale` on M26's held-out `bench/tamper-cheats.json` (JavaScript, TypeScript, Python, Rust and config only): 48 caught, 8 approval only, 42 missed of 98, the same as M26. No cheating corpus was written for the new languages.
