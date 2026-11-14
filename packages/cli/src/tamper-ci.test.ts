@@ -202,6 +202,55 @@ describe('--pr-base: the base GitHub gives, not a ref in the clone', () => {
     );
   });
 
+  it('judges what merging would change on the base tip, with the base tip policy, however old the branch point', async () => {
+    const wf = (job: string) =>
+      `on:\n  pull_request:\njobs:\n  build:\n    runs-on: ubuntu-latest\n${job}    steps:\n      - run: npm run build\n      - run: npm test\n`;
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': config('evaluated'),
+        '.github/workflows/ci.yml': `on:\n  pull_request:\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run build\n`,
+      },
+      track: 'no-git',
+    });
+    const root = repo.root;
+    await git(root, 'init', '--quiet', '--initial-branch=main');
+    await commitAll(root, 'old base');
+    const old = await git(root, 'rev-parse', 'HEAD');
+    // The base branch later adds tests to the job and enforces the guard.
+    await writeFile(path.join(root, 'firescale.config.json'), config('enforced'));
+    await writeFile(path.join(root, '.github', 'workflows', 'ci.yml'), wf(''));
+    await commitAll(root, 'tests and enforced');
+    const tip = await git(root, 'rev-parse', 'HEAD');
+    // The pull request branches from the old commit and makes the job
+    // unable to fail: on its own diff, only a build step is affected.
+    await git(root, 'checkout', '--quiet', '-b', 'change', old);
+    await writeFile(
+      path.join(root, '.github', 'workflows', 'ci.yml'),
+      `on:\n  pull_request:\njobs:\n  build:\n    runs-on: ubuntu-latest\n    continue-on-error: true\n    steps:\n      - run: npm run build\n`,
+    );
+    await commitAll(root, 'continue on error');
+    const head = await git(root, 'rev-parse', 'HEAD');
+    await git(root, 'checkout', '--quiet', 'main');
+    const event = path.join(root, '..', `event-old-${path.basename(root)}.json`);
+    await writeFile(
+      event,
+      JSON.stringify({ pull_request: { base: { sha: old }, head: { sha: head } } }),
+    );
+    const result = await runCli(['tamper', '--json', '--pr-base'], root, {
+      GITHUB_ACTIONS: 'true',
+      GITHUB_EVENT_NAME: 'pull_request_target',
+      GITHUB_EVENT_PATH: event,
+      GITHUB_SHA: tip,
+    });
+    expect(result.code, result.stderr).toBe(EXIT_VIOLATIONS);
+    const report = parse(result.stdout);
+    expect(report.base).toBe(tip);
+    expect(report.policy).toBe('enforced');
+    expect(report.findings.map((f) => f.what)).toContain(
+      'npm test (on pull requests; cannot fail: continue-on-error: true)',
+    );
+  });
+
   it('fails instead of judging nothing when it cannot find the commits', async () => {
     const { root, env } = await pullRequestRun();
     const outside = await runCli(['tamper', '--pr-base'], root, { GITHUB_ACTIONS: undefined });

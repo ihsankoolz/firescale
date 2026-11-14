@@ -196,6 +196,7 @@ mod trigger_shapes {
 }
 
 const STARTER: &str = ".github/workflows/ci.yml";
+const TAMPER: &str = ".github/workflows/tamper-guard.yml";
 
 const HEAD: &str = "# Created by firescale (core/ci-exists). This file belongs to your team:\n# edit it freely. firescale will not rewrite it.\nname: CI\n\non:\n  pull_request:\n  push:\n    branches: [main, master]\n\npermissions:\n  contents: read\n\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0\n        with:\n          node-version: 24\n";
 const TAIL: &str =
@@ -348,9 +349,11 @@ mod fixed_repo {
     fn an_empty_repo_gets_the_workflow_and_it_is_tracked() {
         let f = Fixture::new(&[], Track::All).unwrap();
         let result = fix(&f);
-        assert_eq!(result.changed_files, [STARTER]);
-        assert_eq!(result.notes.len(), 1);
+        assert_eq!(result.changed_files, [STARTER, TAMPER]);
+        assert_eq!(result.notes.len(), 2);
         assert!(result.notes[0].starts_with("Review .github/workflows/ci.yml"));
+        assert!(result.notes[1].starts_with("Review .github/workflows/tamper-guard.yml"));
+        assert_eq!(f.tracked().unwrap(), [STARTER, TAMPER]);
         let text = f.read(STARTER).unwrap();
         assert!(super::super::workflow::firescale_wrote(&text));
         assert!(text.contains("      - run: npx firescale verify --affected --pr-base --jobs 2 --shared-cache .firescale/shared\n"));
@@ -359,7 +362,6 @@ mod fixed_repo {
         ));
         assert!(!text.contains("setup-python"));
         assert!(!text.contains("npm ci"));
-        assert_eq!(f.tracked().unwrap(), [STARTER]);
         assert!(check(&f).is_empty());
     }
 
@@ -386,20 +388,21 @@ mod fixed_repo {
         // The setup actions save their own caches in a post step: off here.
         assert!(job.contains("package-manager-cache: false"));
         assert!(!job.contains("cache: npm") && !job.contains("cache: pip"));
-        // pull_request_target starts only the tamper guard, which holds no
-        // cache step and runs nothing from the pull request (ADR 0045).
-        let guard = &text[text.find("  tamper-guard:\n").unwrap()..];
-        let guard = &guard[..guard.find("\n# firescale-workflow").unwrap_or(guard.len())];
+        // The CI workflow never uses pull_request_target; the tamper guard has
+        // a file of its own, started by nothing else (ADR 0045).
+        assert!(!text.contains("pull_request_target"));
+        let guard = f.read(super::super::workflow::TAMPER_PATH).unwrap();
+        assert!(super::super::workflow::firescale_wrote(&guard));
+        assert!(guard.contains("on:\n  pull_request_target:\n\npermissions:\n  contents: read\n"));
         assert_eq!(
-            text.matches("pull_request_target").count(),
-            3,
-            "on:, its comment and the job's if"
+            guard.matches("pull_request_target").count(),
+            2,
+            "a comment and on:"
         );
-        assert!(guard.contains("    if: github.event_name == 'pull_request_target'\n"));
-        assert!(!job.contains("pull_request_target"));
-        assert!(guard.contains("    cache-mode: none\n    permissions:\n      contents: read\n"));
+        assert!(guard.contains("    cache-mode: none\n"));
         assert!(!guard.contains("actions/cache"));
         assert!(!guard.contains("ref:"));
+        assert!(!guard.contains("  if:"));
         let runs: Vec<&str> = guard
             .lines()
             .filter_map(|line| line.trim().strip_prefix("- run: "))
@@ -428,8 +431,8 @@ mod fixed_repo {
         let f = Fixture::new(&[], Track::All).unwrap();
         fix(&f);
         let text = f.read(STARTER).unwrap();
-        assert_eq!(text.matches("          fetch-depth: 0\n").count(), 3);
-        assert!(text.contains("  cancel-in-progress: ${{ github.event_name != 'push' }}\n"));
+        assert_eq!(text.matches("          fetch-depth: 0\n").count(), 2);
+        assert!(text.contains("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"));
     }
 
     #[test]
@@ -442,7 +445,7 @@ mod fixed_repo {
             Track::All,
         )
         .unwrap();
-        assert_eq!(fix(&f).notes.len(), 1);
+        assert_eq!(fix(&f).notes.len(), 2);
         let text = f.read(STARTER).unwrap();
         assert_eq!(text.matches("      - run: npm ci\n").count(), 2);
         assert!(text.contains("run: echo \"dir=$(npm config get cache)\" >> \"$GITHUB_OUTPUT\""));
@@ -520,8 +523,8 @@ mod fixed_repo {
             )
             .unwrap();
             let result = fix(&f);
-            assert_eq!(result.notes.len(), 2, "{manager}");
-            assert!(result.notes[1].contains("no install step"), "{manager}");
+            assert_eq!(result.notes.len(), 3, "{manager}");
+            assert!(result.notes[2].contains("no install step"), "{manager}");
             assert_eq!(
                 f.read(STARTER)
                     .unwrap()
@@ -545,7 +548,7 @@ mod fixed_repo {
     fn fix_twice_changes_nothing_the_second_time() {
         let f = Fixture::new(&[("package.json", "{\"name\":\"demo\"}\n")], Track::All).unwrap();
         let first = fix_rule_with(&CiExists, f.root(), &Options::new(), false).unwrap();
-        assert_eq!(first.changes.len(), 2);
+        assert_eq!(first.changes.len(), 4);
         assert!(
             matches!(&first.changes[0], Change::Write { file, before: None, .. } if file == STARTER)
         );
@@ -566,7 +569,11 @@ mod fixed_repo {
     fn dry_run_reports_the_changes_and_touches_nothing() {
         let f = Fixture::new(&[("package.json", "{\"name\":\"demo\"}\n")], Track::All).unwrap();
         let outcome = fix_rule_with(&CiExists, f.root(), &Options::new(), true).unwrap();
-        assert_eq!(outcome.changes.len(), 2);
+        assert_eq!(
+            outcome.changes.len(),
+            4,
+            "two files, each created and staged"
+        );
         assert_eq!(files_on_disk(&f), ["package.json"]);
         assert_eq!(f.tracked().unwrap(), ["package.json"]);
     }
@@ -576,8 +583,8 @@ mod fixed_repo {
         let f = Fixture::new(&[("package.json", "{\"name\":\"demo\"}\n")], Track::NoGit).unwrap();
         assert_eq!(check(&f)[0].fixable, Fixable::Deterministic);
         let outcome = fix_rule_with(&CiExists, f.root(), &Options::new(), false).unwrap();
-        assert_eq!(outcome.result.changed_files, [STARTER]);
-        assert_eq!(outcome.changes.len(), 1, "nothing to stage outside git");
+        assert_eq!(outcome.result.changed_files, [STARTER, TAMPER]);
+        assert_eq!(outcome.changes.len(), 2, "nothing to stage outside git");
         assert!(check(&f).is_empty());
         let again = fix_rule_with(&CiExists, f.root(), &Options::new(), false).unwrap();
         assert!(again.changes.is_empty());
@@ -683,7 +690,7 @@ mod sync_offers_the_newer_workflow {
             assert_eq!(d[0].severity, Some(Severity::Low));
             assert!(d[0].message.contains("`fscale sync` replaces it"));
             let result = fix(&f);
-            assert_eq!(result.changed_files, [STARTER]);
+            assert_eq!(result.changed_files, [STARTER, TAMPER]);
             let text = f.read(STARTER).unwrap();
             assert!(text.contains("cache-mode: read"));
             assert!(super::super::workflow::firescale_wrote(&text));
@@ -824,6 +831,6 @@ mod the_push_trigger {
         assert!(f
             .read(STARTER)
             .unwrap()
-            .contains("  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}\n"));
+            .contains("  group: ci-${{ github.event.pull_request.number || github.run_id }}\n"));
     }
 }

@@ -1,7 +1,7 @@
 //! The CI workflow that `core/ci-exists` writes (M22, ADR 0041), and how to
 //! tell a workflow firescale wrote, untouched since, from one a person wrote.
 //!
-//! Three jobs:
+//! Two jobs:
 //!
 //! - `pull-request` runs `fscale verify --affected --pr-base`: the base is
 //!   the one GitHub's event names (ADR 0045), not a ref in the clone. It can restore caches and never save them: its token
@@ -11,14 +11,16 @@
 //! - `default-branch` runs a full `fscale verify` on a push, and saves the
 //!   shared step records and the package managers' download caches, from
 //!   the default branch only.
-//! - `tamper-guard` runs on `pull_request_target`, so GitHub takes it from
-//!   the base branch's copy of this file: a pull request can neither change
-//!   nor remove it. It runs none of the pull request's code: it checks out
-//!   the base branch, fetches the pull request's commits as git objects, and
-//!   runs `fscale tamper --pr-base` from npm at the version that wrote this
-//!   file (ADR 0045, which changes ADR 0041's "never `pull_request_target`"
-//!   for this one job).
 //!
+//! And a second file, `.github/workflows/tamper-guard.yml` ([`TAMPER_PATH`]),
+//! started only by `pull_request_target`, so GitHub takes it from the
+//! default branch's copy: a pull request can neither change nor remove it,
+//! and no skipped job of the same name exists in another run (a skipped job
+//! counts as a passed required check). It runs none of the pull request's
+//! code: it checks out the base branch, fetches the pull request's commits
+//! as git objects, and runs `fscale tamper --pr-base` from npm at the version
+//! that wrote the file (ADR 0045, which changes ADR 0041's "never
+//! `pull_request_target`" for this one workflow).
 //! Both fetch the whole history, so the merge base is in the clone. A new
 //! push to a pull request cancels its run in progress; a push to a branch
 //! never does.
@@ -383,24 +385,45 @@ fn job(lines: &mut Lines, setup: &Setup, kind: Job) {
     }
 }
 
-/// The tamper guard as the base branch defines it (ADR 0045).
-fn tamper_job(lines: &mut Lines) {
-    for comment in [
-        "# The tamper guard. On pull_request_target GitHub runs this job as the",
-        "# base branch's copy of this file has it, so a pull request cannot edit",
-        "# or remove it. It runs no code from the pull request: it checks out the",
-        "# base branch, fetches the pull request's commits as git objects, and",
-        "# compares them with the base GitHub names. Keep it that way: never check",
-        "# out the pull request's files here, install them or run them.",
+/// Where the tamper guard's own workflow is written.
+pub(crate) const TAMPER_PATH: &str = ".github/workflows/tamper-guard.yml";
+
+/// The tamper guard's workflow (ADR 0045). LF line endings; the last line
+/// is its digest, as for the CI workflow.
+pub(crate) fn tamper_workflow() -> String {
+    let mut lines = Lines(Vec::new());
+    for line in [
+        "# Created by firescale (core/ci-exists). `fscale sync` replaces this file",
+        "# with a newer one only while it is exactly as firescale wrote it (the",
+        "# digest on the last line says so). Once you edit it, it is yours.",
+        "#",
+        "# The tamper guard. On pull_request_target GitHub runs this workflow as",
+        "# the default branch has it, so a pull request cannot edit or remove it.",
+        "# It runs no code from the pull request: it checks out the base branch,",
+        "# fetches the pull request's commits as git objects, and compares what",
+        "# merging them would change with the base GitHub names. Keep it that way:",
+        "# never check out the pull request's files here, install them or run them.",
+        "# To make it block, require the tamper-guard check in branch protection",
+        "# and set verify.tamper to \"enforced\" on the default branch.",
+        "name: Tamper guard",
+        "",
+        "on:",
+        "  pull_request_target:",
+        "",
+        "permissions:",
+        "  contents: read",
+        "",
+        "concurrency:",
+        "  group: tamper-guard-${{ github.event.pull_request.number }}",
+        "  cancel-in-progress: true",
+        "",
+        "jobs:",
     ] {
-        lines.push(2, comment);
+        lines.push(0, line);
     }
     lines.push(2, "tamper-guard:");
-    lines.push(4, "if: github.event_name == 'pull_request_target'");
     lines.push(4, "runs-on: ubuntu-latest");
     lines.push(4, "cache-mode: none");
-    lines.push(4, "permissions:");
-    lines.push(6, "contents: read");
     lines.push(4, "steps:");
     lines.push(6, &format!("- uses: {CHECKOUT}"));
     lines.push(8, "with:");
@@ -419,6 +442,11 @@ fn tamper_job(lines: &mut Lines) {
             firescale_core::version()
         ),
     );
+    let mut text = lines.0.join("\n");
+    text.push('\n');
+    let digest = digest_of(&text);
+    text.push_str(&format!("{DIGEST_PREFIX}{digest}\n"));
+    text
 }
 
 /// The workflow for `setup`. LF line endings; the last line is its digest.
@@ -437,8 +465,6 @@ pub(crate) fn workflow(setup: &Setup) -> String {
         "",
         "on:",
         "  pull_request:",
-        "  # Only for the tamper-guard job, which runs no code of the pull request.",
-        "  pull_request_target:",
         "  push:",
         &format!("    branches: [{branches}]"),
         "",
@@ -449,8 +475,8 @@ pub(crate) fn workflow(setup: &Setup) -> String {
         "# to a branch has a group of its own, so it is never cancelled: it",
         "# keeps the shared cache up to date.",
         "concurrency:",
-        "  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}",
-        "  cancel-in-progress: ${{ github.event_name != 'push' }}",
+        "  group: ci-${{ github.event.pull_request.number || github.run_id }}",
+        "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
         "",
         "jobs:",
     ] {
@@ -459,8 +485,6 @@ pub(crate) fn workflow(setup: &Setup) -> String {
     job(&mut lines, setup, Job::PullRequest);
     lines.push(0, "");
     job(&mut lines, setup, Job::DefaultBranch);
-    lines.push(0, "");
-    tamper_job(&mut lines);
     let mut text = lines.0.join("\n");
     text.push('\n');
     let digest = digest_of(&text);

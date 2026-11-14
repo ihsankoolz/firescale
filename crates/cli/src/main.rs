@@ -1263,14 +1263,18 @@ fn tamper_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> 
         ));
     }
     let (base, head) = if args.pr_base {
+        // The base branch as it is now against what merging the pull
+        // request into it gives: the policy and the comparison both come
+        // from the base branch's tip, not from the older commit the change
+        // branched from, which its author chose (ADR 0045).
         let pr = tamper::github::pull_request(root, &|name| env::var(name).ok())?;
-        let commit = tamper::github::merge_base(root, &pr.head, &pr.base_tip)?;
+        let merged = tamper::github::merged_tree(root, &pr.base_tip, &pr.head)?;
         (
             firescale_core::blame::BaseCommit {
                 reference: "the pull request's base branch (from GitHub's event)".to_owned(),
-                commit,
+                commit: pr.base_tip,
             },
-            tamper::Head::Commit(pr.head),
+            tamper::Head::Commit(merged),
         )
     } else if let Some(head) = &args.head {
         let resolved = firescale_core::git::run_git(

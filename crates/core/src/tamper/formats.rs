@@ -695,15 +695,17 @@ mod yaml {
             if rest.starts_with('[') || rest.starts_with('{') {
                 // A flow collection, maybe over several lines.
                 let mut text = rest.to_owned();
-                while !balanced(&text) {
+                let mut depth = depth_of(&text, 0);
+                while depth > 0 {
                     let Some(next) = self.lines.get(self.at) else {
                         return Err(number);
                     };
                     text.push(' ');
                     text.push_str(next.text);
+                    depth = depth_of(next.text, depth);
                     self.at += 1;
                 }
-                return flow(&text, number, path, &mut self.entries);
+                return flow(&text, number, path, &mut self.entries, 0);
             }
             if rest.starts_with('"') || rest.starts_with('\'') {
                 let quote = rest.chars().next().unwrap_or('"');
@@ -761,8 +763,9 @@ mod yaml {
         false
     }
 
-    fn balanced(text: &str) -> bool {
-        let mut depth = 0i32;
+    /// The bracket depth after `text`, starting from `depth`; quotes are
+    /// taken to close on the line they open (YAML's flow scalars do).
+    fn depth_of(text: &str, mut depth: i32) -> i32 {
         let mut quote: Option<char> = None;
         for c in text.chars() {
             match quote {
@@ -776,7 +779,7 @@ mod yaml {
                 },
             }
         }
-        depth <= 0
+        depth
     }
 
     pub(super) fn unquote(text: &str) -> String {
@@ -863,12 +866,16 @@ mod yaml {
         line: usize,
         path: &mut Vec<String>,
         entries: &mut Vec<Entry>,
+        depth: usize,
     ) -> Result<(), usize> {
+        if depth > 100 {
+            return Err(line);
+        }
         let text = text.trim();
         if let Some(inner) = text.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
             for (index, item) in split_items(inner).into_iter().enumerate() {
                 path.push(format!("[{index}]"));
-                flow(item, line, path, entries)?;
+                flow(item, line, path, entries, depth + 1)?;
                 path.pop();
             }
             return Ok(());
@@ -887,7 +894,7 @@ mod yaml {
                         line,
                     });
                 } else {
-                    flow(value, line, path, entries)?;
+                    flow(value, line, path, entries, depth + 1)?;
                 }
                 path.pop();
             }
@@ -947,11 +954,15 @@ mod toml {
             let eq = find_eq(line).ok_or(number)?;
             let keys = dotted_keys(&line[..eq]).ok_or(number)?;
             let mut value = line[eq + 1..].trim().to_owned();
-            // A multi-line string or array goes on until it closes.
+            // A multi-line string or array goes on until it closes. The
+            // bracket depth is kept as lines are added, so a long array is
+            // read in linear time.
+            let mut scan = Scan::default();
+            scan.feed(&value);
             loop {
                 let open = (value.starts_with("\"\"\"") && !closes(&value, "\"\"\""))
                     || (value.starts_with("'''") && !closes(&value, "'''"))
-                    || ((value.starts_with('[') || value.starts_with('{')) && !balanced(&value));
+                    || ((value.starts_with('[') || value.starts_with('{')) && scan.depth > 0);
                 if !open {
                     break;
                 }
@@ -960,11 +971,13 @@ mod toml {
                 };
                 value.push('\n');
                 value.push_str(next);
+                scan.feed("\n");
+                scan.feed(next);
                 index += 1;
             }
             let mut path = table.clone();
             path.extend(keys);
-            value_entries(&value, number, &mut path, &mut entries)?;
+            value_entries(&value, number, &mut path, &mut entries, 0)?;
         }
         Ok(entries)
     }
@@ -1009,30 +1022,36 @@ mod toml {
         (!keys.iter().any(String::is_empty)).then_some(keys)
     }
 
-    fn balanced(text: &str) -> bool {
-        let mut depth = 0i32;
-        let mut quote: Option<char> = None;
-        let mut comment = false;
-        for c in text.chars() {
-            if comment {
-                if c == '\n' {
-                    comment = false;
+    /// Bracket depth outside strings and comments, fed piece by piece.
+    #[derive(Default)]
+    struct Scan {
+        depth: i64,
+        quote: Option<char>,
+        comment: bool,
+    }
+
+    impl Scan {
+        fn feed(&mut self, text: &str) {
+            for c in text.chars() {
+                if self.comment {
+                    if c == '\n' {
+                        self.comment = false;
+                    }
+                    continue;
                 }
-                continue;
-            }
-            match quote {
-                Some(q) if c == q => quote = None,
-                Some(_) => {}
-                None => match c {
-                    '"' | '\'' => quote = Some(c),
-                    '#' => comment = true,
-                    '[' | '{' => depth += 1,
-                    ']' | '}' => depth -= 1,
-                    _ => {}
-                },
+                match self.quote {
+                    Some(q) if c == q => self.quote = None,
+                    Some(_) => {}
+                    None => match c {
+                        '"' | '\'' => self.quote = Some(c),
+                        '#' => self.comment = true,
+                        '[' | '{' => self.depth += 1,
+                        ']' | '}' => self.depth -= 1,
+                        _ => {}
+                    },
+                }
             }
         }
-        depth <= 0
     }
 
     /// Splits the inside of an array or inline table at top-level commas,
@@ -1143,7 +1162,11 @@ mod toml {
         line: usize,
         path: &mut Vec<String>,
         entries: &mut Vec<Entry>,
+        depth: usize,
     ) -> Result<(), usize> {
+        if depth > 100 {
+            return Err(line);
+        }
         let value = value.trim();
         if let Some(inner) = value.strip_prefix("\"\"\"") {
             let inner = inner.rsplit_once("\"\"\"").map_or(inner, |(body, _)| body);
@@ -1173,7 +1196,7 @@ mod toml {
         if let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
             for (index, (offset, item)) in split_items(inner).into_iter().enumerate() {
                 path.push(format!("[{index}]"));
-                value_entries(&item, line + offset, path, entries)?;
+                value_entries(&item, line + offset, path, entries, depth + 1)?;
                 path.pop();
             }
             return Ok(());
@@ -1184,7 +1207,7 @@ mod toml {
                 let keys = dotted_keys(&item[..eq]).ok_or(line)?;
                 let depth = path.len();
                 path.extend(keys);
-                value_entries(&item[eq + 1..], line + offset, path, entries)?;
+                value_entries(&item[eq + 1..], line + offset, path, entries, depth + 1)?;
                 path.truncate(depth);
             }
             return Ok(());
@@ -1513,6 +1536,27 @@ mod tests {
         ));
         assert!(has(&entries, "jobs.test.steps.[2].run", "cargo test", 19));
         assert!(has(&entries, "jobs.test.continue-on-error", "false", 9));
+    }
+
+    #[test]
+    fn deep_or_long_input_is_refused_or_read_in_linear_time() {
+        let deep = format!("select = {}{}\n", "[".repeat(5000), "]".repeat(5000));
+        assert!(read(Format::Toml, &deep).is_err());
+        let deep_yaml = format!("on: {}{}\n", "[".repeat(5000), "]".repeat(5000));
+        assert!(read(Format::Yaml, &deep_yaml).is_err());
+        let long = format!("x = [\n{}]\n", "  \"a\",\n".repeat(20_000));
+        let started = std::time::Instant::now();
+        assert_eq!(read(Format::Toml, &long).expect("readable").len(), 20_000);
+        let long_yaml = format!("x: [\n{}  ]\n", "  a,\n".repeat(20_000));
+        assert_eq!(
+            read(Format::Yaml, &long_yaml).expect("readable").len(),
+            20_000
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

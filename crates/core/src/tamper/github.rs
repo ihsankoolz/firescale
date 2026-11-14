@@ -149,3 +149,33 @@ pub fn merge_base(root: &Path, a: &str, b: &str) -> Result<String> {
     }
     Ok(line.to_owned())
 }
+
+/// The tree a merge of `head` into `base_tip` would give, written from git
+/// objects only (`git merge-tree --write-tree`, git 2.38 or later): what the
+/// pull request would change on the base branch as it is now, whatever
+/// older commit it branched from. A merge with conflicts still gives a tree,
+/// with conflict markers in the files that conflict.
+///
+/// # Errors
+///
+/// When git cannot write the merge (too old a git, a commit missing).
+pub fn merged_tree(root: &Path, base_tip: &str, head: &str) -> Result<String> {
+    let out = run_git(
+        root,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--no-messages",
+            base_tip,
+            head,
+        ],
+    )?;
+    let tree = out.stdout.lines().next().unwrap_or("").trim().to_owned();
+    if (out.code == 0 || out.code == 1) && full_id(&tree) {
+        return Ok(tree);
+    }
+    Err(Error::user(format!(
+        "git could not merge {head} into {base_tip} to judge the pull request ({}). firescale needs git 2.38 or later here.",
+        out.stderr.trim()
+    )))
+}

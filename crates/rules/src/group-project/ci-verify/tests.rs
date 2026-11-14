@@ -6,6 +6,7 @@ use firescale_core::testing::{Fixture, Track};
 
 use super::{verifies_pull_requests, CiVerify, ID};
 use crate::core::ci_exists::{CiExists, STARTER};
+const TAMPER: &str = ".github/workflows/tamper-guard.yml";
 
 fn check(fixture: &Fixture) -> Vec<Diagnostic> {
     fixture.check(&CiVerify, &Options::new()).unwrap()
@@ -122,7 +123,7 @@ mod fixed_repo {
     fn the_fix_creates_the_starter_and_the_check_passes_then_nothing_changes() {
         let f = Fixture::new(&[("README.md", "x\n")], Track::All).unwrap();
         let result = f.fix(&CiVerify, &Options::new()).unwrap();
-        assert_eq!(result.changed_files, [STARTER]);
+        assert_eq!(result.changed_files, [STARTER, TAMPER]);
         assert!(check(&f).is_empty());
         let before = f.read(STARTER);
         assert!(f
@@ -138,7 +139,7 @@ mod fixed_repo {
         let f = Fixture::new(&[("README.md", "x\n")], Track::All).unwrap();
         assert_eq!(
             f.fix(&CiExists, &Options::new()).unwrap().changed_files,
-            [STARTER]
+            [STARTER, TAMPER]
         );
         assert!(check(&f).is_empty());
         assert!(f
