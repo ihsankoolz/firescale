@@ -217,21 +217,23 @@ pub fn has_literal(shape: &str) -> bool {
 }
 
 /// Pairs a file's assertions that are gone with the ones that are new and
-/// differ only in their literals: (index in `gone`, index in `new`).
+/// differ only in their literals, within the same test (the first of each
+/// pair, an id; assertions outside a test have the id `""`): (index in
+/// `gone`, index in `new`).
 #[must_use]
-pub fn pairs(gone: &[&str], new: &[&str]) -> Vec<(usize, usize)> {
-    let mut free: BTreeMap<String, Vec<usize>> = BTreeMap::new();
-    for (index, shape) in new.iter().enumerate() {
+pub fn pairs(gone: &[(&str, &str)], new: &[(&str, &str)]) -> Vec<(usize, usize)> {
+    let mut free: BTreeMap<(&str, String), Vec<usize>> = BTreeMap::new();
+    for (index, (test, shape)) in new.iter().enumerate() {
         if has_literal(shape) {
-            free.entry(skeleton(shape)).or_default().push(index);
+            free.entry((test, skeleton(shape))).or_default().push(index);
         }
     }
     let mut out = Vec::new();
-    for (index, shape) in gone.iter().enumerate() {
+    for (index, (test, shape)) in gone.iter().enumerate() {
         if !has_literal(shape) {
             continue;
         }
-        if let Some(list) = free.get_mut(&skeleton(shape)) {
+        if let Some(list) = free.get_mut(&(*test, skeleton(shape))) {
             if !list.is_empty() {
                 out.push((index, list.remove(0)));
             }
@@ -377,14 +379,38 @@ mod tests {
             skeleton("expect(x).toMatchInlineSnapshot(`\"30\"`)"),
             "expect(x).toMatchInlineSnapshot(_)"
         );
-        let gone = ["expect(total(cart)).toBe(30)", "expect(name).toBe(\"a\")"];
-        let new = ["expect(name).toBe(\"b\")", "expect(total(cart)).toBe(31)"];
+        let gone = [
+            ("t", "expect(total(cart)).toBe(30)"),
+            ("t", "expect(name).toBe(\"a\")"),
+        ];
+        let new = [
+            ("t", "expect(name).toBe(\"b\")"),
+            ("t", "expect(total(cart)).toBe(31)"),
+        ];
         assert_eq!(pairs(&gone, &new), [(0, 1), (1, 0)]);
         // A different matcher, or a different subject, is not a value change.
-        assert!(pairs(&["expect(x).toBe(3)"], &["expect(x).toBeDefined()"]).is_empty());
-        assert!(pairs(&["expect(f(1)).toBe(3)"], &["expect(g(1)).toBe(3)"]).is_empty());
+        assert!(pairs(
+            &[("t", "expect(x).toBe(3)")],
+            &[("t", "expect(x).toBeDefined()")]
+        )
+        .is_empty());
+        assert!(pairs(
+            &[("t", "expect(f(1)).toBe(3)")],
+            &[("t", "expect(g(1)).toBe(3)")]
+        )
+        .is_empty());
         // Nothing to change: no literal.
-        assert!(pairs(&["expect(a).toEqual(b)"], &["expect(a).toEqual(b)"]).is_empty());
+        assert!(pairs(
+            &[("t", "expect(a).toEqual(b)")],
+            &[("t", "expect(a).toEqual(b)")]
+        )
+        .is_empty());
+        // An assertion of one test is never paired with one of another test.
+        assert!(pairs(
+            &[("old test", "expect(x).toBe(3)")],
+            &[("new test", "expect(x).toBe(4)")]
+        )
+        .is_empty());
     }
 
     #[test]

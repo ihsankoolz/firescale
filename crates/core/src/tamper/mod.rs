@@ -784,8 +784,16 @@ pub fn guard_at(
         .iter()
         .filter(|file| !allows(&file.path, Kind::SuppressionAdded))
     {
+        // In a test file `@ts-expect-error` asserts that a type error
+        // happens (a type test fails when the error goes away): it is a
+        // check, not a suppression (ADR 0046, found on real history).
+        let type_test = is_test_path(&file.path) || policy.names_test(&file.path);
+        let counted = |found: &Suppression| !(type_test && found.text.contains("@ts-expect-error"));
         if let Some(text) = &file.base {
-            for found in suppressions(text, file.language) {
+            for found in suppressions(text, file.language)
+                .into_iter()
+                .filter(|found| counted(found))
+            {
                 *base_keys.entry(found.key.clone()).or_default() += 1;
                 *base_texts
                     .entry((file.path.clone(), found.key, found.text))
@@ -794,7 +802,10 @@ pub fn guard_at(
             }
         }
         if let Ok(Some(text)) = &file.head {
-            for found in suppressions(text, file.language) {
+            for found in suppressions(text, file.language)
+                .into_iter()
+                .filter(|found| counted(found))
+            {
                 report.counts.head_suppressions += 1;
                 head_suppressions.push((file.path.clone(), found));
             }
@@ -1135,10 +1146,32 @@ pub fn guard_at(
     }
     // More skipped runs: name the tests that skip more runs than on the
     // base, up to the shortfall.
-    if counts.head_skipped > counts.base_skipped {
-        let mut shortfall = counts.head_skipped - counts.base_skipped;
+    // New tests that are skipped or run only sometimes (a new `#[cfg(unix)]`
+    // test, a test added inside an existing `describe.runIf`) take nothing
+    // away while the change adds at least as many tests: they are left out
+    // of the shortfall. A test renamed and skipped keeps the count of tests
+    // the same, so it is still found (ADR 0046, found on real history).
+    let had_ids: BTreeSet<&str> = base_ids.iter().map(|(id, _, _)| id.as_str()).collect();
+    let new_skipped: usize = head_skips
+        .iter()
+        .filter(|skip| !had_ids.contains(skip.test.id.as_str()) && !skip.test.marker)
+        .map(|skip| skip.weight)
+        .sum();
+    let added_tests = counts.head_tests.saturating_sub(counts.base_tests);
+    let excused_skips = new_skipped.min(added_tests);
+    if counts.head_skipped > counts.base_skipped + excused_skips {
+        let mut shortfall = counts.head_skipped - counts.base_skipped - excused_skips;
         let mut left = base_skipped_ids;
-        for skip in &head_skips {
+        // Tests the base had first: those are the ones made to not run.
+        let ordered = head_skips
+            .iter()
+            .filter(|skip| had_ids.contains(skip.test.id.as_str()))
+            .chain(
+                head_skips
+                    .iter()
+                    .filter(|skip| !had_ids.contains(skip.test.id.as_str())),
+            );
+        for skip in ordered {
             if shortfall == 0 {
                 break;
             }
@@ -1240,6 +1273,76 @@ pub fn guard_at(
             (*base > head).then(|| (key.clone(), base - head))
         })
         .collect();
+    let new_files: BTreeMap<&str, &str> = files
+        .iter()
+        .filter(|file| file.base.is_none())
+        .filter_map(|file| match &file.head {
+            Ok(Some(text)) => Some((file.path.as_str(), text.as_str())),
+            _ => None,
+        })
+        .collect();
+    let copied_from_base = |path: &str, line: usize| -> bool {
+        let Some(text) = new_files.get(path) else {
+            return false;
+        };
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let Some(source) = lines.get(line.saturating_sub(1)).copied() else {
+            return false;
+        };
+        // A comment or attribute on a line of its own suppresses the code
+        // under it: the base must hold both, one above the other. A line
+        // of code with its suppression must be there word for word.
+        let alone = ["//", "#", "/*", "*", "--"]
+            .iter()
+            .any(|mark| source.starts_with(mark));
+        let next = if alone {
+            match lines[line.min(lines.len())..]
+                .iter()
+                .find(|l| !l.is_empty())
+            {
+                Some(next) => Some(*next),
+                None => return false,
+            }
+        } else {
+            None
+        };
+        if source.len() < 12 && next.is_none() {
+            return false;
+        }
+        let Ok(out) = run_git(
+            root,
+            &["grep", "-l", "-F", "-e", source, &base.commit, "--"],
+        ) else {
+            return false;
+        };
+        if out.code != 0 {
+            return false;
+        }
+        let Some(next) = next else {
+            return true;
+        };
+        let prefix = format!("{}:", base.commit);
+        let candidates: Vec<String> = out
+            .stdout
+            .lines()
+            .filter_map(|l| l.strip_prefix(&prefix).map(str::to_owned))
+            .take(20)
+            .collect();
+        let wanted: Vec<&str> = candidates.iter().map(String::as_str).collect();
+        crate::git::files_at(root, &base.commit, &wanted)
+            .values()
+            .any(|bytes| {
+                let text = String::from_utf8_lossy(bytes);
+                let base_lines: Vec<&str> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                base_lines
+                    .windows(2)
+                    .any(|pair| pair[0] == source && pair[1] == next)
+            })
+    };
     let mut left = base_texts;
     for (path, found) in &head_suppressions {
         let Some(more) = shortfall.get_mut(found.key.as_str()) else {
@@ -1273,6 +1376,12 @@ pub fn guard_at(
             *count -= 1;
             continue;
         }
+        // In a new file, a line that the base holds word for word elsewhere
+        // is a copy of code that keeps its suppression (a file split off,
+        // an adapter copied): not a new one (ADR 0046, real history).
+        if copied_from_base(path, found.line) {
+            continue;
+        }
         findings.push(Finding {
             kind: Kind::SuppressionAdded,
             file: path.clone(),
@@ -1282,12 +1391,21 @@ pub fn guard_at(
         });
     }
     findings.sort_by(|a, b| (a.kind, &a.file, a.line).cmp(&(b.kind, &b.file, b.line)));
+    // One finding per place and kind (a CI check counted for several
+    // events, gone from each, is one finding).
+    findings.dedup_by(|a, b| {
+        a.kind == Kind::CiWeakened
+            && a.kind == b.kind
+            && a.file == b.file
+            && a.line == b.line
+            && a.on_base == b.on_base
+    });
     report.findings = findings;
     report
 }
 
 /// The approvals of the pull request `pr`, from GitHub's list of its reviews
-/// (the text of `gh api --paginate --slurp repos/{owner}/{repo}/pulls/{n}/reviews`).
+/// (the text of `gh api --paginate repos/{owner}/{repo}/pulls/{n}/reviews`).
 ///
 /// # Errors
 ///
@@ -1332,8 +1450,27 @@ fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Find
             _ => new.push(assertion),
         }
     }
-    let gone_shapes: Vec<&str> = gone.iter().map(|a| a.shape.as_str()).collect();
-    let new_shapes: Vec<&str> = new.iter().map(|a| a.shape.as_str()).collect();
+    // Paired only within the same test (found on real history: a new test's
+    // assertion was paired with a deleted test's).
+    let test_of = |file: &TestFile, assertion: &Assertion| -> String {
+        assertion
+            .test
+            .and_then(|index| file.tests.get(index))
+            .map(|test| test.id.clone())
+            .unwrap_or_default()
+    };
+    let gone_ids: Vec<String> = gone.iter().map(|a| test_of(before, a)).collect();
+    let new_ids: Vec<String> = new.iter().map(|a| test_of(after, a)).collect();
+    let gone_shapes: Vec<(&str, &str)> = gone
+        .iter()
+        .zip(&gone_ids)
+        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .collect();
+    let new_shapes: Vec<(&str, &str)> = new
+        .iter()
+        .zip(&new_ids)
+        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .collect();
     approval::pairs(&gone_shapes, &new_shapes)
         .into_iter()
         .map(|(old, now)| Finding {

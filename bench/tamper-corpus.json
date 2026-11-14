@@ -2818,6 +2818,124 @@
       "head": {
         "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"sums the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n"
       }
+    },
+    {
+      "name": "ts: @ts-expect-error added in a type test",
+      "expect": [],
+      "note": "In a test file it asserts that a type error happens. Found on real history (ADR 0046).",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n"
+      },
+      "head": {
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n\n// @ts-expect-error a string is not a number\nadd(\"1\", 2);\n"
+      }
+    },
+    {
+      "name": "ts: @ts-ignore added in a test file",
+      "expect": ["suppression-added"],
+      "note": "Unlike @ts-expect-error, it fails on nothing.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n"
+      },
+      "head": {
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n\n// @ts-ignore\nadd(\"1\", 2);\n"
+      }
+    },
+    {
+      "name": "rs: a new #[cfg(unix)] test added",
+      "expect": [],
+      "note": "A new test that runs only on some systems takes nothing away. Found on real history.",
+      "base": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n\n    #[cfg(unix)]\n    #[test]\n    fn adds_on_unix() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "ts: a new test inside an existing describe.runIf",
+      "expect": [],
+      "note": "Found on real history.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe.runIf(process.platform !== \"win32\")(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe.runIf(process.platform !== \"win32\")(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it(\"adds zero\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test renamed and skipped",
+      "expect": ["test-skipped"],
+      "note": "The count of tests is the same, so the skip is not a new test's.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it(\"adds zero\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it.skip(\"adds nothing\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a module split off with its eslint-disable line",
+      "expect": [],
+      "note": "The suppressed line is copied word for word from a file the base keeps. Found on real history.",
+      "base": {
+        "src/util.ts": "// eslint-disable-next-line no-control-regex\nexport const CONTROL = /[\\u0000-\\u001f]/;\n\nexport function clean(text: string): string {\n  return text.replace(CONTROL, \"\");\n}\n",
+        "src/index.ts": "export { clean } from \"./util\";\n"
+      },
+      "head": {
+        "src/adapter/util.ts": "// eslint-disable-next-line no-control-regex\nexport const CONTROL = /[\\u0000-\\u001f]/;\n\nexport function clean(text: string): string {\n  return text.replace(CONTROL, \"\");\n}\n"
+      }
+    },
+    {
+      "name": "ts: a copied eslint-disable comment over new code",
+      "expect": ["suppression-added"],
+      "note": "Only the comment is copied; the code under it is new.",
+      "base": {
+        "src/util.ts": "// eslint-disable-next-line no-control-regex\nexport const CONTROL = /[\\u0000-\\u001f]/;\n\nexport function clean(text: string): string {\n  return text.replace(CONTROL, \"\");\n}\n",
+        "src/index.ts": "export { clean } from \"./util\";\n"
+      },
+      "head": {
+        "src/adapter/debug.ts": "// eslint-disable-next-line no-control-regex\nexport const BELL = /\\u0007/;\n"
+      }
+    },
+    {
+      "name": "ci: a paths-ignore filter removed",
+      "expect": [],
+      "note": "The workflow runs on more pull requests. Found on real history.",
+      "base": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n    paths-ignore: [\"docs/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked tox run\n      - run: npm test\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked tox run\n      - run: npm test\n"
+      }
+    },
+    {
+      "name": "ci: an option with a value added before the command uv runs",
+      "expect": [],
+      "note": "`--group dev` is an option and its value. Found on real history.",
+      "base": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n    paths-ignore: [\"docs/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked tox run\n      - run: npm test\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n    paths-ignore: [\"docs/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked --no-default-groups --group dev tox run\n      - run: npm test\n"
+      }
+    },
+    {
+      "name": "py: a test replaced by a different test with another value",
+      "expect": [],
+      "note": "An assertion of a new test is not paired with a deleted test's. Found on real history.",
+      "base": {
+        "app/__init__.py": "",
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([10, 20]) == 30\n"
+      },
+      "head": {
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total_of_three():\n    assert total([10, 20, 1]) == 31\n"
+      }
     }
   ]
 }

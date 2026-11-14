@@ -367,6 +367,11 @@ pub(crate) fn compare(base: &[Located], head: &[Located]) -> Vec<Finding> {
             }
         }
     }
+    // One finding per place: a check counted for several events is named
+    // once.
+    let mut seen = std::collections::BTreeSet::new();
+    findings
+        .retain(|f| f.kind != Kind::CiWeakened || seen.insert((f.file.clone(), f.line, f.on_base)));
     findings
 }
 

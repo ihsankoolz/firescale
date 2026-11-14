@@ -541,11 +541,13 @@ pub(super) fn is_test_path(path: &str) -> bool {
         .copied()
         .unwrap_or_default()
         .to_ascii_lowercase();
+    // `*.test-d.ts` and `test-d/` are tsd's type tests.
     name.contains(".test.")
         || name.contains(".spec.")
+        || name.contains(".test-d.")
         || parts[..parts.len() - 1]
             .iter()
-            .any(|part| matches!(*part, "__tests__" | "test" | "tests" | "spec"))
+            .any(|part| matches!(*part, "__tests__" | "test" | "tests" | "spec" | "test-d"))
 }
 
 /// The repo path an import of `spec` from `from` (a file) names, among
@@ -821,6 +823,8 @@ it.todo("later");
             "src/__tests__/a.ts",
             "test/a.mjs",
             "pkg/tests/x.tsx",
+            "index.test-d.ts",
+            "test-d/hooks.ts",
         ] {
             assert!(is_test_path(path), "{path}");
         }
