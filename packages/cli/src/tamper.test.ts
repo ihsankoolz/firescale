@@ -102,7 +102,20 @@ async function tamper(
 const kinds = (report?: Tamper): string[] =>
   [...new Set((report?.findings ?? []).map((finding) => finding.kind))].sort();
 
-const LANGUAGES = ['ts', 'js', 'py', 'rs'];
+const LANGUAGES = [
+  'ts',
+  'js',
+  'py',
+  'rs',
+  'java',
+  'kotlin',
+  'swift',
+  'dart',
+  'c',
+  'cpp',
+  'cs',
+  'go',
+];
 const KINDS = [
   'test-deleted',
   'test-skipped',
