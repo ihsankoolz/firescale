@@ -4,11 +4,11 @@ Numbers are wall-clock times for the whole process, measured with `bench/startup
 
 ## M32: the tamper guard in Java, Kotlin, Swift, Dart, C, C++, C# and Go
 
-Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build. Method, limits and what was fixed: ADR 0052. **Read the limits before the numbers**: the method of M26 (ADR 0046); one repo per language, so a rate is that repo's more than its language's; each finding labelled once by a fresh subagent that saw the commit's diff and a neutral statement of the claim (not the guard's code or reasoning), ten labellers, 724 labels, no second labeller and no human check; the "after" rate is on the commits the fixes were developed against, so it is optimistic.
+Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build. Method, limits and what was fixed: ADR 0052. **Read the limits before the numbers**: the method of M26 (ADR 0046); one repo per language, so a rate is that repo's more than its language's; each finding labelled once by a fresh subagent that saw the commit's diff and a neutral statement of the claim (not the guard's code or reasoning), twelve labellers, 756 labels, no second labeller and no human check; the "after" rate is on the commits the fixes were developed against, so it is optimistic.
 
 ### False positives on real history
 
-`node bench/tamper-history.mjs …` over the last 125 non-merge commits of eight public repos (shallow clones, read-only, nothing of theirs run; `--all-parents` for cJSON, Humanizer, commons-lang and cobra), then `node bench/tamper-history-report.mjs --data bench/tamper-history-m32.json` (every finding with its label and the labeller's reason). Rates with 95% Wilson intervals. "Before" is the guard as M32 first ran it; "after" is after the fixes of ADR 0052 (parse errors that cannot hide a test, the assertion that went named instead of a copy of it, new tests under an existing `#if`).
+`node bench/tamper-history.mjs …` over the last 125 non-merge commits of eight public repos (shallow clones, read-only, nothing of theirs run; `--all-parents` for cJSON, Humanizer, commons-lang and cobra), then `node bench/tamper-history-report.mjs --data bench/tamper-history-m32.json` (every finding with its label and the labeller's reason). Rates with 95% Wilson intervals. "Before" is the guard as M32 first ran it; "after" is after the fixes of ADR 0052 (parse errors that cannot hide a test, the assertion that went named instead of a copy of it, new tests under an existing `#if`) and those that followed the review (which also found 7 more true findings: Alamofire wrapping a whole test file in `#if canImport(Networking)`).
 
 #### Before
 
@@ -38,36 +38,36 @@ Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build.
 
 | Language         | Repos                                                                                                                                  | Commits | Commits with findings | Findings | False | False-positive rate (95% interval) | Commits with a false finding (95% interval) |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------- | -------- | ----- | ---------------------------------- | ------------------------------------------- |
-| Swift            | Alamofire/Alamofire                                                                                                                    | 125     | 10                    | 298      | 6     | 2.0% (0.9–4.3%)                    | 2 of 125, 1.6% (0.4–5.6%)                   |
+| Swift            | Alamofire/Alamofire                                                                                                                    | 125     | 10                    | 306      | 7     | 2.3% (1.1–4.6%)                    | 3 of 125, 2.4% (0.8–6.8%)                   |
 | C                | DaveGamble/cJSON                                                                                                                       | 125     | 2                     | 2        | 1     | 50.0% (9.5–90.5%)                  | 1 of 125, 0.8% (0.1–4.4%)                   |
 | C#               | Humanizr/Humanizer                                                                                                                     | 125     | 13                    | 22       | 5     | 22.7% (10.1–43.4%)                 | 3 of 125, 2.4% (0.8–6.8%)                   |
 | Java             | apache/commons-lang                                                                                                                    | 125     | 2                     | 2        | 1     | 50.0% (9.5–90.5%)                  | 1 of 125, 0.8% (0.1–4.4%)                   |
 | Dart             | dart-lang/http                                                                                                                         | 125     | 11                    | 38       | 2     | 5.3% (1.5–17.3%)                   | 1 of 125, 0.8% (0.1–4.4%)                   |
-| C++              | fmtlib/fmt                                                                                                                             | 125     | 25                    | 100      | 18    | 18.0% (11.7–26.7%)                 | 11 of 125, 8.8% (5.0–15.1%)                 |
+| C++              | fmtlib/fmt                                                                                                                             | 125     | 25                    | 101      | 19    | 18.8% (12.4–27.5%)                 | 11 of 125, 8.8% (5.0–15.1%)                 |
 | Go               | spf13/cobra                                                                                                                            | 125     | 7                     | 13       | 0     | 0.0% (0.0–22.8%)                   | 0 of 125, 0.0% (0.0–3.0%)                   |
 | Kotlin           | square/okhttp                                                                                                                          | 125     | 4                     | 33       | 0     | 0.0% (0.0–10.4%)                   | 0 of 125, 0.0% (0.0–3.0%)                   |
-| All public repos | Alamofire/Alamofire, DaveGamble/cJSON, Humanizr/Humanizer, apache/commons-lang, dart-lang/http, fmtlib/fmt, spf13/cobra, square/okhttp | 1000    | 74                    | 508      | 33    | 6.5% (4.7–9.0%)                    | 19 of 1000, 1.9% (1.2–2.9%)                 |
+| All public repos | Alamofire/Alamofire, DaveGamble/cJSON, Humanizr/Humanizer, apache/commons-lang, dart-lang/http, fmtlib/fmt, spf13/cobra, square/okhttp | 1000    | 74                    | 517      | 35    | 6.8% (4.9–9.3%)                    | 20 of 1000, 2.0% (1.3–3.1%)                 |
 
 | Kind              | Findings | False | False-positive rate (95% interval) |
 | ----------------- | -------- | ----- | ---------------------------------- |
-| assertion-removed | 333      | 14    | 4.2% (2.5–6.9%)                    |
+| assertion-removed | 334      | 15    | 4.5% (2.7–7.3%)                    |
 | ci-weakened       | 2        | 0     | 0.0% (0.0–65.8%)                   |
 | expected-changed  | 40       | 12    | 30.0% (18.1–45.4%)                 |
 | not-checked       | 2        | 2     | 100.0% (34.2–100.0%)               |
 | suppression-added | 43       | 0     | 0.0% (0.0–8.2%)                    |
 | test-deleted      | 85       | 4     | 4.7% (1.8–11.5%)                   |
-| test-skipped      | 3        | 1     | 33.3% (6.1–79.2%)                  |
+| test-skipped      | 11       | 2     | 18.2% (5.1–47.7%)                  |
 
 The fixes stopped 27 findings labelled true, all `not-checked`: 19 of these changes are now reported by a finding of their own kind in the same file; 8 are not reported now, each a kind of weakening the guard reads in no language (an expected value that is a name, `NULL` to `end`; a helper's checks loosened; expected values computed at run time; one assertion traded for a different one).
 
 ### M26's repos again
 
-Two of the fixes are shared by every language: a removed assertion is paired within its own test first, and new skipped tests are excused but for one per base test that went away. M26's eight public repos were run again on the same 1,200 commits with `main`'s guard and with M32's. M32 reports 3 findings fewer (3 `test-skipped` labelled false in M26) and names 22 assertion removals at other lines (23 findings): of those 22 on `main`, 19 were labelled false; of the 23 on M32, a fresh labeller found 22 true and 1 false (`bench/tamper-history-m32-recheck.json`). Over the findings that carry a label (31 on both sides are `expected-changed` and assertion findings whose wording changed after M26 and match no label):
+Two of the fixes are shared by every language: a removed assertion is paired within its own test first, and new skipped tests are excused but for one per base test that went away. M26's eight public repos were run again on the same 1,200 commits with `main`'s guard and with M32's. M32 reports 4 findings fewer (4 `test-skipped` labelled false in M26: new tests in a file whose tests were all skipped, and new conditional tests beside a renamed one) and names 22 assertion removals at other lines (23 findings): of those 22 on `main`, 19 were labelled false; of the 23 on M32, a fresh labeller found 22 true and 1 false (`bench/tamper-history-m32-recheck.json`). Over the findings that carry a label (31 on both sides are `expected-changed` and assertion findings whose wording changed after M26 and match no label):
 
 | M26's public repos, 1,200 commits | Findings with a label | False | False-positive rate (95% interval) | Commits with a false finding |
 | --------------------------------- | --------------------- | ----- | ---------------------------------- | ---------------------------- |
 | `main` (M31)                      | 349                   | 73    | 20.9% (17.0–25.5%)                 | 23 of 1,200                  |
-| M32                               | 346                   | 51    | 14.7% (11.4–18.9%)                 | 21 of 1,200                  |
+| M32                               | 345                   | 50    | 14.5% (11.2–18.6%)                 | 20 of 1,200                  |
 
 ### Misses on cheating changes
 
@@ -75,7 +75,7 @@ Two of the fixes are shared by every language: a removed assertion is paired wit
 
 ### The labelled corpus (fixture counts)
 
-`node bench/tamper-rates.mjs`: 439 cases (265 to catch, 174 not), 0 missed, 0 false positives; each new language has 15 to 27 cases. Written with the guard: it shows the guard does what its ADRs say, not a rate.
+`node bench/tamper-rates.mjs`: 458 cases (281 to catch, 177 not), 0 missed, 0 false positives; each new language has 17 to 30 cases. Written with the guard: it shows the guard does what its ADRs say, not a rate.
 
 ### Binary size and build time
 

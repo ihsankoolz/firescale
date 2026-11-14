@@ -48,7 +48,7 @@ M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull requ
 
 **Decided on your behalf** (ADR 0052): which frameworks each reader knows; a parse error is harmless when none of its words could name a test, a skip or an assertion; C and C++ macros alone on their line are blanked; an `#if` tree-sitter cannot read is read by its first branches when the others name no test.
 
-**Proof:** 439 corpus cases, 0 missed, 0 false positives; 1,000 real commits of eight repos, each finding labelled by a fresh subagent: false findings 29.5% → 6.5% (4.7–9.0%), commits with a false finding 8.5% → 1.9%.
+**Proof:** 458 corpus cases, 0 missed, 0 false positives; 1,000 real commits of eight repos, each finding labelled by a fresh subagent: false findings 29.5% → 6.8% (4.9–9.3%), commits with a false finding 8.5% → 2.0%. A fresh review found ten ways to weaken a test unseen; all but the ones ADR 0052 lists are fixed.
 
 ## M31 — Ecosystems: Java, Kotlin, Android, Swift, Xcode, C, C++, .NET, Dart
 

@@ -1,5 +1,5 @@
 {
-  "about": "M26's public repos (bench/tamper-history.json) run again with M32's guard (ADR 0052), on the same commits. These are the 23 findings M32 reports and main does not: assertion removals named at a different line since a removed assertion is paired within its own test first. Each was labelled by a fresh subagent with ADR 0046's brief. The findings main reports and M32 does not (19 assertion removals and 3 skips labelled false, 3 assertion removals labelled true, in bench/tamper-history.json) are the other side of the same change.",
+  "about": "M26's public repos (bench/tamper-history.json) run again with M32's guard (ADR 0052), on the same commits. These are the 23 findings M32 reports and main does not: assertion removals named at a different line since a removed assertion is paired within its own test first. Each was labelled by a fresh subagent with ADR 0046's brief. The findings main reports and M32 does not (19 assertion removals and 4 skips labelled false, 3 assertion removals labelled true, in bench/tamper-history.json) are the other side of the same change.",
   "findings": [
     {
       "id": "R1",

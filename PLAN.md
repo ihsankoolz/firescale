@@ -735,8 +735,8 @@ Added by the owner ("go as deep as the options go" on other languages). Decision
 **Done when**
 
 - ☑ Each language's tests, skips, assertions and suppressions are read, with unit tests on fixtures (`crates/core/src/tamper/{java,kotlin,swift,dart,cfamily,csharp,go}.rs`, `recover.rs`).
-- ☑ The labelled corpus has cases for every new language, and `node bench/tamper-rates.mjs` reports 0 missed and 0 false positives (439 cases, 184 in the new languages; also run by `packages/cli/src/tamper.test.ts`).
-- ☑ Measured on real history: 1,000 commits of eight public repos, one per language, every finding labelled by a fresh subagent; rates per language with 95% intervals in `bench/RESULTS.md` (false findings 29.5% → 6.5%; labels in `bench/tamper-history-m32.json`).
+- ☑ The labelled corpus has cases for every new language, and `node bench/tamper-rates.mjs` reports 0 missed and 0 false positives (458 cases, 203 in the new languages; also run by `packages/cli/src/tamper.test.ts`).
+- ☑ Measured on real history: 1,000 commits of eight public repos, one per language, every finding labelled by a fresh subagent; rates per language with 95% intervals in `bench/RESULTS.md` (false findings 29.5% → 6.8%; labels in `bench/tamper-history-m32.json`).
 - ☑ The binary's size is recorded, and its growth is put to the owner (11.5 → 31.0 MB, `bench/RESULTS.md`; DECISIONS.md, "Needs your decision").
 
 ---
