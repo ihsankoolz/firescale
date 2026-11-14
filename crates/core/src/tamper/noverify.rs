@@ -65,6 +65,18 @@ pub(crate) fn measures(path: &str, text: &str) -> Result<Vec<Measure>, usize> {
     let mut measures = Vec::new();
     if AGENT_HOOK_FILES.contains(&path) {
         let entries = formats::read(Format::Json, text)?;
+        // Claude Code's switch that turns every hook off.
+        for entry in entries.iter().filter(|e| e.path == ["disableAllHooks"]) {
+            if entry.value.as_bool() == Some(true) {
+                measures.push(Measure::count(
+                    Kind::NoVerify,
+                    "git hooks skipped",
+                    -1,
+                    entry.line,
+                    "\"disableAllHooks\": true (every agent hook is off)",
+                ));
+            }
+        }
         for entry in &entries {
             let in_hooks = entry.path.first().is_some_and(|k| k == "hooks");
             let is_command = entry
@@ -72,12 +84,27 @@ pub(crate) fn measures(path: &str, text: &str) -> Result<Vec<Measure>, usize> {
                 .last()
                 .is_some_and(|k| k == "command" || k == "bash" || k == "powershell");
             let value = entry.value.as_text();
-            let runs_fscale = shell_words(&value).iter().any(|w| {
+            // It must run fscale's stop hook or verify, not just name it:
+            // `echo fscale` or `fscale --version` does nothing.
+            let words = shell_words(&value);
+            let runs_fscale = words.iter().enumerate().any(|(at, w)| {
                 let w = w.rsplit(['/', '\\']).next().unwrap_or(w);
-                matches!(
+                let is_fscale = matches!(
                     w,
                     "fscale" | "firescale" | "fscale.exe" | "fscale.cmd" | "firescale.cmd"
-                )
+                );
+                let next: Vec<&str> = words[at + 1..]
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|n| !n.starts_with('-'))
+                    .take(2)
+                    .collect();
+                let leading_echo = words.first().is_some_and(|first| {
+                    matches!(first.as_str(), "echo" | "printf" | "true" | ":" | "exit")
+                });
+                is_fscale
+                    && !leading_echo
+                    && (next == ["hooks", "run"] || next.first() == Some(&"verify"))
             });
             if in_hooks && is_command && runs_fscale {
                 let event = entry.path.get(1).cloned().unwrap_or_default();
@@ -122,10 +149,23 @@ fn hook_skips(line: &str) -> Vec<String> {
         let words = shell_words(command);
         // A quoted script (`"save": "git commit …"`, `sh -c "…"`) is read
         // as a line of its own.
+        // Not the value of a commit message (`-m "fix --no-verify docs"`).
         let nested: Vec<String> = words
             .iter()
-            .filter(|w| w.contains(' '))
-            .flat_map(|w| hook_skips(w))
+            .enumerate()
+            .filter(|(at, w)| {
+                let message = at
+                    .checked_sub(1)
+                    .and_then(|before| words.get(before))
+                    .is_some_and(|before| {
+                        before == "--message"
+                            || (before.starts_with('-')
+                                && !before.starts_with("--")
+                                && before.ends_with(['m', 'F']))
+                    });
+                w.contains(' ') && !message
+            })
+            .flat_map(|(_, w)| hook_skips(w))
             .collect();
         if !nested.is_empty() {
             found.extend(nested);
@@ -152,7 +192,12 @@ fn hook_skips(line: &str) -> Vec<String> {
         };
         let no_verify = lower
             .iter()
-            .any(|w| w == "--no-verify" || w.starts_with("--no-verify="));
+            // git takes any unambiguous start of a long option:
+            // `--no-veri` and longer mean `--no-verify`.
+            .any(|w| {
+                w.len() >= "--no-veri".len()
+                    && "--no-verify".starts_with(w.split('=').next().unwrap_or(w))
+            });
         let cargo_package = lower.windows(2).any(|pair| {
             pair[0].rsplit(['/', '\\']).next() == Some("cargo")
                 && matches!(pair[1].as_str(), "publish" | "package")
@@ -214,7 +259,15 @@ fn hook_skips(line: &str) -> Vec<String> {
         {
             let tail = joined[at + "core.hookspath".len()..].trim_start_matches(['=', ' ']);
             let target = tail.split_whitespace().next().unwrap_or("");
-            if target.is_empty() || target == "/dev/null" || target == "nul" || target == "NUL" {
+            // `git -c core.hooksPath=… <command>` points one command's hooks
+            // elsewhere; `git config core.hooksPath` to nowhere turns them off.
+            let inline = joined[..at].trim_end().ends_with("-c");
+            if inline
+                || target.is_empty()
+                || target == "/dev/null"
+                || target == "nul"
+                || target == "NUL"
+            {
                 found.push(shown(command));
             }
         }
@@ -246,6 +299,9 @@ mod tests {
             "git commit -anm \"wip\"",
             "git commit -n -m x",
             "git -c core.hooksPath=/dev/null commit -m x",
+            "git -c core.hooksPath=.none commit -m x",
+            "git commit -m wip -n",
+            "git commit --no-verif -m x",
             "\"release\": \"standard-version && git push --no-verify --follow-tags\",",
         ] {
             assert_eq!(hook_skips(line).len(), 1, "{line}");
@@ -257,6 +313,8 @@ mod tests {
             "git push -n",
             "npm run verify",
             "git config core.hooksPath .githooks",
+            "git commit -m \"fix --no-verify docs\"",
+            "git commit --no-verbose -m x",
         ] {
             assert!(hook_skips(line).is_empty(), "{line}");
         }
@@ -294,5 +352,35 @@ mod tests {
             .what
             .starts_with("Stop hook: pnpm --silent fscale hooks run"));
         assert!(compare(&base, &base).is_empty());
+    }
+
+    #[test]
+    fn a_stop_hook_that_no_longer_runs_fscale_or_all_hooks_off_is_a_finding() {
+        let settings = |command: &str| {
+            format!("{{\n  \"hooks\": {{\n    \"Stop\": [{{ \"hooks\": [{{ \"type\": \"command\", \"command\": \"{command}\" }}] }}]\n  }}\n}}\n")
+        };
+        let base = located(
+            ".claude/settings.json",
+            &settings("pnpm --silent fscale hooks run --agent claude"),
+        );
+        for command in ["echo fscale", "pnpm fscale --version", "true"] {
+            assert_eq!(
+                compare(&base, &located(".claude/settings.json", &settings(command))).len(),
+                1,
+                "{command}"
+            );
+        }
+        assert!(compare(
+            &base,
+            &located(".claude/settings.json", &settings("npx firescale verify"))
+        )
+        .is_empty());
+        let off = located(
+            ".claude/settings.local.json",
+            "{ \"disableAllHooks\": true }\n",
+        );
+        let found = compare(&[], &off);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].what.contains("disableAllHooks"));
     }
 }

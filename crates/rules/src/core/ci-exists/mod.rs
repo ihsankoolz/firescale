@@ -75,6 +75,15 @@ fn workflow_folder_names(root: &Path) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// firescale's own tamper guard workflow, unedited (ADR 0045): it runs no
+/// build or tests, so it is not the CI this rule asks for, and it does not
+/// stand in the starter's way.
+fn is_our_guard(root: &Path, file: &str) -> bool {
+    file == workflow::TAMPER_PATH
+        && std::fs::read_to_string(on_disk(root, file))
+            .is_ok_and(|text| workflow::firescale_wrote(&text))
+}
+
 /// CI configs that are on disk, tracked or not: workflow files first, then
 /// the configs of other CI systems. Sorted within each group.
 fn ci_files_on_disk(root: &Path) -> Vec<String> {
@@ -83,6 +92,7 @@ fn ci_files_on_disk(root: &Path) -> Vec<String> {
         .into_iter()
         .map(|name| format!("{WORKFLOWS}/{name}"))
         .filter(|file| is_workflow(file) && on_disk(root, file).is_file())
+        .filter(|file| !is_our_guard(root, file))
         .collect();
     let mut others: Vec<String> = OTHER_CI
         .iter()
@@ -105,6 +115,7 @@ fn starter_can_be_created(root: &Path) -> bool {
     let no_workflow = names.iter().all(|name| {
         let lower = name.to_lowercase();
         !(lower.ends_with(".yml") || lower.ends_with(".yaml"))
+            || is_our_guard(root, &format!("{WORKFLOWS}/{name}"))
     });
     // Each folder on the way is a real folder or absent: not a file, and not
     // a link, which would lead the write out of the repo.
@@ -175,17 +186,21 @@ pub(crate) fn starter_blocker(ctx: &RuleContext) -> Result<Option<(String, Fixab
 /// (a tracked file deleted from the working tree is absent). Otherwise a
 /// plain listing of the places that matter.
 pub(crate) fn candidate_files(ctx: &RuleContext) -> Result<Vec<String>> {
-    if ctx.git().is_repo()? {
-        return Ok(ctx
-            .git()
+    let mut files = if ctx.git().is_repo()? {
+        ctx.git()
             .tracked_files()?
             .into_iter()
             .filter(|file| is_workflow(file) || OTHER_CI.contains(&file.as_str()))
             .filter(|file| on_disk(ctx.root(), file).is_file())
-            .collect());
-    }
-    let mut files = ci_files_on_disk(ctx.root());
-    files.sort();
+            .collect()
+    } else {
+        let mut files = ci_files_on_disk(ctx.root());
+        files.sort();
+        files
+    };
+    // firescale's tamper guard (ADR 0045) runs no build or tests: it is not
+    // the CI this rule asks for.
+    files.retain(|file| !is_our_guard(ctx.root(), file));
     Ok(files)
 }
 

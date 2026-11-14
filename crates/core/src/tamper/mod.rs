@@ -589,10 +589,18 @@ pub fn guard_at(
         .filter_map(|path| Language::of(path).map(|language| (path, language)))
         .collect();
     // Config and CI files the detectors of M25 read (ADR 0045).
-    let configs: Vec<&String> = changed
+    // With every config file of the same tool in its folder: adding one can
+    // hide another that did not change.
+    let mut configs: BTreeSet<String> = changed
         .iter()
         .filter(|path| config::is_config(path))
+        .cloned()
         .collect();
+    let related: Vec<String> = configs
+        .iter()
+        .flat_map(|path| config::siblings(path))
+        .collect();
+    configs.extend(related);
     let mut wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
     wanted.extend(configs.iter().map(|path| path.as_str()));
     wanted.sort_unstable();
@@ -790,6 +798,23 @@ pub fn guard_at(
         // A file that cannot be read on one side is compared on neither.
         base_measures.retain(|located| !report.not_checked.contains(&located.file));
         head_measures.retain(|located| !report.not_checked.contains(&located.file));
+        // Settings in a file its tool does not read, because another of its
+        // files in the folder comes first, do not count.
+        let side_texts = |base_side: bool| -> BTreeMap<String, String> {
+            config_files
+                .iter()
+                .filter_map(|file| {
+                    let text = if base_side {
+                        file.base.clone()
+                    } else {
+                        file.head.clone().ok().flatten()
+                    };
+                    text.map(|text| (file.path.clone(), text))
+                })
+                .collect()
+        };
+        config::drop_shadowed(&mut base_measures, &side_texts(true));
+        config::drop_shadowed(&mut head_measures, &side_texts(false));
         // Checks the working tree still turns on by implication (M25).
         let implied = lintconfig::implied(&base_measures, &head_measures);
         head_measures.extend(implied);

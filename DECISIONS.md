@@ -22,7 +22,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
-- **(M25) The generated workflow now has a `tamper-guard` job on `pull_request_target`** (ADR 0045), against ADR 0041's "never". To make it a gate, mark `tamper-guard` as a required check and set `verify.tamper` to `"enforced"` on the default branch. Say if you would rather keep `pull_request_target` out and accept that a pull request can edit the job that judges it.
+- **(M25) `fscale init` now writes `.github/workflows/tamper-guard.yml`, on `pull_request_target`** (ADR 0045), against ADR 0041's "never". To make it a gate, mark `tamper-guard` as a required check and set `verify.tamper` to `"enforced"` on the default branch. Say if you would rather keep `pull_request_target` out and accept that a pull request can edit the job that judges it.
 - **(M25) The job runs `npx --yes firescale@<version>`**, the version that wrote the file, from npm. The version is still 0.4.0, which has no `fscale tamper`, so the job works only once a release with M25 is published and `fscale sync` has written the workflow with that version. No release was made (you asked for none).
 - **(M25) A pull request can add a job named `tamper-guard` to its own workflow.** Branch protection matches required checks by name; look at the `pull_request_target` run.
 - **(M24) Lint suppressions are counted per rule over the whole change, not per file** as PLAN.md's M25 line said (ADR 0044): a function moved to another file keeps its `#[allow]` or `# noqa` without a finding. The cost: removing a suppression of a rule in one file while adding one of the same rule elsewhere is not reported.
@@ -142,10 +142,10 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 2. **Small readers** for JSON (with comments), YAML, TOML, INI and JS/TS object literals (`tamper/formats.rs`); no new dependency.
 3. **`fscale tamper`**: the guard alone; with `--head <commit>` it reads a commit from git objects, checking out and running nothing.
 4. **`--pr-base`** (verify and tamper): the base from GitHub's pull request event, the first parent of the merge commit GitHub made, never a ref in the clone; it fails rather than judge nothing. Every git command sets `GIT_NO_REPLACE_OBJECTS=1`. Files hidden from git (`skip-worktree`, `assume-unchanged`) are compared anyway.
-5. **The generated workflow**: the `pull-request` job runs `verify --affected --pr-base`; a new `tamper-guard` job on `pull_request_target` runs `npx --yes firescale@<version> tamper --pr-base` from the default branch's copy of the file, with no cache, a read-only token, and none of the pull request's code.
+5. **The generated workflows**: `ci.yml`'s `pull-request` job runs `verify --affected --pr-base`; a second file, `tamper-guard.yml`, started only by `pull_request_target`, runs `npx --yes firescale@<version> tamper --pr-base` from the default branch's copy, with no cache, a read-only token, and none of the pull request's code. It compares what merging the pull request would change with the base branch's tip, under the tip's policy.
 6. **Corpus**: 207 cases (60 new); 0 missed, 0 false positives. Fixture counts, not a rate.
 
-**How the work was split:** I wrote the reader, the model, the CI and hook-skip detectors, `fscale tamper`, `--pr-base` and the workflow job; two subagents wrote the coverage and lint-config detectors in their own worktrees against that model, and I merged their commits under your identity. A fresh subagent reviewed the whole diff before the pull request.
+**How the work was split:** I wrote the reader, the model, the CI and hook-skip detectors, `fscale tamper`, `--pr-base` and the workflow; two subagents wrote the coverage and lint-config detectors in their own worktrees against that model, and I merged their commits under your identity. A fresh subagent reviewed the whole diff before the pull request; its findings (ADR 0045, "After the review") are fixed: the CI guard compared with the merge base the author chose, a skipped job would have passed a required check, several ways to stop checks or skip hooks went unseen, config files of higher precedence, five false positives, and a stack overflow and quadratic time in the readers.
 
 **Decided on your behalf** (ADR 0045):
 

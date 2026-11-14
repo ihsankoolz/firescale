@@ -2456,6 +2456,217 @@
       "head": {
         "tsconfig.scripts.json": "{\n  \"compilerOptions\": { \"checkJs\": false, \"noUnusedLocals\": false },\n  \"include\": [\"scripts\"]\n}\n"
       }
+    },
+    {
+      "name": "ci: the pull request trigger narrowed to a branch that does not exist",
+      "expect": ["ci-weakened"],
+      "note": "Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    branches: [nope]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: the pull request trigger limited to closed pull requests",
+      "expect": ["ci-weakened"],
+      "note": "Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    types: [closed]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: tests run in the background with &",
+      "expect": ["ci-weakened"],
+      "note": "Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test &\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: tests before && on a line that is not the last",
+      "expect": ["ci-weakened"],
+      "note": "bash -e does not stop on a failure inside an && list. Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test && echo ok\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: tests piped into tee without pipefail",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test | tee test.log\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: npm replaced by pnpm",
+      "expect": [],
+      "note": "The same scripts. Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: pnpm install --frozen-lockfile\n      - name: Test\n        run: |\n          pnpm test\n          pnpm lint\n"
+      }
+    },
+    {
+      "name": "ci: a matrix entry allowed to fail",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: ${{ matrix.experimental }}\n    strategy:\n      matrix:\n        experimental: [false]\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: ; exit 0 after the last command",
+      "expect": [],
+      "note": "bash -e stops at the failing command first.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint; exit 0\n"
+      }
+    },
+    {
+      "name": "ci: the pull request branch filter widened",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    branches: [main]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    branches: [main, \"release/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "cov: a .coveragerc added that hides fail_under in pyproject.toml",
+      "expect": ["coverage-lowered"],
+      "note": "coverage.py reads .coveragerc first and then no other file. Found in review.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\"]\n"
+      },
+      "head": {
+        ".coveragerc": "[run]\nbranch = True\n"
+      }
+    },
+    {
+      "name": "lint: a ruff.toml added that selects fewer rules than pyproject.toml",
+      "expect": ["rule-disabled"],
+      "note": "Ruff reads ruff.toml before pyproject.toml. Found in review.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\"]\n"
+      },
+      "head": {
+        "ruff.toml": "[lint]\nselect = [\"E\"]\n"
+      }
+    },
+    {
+      "name": "lint: an empty eslint.config.js added next to .eslintrc.json",
+      "expect": ["rule-disabled"],
+      "note": "ESLint 9 reads only the flat config. Found in review.",
+      "base": {
+        ".eslintrc.json": "{\n  \"rules\": {\n    \"no-console\": \"error\",\n    \"eqeqeq\": \"error\"\n  }\n}\n",
+        "package.json": "{ \"name\": \"demo\" }\n"
+      },
+      "head": {
+        "eslint.config.js": "export default [];\n"
+      }
+    },
+    {
+      "name": "lint: a pyproject.toml change next to ruff.toml",
+      "expect": [],
+      "note": "pyproject's ruff settings are not read while ruff.toml exists.",
+      "base": {
+        "ruff.toml": "[lint]\nselect = [\"E\", \"F\"]\n",
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\"]\n"
+      }
+    },
+    {
+      "name": "nv: the stop hook replaced by one that only names fscale",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }] }]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"echo fscale\" }] }]\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: every Claude Code hook turned off in local settings",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }] }]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.local.json": "{\n  \"disableAllHooks\": true\n}\n"
+      }
+    },
+    {
+      "name": "nv: -n after the commit message",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip -n\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: a shortened --no-verify",
+      "expect": ["no-verify"],
+      "note": "git takes an unambiguous start of a long option. Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit --no-verif -m wip\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: hooks pointed elsewhere for one commit",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git -c core.hooksPath=.none commit -m wip\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: --no-verify inside a commit message",
+      "expect": [],
+      "note": "Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m 'docs: explain --no-verify'\"\n  }\n}\n"
+      }
     }
   ]
 }

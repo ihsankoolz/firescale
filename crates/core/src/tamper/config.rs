@@ -133,6 +133,107 @@ pub(crate) fn measures_of(path: &str, text: &str) -> Result<Vec<Measure>, usize>
     Ok(all)
 }
 
+/// Config files of one tool in one folder, in the order the tool picks
+/// them: it reads only the first one present that holds its settings (the
+/// marker, when the file is shared with other tools), and ignores the rest.
+struct Precedence {
+    /// The start of the tool's measure keys.
+    tool: &'static str,
+    files: &'static [(&'static str, Option<&'static str>)],
+}
+
+const PRECEDENCE: [Precedence; 3] = [
+    // coverage.py: `.coveragerc`, else the first of these with its settings.
+    Precedence {
+        tool: "coverage.py ",
+        files: &[
+            (".coveragerc", None),
+            ("setup.cfg", Some("[coverage:")),
+            ("tox.ini", Some("[coverage:")),
+            ("pyproject.toml", Some("[tool.coverage")),
+        ],
+    },
+    // Ruff: the closest of these, in this order.
+    Precedence {
+        tool: "ruff | ",
+        files: &[
+            (".ruff.toml", None),
+            ("ruff.toml", None),
+            ("pyproject.toml", Some("[tool.ruff")),
+        ],
+    },
+    // ESLint 9: a flat config wins over every eslintrc form.
+    Precedence {
+        tool: "eslint | ",
+        files: &[
+            ("eslint.config.js", None),
+            ("eslint.config.mjs", None),
+            ("eslint.config.cjs", None),
+            ("eslint.config.ts", None),
+            ("eslint.config.mts", None),
+            ("eslint.config.cts", None),
+            (".eslintrc.js", None),
+            (".eslintrc.cjs", None),
+            (".eslintrc.yaml", None),
+            (".eslintrc.yml", None),
+            (".eslintrc.json", None),
+            (".eslintrc", None),
+            ("package.json", Some("\"eslintConfig\"")),
+        ],
+    },
+];
+
+fn split_folder(path: &str) -> (&str, &str) {
+    path.rsplit_once('/').unwrap_or(("", path))
+}
+
+fn joined(folder: &str, name: &str) -> String {
+    if folder.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
+/// The other config files of the same tools in `path`'s folder: when one of
+/// them changes, all of them are read, since adding one can hide another.
+pub(crate) fn siblings(path: &str) -> Vec<String> {
+    let (folder, name) = split_folder(path);
+    PRECEDENCE
+        .iter()
+        .filter(|group| group.files.iter().any(|(file, _)| *file == name))
+        .flat_map(|group| group.files.iter().map(|(file, _)| joined(folder, file)))
+        .filter(|sibling| sibling != path)
+        .collect()
+}
+
+/// Drops the measures of files a tool does not read because another of its
+/// files in the same folder comes first. `texts` holds the config files of
+/// one side.
+pub(crate) fn drop_shadowed(measures: &mut Vec<Located>, texts: &BTreeMap<String, String>) {
+    measures.retain(|located| {
+        let (folder, name) = split_folder(&located.file);
+        for group in &PRECEDENCE {
+            if !located.measure.key.starts_with(group.tool)
+                || !group.files.iter().any(|(file, _)| *file == name)
+            {
+                continue;
+            }
+            let winner = group.files.iter().find(|(file, marker)| {
+                texts
+                    .get(&joined(folder, file))
+                    .is_some_and(|text| marker.is_none_or(|marker| text.contains(marker)))
+            });
+            if let Some((file, _)) = winner {
+                if *file != name {
+                    return false;
+                }
+            }
+        }
+        true
+    });
+}
+
 /// A measure and the file it is in.
 #[derive(Debug, Clone)]
 pub(crate) struct Located {

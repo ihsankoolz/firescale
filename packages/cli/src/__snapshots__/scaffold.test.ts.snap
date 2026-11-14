@@ -15,10 +15,11 @@ firescale
 
 core/ci-exists
   would create .github/workflows/ci.yml (and stage it with git add)
+  would create .github/workflows/tamper-guard.yml (and stage it with git add)
 
 --- /dev/null
 +++ b/.github/workflows/ci.yml
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,83 @@
 +# Created by firescale (core/ci-exists). \`fscale sync\` replaces this file
 +# with a newer one only while it is exactly as firescale wrote it (the
 +# digest on the last line says so). Once you edit it, it is yours, and
@@ -27,8 +28,6 @@ core/ci-exists
 +
 +on:
 +  pull_request:
-+  # Only for the tamper-guard job, which runs no code of the pull request.
-+  pull_request_target:
 +  push:
 +    branches: [<branch>]
 +
@@ -39,8 +38,8 @@ core/ci-exists
 +# to a branch has a group of its own, so it is never cancelled: it
 +# keeps the shared cache up to date.
 +concurrency:
-+  group: ci-\${{ github.event_name }}-\${{ github.event.pull_request.number || github.run_id }}
-+  cancel-in-progress: \${{ github.event_name != 'push' }}
++  group: ci-\${{ github.event.pull_request.number || github.run_id }}
++  cancel-in-progress: \${{ github.event_name == 'pull_request' }}
 +
 +jobs:
 +  # Pull requests: only the projects the change reaches, judged against
@@ -103,19 +102,38 @@ core/ci-exists
 +        with:
 +          path: .firescale/shared
 +          key: firescale-steps-\${{ runner.os }}-\${{ steps.image.outputs.id }}-\${{ hashFiles('.github/workflows/ci.yml') }}-\${{ hashFiles('.firescale/shared/*.json') }}
++# firescale-workflow: <digest>
+--- /dev/null
++++ b/.github/workflows/tamper-guard.yml
+@@ -0,0 +1,41 @@
++# Created by firescale (core/ci-exists). \`fscale sync\` replaces this file
++# with a newer one only while it is exactly as firescale wrote it (the
++# digest on the last line says so). Once you edit it, it is yours.
++#
++# The tamper guard. On pull_request_target GitHub runs this workflow as
++# the default branch has it, so a pull request cannot edit or remove it.
++# It runs no code from the pull request: it checks out the base branch,
++# fetches the pull request's commits as git objects, and compares what
++# merging them would change with the base GitHub names. Keep it that way:
++# never check out the pull request's files here, install them or run them.
++# To make it block, require the tamper-guard check in branch protection
++# and set verify.tamper to "enforced" on the default branch.
++name: Tamper guard
 +
-+  # The tamper guard. On pull_request_target GitHub runs this job as the
-+  # base branch's copy of this file has it, so a pull request cannot edit
-+  # or remove it. It runs no code from the pull request: it checks out the
-+  # base branch, fetches the pull request's commits as git objects, and
-+  # compares them with the base GitHub names. Keep it that way: never check
-+  # out the pull request's files here, install them or run them.
++on:
++  pull_request_target:
++
++permissions:
++  contents: read
++
++concurrency:
++  group: tamper-guard-\${{ github.event.pull_request.number }}
++  cancel-in-progress: true
++
++jobs:
 +  tamper-guard:
-+    if: github.event_name == 'pull_request_target'
 +    runs-on: ubuntu-latest
 +    cache-mode: none
-+    permissions:
-+      contents: read
 +    steps:
 +      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 +        with:
@@ -128,7 +146,7 @@ core/ci-exists
 +          node-version: 24
 +          package-manager-cache: false
 +      - run: npx --yes firescale@0.4.0 tamper --pr-base
-+# firescale-workflow: <digest>
++# firescale-workflow: a62e6bb52a83b9ce333bb3fd5c984d7c
 
 core/gitignore-basics
   would create .gitignore
@@ -159,7 +177,7 @@ core/readme-setup
 +npm run test
 +\`\`\`
 
-Dry run: 4 changes. Nothing was changed. Run \`fscale adopt\` to apply.
+Dry run: 5 changes. Nothing was changed. Run \`fscale adopt\` to apply.
 
 Left for you afterwards: 2 violations that a fix cannot repair. A person or an agent has to.
   core/scripts-present
@@ -169,6 +187,7 @@ Left for you afterwards: 2 violations that a fix cannot repair. A person or an a
 
 To review afterwards:
   core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/tamper-guard.yml: on pull_request_target it runs \`fscale tamper --pr-base\` as the default branch defines it, reading the pull request's commits without running them (ADR 0045). Require its tamper-guard check in branch protection, and set verify.tamper to "enforced", to make it block.
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 "
 `;
@@ -181,6 +200,7 @@ firescale
 
 core/ci-exists
   created .github/workflows/ci.yml (staged with git add)
+  created .github/workflows/tamper-guard.yml (staged with git add)
 
 core/gitignore-basics
   created .gitignore
@@ -188,7 +208,7 @@ core/gitignore-basics
 core/readme-setup
   created README.md (staged with git add)
 
-Done: 4 changes.
+Done: 5 changes.
 
 Left for you: 2 violations that a fix cannot repair. A person or an agent has to.
   core/scripts-present
@@ -198,6 +218,7 @@ Left for you: 2 violations that a fix cannot repair. A person or an agent has to
 
 To review:
   core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/tamper-guard.yml: on pull_request_target it runs \`fscale tamper --pr-base\` as the default branch defines it, reading the pull request's commits without running them (ADR 0045). Require its tamper-guard check in branch protection, and set verify.tamper to "enforced", to make it block.
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 
 Next: review the changes with \`git status\` and \`git diff\`, then commit them.
@@ -213,6 +234,7 @@ firescale
 
 core/ci-exists
   created .github/workflows/ci.yml (staged with git add)
+  created .github/workflows/tamper-guard.yml (staged with git add)
 
 core/gitignore-basics
   created .gitignore
@@ -220,12 +242,13 @@ core/gitignore-basics
 core/readme-setup
   created README.md (staged with git add)
 
-Done: 4 changes.
+Done: 5 changes.
 
 Left for you: no violations.
 
 To review:
   core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/tamper-guard.yml: on pull_request_target it runs \`fscale tamper --pr-base\` as the default branch defines it, reading the pull request's commits without running them (ADR 0045). Require its tamper-guard check in branch protection, and set verify.tamper to "enforced", to make it block.
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 
 Next: review the changes with \`git status\` and \`git diff\`, then commit them.
@@ -301,6 +324,7 @@ agent-ready/agent-permissions
 
 core/ci-exists
   created .github/workflows/ci.yml (staged with git add)
+  created .github/workflows/tamper-guard.yml (staged with git add)
 
 core/gitignore-basics
   created .gitignore
@@ -308,7 +332,7 @@ core/gitignore-basics
 core/readme-setup
   created README.md (staged with git add)
 
-Done: 56 changes.
+Done: 57 changes.
 
 Left for you: no violations.
 
@@ -317,6 +341,7 @@ To review:
   agent-ready/verify-hook: Codex runs a project's hooks only in a trusted project, and only after you approve the hook once in Codex (and again after it changes).
   agent-ready/agent-permissions: .cursor/cli.json follows Cursor's CLI permission format as far as it could be checked; Cursor's own docs could not be read when it was written. Check it once in Cursor.
   core/ci-exists: Review .github/workflows/ci.yml: it runs \`npx firescale verify\` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains).
+  core/ci-exists: Review .github/workflows/tamper-guard.yml: on pull_request_target it runs \`fscale tamper --pr-base\` as the default branch defines it, reading the pull request's commits without running them (ADR 0045). Require its tamper-guard check in branch protection, and set verify.tamper to "enforced", to make it block.
   core/readme-setup: README.md is a skeleton. Describe the project and complete the Install and Usage sections.
 
 Next: review the changes with \`git status\` and \`git diff\`, then commit them.

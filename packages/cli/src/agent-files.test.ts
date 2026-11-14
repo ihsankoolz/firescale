@@ -261,6 +261,7 @@ describe('a repo shaped like the course project', () => {
             '.env.example',
             'README.md',
             '.github/workflows/ci.yml',
+            '.github/workflows/tamper-guard.yml',
           ].includes(file) ||
           file.startsWith('.firescale/');
         expect(ours, `${file} was created`).toBe(true);

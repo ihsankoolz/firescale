@@ -28,8 +28,14 @@ pub(crate) fn reads(path: &str) -> bool {
     !name.contains('/') && (name.ends_with(".yml") || name.ends_with(".yaml"))
 }
 
-/// The kinds of event a workflow's checks count for.
-fn event_classes(entries: &[Entry]) -> BTreeSet<&'static str> {
+/// The kinds of event a workflow's checks count for. A `pull_request`
+/// whose `types` leave out every update of the pull request (`opened`,
+/// `synchronize`, `reopened`) does not count. A trigger with a `branches`,
+/// `paths` or `*-ignore` filter is a class of its own ("… (some changes)"),
+/// so adding a filter takes the checks away from every pull request, while
+/// editing a filter, renaming the file or adding a filtered workflow does
+/// not.
+fn event_classes(entries: &[Entry]) -> BTreeSet<String> {
     let mut events: BTreeSet<String> = BTreeSet::new();
     for entry in entries
         .iter()
@@ -48,17 +54,55 @@ fn event_classes(entries: &[Entry]) -> BTreeSet<&'static str> {
             }
         }
     }
+    let settings = |event: &str, key: &str| -> Vec<String> {
+        entries
+            .iter()
+            .filter(|e| {
+                e.path.len() >= 3 && e.path[0] == "on" && e.path[1] == event && e.path[2] == key
+            })
+            .map(|e| e.value.as_text())
+            .collect()
+    };
+    let filtered = |event: &str| {
+        ["branches", "paths", "branches-ignore", "paths-ignore"]
+            .iter()
+            .any(|key| {
+                entries.iter().any(|e| {
+                    e.path.len() >= 3
+                        && e.path[0] == "on"
+                        && e.path[1] == event
+                        && e.path[2] == *key
+                })
+            })
+    };
+    let class = |name: &str, event: &str| {
+        if filtered(event) {
+            format!("{name} (some changes)")
+        } else {
+            name.to_owned()
+        }
+    };
     let mut classes = BTreeSet::new();
     for event in &events {
         match event.as_str() {
-            "pull_request" | "pull_request_target" | "merge_group" => {
-                classes.insert("pull requests");
+            "pull_request" | "pull_request_target" => {
+                let types = settings(event, "types");
+                let updates = types.is_empty()
+                    || types
+                        .iter()
+                        .any(|t| matches!(t.as_str(), "opened" | "synchronize" | "reopened"));
+                if updates {
+                    classes.insert(class("pull requests", event));
+                }
+            }
+            "merge_group" => {
+                classes.insert("pull requests".to_owned());
             }
             "push" => {
-                classes.insert("pushes");
+                classes.insert(class("pushes", event));
             }
             "workflow_call" => {
-                classes.insert("calls");
+                classes.insert("calls".to_owned());
             }
             _ => {}
         }
@@ -90,7 +134,11 @@ fn never_fails(fields: &[&Entry]) -> Option<String> {
         let key = entry.path.last().map(String::as_str);
         match key {
             Some("continue-on-error") => {
-                if literal(&entry.value) != Some(false) {
+                // `${{ matrix.experimental }}` marks the matrix entries that
+                // may fail, the usual and visible way to allow one; any other
+                // value that is not literally false lets the step pass.
+                let per_entry = entry.value.as_text().contains("matrix.");
+                if literal(&entry.value) != Some(false) && !per_entry {
                     return Some(format!("continue-on-error: {}", entry.value.as_text()));
                 }
             }
@@ -107,6 +155,11 @@ pub(crate) fn measures(_path: &str, text: &str) -> Result<Vec<Measure>, usize> {
     let entries = formats::read(Format::Yaml, text)?;
     let classes = event_classes(&entries);
     let mut measures = Vec::new();
+    // `shell: bash` (on the step, the job or the workflow's defaults) runs
+    // with `-o pipefail`; GitHub's default `bash -e {0}` does not.
+    let workflow_bash = entries
+        .iter()
+        .any(|e| e.path == ["defaults", "run", "shell"] && e.value.as_text() == "bash");
     // Jobs and their steps.
     let jobs: BTreeSet<&String> = entries
         .iter()
@@ -124,6 +177,13 @@ pub(crate) fn measures(_path: &str, text: &str) -> Result<Vec<Measure>, usize> {
             .filter(|e| e.path.len() == 3)
             .collect();
         let job_reason = never_fails(&job_fields);
+        let job_bash = workflow_bash
+            || in_job.iter().any(|e| {
+                e.path.len() == 5
+                    && e.path[2] == "defaults"
+                    && e.path[4] == "shell"
+                    && e.value.as_text() == "bash"
+            });
         let steps: BTreeSet<&String> = in_job
             .iter()
             .filter(|e| e.path.len() >= 5 && e.path[2] == "steps")
@@ -139,21 +199,43 @@ pub(crate) fn measures(_path: &str, text: &str) -> Result<Vec<Measure>, usize> {
             let Some(run) = fields.iter().find(|e| e.path[4] == "run") else {
                 continue;
             };
+            let pipefail = job_bash
+                || fields
+                    .iter()
+                    .any(|e| e.path[4] == "shell" && e.value.as_text() == "bash");
             let script = run.value.as_text();
             let mut set_plus_e = false;
-            for (offset, line) in logical_lines(&script) {
+            let lines = logical_lines(&script);
+            let last = lines.len().saturating_sub(1);
+            for (number, (offset, line)) in lines.iter().enumerate() {
+                let offset = *offset;
                 if line.split_whitespace().collect::<Vec<_>>() == ["set", "+e"] {
                     set_plus_e = true;
                     continue;
                 }
-                for (command, rest) in commands(&line) {
+                for (command, rest) in commands(line) {
                     let Some(check) = check_of(&command) else {
                         continue;
                     };
+                    let after = rest.trim_start();
                     let reason = step_reason
                         .clone()
                         .or_else(|| set_plus_e.then(|| "set +e before it".to_owned()))
-                        .or_else(|| swallowed(&rest));
+                        .or_else(|| swallowed(&rest))
+                        .or_else(|| {
+                            (after.starts_with('&') && !after.starts_with("&&"))
+                                .then(|| "runs in the background with &".to_owned())
+                        })
+                        .or_else(|| {
+                            (after.starts_with("&&") && number != last).then(|| {
+                                "before && on a line that is not the last, where bash -e does not stop".to_owned()
+                            })
+                        })
+                        .or_else(|| {
+                            (after.starts_with('|') && !after.starts_with("||") && !pipefail).then(|| {
+                                "piped, and without pipefail the last command of the pipe decides".to_owned()
+                            })
+                        });
                     let shown: String = line.trim().chars().take(160).collect();
                     for class in &classes {
                         let (value, what) = match &reason {
@@ -223,7 +305,10 @@ fn commands(line: &str) -> Vec<(String, String)> {
                     cuts.push((index, index + 2));
                     index += 1;
                 }
-                ';' | '|' => cuts.push((index, index + 1)),
+                // `2>&1` and `&>` are redirections, not a background `&`.
+                '&' if index > 0 && matches!(bytes[index - 1], '>' | '<') => {}
+                '&' if bytes.get(index + 1) == Some(&'>') => {}
+                ';' | '|' | '&' => cuts.push((index, index + 1)),
                 _ => {}
             },
         }
@@ -242,25 +327,16 @@ fn commands(line: &str) -> Vec<(String, String)> {
 }
 
 /// Why what follows a command makes it unable to fail: `|| true`, `|| :`,
-/// `|| exit 0`, `|| echo …`, `; true`.
+/// `|| exit 0`, `|| echo …`. (`; true` is not: with GitHub's `bash -e` the
+/// step stops at the failing command before it.)
 fn swallowed(rest: &str) -> Option<String> {
-    let rest = rest.trim_start();
-    let (operator, tail) = match rest.strip_prefix("||") {
-        Some(tail) => ("||", tail),
-        None => (";", rest.strip_prefix(';')?),
-    };
+    let tail = rest.trim_start().strip_prefix("||")?;
     let next: Vec<&str> = tail.split_whitespace().take(2).collect();
-    let swallow = match next.as_slice() {
-        ["true", ..] | [":", ..] => true,
-        ["exit", "0", ..] => true,
-        ["echo" | "printf", ..] => operator == "||",
-        ["exit"] => operator == "||",
-        _ => false,
-    };
-    // `; true` only swallows when it ends the line.
-    let ends =
-        operator == "||" || tail.trim() == "true" || tail.trim() == ":" || tail.trim() == "exit 0";
-    (swallow && ends).then(|| format!("{operator} {}", next.join(" ")))
+    let swallow = matches!(
+        next.as_slice(),
+        ["true", ..] | [":", ..] | ["exit", "0", ..] | ["echo" | "printf", ..] | ["exit"]
+    );
+    swallow.then(|| format!("|| {}", next.join(" ")))
 }
 
 /// Script names that run checks.
@@ -335,25 +411,25 @@ pub(crate) fn check_of(command: &str) -> Option<String> {
         check_of(&words.join(" "))
     };
     match program {
+        // A package script, whichever manager runs it: moving from npm to
+        // pnpm keeps the key.
         "npm" | "pnpm" | "yarn" | "bun" => {
             let sub = sub?;
             let index = rest.iter().position(|w| *w == sub)?;
             match sub {
-                "test" | "t" | "tst" => Some(format!("{program} test")),
+                "test" | "t" | "tst" => Some("script test".to_owned()),
                 "run" | "run-script" => {
                     let script = rest
                         .get(index + 1..)?
                         .iter()
                         .find(|w| !w.starts_with('-'))?;
-                    is_check_script(script).then(|| format!("{program} {script}"))
+                    is_check_script(script).then(|| format!("script {script}"))
                 }
                 "exec" | "dlx" | "x" => runner(&rest[index + 1..]),
-                "lint" | "typecheck" | "check" | "verify" | "ci" if program != "npm" => {
-                    Some(format!("{program} {sub}"))
-                }
-                // `pnpm <script>` and `yarn <script>` run a script.
+                // `pnpm <script>`, `yarn <script>` and `bun <script>` run a
+                // script.
                 script if program != "npm" && is_check_script(script) => {
-                    Some(format!("{program} {script}"))
+                    Some(format!("script {script}"))
                 }
                 _ => None,
             }
@@ -503,8 +579,8 @@ mod tests {
     #[test]
     fn recognises_checks() {
         for (command, check) in [
-            ("pnpm test", "pnpm test"),
-            ("npm run test:unit -- --run", "npm test:unit"),
+            ("pnpm test", "script test"),
+            ("npm run test:unit -- --run", "script test:unit"),
             ("npx --yes firescale verify --affected", "fscale verify"),
             (
                 "npx --yes firescale@0.5.0 tamper --pr-base",
@@ -514,7 +590,7 @@ mod tests {
             ("python -m pytest tests", "pytest"),
             ("cargo test --workspace", "cargo test"),
             ("cargo fmt --all --check", "cargo fmt --check"),
-            ("yarn typecheck", "yarn typecheck"),
+            ("yarn typecheck", "script typecheck"),
             ("make lint", "make lint"),
             ("./node_modules/.bin/eslint .", "eslint"),
         ] {
@@ -539,7 +615,7 @@ mod tests {
             findings(BASE, &head),
             [
                 "11:base pnpm lint (on pull requests) is gone",
-                "11:base pnpm lint (on pushes) is gone"
+                "11:base pnpm lint (on pushes (some changes)) is gone"
             ]
         );
         // The lint step moved after the tests, and into the same script.
@@ -558,7 +634,7 @@ mod tests {
             findings(BASE, &swallowed),
             [
                 "15:now pnpm test || true (on pull requests; cannot fail)",
-                "15:now pnpm test || true (on pushes; cannot fail)",
+                "15:now pnpm test || true (on pushes (some changes); cannot fail)",
             ]
         );
         let continued = BASE.replace(
@@ -593,5 +669,93 @@ mod tests {
             .all(|f| f.contains("(on pull requests) is gone")));
         // A trigger added, or a branch filter edited, is not.
         assert!(findings(BASE, &BASE.replace("[main]", "[main, release]")).is_empty());
+    }
+
+    #[test]
+    fn narrower_triggers_are_findings() {
+        for (from, to) in [
+            (
+                "  pull_request:\n",
+                "  pull_request:\n    branches: [nope]\n",
+            ),
+            (
+                "  pull_request:\n",
+                "  pull_request:\n    paths: [\"nothing/**\"]\n",
+            ),
+            (
+                "  pull_request:\n",
+                "  pull_request:\n    types: [closed]\n",
+            ),
+            (
+                "  pull_request:\n",
+                "  pull_request:\n    paths-ignore: [\"src/**\"]\n",
+            ),
+        ] {
+            assert!(!findings(BASE, &BASE.replace(from, to)).is_empty(), "{to}");
+        }
+        // Editing an existing filter, or adding the types every pull request
+        // update has, is not.
+        let filtered = BASE.replace(
+            "  pull_request:\n",
+            "  pull_request:\n    branches: [main]\n",
+        );
+        assert!(findings(&filtered, &filtered.replace("[main]", "[main, next]")).is_empty());
+        let typed = BASE.replace(
+            "  pull_request:\n",
+            "  pull_request:\n    types: [opened, synchronize]\n",
+        );
+        assert!(findings(BASE, &typed).is_empty());
+    }
+
+    #[test]
+    fn shell_forms_that_cannot_fail_are_findings_and_the_ones_that_can_are_not() {
+        for (to, why) in [
+            ("pnpm test &\n          wait\n", "background"),
+            ("pnpm test && echo ok\n          echo done\n", "bash -e"),
+            ("pnpm test | tee out.log\n", "pipefail"),
+        ] {
+            let found = findings(BASE, &BASE.replace("pnpm test\n", to));
+            assert!(found.iter().any(|f| f.contains(why)), "{to}: {found:?}");
+        }
+        for to in [
+            "pnpm test && echo ok\n",
+            "pnpm test 2>&1\n",
+            "pnpm test; exit 0\n",
+            "pnpm test || exit 1\n",
+        ] {
+            assert!(
+                findings(BASE, &BASE.replace("pnpm test\n", to)).is_empty(),
+                "{to}"
+            );
+        }
+        // With `shell: bash` the pipe fails as its first command does.
+        let bash = BASE.replace(
+            "      - name: Tests\n",
+            "      - name: Tests\n        shell: bash\n",
+        );
+        assert!(findings(
+            &bash,
+            &bash.replace("pnpm test\n", "pnpm test | tee out.log\n")
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn honest_workflow_edits_are_not_findings() {
+        // npm to pnpm keeps the scripts.
+        let npm = BASE
+            .replace("pnpm", "npm run")
+            .replace("npm run install --frozen-lockfile", "npm ci");
+        assert!(
+            findings(&npm, BASE).is_empty(),
+            "{:?}",
+            findings(&npm, BASE)
+        );
+        // A matrix entry allowed to fail.
+        let matrix = BASE.replace(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    continue-on-error: ${{ matrix.experimental }}\n",
+        );
+        assert!(findings(BASE, &matrix).is_empty());
     }
 }
