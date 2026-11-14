@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use firescale_core::agentrun::{
-    append_ledger, diff_guard, now_utc, repo_limits, Adapter, AgentResult, LedgerEntry, Policy,
-    ProgramAdapter, RepoState, Request, RunWorktree,
+    append_ledger, diff_guard, now_utc, repo_limits, staged_changes, Adapter, AgentResult,
+    LedgerEntry, Policy, ProgramAdapter, RepoState, Request, RunWorktree,
 };
 use firescale_core::blame::BaseCommit;
 use firescale_core::check::run_check;
@@ -176,6 +176,17 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
             "rule \"{rule_id}\" is not enabled in this repo. `fscale check` lists the rules that are."
         )));
     };
+    // Secrets in the code itself: no agent run until they are gone.
+    if outcome
+        .report
+        .diagnostics
+        .iter()
+        .any(|d| d.rule_id == "core/no-secrets-in-source")
+    {
+        return Err(Error::user(
+            "core/no-secrets-in-source has findings: there may be keys or tokens in tracked files. Remove them before any agent run (`fscale explain core/no-secrets-in-source`).",
+        ));
+    }
     let diagnostics: Vec<&firescale_core::report::ReportedDiagnostic> = outcome
         .report
         .diagnostics
@@ -196,7 +207,8 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     allowed.extend(diagnostics.iter().map(|d| d.file.clone()));
     let description = rule.meta.description.clone();
 
-    // 2. Isolation: a worktree on a new branch.
+    // 2. Isolation: a worktree on a new branch, rolled back when dropped
+    // unless the run passes.
     let base = run_git(root, &["rev-parse", "HEAD"])?
         .stdout
         .trim()
@@ -212,6 +224,15 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     // 3 to 6. A scoped request under the policy.
     let (max_turns, max_cost, timeout) = limits(root);
     let policy = Policy::strict(&limits_of_repo, &protected, max_turns, max_cost, timeout);
+    if !policy
+        .allowed_tools
+        .iter()
+        .any(|tool| tool == "Edit" || tool == "Write")
+    {
+        return Err(Error::user(
+            "the repo's own agent settings deny every tool that edits files; an agent run never has wider permissions than they give.",
+        ));
+    }
     let request = Request {
         cwd: worktree.path.to_string_lossy().into_owned(),
         rule: rule_id.clone(),
@@ -229,27 +250,23 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         },
     };
 
-    let run = judge(
+    let mut protected_all = protected.clone();
+    protected_all.extend(limits_of_repo.denied_paths.iter().cloned());
+    let run = judge(&Judged {
         root,
-        &worktree.path,
-        &base,
-        &agent,
-        &policy,
-        &allowed,
-        &protected,
-        &rule_id,
-        &before,
-        &branch,
-    );
-    let run = match run {
-        Ok(run) => run,
-        Err(error) => {
-            worktree.roll_back();
-            return Err(error);
-        }
-    };
+        worktree: &worktree.path,
+        base: &base,
+        agent: &agent,
+        policy: &policy,
+        allowed: &allowed,
+        protected: &protected_all,
+        rule_id: &rule_id,
+        before: &before,
+        branch: &branch,
+    })?;
 
-    // 8 and 9. Pass: one commit with trailers. Fail: roll back.
+    // 8 and 9. Pass: one commit with trailers. Fail: roll back (the
+    // worktree guard does it when dropped).
     let mut out = String::new();
     let passed = run.result == "pass";
     if passed {
@@ -262,7 +279,6 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
             &["commit", "--quiet", "--no-verify", "-m", &message],
         )?;
         if committed.code != 0 {
-            worktree.roll_back();
             return Err(Error::user(format!(
                 "the fix could not be committed: {}",
                 committed.stderr.trim()
@@ -278,7 +294,7 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
             if run.lines == 1 { "" } else { "s" },
         ));
     } else {
-        worktree.roll_back();
+        drop(worktree);
         out.push_str(&format!(
             "fix --agent {}: FAILED - {rule_id}: {}. The run was rolled back; your branch and files are untouched.\n",
             adapter.name(),
@@ -287,7 +303,7 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     }
     out.push_str(&format!("Agent: {}\n", version_line));
 
-    // 10. The ledger.
+    // 10. The ledger: codes and counts only.
     let entry = LedgerEntry {
         schema: 1,
         time: now_utc(),
@@ -298,7 +314,7 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         files_changed: run.files,
         lines_changed: run.lines,
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-        cost_usd: run.agent.cost_usd,
+        cost_usd: run.agent.cost_usd.filter(|c| c.is_finite() && *c >= 0.0),
         turns: run.agent.turns,
     };
     append_ledger(root, &entry)?;
@@ -309,21 +325,50 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     })
 }
 
-/// Guardrails 5, 7 and 8, and the rule against pushing or tagging: what
-/// the run did, judged in the worktree. Stages the change when it passes.
-#[allow(clippy::too_many_arguments)]
-fn judge(
-    root: &Path,
-    worktree: &Path,
-    base: &str,
-    agent: &AgentResult,
-    policy: &Policy,
-    allowed: &[String],
-    protected: &[String],
-    rule_id: &str,
-    before: &RepoState,
-    branch: &str,
-) -> Result<Run> {
+/// What `judge` looks at.
+struct Judged<'a> {
+    root: &'a Path,
+    worktree: &'a Path,
+    base: &'a str,
+    agent: &'a AgentResult,
+    policy: &'a Policy,
+    allowed: &'a [String],
+    protected: &'a [String],
+    rule_id: &'a str,
+    before: &'a RepoState,
+    branch: &'a str,
+}
+
+/// The environment of the agent, set on this process while the re-check
+/// runs code the agent wrote (rules, tests), and taken off again.
+struct AgentEnvironment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl AgentEnvironment {
+    fn set() -> Self {
+        let mut old = Vec::new();
+        for (name, value) in firescale_core::agentrun::agent_env() {
+            old.push((name, env::var_os(name)));
+            env::set_var(name, value);
+        }
+        Self(old)
+    }
+}
+
+impl Drop for AgentEnvironment {
+    fn drop(&mut self) {
+        for (name, value) in self.0.drain(..) {
+            match value {
+                Some(value) => env::set_var(name, value),
+                None => env::remove_var(name),
+            }
+        }
+    }
+}
+
+/// Guardrails 5, 7 and 8, and nothing outside the worktree: what the run
+/// did, judged against the commit it started from. Stages the change.
+fn judge(j: &Judged<'_>) -> Result<Run> {
+    let agent = j.agent;
     let fail = |reason: &'static str, detail: String, files: usize, lines: usize| Run {
         result: "fail",
         reason: Some(reason),
@@ -332,38 +377,70 @@ fn judge(
         lines,
         agent: agent.clone(),
     };
-    // Stage everything to measure it, tracked or new.
-    let _ = run_git(worktree, &["add", "--all"]);
-    let changed = git_lines(
-        worktree,
+    // Stage everything, tracked or new, and compare with the base commit,
+    // not the worktree's HEAD: a commit the agent made itself counts too.
+    let _ = run_git(j.worktree, &["add", "--all"]);
+    let changed = staged_changes(j.worktree, j.base);
+    let lines: usize = git_lines(
+        j.worktree,
         &[
-            "-c",
-            "core.quotepath=off",
             "diff",
             "--cached",
-            "--name-only",
+            "--numstat",
+            "--no-renames",
+            j.base,
+            "--",
         ],
-    );
-    let lines: usize = git_lines(worktree, &["diff", "--cached", "--numstat"])
-        .iter()
-        .map(|line| {
-            line.split_whitespace()
-                .take(2)
-                .filter_map(|n| n.parse::<usize>().ok())
-                .sum::<usize>()
-        })
-        .sum();
+    )
+    .iter()
+    .map(|line| {
+        line.split_whitespace()
+            .take(2)
+            .filter_map(|n| n.parse::<usize>().ok())
+            .sum::<usize>()
+    })
+    .sum();
     let files = changed.len();
 
     // Nothing outside the worktree: refs, git config, hooks, your HEAD and
     // files. A change there fails the run and is put back where it can be.
-    let after = RepoState::capture(root);
-    let outside = before.changes(&after, branch);
+    let after = RepoState::capture(j.root);
+    let outside = j.before.changes(&after, j.branch);
     if !outside.is_empty() {
-        before.restore(root, &after, branch);
+        j.before.restore(j.root, &after, j.branch);
         return Ok(fail(
             "outside-worktree",
             format!("the agent {}", outside.join(", ")),
+            files,
+            lines,
+        ));
+    }
+    let head = git_lines(j.worktree, &["rev-parse", "HEAD"]).join("");
+    if head != j.base {
+        return Ok(fail(
+            "agent-committed",
+            "the agent made commits of its own; firescale makes the run's one commit".to_owned(),
+            files,
+            lines,
+        ));
+    }
+    // Ignored files are not in the diff, but a re-check would see them.
+    let ignored: Vec<String> = git_lines(
+        j.worktree,
+        &[
+            "status",
+            "--porcelain",
+            "--ignored",
+            "--untracked-files=all",
+        ],
+    )
+    .into_iter()
+    .filter_map(|line| line.strip_prefix("!! ").map(str::to_owned))
+    .collect();
+    if let Some(path) = ignored.first() {
+        return Ok(fail(
+            "diff-guard",
+            format!("it created the ignored file {path}"),
             files,
             lines,
         ));
@@ -373,7 +450,7 @@ fn judge(
             .error
             .clone()
             .unwrap_or_else(|| "the agent reported an error".to_owned());
-        let reason = if detail.contains("time limit") {
+        let reason = if agent.timed_out {
             "timeout"
         } else {
             "agent-error"
@@ -381,12 +458,20 @@ fn judge(
         return Ok(fail(reason, detail, files, lines));
     }
     if let Some(cost) = agent.cost_usd {
-        if cost > policy.max_cost_usd {
+        if !cost.is_finite() || cost < 0.0 {
+            return Ok(fail(
+                "agent-error",
+                "the agent reported a cost that is not a number of 0 or more".to_owned(),
+                files,
+                lines,
+            ));
+        }
+        if cost > j.policy.max_cost_usd {
             return Ok(fail(
                 "over-budget",
                 format!(
                     "the agent spent ${cost:.2}, over the limit of ${:.2}",
-                    policy.max_cost_usd
+                    j.policy.max_cost_usd
                 ),
                 files,
                 lines,
@@ -394,12 +479,12 @@ fn judge(
         }
     }
     if let Some(turns) = agent.turns {
-        if turns > policy.max_turns {
+        if turns > j.policy.max_turns {
             return Ok(fail(
                 "over-budget",
                 format!(
                     "the agent took {turns} turns, over the limit of {}",
-                    policy.max_turns
+                    j.policy.max_turns
                 ),
                 files,
                 lines,
@@ -414,21 +499,24 @@ fn judge(
             0,
         ));
     }
-    // 7. The diff guard.
-    if let Some(why) = diff_guard(&changed, allowed, protected) {
+    // 7. The diff guard, both sides of every path.
+    if let Some(why) = diff_guard(&changed, j.allowed, j.protected) {
         return Ok(fail("diff-guard", why, files, lines));
     }
-    // 8. The re-check: the rule again, in the worktree.
+    // 8. The re-check runs code the agent may have written: under the
+    // agent's environment, and the repo is checked again after it.
+    let guard = AgentEnvironment::set();
     let packs = firescale_rules::builtin_packs();
-    let mut host = NodeHost::new(worktree);
-    let config = load_config(worktree, &packs, &mut host)?;
+    let mut host = NodeHost::new(j.worktree);
+    let config = load_config(j.worktree, &packs, &mut host)?;
     let selection = select_rules(config.rules, None)?;
-    let outcome = run_check(worktree, &selection.rules, version(), &mut host, false)?;
+    let outcome = run_check(j.worktree, &selection.rules, version(), &mut host, false)?;
+    drop(host);
     let left = outcome
         .report
         .diagnostics
         .iter()
-        .filter(|d| d.rule_id == rule_id)
+        .filter(|d| d.rule_id == j.rule_id)
         .count();
     if left > 0 {
         return Ok(fail(
@@ -444,10 +532,10 @@ fn judge(
     // The referee: the tamper guard over the diff, and blame-aware verify.
     let base_commit = BaseCommit {
         reference: "the commit the run started from".to_owned(),
-        commit: base.to_owned(),
+        commit: j.base.to_owned(),
     };
-    let changed_set = changed.iter().cloned().collect();
-    let report = tamper::guard(worktree, &base_commit, &changed_set);
+    let changed_set = changed.iter().map(|c| c.path.clone()).collect();
+    let report = tamper::guard(j.worktree, &base_commit, &changed_set);
     if let Some(finding) = report.findings.first() {
         return Ok(fail(
             "tamper",
@@ -462,12 +550,27 @@ fn judge(
             lines,
         ));
     }
-    let mut verify_args = Args {
-        base: Some(base.to_owned()),
+    let verify_args = Args {
+        base: Some(j.base.to_owned()),
         ..Args::default()
     };
-    verify_args.no_cache = false;
-    let (verify, _) = crate::verify_report(worktree, &verify_args, false, crate::VerifyMode::Full)?;
+    let (verify, _) =
+        crate::verify_report(j.worktree, &verify_args, false, crate::VerifyMode::Full)?;
+    drop(guard);
+    let after_checks = RepoState::capture(j.root);
+    let outside = j.before.changes(&after_checks, j.branch);
+    if !outside.is_empty() {
+        j.before.restore(j.root, &after_checks, j.branch);
+        return Ok(fail(
+            "outside-worktree",
+            format!(
+                "code from the change, run by the re-check, {}",
+                outside.join(", ")
+            ),
+            files,
+            lines,
+        ));
+    }
     if !verify.ok {
         return Ok(fail(
             "verify",

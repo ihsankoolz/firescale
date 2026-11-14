@@ -20,7 +20,9 @@ import {
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
 
-const APP = 'export const url = process.env.API_URL;\nexport const add = (a, b) => a + b;\n';
+// Built from parts, so this repo's own core/env-example does not read the
+// fixture's code as code of this repo.
+const APP = `export const url = ${['process', 'env', 'API_URL'].join('.')};\nexport const add = (a, b) => a + b;\n`;
 const TEST =
   'import { add } from "./app.js";\n\ntest("adds", () => {\n  expect(add(1, 2)).toBe(3);\n});\n';
 const RULE = 'core/env-example';
@@ -92,9 +94,7 @@ async function fix(root: string, scenario: Scenario, extra: string[] = ['--rule'
   const requests = logged
     .split('\n')
     .filter(Boolean)
-    .map(
-      (line) => JSON.parse(line) as { request: Request; cwd: string; gitConfigKey: string | null },
-    );
+    .map((line) => JSON.parse(line) as { request: Request; cwd: string; gitConfigKeys: string[] });
   return { ...result, requests };
 }
 
@@ -205,7 +205,7 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
         '*.pem',
         '*.key',
         '**/secrets/**',
-        '.claude/**',
+        '**/.claude/**',
       ]),
     );
 
@@ -245,8 +245,11 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
     const result = await fix(root, GOOD);
     expect(result.requests[0]?.request.policy.loadProjectConfig).toBe(false);
     // And pushes from inside the run go nowhere.
-    expect(result.requests[0]?.gitConfigKey).toBe(
-      'url.file:///firescale-runner-never-pushes/.pushInsteadOf',
+    expect(result.requests[0]?.gitConfigKeys).toEqual(
+      expect.arrayContaining([
+        'protocol.allow',
+        'url.file:///firescale-runner-never-pushes/.pushInsteadOf',
+      ]),
     );
   });
 
@@ -319,21 +322,15 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
     await fix(root, { write: { '.env.example': 'OTHER=\n' }, result: { ok: true, costUsd: 0.05 } });
     const lines = await ledger(root);
     expect(lines).toHaveLength(2);
-    const keys = new Set([
-      'schema',
-      'time',
-      'rule',
-      'agent',
-      'result',
-      'reason',
-      'filesChanged',
-      'linesChanged',
-      'durationMs',
-      'costUsd',
-      'turns',
-    ]);
+    const schema = JSON.parse(
+      await readFile(
+        new URL('../../../docs/schemas/ledger-entry.schema.json', import.meta.url),
+        'utf8',
+      ),
+    ) as object;
+    const valid = new Ajv({ strict: true }).compile(schema);
     for (const line of lines) {
-      for (const key of Object.keys(line)) expect(keys.has(key), key).toBe(true);
+      expect(valid(line), JSON.stringify(valid.errors)).toBe(true);
       expect(line.schema).toBe(1);
       expect(line.time).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/);
       expect(line.rule).toBe(RULE);
@@ -409,5 +406,106 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
     const result = await fix(root, { ...GOOD, write: { ...GOOD.write, [outside]: 'changed\n' } });
     expect(result.code).toBe(EXIT_VIOLATIONS);
     expect(result.stdout).toContain('changed files in your checkout');
+  });
+
+  describe('after review', () => {
+    it('a commit the agent makes itself, or a protected file renamed away, fails the run', async () => {
+      const root = await repo({ '.husky/pre-commit': 'pnpm --silent fscale verify\n' });
+      const committed = await fix(root, {
+        write: { '.env.example': 'API_URL=\n', '.claude/settings.json': '{}\n' },
+        commands: [
+          ['git', 'add', '.claude/settings.json'],
+          [
+            'git',
+            '-c',
+            'user.name=a',
+            '-c',
+            'user.email=a@b.invalid',
+            'commit',
+            '--quiet',
+            '-m',
+            'sneaky',
+          ],
+        ],
+        result: { ok: true },
+      });
+      expect(committed.code).toBe(EXIT_VIOLATIONS);
+      expect(committed.stdout).toContain('made commits of its own');
+      const renamed = await fix(root, {
+        write: {
+          '.env.example': 'API_URL=\n',
+          '.husky/pre-commit': null,
+          'src/hook.js': 'pnpm --silent fscale verify\n',
+        },
+        result: { ok: true },
+      });
+      expect(renamed.code).toBe(EXIT_VIOLATIONS);
+      expect(renamed.stdout).toContain('protected path .husky/pre-commit');
+      expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
+    });
+
+    it('a remote with its own pushurl still gets no push', async () => {
+      const root = await repo();
+      const remote = path.join(root, '..', `remote-url-${path.basename(root)}.git`);
+      await runGit(path.dirname(root), ['init', '--quiet', '--bare', remote]);
+      await git(root, 'remote', 'add', 'origin', remote);
+      await git(root, 'config', 'remote.origin.pushurl', remote);
+      await fix(root, { ...GOOD, commands: [['git', 'push', 'origin', 'HEAD:refs/heads/agent']] });
+      expect((await runGit(path.dirname(root), ['--git-dir', remote, 'for-each-ref'])).stdout).toBe(
+        '',
+      );
+    });
+
+    it("the repo's deny and ask rules narrow the run, and a repo that denies every edit is refused", async () => {
+      const scoped = await repo({
+        '.claude/settings.json': JSON.stringify({
+          permissions: { deny: ['Edit(src/**)'], ask: ['Bash'] },
+        }),
+      });
+      const result = await fix(scoped, {
+        ...GOOD,
+        write: { ...GOOD.write, 'src/app.js': APP + '// x\n' },
+      });
+      expect(result.code).toBe(EXIT_VIOLATIONS);
+      expect(result.stdout).toContain('protected path src/app.js');
+      expect(result.requests[0]?.request.policy.deniedCommands).toContain('Bash');
+      const none = await repo({
+        '.claude/settings.json': JSON.stringify({ permissions: { deny: ['Edit'] } }),
+      });
+      const refused = await fix(none, GOOD);
+      expect(refused.code).toBe(EXIT_USAGE);
+      expect(refused.stderr).toContain('deny every tool that edits files');
+      expect(refused.requests).toEqual([]);
+    });
+
+    it('a secret in the code itself stops the run before it starts', async () => {
+      const key = ['AKIA', 'IOSFODNN7', 'EXAMPLX'].join('');
+      const root = await repo({ 'src/aws.js': `export const key = "${key}";\n` });
+      const result = await fix(root, GOOD);
+      expect(result.code).toBe(EXIT_USAGE);
+      expect(result.stderr).toContain('core/no-secrets-in-source has findings');
+      expect(result.requests).toEqual([]);
+    });
+
+    it('the ledger reason comes from the runner, not from what the agent says, and a cost below 0 is an error', async () => {
+      const root = await repo();
+      await fix(root, { ...GOOD, result: { ok: false, error: 'hit the time limit' } });
+      await fix(root, { ...GOOD, result: { ok: true, costUsd: -50 } });
+      const lines = await ledger(root);
+      expect(lines.map((line) => line.reason)).toEqual(['agent-error', 'agent-error']);
+      expect(lines.every((line) => line.costUsd === undefined)).toBe(true);
+    });
+
+    it('a worktree the agent locked is still removed when the run fails', async () => {
+      const root = await repo();
+      const result = await fix(root, {
+        write: { '.env.example': 'OTHER=\n' },
+        commands: [['git', 'worktree', 'lock', '.']],
+        result: { ok: true },
+      });
+      expect(result.code).toBe(EXIT_VIOLATIONS);
+      expect((await git(root, 'worktree', 'list')).split('\n')).toHaveLength(1);
+      expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
+    });
   });
 });

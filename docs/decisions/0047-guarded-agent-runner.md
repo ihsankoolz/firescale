@@ -42,10 +42,30 @@ The request file is written to the system's temporary folder and removed after t
 - **Any tamper finding fails a run**, approval kinds too: the run is local, and ADR 0046 decides nothing can be approved locally.
 - **Failure leaves nothing**: the worktree and the branch go; only the ledger line stays.
 
+## After the review
+
+A fresh subagent tried to break the runner with the stand-in agent and reproduced, all fixed with tests (`agent-runner.test.ts`, "after review", and unit tests):
+
+- **The agent could commit protected files to the run's own branch**, which the diff (against the worktree's `HEAD`) did not show. The diff is now against the commit the run started from, and a run whose branch moved is `agent-committed`.
+- **A rename hid a protected file's deletion.** The diff is `--no-renames`, so both sides of every path are checked.
+- **Code the agent wrote ran unguarded during the re-check** (a test that pushes). The re-check and verify now run under the agent's environment, and the repo's refs, config, hooks and checkout are compared again after them.
+- **A remote with its own `pushurl` ignored `pushInsteadOf`.** Every agent process also gets `protocol.allow=never` and `GIT_SSH_COMMAND=false`: no transport at all.
+- **Refs, the git config, hooks and the checkout outside the worktree** could be changed through the shared repo (`git update-ref`, `git config`, a new branch, a write through an absolute path). They are compared before and after; refs, config and hooks are put back, and the run fails.
+- **A locked worktree, or an error on the way out, left the worktree behind.** The worktree is a drop guard: every way out of a run unlocks and removes it, deletes its folder and its branch.
+- **Repo rules were half applied**: `Edit` denied left `Write` allowed; `Edit(src/**)` was not enforced; `ask` was ignored. Now `Edit` takes `Write` with it, scoped `Edit`/`Write`/`Read` globs are protected paths for the diff guard, `ask` counts as `deny`, and a repo that denies every edit is refused.
+- **Secrets in the code** (not in file names) did not stop a run: `core/no-secrets-in-source` findings now refuse it.
+- **The diff guard missed secrets the pre-flight knew** (`api/.env.production`, `.envrc`), letter case (`.ENV`, `.CLAUDE/`), nested agent folders and `.mcp.json`, and `\` in `protectedPaths`. It now uses the same `is_secret`, compares in lower case with `/`, and matches the agent folders at any depth.
+- **Links and submodules** were committed (mode 120000, 160000): now rejected.
+- **The agent could choose the ledger's reason** ("hit the time limit" read as `timeout`) and write a negative cost. The reason comes from the runner only, and a cost below 0 is an `agent-error`.
+- **Ignored files** the agent created were outside the diff but seen by the re-check: a run that creates one fails.
+
 ## Known limits
 
 - The `fake` adapter is the only one; whether a real agent respects `loadProjectConfig: false`, the tool lists and the budget depends on its adapter's flags (M28).
 - The push guard is a git setting in the environment: an agent with a shell could unset it. The policy denies the shell, and the runner itself never pushes.
+- **A process the agent detaches** (`setsid`, a daemon) outlives the run's process tree: it can change files or refs after every check has passed. Stopping it would need a cgroup or a job object around the whole run; not done.
+- Other files in `.git` (`info/exclude`, reflogs) are not compared; files changed in your checkout are reported, not put back.
+- The `agent` limits are read from `firescale.config.json` only, not from a `firescale.config.ts`.
 - The cost limit is checked after the run, on what the agent reports; an agent that does not report cost is held only by the turn and time limits.
 - Tags are compared by name before and after; a tag created and deleted inside the run, or a ref other than a tag, is not seen.
 - Re-check runs the whole of verify against `HEAD` in the worktree, so a run costs a verify; the worktree has no installed dependencies unless the repo's `verify.baseInstall` provides them (ADR 0037).

@@ -150,7 +150,12 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 - **The rule's `inputs` and its diagnostics' files are what a fix may change.**
 - **Any tamper finding fails a run**, including a changed snapshot or expected value.
 - **`.env.example` and other templates are not secrets**; every other `.env*` is.
-- **Pushes inside a run are pointed at a path that does not exist** through git's `pushInsteadOf`, as well as denied in the policy.
+- **Git in a run can reach no remote** (`pushInsteadOf` and `protocol.allow=never`), as well as push being denied in the policy.
+- **`ask` rules in the repo's Claude Code settings count as `deny`**: a run has no person to ask.
+
+**The review** (ADR 0047, "After the review") reproduced twelve ways around the guardrails (the agent committing protected files to its own branch, a rename hiding a deletion, unguarded code in the re-check, `pushurl`, refs and config of the shared repo, locked worktrees, half-applied deny rules, secrets in code, case and nesting in the diff guard, links, agent-chosen ledger reasons, ignored files); all fixed with tests. Left as limits: a process the agent detaches outlives the run; `info/exclude` and reflogs are not compared.
+
+**Not testable here:** a real agent run (M28's manual test).
 
 ## M26 — Tamper guard: approvals and measured rates
 

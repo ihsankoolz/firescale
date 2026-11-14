@@ -45,28 +45,39 @@ pub const SECRET_PATHS: [&str; 16] = [
     "**/id_rsa*",
 ];
 
-/// True for a path that holds secrets: any `.env` or `.env.*` file that is
-/// not a template, and the [`SECRET_PATHS`].
+/// True for a path that holds secrets: any `.env`, `.env.*` or `.envrc`
+/// file that is not a template, the [`SECRET_PATHS`], and anything in a
+/// `secrets` folder. Letter case and `\\` separators do not matter (macOS
+/// and Windows file systems ignore case).
 #[must_use]
 pub fn is_secret(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    let env_file = name == ".env" || name.starts_with(".env.");
+    let path = normalise(path);
+    let name = path.rsplit('/').next().unwrap_or(&path);
+    let env_file = name == ".env" || name.starts_with(".env.") || name == ".envrc";
     let named: Vec<String> = SECRET_PATHS.iter().map(|p| (*p).to_owned()).collect();
-    !is_example(path) && (env_file || matches_any(path, &named) || path.starts_with("secrets/"))
+    let in_secrets = path.split('/').rev().skip(1).any(|part| part == "secrets");
+    !is_example(&path) && (env_file || in_secrets || matches_any(&path, &named))
+}
+
+/// A path as the guards compare it: `/` separators, lower case.
+#[must_use]
+pub fn normalise(path: &str) -> String {
+    path.replace('\\', "/").to_lowercase()
 }
 
 /// Paths a fix may never change (guardrail 7): the secrets, git itself,
 /// firescale's config, and the agents' own settings and hooks.
-pub const PROTECTED_PATHS: [&str; 9] = [
-    ".git/**",
+pub const PROTECTED_PATHS: [&str; 10] = [
+    "**/.git/**",
+    "**/.gitmodules",
     "firescale.config.json",
     "firescale.config.ts",
-    ".claude/**",
-    ".codex/**",
-    ".cursor/**",
-    ".husky/**",
-    ".firescale/**",
-    ".mcp.json",
+    "**/.claude/**",
+    "**/.codex/**",
+    "**/.cursor/**",
+    "**/.husky/**",
+    "**/.firescale/**",
+    "**/.mcp.json",
 ];
 
 /// Commands an agent may never run, whatever the repo allows: the runner
@@ -119,6 +130,9 @@ pub struct RepoLimits {
     /// The repo's settings let no agent edit files (Codex `sandbox_mode =
     /// "read-only"`, Claude Code `defaultMode: "plan"`).
     pub read_only: Option<String>,
+    /// Paths the repo's settings deny editing (`Edit(src/**)`,
+    /// `Write(./docs/**)`): the diff guard protects them.
+    pub denied_paths: Vec<String>,
 }
 
 /// Reads what the repo's agent settings deny: `.claude/settings.json` (and
@@ -136,14 +150,32 @@ pub fn repo_limits(root: &Path) -> RepoLimits {
         else {
             continue;
         };
-        if let Some(deny) = value
-            .pointer("/permissions/deny")
-            .and_then(serde_json::Value::as_array)
-        {
-            for rule in deny.iter().filter_map(serde_json::Value::as_str) {
+        // `ask` needs a person, and a run has none: it counts as `deny`.
+        for list in ["/permissions/deny", "/permissions/ask"] {
+            let Some(rules) = value.pointer(list).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for rule in rules.iter().filter_map(serde_json::Value::as_str) {
                 limits.denied.push(rule.to_owned());
-                if !rule.contains('(') {
-                    limits.denied_tools.insert(rule.to_owned());
+                match rule.split_once('(') {
+                    None => {
+                        limits.denied_tools.insert(rule.to_owned());
+                        // In Claude Code, Edit stands for every tool that
+                        // edits files.
+                        if rule == "Edit" {
+                            limits.denied_tools.insert("Write".to_owned());
+                        }
+                    }
+                    Some(("Edit" | "Write" | "Read", rest)) => {
+                        let glob = rest
+                            .trim_end_matches(')')
+                            .trim_start_matches("./")
+                            .trim_start_matches('/');
+                        if !glob.is_empty() {
+                            limits.denied_paths.push(glob.to_owned());
+                        }
+                    }
+                    Some(_) => {}
                 }
             }
         }
@@ -182,6 +214,7 @@ impl Policy {
     ) -> Self {
         let mut denied_paths: Vec<String> = SECRET_PATHS.iter().map(|p| (*p).to_owned()).collect();
         denied_paths.extend(protected.iter().cloned());
+        denied_paths.extend(limits.denied_paths.iter().cloned());
         denied_paths.extend(PROTECTED_PATHS.iter().map(|p| (*p).to_owned()));
         let mut denied_commands: Vec<String> =
             DENIED_COMMANDS.iter().map(|c| (*c).to_owned()).collect();
@@ -230,9 +263,14 @@ pub struct AgentResult {
     pub cost_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turns: Option<u32>,
-    /// A short reason when `ok` is false (never the agent's own text).
+    /// A short reason when `ok` is false, shown to the person and never
+    /// written to the ledger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Set by the runner, never read from the agent: the time limit stopped
+    /// it.
+    #[serde(skip)]
+    pub timed_out: bool,
 }
 
 /// An agent CLI behind the JSON protocol.
@@ -269,12 +307,17 @@ pub struct ProgramAdapter {
 #[must_use]
 pub fn agent_env() -> Vec<(&'static str, String)> {
     vec![
-        ("GIT_CONFIG_COUNT", "1".to_owned()),
+        ("GIT_CONFIG_COUNT", "2".to_owned()),
         (
             "GIT_CONFIG_KEY_0",
             "url.file:///firescale-runner-never-pushes/.pushInsteadOf".to_owned(),
         ),
         ("GIT_CONFIG_VALUE_0", String::new()),
+        // A remote with its own `pushurl` ignores `pushInsteadOf`: no
+        // transport at all is allowed, so no push (and no fetch) can go out.
+        ("GIT_CONFIG_KEY_1", "protocol.allow".to_owned()),
+        ("GIT_CONFIG_VALUE_1", "never".to_owned()),
+        ("GIT_SSH_COMMAND", "false".to_owned()),
         ("GIT_TERMINAL_PROMPT", "0".to_owned()),
         ("FSCALE_AGENT_RUN", "1".to_owned()),
     ]
@@ -323,10 +366,12 @@ impl Adapter for ProgramAdapter {
         // The request goes in a file outside the repo, removed afterwards;
         // the agent runs as a process tree that a time limit or Ctrl+C
         // stops as a whole.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
         let file = std::env::temp_dir().join(format!(
-            "firescale-request-{}-{}.json",
-            std::process::id(),
-            request.rule.replace(['/', '\\'], "-")
+            "firescale-request-{}-{unique}.json",
+            std::process::id()
         ));
         let body =
             serde_json::to_vec(request).map_err(|error| Error::internal(error.to_string()))?;
@@ -367,6 +412,7 @@ impl Adapter for ProgramAdapter {
                         "stopped after the time limit of {} s",
                         request.policy.timeout_secs
                     )),
+                    timed_out: true,
                     ..AgentResult::default()
                 })
             }
@@ -413,6 +459,8 @@ impl Adapter for ProgramAdapter {
 /// a folder, `**` crosses them).
 #[must_use]
 pub fn matches_any(path: &str, globs: &[String]) -> bool {
+    let path = normalise(path);
+    let globs: Vec<String> = globs.iter().map(|glob| normalise(glob)).collect();
     let set = globs.iter().filter_map(|glob| {
         globset::GlobBuilder::new(glob)
             .literal_separator(true)
@@ -423,29 +471,81 @@ pub fn matches_any(path: &str, globs: &[String]) -> bool {
     for glob in set {
         builder.add(glob);
     }
-    builder.build().is_ok_and(|set| set.is_match(path))
+    builder.build().is_ok_and(|set| set.is_match(&path))
 }
 
 /// Why a run's diff is rejected (guardrail 7), or `None`.
 #[must_use]
 pub fn diff_guard(
-    changed: &[String],
+    changed: &[Change],
     allowed: &[String],
     extra_protected: &[String],
 ) -> Option<String> {
-    let secrets: Vec<String> = SECRET_PATHS.iter().map(|p| (*p).to_owned()).collect();
     let mut protected: Vec<String> = PROTECTED_PATHS.iter().map(|p| (*p).to_owned()).collect();
     protected.extend(extra_protected.iter().cloned());
-    let hit = |path: &&String| {
-        (matches_any(path, &secrets) && !is_example(path)) || matches_any(path, &protected)
-    };
-    if let Some(path) = changed.iter().find(hit) {
-        return Some(format!("it changed the protected path {path}"));
+    for change in changed {
+        if is_secret(&change.path) || matches_any(&change.path, &protected) {
+            return Some(format!("it changed the protected path {}", change.path));
+        }
+        // A link or a submodule could point anywhere, inside the repo or out.
+        if change.mode == "120000" || change.mode == "160000" {
+            return Some(format!("it added a link or a submodule at {}", change.path));
+        }
     }
     changed
         .iter()
-        .find(|path| !matches_any(path, allowed))
-        .map(|path| format!("it changed {path}, outside what the rule may change"))
+        .find(|change| !matches_any(&change.path, allowed))
+        .map(|change| {
+            format!(
+                "it changed {}, outside what the rule may change",
+                change.path
+            )
+        })
+}
+
+/// One path a run changed, against the commit it started from: deleted,
+/// added or changed, with the file mode it has now (`000000` when gone).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub path: String,
+    pub mode: String,
+}
+
+/// What `git diff --cached --raw --no-renames -z <base>` lists: every path,
+/// so a rename shows both its sides.
+#[must_use]
+pub fn staged_changes(worktree: &Path, base: &str) -> Vec<Change> {
+    let Ok(out) = run_git(
+        worktree,
+        &[
+            "diff",
+            "--cached",
+            "--raw",
+            "--no-renames",
+            "-z",
+            base,
+            "--",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    let parts: Vec<&str> = out.stdout.split('\0').collect();
+    let mut changes = Vec::new();
+    let mut index = 0;
+    while index + 1 < parts.len() {
+        let meta = parts[index];
+        let path = parts[index + 1];
+        // `:100644 100644 <a> <b> M`: the second mode is the new one.
+        let mode = meta.split_whitespace().nth(1).unwrap_or("").to_owned();
+        if meta.starts_with(':') && !path.is_empty() {
+            changes.push(Change {
+                path: path.replace('\\', "/"),
+                mode,
+            });
+        }
+        index += 2;
+    }
+    changes
 }
 
 /// A template of a secret file, not a secret: `.env.example`,
@@ -536,12 +636,14 @@ pub fn now_utc() -> String {
     )
 }
 
-/// A worktree on a new branch, for one run (guardrail 2). Removed, with
-/// its branch, when the run is rolled back.
+/// A worktree on a new branch, for one run (guardrail 2). Dropping it rolls
+/// the run back (the worktree and its branch go), on every path out of a
+/// run, unless [`RunWorktree::keep_branch`] was called.
 pub struct RunWorktree {
     pub root: PathBuf,
     pub path: PathBuf,
     pub branch: String,
+    kept: std::cell::Cell<bool>,
 }
 
 impl RunWorktree {
@@ -572,20 +674,36 @@ impl RunWorktree {
             root: root.to_path_buf(),
             path,
             branch: branch.to_owned(),
+            kept: std::cell::Cell::new(false),
         })
     }
 
-    /// Removes the worktree and its branch: the run is rolled back.
-    pub fn roll_back(self) {
+    /// Removes the worktree, even one the agent locked, and what is left of
+    /// its folder.
+    fn remove_worktree(&self) {
         let target = self.path.to_string_lossy().into_owned();
-        let _ = run_git(&self.root, &["worktree", "remove", "--force", &target]);
-        let _ = run_git(&self.root, &["branch", "-D", &self.branch]);
+        let _ = run_git(&self.root, &["worktree", "unlock", &target]);
+        let _ = run_git(
+            &self.root,
+            &["worktree", "remove", "--force", "--force", &target],
+        );
+        let _ = fs::remove_dir_all(&self.path);
+        let _ = run_git(&self.root, &["worktree", "prune"]);
     }
 
     /// Removes the worktree and keeps its branch with the run's commit.
-    pub fn keep_branch(self) {
-        let target = self.path.to_string_lossy().into_owned();
-        let _ = run_git(&self.root, &["worktree", "remove", "--force", &target]);
+    pub fn keep_branch(&self) {
+        self.kept.set(true);
+        self.remove_worktree();
+    }
+}
+
+impl Drop for RunWorktree {
+    fn drop(&mut self) {
+        if !self.kept.get() {
+            self.remove_worktree();
+            let _ = run_git(&self.root, &["branch", "-D", &self.branch]);
+        }
     }
 }
 
@@ -743,8 +861,10 @@ mod tests {
             denied: vec!["Bash(curl *)".to_owned(), "Write".to_owned()],
             denied_tools: ["Write".to_owned()].into_iter().collect(),
             read_only: None,
+            denied_paths: vec!["src/**".to_owned()],
         };
         let policy = Policy::strict(&limits, &[], 10, 1.0, 60);
+        assert!(policy.denied_paths.contains(&"src/**".to_owned()));
         assert!(!policy.allowed_tools.contains(&"Write".to_owned()));
         assert!(policy.allowed_tools.contains(&"Edit".to_owned()));
         assert!(policy.denied_commands.contains(&"Bash(curl *)".to_owned()));
@@ -761,31 +881,44 @@ mod tests {
 
     #[test]
     fn the_diff_guard_rejects_protected_and_unrelated_paths() {
+        let change = |path: &str| {
+            vec![Change {
+                path: path.to_owned(),
+                mode: "100644".to_owned(),
+            }]
+        };
         let allowed = vec!["**/.env.example".to_owned(), "src/**".to_owned()];
-        assert_eq!(
-            diff_guard(&[".env.example".to_owned()], &allowed, &[]),
-            None
+        let all = vec!["**".to_owned()];
+        assert_eq!(diff_guard(&change(".env.example"), &allowed, &[]), None);
+        for path in [
+            ".env",
+            "api/.env.production",
+            ".ENV",
+            ".envrc",
+            "SECRETS/x",
+            "certs/a.PEM",
+            ".CLAUDE/settings.json",
+            "packages/a/.claude/x.json",
+            "packages/a/.mcp.json",
+            "sub/.git/config",
+            "firescale.config.json",
+        ] {
+            assert!(
+                diff_guard(&change(path), &all, &[]).is_some_and(|why| why.contains("protected")),
+                "{path}"
+            );
+        }
+        assert!(
+            diff_guard(&change("infra/main.tf"), &all, &["infra\\**".to_owned()])
+                .is_some_and(|why| why.contains("protected"))
         );
-        assert!(diff_guard(&[".env".to_owned()], &allowed, &[])
-            .unwrap()
-            .contains("protected"));
-        assert!(diff_guard(
-            &["firescale.config.json".to_owned()],
-            &["**".to_owned()],
-            &[]
-        )
-        .unwrap()
-        .contains("protected"));
-        assert!(diff_guard(
-            &[".claude/settings.json".to_owned()],
-            &["**".to_owned()],
-            &[]
-        )
-        .unwrap()
-        .contains("protected"));
-        assert!(diff_guard(&["README.md".to_owned()], &allowed, &[])
-            .unwrap()
-            .contains("outside"));
+        assert!(diff_guard(&change("README.md"), &allowed, &[])
+            .is_some_and(|why| why.contains("outside")));
+        let link = vec![Change {
+            path: "src/hook.js".to_owned(),
+            mode: "120000".to_owned(),
+        }];
+        assert!(diff_guard(&link, &all, &[]).is_some_and(|why| why.contains("link")));
     }
 
     #[test]

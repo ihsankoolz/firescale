@@ -31,7 +31,8 @@
         "still-failing",
         "tamper",
         "verify",
-        "outside-worktree"
+        "outside-worktree",
+        "agent-committed"
       ]
     },
     "filesChanged": { "type": "integer", "minimum": 0 },

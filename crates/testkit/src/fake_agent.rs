@@ -64,7 +64,11 @@ fn run(scenario: &serde_json::Value, input: String) -> ExitCode {
         let entry = serde_json::json!({
             "request": request,
             "cwd": cwd.to_string_lossy(),
-            "gitConfigKey": std::env::var("GIT_CONFIG_KEY_0").ok(),
+            // Every `GIT_CONFIG_KEY_*` it was given, by name.
+            "gitConfigKeys": std::env::vars()
+                .filter(|(name, _)| name.starts_with("GIT_CONFIG_KEY_"))
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
         });
         if let Ok(mut file) = std::fs::OpenOptions::new()
             .create(true)
