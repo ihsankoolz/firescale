@@ -73,6 +73,19 @@ fn another_stack_gets_nothing() {
         vec![("build.gradle.kts", "plugins { java }\n")],
         vec![("README.md", "x\n"), ("src/app.py", "print(1)\n")],
         vec![("go.mod", "module x\n")],
+        // Found in review: Groovy-DSL Gradle, Ant and Bazel Java repos.
+        vec![
+            ("settings.gradle", "include 'app'\n"),
+            ("app/src/main/java/org/example/Main.java", "class Main {}\n"),
+        ],
+        vec![
+            ("build.xml", "<project/>\n"),
+            ("src/org/ex/A.java", "class A {}\n"),
+        ],
+        vec![
+            ("MODULE.bazel", "module(name = \"x\")\n"),
+            ("java/A.java", "class A {}\n"),
+        ],
     ] {
         let f = fixture(
             &files
@@ -107,4 +120,24 @@ fn a_pom_below_another_stack_is_that_stacks_business() {
         ("maven-tests/pom.xml", "<project/>\n".to_owned()),
     ]);
     assert_eq!(findings(&f), Vec::<Diagnostic>::new());
+}
+
+// Found in review: a Kotlin project was given a Java starter.
+#[test]
+fn a_kotlin_project_has_code() {
+    let f = fixture(&[
+        ("pom.xml", super::pom::new_pom()),
+        ("src/main/kotlin/ex/Main.kt", "fun main() {}\n".to_owned()),
+        (
+            "src/test/kotlin/ex/MainTest.kt",
+            "class MainTest\n".to_owned(),
+        ),
+    ]);
+    let ids: Vec<String> = findings(&f).into_iter().map(|d| d.rule_id).collect();
+    assert!(
+        !ids.iter()
+            .any(|id| id == "maven/entry" || id == "maven/tests"),
+        "{ids:?}"
+    );
+    assert!(fix_all(&f).is_empty());
 }

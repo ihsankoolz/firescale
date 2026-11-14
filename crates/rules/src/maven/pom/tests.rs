@@ -31,16 +31,23 @@ fn a_missing_pom_is_created_once() {
 
 #[test]
 fn coordinates_are_the_projects_own_not_a_dependencys() {
-    assert!(missing_coordinates(&new_pom()).is_empty());
+    assert_eq!(missing_coordinates(&new_pom()), Some(vec![]));
     let child = "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <parent>\n    <groupId>g</groupId>\n    <artifactId>p</artifactId>\n    <version>1</version>\n  </parent>\n  <artifactId>child</artifactId>\n</project>\n";
-    assert!(missing_coordinates(child).is_empty());
+    assert_eq!(missing_coordinates(child), Some(vec![]));
     let only_a_dependency = "<project>\n  <modelVersion>4.0.0</modelVersion>\n  <dependencies>\n    <dependency>\n      <groupId>g</groupId>\n      <artifactId>a</artifactId>\n      <version>1</version>\n    </dependency>\n  </dependencies>\n</project>\n";
     assert_eq!(
         missing_coordinates(only_a_dependency),
-        ["groupId", "artifactId", "version"]
+        Some(vec!["groupId", "artifactId", "version"])
     );
     let commented = "<project><modelVersion>4.0.0</modelVersion><!-- <artifactId>x</artifactId> --><groupId>g</groupId><version>1</version></project>";
-    assert_eq!(missing_coordinates(commented), ["artifactId"]);
+    assert_eq!(missing_coordinates(commented), Some(vec!["artifactId"]));
+    // A flatten plugin's <parent> setting is not a parent (found in review).
+    let flatten = "<project><modelVersion>4.0.0</modelVersion><artifactId>a</artifactId><build><plugins><plugin><configuration><pomElements><parent>expand</parent></pomElements></configuration></plugin></plugins></build></project>";
+    assert_eq!(
+        missing_coordinates(flatten),
+        Some(vec!["groupId", "version"])
+    );
+    assert_eq!(missing_coordinates("<project><artifactId>"), None);
 }
 
 #[test]

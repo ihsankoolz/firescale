@@ -24,6 +24,7 @@ pub mod pom;
 pub mod properties;
 #[path = "tests/mod.rs"]
 pub mod test_files;
+pub mod xml;
 
 #[cfg(test)]
 mod fixtures;
@@ -58,7 +59,7 @@ pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
     if any_exists(ctx, &["pom.xml"]) {
         return Ok(true);
     }
-    Ok(!other_stack(ctx, &["pom.xml"], &["java"])? && poms_below(ctx)?.is_empty())
+    Ok(!other_stack(ctx, &["pom.xml"], &JVM_CODE)? && poms_below(ctx)?.is_empty())
 }
 
 /// The folders below the root that hold a `pom.xml`, outside folders no
@@ -76,20 +77,28 @@ pub(crate) fn poms_below(ctx: &RuleContext) -> Result<Vec<String>> {
 /// own, so no starter code is written beside it.
 #[must_use]
 pub fn aggregates(pom: &str) -> bool {
-    let pom = without_comments(pom);
-    pom.contains("<modules>") || squeezed(&pom).contains("<packaging>pom</packaging>")
+    xml::elements(pom).is_some_and(|elements| {
+        xml::find(&elements, "project/modules").is_some()
+            || xml::find(&elements, "project/packaging").is_some_and(|p| p.text(pom) == "pom")
+    })
 }
 
-/// The project's Java files, by where Maven reads them: `src/main/java` and
-/// `src/test/java`, not `target`.
+/// Source extensions Maven builds for the JVM: Java, and Kotlin, Scala or
+/// Groovy through their plugins. A project in any of them has code (found
+/// in review: a Kotlin project was given a Java starter).
+const JVM_CODE: [&str; 5] = ["java", "kt", "kts", "scala", "groovy"];
+
+/// The project's JVM source files, by where Maven reads them: under
+/// `src/main` and under `src/test`, not `target`.
 pub(crate) fn java_files(ctx: &RuleContext) -> Result<(Vec<String>, Vec<String>)> {
     let mut main = Vec::new();
     let mut test = Vec::new();
     for path in firescale_core::walk::walk_files(ctx.root())? {
-        if !std::path::Path::new(&path)
+        let jvm = std::path::Path::new(&path)
             .extension()
-            .is_some_and(|extension| extension == "java")
-        {
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| JVM_CODE.contains(&extension));
+        if !jvm {
             continue;
         }
         if path.starts_with("src/test/") {
@@ -99,28 +108,6 @@ pub(crate) fn java_files(ctx: &RuleContext) -> Result<(Vec<String>, Vec<String>)
         }
     }
     Ok((main, test))
-}
-
-/// A POM without its XML comments, so a commented-out element is not read.
-#[must_use]
-pub fn without_comments(pom: &str) -> String {
-    let mut out = String::with_capacity(pom.len());
-    let mut rest = pom;
-    while let Some(start) = rest.find("<!--") {
-        out.push_str(&rest[..start]);
-        match rest[start..].find("-->") {
-            Some(end) => rest = &rest[start + end + 3..],
-            None => return out,
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-/// Text without white space, to compare elements however they are laid
-/// out.
-fn squeezed(text: &str) -> String {
-    text.split_whitespace().collect()
 }
 
 /// What every rule of the pack reads besides its own files, for the cache.
@@ -165,6 +152,6 @@ mod unit {
         ));
         assert!(!aggregates("<project><packaging>jar</packaging></project>"));
         assert!(!aggregates("<project><!-- <modules> --></project>"));
-        assert_eq!(without_comments("a<!-- b -->c<!-- d"), "ac");
+        assert!(!aggregates("<project><build><plugins><plugin><configuration><packaging>pom</packaging></configuration></plugin></plugins></build></project>"));
     }
 }

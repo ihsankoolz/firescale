@@ -94,7 +94,7 @@ pub(crate) fn package_json_with(ctx: &RuleContext, add: &Value) -> Result<Option
 
 /// Root manifests of every stack a pack knows, for [`other_stack`]: a
 /// pack's starter is written only into a repo that has none but its own.
-pub(crate) const MANIFESTS: [&str; 22] = [
+pub(crate) const MANIFESTS: [&str; 28] = [
     "package.json",
     "deno.json",
     "deno.jsonc",
@@ -117,6 +117,14 @@ pub(crate) const MANIFESTS: [&str; 22] = [
     "composer.json",
     "mix.exs",
     "settings.gradle.kts",
+    // Found in the maven pack's review: Groovy-DSL Gradle, Ant and Bazel
+    // Java repos looked new to Java.
+    "settings.gradle",
+    "build.xml",
+    "WORKSPACE",
+    "WORKSPACE.bazel",
+    "MODULE.bazel",
+    "BUILD.bazel",
 ];
 
 /// Source file extensions of every language a pack knows, for

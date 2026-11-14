@@ -9,8 +9,7 @@ use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
 use super::{
-    any_exists, applies, create, finding, other_stack, poms_below, without_comments, JAVA_RELEASE,
-    VERSIONS,
+    any_exists, applies, create, finding, other_stack, poms_below, xml, JAVA_RELEASE, VERSIONS,
 };
 
 #[cfg(test)]
@@ -107,60 +106,29 @@ pub fn new_pom() -> String {
     )
 }
 
-/// Blocks whose elements are not the project's own: a dependency's
-/// `artifactId` is not the project's.
-const NESTED: [&str; 12] = [
-    "parent",
-    "dependencies",
-    "dependencyManagement",
-    "build",
-    "profiles",
-    "reporting",
-    "distributionManagement",
-    "repositories",
-    "pluginRepositories",
-    "modules",
-    "properties",
-    "developers",
-];
-
-/// The POM with comments and nested blocks taken out: what is left are the
-/// project's own elements.
+/// The coordinates the POM lacks, by element name: the project's own
+/// children, read by their paths (a dependency's or a plugin's do not
+/// count, nor a flatten plugin's `<parent>` setting; found in review).
+/// `None` when the POM cannot be read.
 #[must_use]
-pub fn own_elements(pom: &str) -> String {
-    let mut text = without_comments(pom);
-    for name in NESTED {
-        let open = format!("<{name}>");
-        let close = format!("</{name}>");
-        while let Some(start) = text.find(&open) {
-            let Some(end) = text[start..].find(&close) else {
-                break;
-            };
-            text.replace_range(start..start + end + close.len(), "");
-        }
-    }
-    text
-}
-
-/// The coordinates the POM lacks, by element name.
-#[must_use]
-pub fn missing_coordinates(pom: &str) -> Vec<&'static str> {
-    let has_parent = without_comments(pom).contains("<parent>");
-    let own = own_elements(pom);
+pub fn missing_coordinates(pom: &str) -> Option<Vec<&'static str>> {
+    let elements = xml::elements(pom)?;
+    let has = |name: &str| xml::find(&elements, &format!("project/{name}")).is_some();
+    let has_parent = has("parent");
     let mut missing = Vec::new();
-    if !own.contains("<modelVersion>") {
+    if !has("modelVersion") {
         missing.push("modelVersion");
     }
-    if !own.contains("<groupId>") && !has_parent {
+    if !has("groupId") && !has_parent {
         missing.push("groupId");
     }
-    if !own.contains("<artifactId>") {
+    if !has("artifactId") {
         missing.push("artifactId");
     }
-    if !own.contains("<version>") && !has_parent {
+    if !has("version") && !has_parent {
         missing.push("version");
     }
-    missing
+    Some(missing)
 }
 
 impl BuiltinRule for Pom {
@@ -209,7 +177,13 @@ impl BuiltinRule for Pom {
                 Fixable::Deterministic,
             )]);
         };
-        let missing = missing_coordinates(&text);
+        let Some(missing) = missing_coordinates(&text) else {
+            return Ok(vec![finding(
+                "pom.xml",
+                "pom.xml is not XML the pack can read (an unclosed element, comment or tag), so Maven will not read it either, and nothing in it is checked or changed. Run `mvn -B validate` to see where.".to_owned(),
+                Fixable::Manual,
+            )]);
+        };
         if missing.is_empty() {
             return Ok(Vec::new());
         }
