@@ -67,7 +67,7 @@ impl PartialEq for TamperPolicy {
 impl Eq for TamperPolicy {}
 
 /// The kinds `allow` may name.
-const KINDS: [(&str, Kind); 9] = [
+const KINDS: [(&str, Kind); 11] = [
     ("test-deleted", Kind::TestDeleted),
     ("test-skipped", Kind::TestSkipped),
     ("assertion-removed", Kind::AssertionRemoved),
@@ -76,6 +76,8 @@ const KINDS: [(&str, Kind); 9] = [
     ("ci-weakened", Kind::CiWeakened),
     ("no-verify", Kind::NoVerify),
     ("rule-disabled", Kind::RuleDisabled),
+    ("snapshot-changed", Kind::SnapshotChanged),
+    ("expected-changed", Kind::ExpectedChanged),
     ("not-checked", Kind::NotChecked),
 ];
 
@@ -207,7 +209,7 @@ impl TamperPolicy {
 }
 
 fn allowance(entry: &Value) -> Result<Allowance, String> {
-    let shape = "verify.tamper.allow entries are globs, or { \"path\": glob, \"kinds\": [\"test-deleted\", \"test-skipped\", \"assertion-removed\", \"suppression-added\", \"coverage-lowered\", \"ci-weakened\", \"no-verify\", \"rule-disabled\", \"not-checked\"] }";
+    let shape = "verify.tamper.allow entries are globs, or { \"path\": glob, \"kinds\": [\"test-deleted\", \"test-skipped\", \"assertion-removed\", \"suppression-added\", \"coverage-lowered\", \"ci-weakened\", \"no-verify\", \"rule-disabled\", \"snapshot-changed\", \"expected-changed\", \"not-checked\"] }";
     let (path, kinds) = match entry {
         Value::String(path) => (path.as_str(), Vec::new()),
         Value::Object(object) => {

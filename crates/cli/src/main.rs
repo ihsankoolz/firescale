@@ -89,6 +89,10 @@ Options:
                    event GitHub gives, never from refs in the clone
   --head <commit>  tamper: compare <commit> (read from git, nothing checked out)
                    instead of the working tree
+  --approvals <file>
+                   tamper --pr-base, in a pull_request_target run only: the pull
+                   request's reviews from GitHub; a changed snapshot or expected
+                   value then needs an approving review of its head commit
   --explain        graph: show where each edge comes from
   --no-cache       check: run every rule again, ignoring .firescale/cache;
                    verify: run every step again (passes are still stored)
@@ -143,6 +147,8 @@ struct Args {
     pr_base: bool,
     /// `--head <commit>`: tamper compares this commit, not the working tree.
     head: Option<String>,
+    /// `--approvals <file>`: the pull request's reviews from GitHub (M26).
+    approvals: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -203,7 +209,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 }
             }
             "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs"
-            | "--shared-cache" | "--head" => {
+            | "--shared-cache" | "--head" | "--approvals" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -222,6 +228,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--jobs" => args.jobs = Some(value),
                     "--shared-cache" => args.shared_cache = Some(value),
                     "--head" => args.head = Some(value),
+                    "--approvals" => args.approvals = Some(value),
                     _ => args.cwd = Some(value),
                 }
             }
@@ -1262,6 +1269,16 @@ fn tamper_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> 
             "--pr-base takes the base and the head from GitHub's event. Drop --base and --head, or --pr-base.",
         ));
     }
+    // Approvals count only where nothing of the change has run: a
+    // pull_request_target run, with the reviews GitHub gave it (ADR 0046).
+    if args.approvals.is_some()
+        && (!args.pr_base || env::var("GITHUB_EVENT_NAME").as_deref() != Ok("pull_request_target"))
+    {
+        return Err(Error::usage(
+            "--approvals is read only with --pr-base in a pull_request_target run, where none of the change's code has run. Anywhere else a file of approvals could be written by the change itself.",
+        ));
+    }
+    let mut approvals = None;
     let (base, head) = if args.pr_base {
         // The base branch as it is now against what merging the pull
         // request into it gives: the policy and the comparison both come
@@ -1269,6 +1286,12 @@ fn tamper_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> 
         // branched from, which its author chose (ADR 0045).
         let pr = tamper::github::pull_request(root, &|name| env::var(name).ok())?;
         let merged = tamper::github::merged_tree(root, &pr.base_tip, &pr.head)?;
+        if let Some(file) = &args.approvals {
+            let text = std::fs::read_to_string(file).map_err(|error| {
+                Error::user(format!("--approvals: could not read {file} ({error})."))
+            })?;
+            approvals = Some(tamper::approvals_from_reviews(&text, &pr)?);
+        }
         (
             firescale_core::blame::BaseCommit {
                 reference: "the pull request's base branch (from GitHub's event)".to_owned(),
@@ -1314,7 +1337,22 @@ fn tamper_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> 
             Error::user("the files changed since the base could not be listed (a shallow clone?). Fetch the whole history.")
         })?,
     };
-    let report = tamper::guard_at(root, &base, &head, &changed);
+    let mut report = tamper::guard_at(root, &base, &head, &changed);
+    // In a pull_request_target run a change that needs approval blocks
+    // until one is read: no `--approvals` means none (found in review).
+    if args.pr_base
+        && approvals.is_none()
+        && env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request_target")
+    {
+        if let tamper::Head::Commit(_) = &head {
+            let pr = tamper::github::pull_request(root, &|name| env::var(name).ok())?;
+            approvals = Some(tamper::Approvals {
+                head: pr.head,
+                by: Vec::new(),
+            });
+        }
+    }
+    report.approvals = approvals;
     let code = if report.blocks() {
         EXIT_VIOLATIONS
     } else {

@@ -75,12 +75,13 @@ fn event_classes(entries: &[Entry]) -> BTreeSet<String> {
                 })
             })
     };
-    let class = |name: &str, event: &str| {
-        if filtered(event) {
-            format!("{name} (some changes)")
-        } else {
-            name.to_owned()
+    // An unfiltered trigger also counts as a filtered one, so removing a
+    // filter (running on more changes) is never a loss.
+    let add = |classes: &mut BTreeSet<String>, name: &str, event: &str| {
+        if !filtered(event) {
+            classes.insert(name.to_owned());
         }
+        classes.insert(format!("{name} (some changes)"));
     };
     let mut classes = BTreeSet::new();
     for event in &events {
@@ -92,14 +93,14 @@ fn event_classes(entries: &[Entry]) -> BTreeSet<String> {
                         .iter()
                         .any(|t| matches!(t.as_str(), "opened" | "synchronize" | "reopened"));
                 if updates {
-                    classes.insert(class("pull requests", event));
+                    add(&mut classes, "pull requests", event);
                 }
             }
             "merge_group" => {
                 classes.insert("pull requests".to_owned());
             }
             "push" => {
-                classes.insert(class("pushes", event));
+                add(&mut classes, "pushes", event);
             }
             "workflow_call" => {
                 classes.insert("calls".to_owned());
@@ -402,13 +403,37 @@ pub(crate) fn check_of(command: &str) -> Option<String> {
     let sub = rest.iter().copied().find(|w| !w.starts_with('-'));
     let has = |flag: &str| rest.contains(&flag);
     let runner = |words: &[&str]| -> Option<String> {
-        // `npx [-y] tool …`, `pnpm exec tool …`
-        let words: Vec<&str> = words
-            .iter()
-            .copied()
-            .skip_while(|w| w.starts_with('-'))
-            .collect();
-        check_of(&words.join(" "))
+        // `npx [-y] tool …`, `pnpm exec tool …`, `uv run --group dev tool …`:
+        // leading options, and the value of those that take one.
+        const TAKES_VALUE: [&str; 16] = [
+            "--group",
+            "--only-group",
+            "--with",
+            "--python",
+            "-p",
+            "--package",
+            "--project",
+            "--directory",
+            "--extra",
+            "--env-file",
+            "--from",
+            "--index",
+            "-C",
+            "--filter",
+            "-F",
+            "--prefix",
+        ];
+        let mut rest = words.iter().copied().peekable();
+        while let Some(word) = rest.peek().copied() {
+            if !word.starts_with('-') {
+                break;
+            }
+            rest.next();
+            if TAKES_VALUE.contains(&word) {
+                rest.next();
+            }
+        }
+        check_of(&rest.collect::<Vec<_>>().join(" "))
     };
     match program {
         // A package script, whichever manager runs it: moving from npm to
@@ -613,10 +638,7 @@ mod tests {
         let head = BASE.replace("      - run: pnpm lint\n", "");
         assert_eq!(
             findings(BASE, &head),
-            [
-                "11:base pnpm lint (on pull requests) is gone",
-                "11:base pnpm lint (on pushes (some changes)) is gone"
-            ]
+            ["11:base pnpm lint (on pull requests) is gone"]
         );
         // The lint step moved after the tests, and into the same script.
         let moved = BASE
@@ -632,10 +654,7 @@ mod tests {
         let swallowed = BASE.replace("pnpm test\n", "pnpm test || true\n");
         assert_eq!(
             findings(BASE, &swallowed),
-            [
-                "15:now pnpm test || true (on pull requests; cannot fail)",
-                "15:now pnpm test || true (on pushes (some changes); cannot fail)",
-            ]
+            ["15:now pnpm test || true (on pull requests; cannot fail)",]
         );
         let continued = BASE.replace(
             "      - run: pnpm lint\n",
@@ -649,7 +668,7 @@ mod tests {
             "    runs-on: ubuntu-latest\n",
             "    runs-on: ubuntu-latest\n    if: ${{ false }}\n",
         );
-        assert_eq!(findings(BASE, &off).len(), 4);
+        assert_eq!(findings(BASE, &off).len(), 2, "one per check");
         let plus_e = BASE.replace("pnpm build\n", "set +e\n          pnpm build\n");
         assert_eq!(
             findings(BASE, &plus_e)[0],

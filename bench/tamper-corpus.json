@@ -2667,6 +2667,360 @@
       "head": {
         "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m 'docs: explain --no-verify'\"\n  }\n}\n"
       }
+    },
+    {
+      "name": "appr: ts expected value changed",
+      "expect": ["expected-changed"],
+      "note": "Needs a person's approval (ADR 0046).",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(31);\n});\n"
+      }
+    },
+    {
+      "name": "appr: py expected value changed",
+      "expect": ["expected-changed"],
+      "note": "",
+      "base": {
+        "app/__init__.py": "",
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([10, 20]) == 30\n"
+      },
+      "head": {
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([10, 20]) == 31\n"
+      }
+    },
+    {
+      "name": "appr: rs expected value changed",
+      "expect": ["expected-changed"],
+      "note": "",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"cart\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn total(items: &[i64]) -> i64 {\n    items.iter().sum()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(total(&[10, 20]), 30);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn total(items: &[i64]) -> i64 {\n    items.iter().sum()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(total(&[10, 20]), 31);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "appr: ts inline snapshot changed",
+      "expect": ["expected-changed"],
+      "note": "An inline snapshot is an expected value.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"renders\", () => {\n  expect(total([10, 20])).toMatchInlineSnapshot(`30`);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"renders\", () => {\n  expect(total([10, 20])).toMatchInlineSnapshot(`31`);\n});\n"
+      }
+    },
+    {
+      "name": "appr: jest snapshot rewritten",
+      "expect": ["snapshot-changed"],
+      "note": "",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"31\"`;\n\n"
+      }
+    },
+    {
+      "name": "appr: insta snapshot rewritten",
+      "expect": ["snapshot-changed"],
+      "note": "",
+      "base": {
+        "src/lib.rs": "pub fn total(items: &[i64]) -> i64 {\n    items.iter().sum()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(total(&[10, 20]), 30);\n    }\n}\n",
+        "src/snapshots/cart__total.snap": "---\nsource: src/lib.rs\nexpression: total(&[10, 20])\n---\n30\n"
+      },
+      "head": {
+        "src/snapshots/cart__total.snap": "---\nsource: src/lib.rs\nexpression: total(&[10, 20])\n---\n31\n"
+      }
+    },
+    {
+      "name": "appr: syrupy snapshot rewritten",
+      "expect": ["snapshot-changed"],
+      "note": "",
+      "base": {
+        "app/__init__.py": "",
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([10, 20]) == 30\n",
+        "tests/__snapshots__/test_cart.ambr": "# serializer version: 1\n# name: test_total\n  30\n# ---\n"
+      },
+      "head": {
+        "tests/__snapshots__/test_cart.ambr": "# serializer version: 1\n# name: test_total\n  31\n# ---\n"
+      }
+    },
+    {
+      "name": "appr: a new snapshot added",
+      "expect": [],
+      "note": "A new test's snapshot is not a rewritten one.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\nexports[`renders empty 1`] = `\"0\"`;\n\n"
+      }
+    },
+    {
+      "name": "appr: a snapshot renamed with its test",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders the total 1`] = `\"30\"`;\n\n"
+      }
+    },
+    {
+      "name": "appr: a snapshot file reformatted with CRLF",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\r\n\r\nexports[`renders 1`] = `\"30\"`;\r\n\r\n"
+      }
+    },
+    {
+      "name": "appr: the subject of an assertion changed, not its value",
+      "expect": [],
+      "note": "A different call is not a changed expected value.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\nexport const sum = total;\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { sum } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(sum([10, 20])).toBe(30);\n});\n"
+      }
+    },
+    {
+      "name": "appr: a test renamed, its expected value kept",
+      "expect": [],
+      "note": "",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"sums the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n"
+      }
+    },
+    {
+      "name": "ts: @ts-expect-error added in a type test",
+      "expect": [],
+      "note": "In a test file it asserts that a type error happens. Found on real history (ADR 0046).",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n"
+      },
+      "head": {
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n\n// @ts-expect-error a string is not a number\nadd(\"1\", 2);\n"
+      }
+    },
+    {
+      "name": "ts: @ts-ignore added in a test file",
+      "expect": ["suppression-added"],
+      "note": "Unlike @ts-expect-error, it fails on nothing.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n"
+      },
+      "head": {
+        "test-d/math.test-d.ts": "import { expectType } from \"tsd\";\nimport { add } from \"../src/math\";\n\nexpectType<number>(add(1, 2));\n\n// @ts-ignore\nadd(\"1\", 2);\n"
+      }
+    },
+    {
+      "name": "rs: a new #[cfg(unix)] test added",
+      "expect": [],
+      "note": "A new test that runs only on some systems takes nothing away. Found on real history.",
+      "base": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n\n    #[cfg(unix)]\n    #[test]\n    fn adds_on_unix() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "ts: a new test inside an existing describe.runIf",
+      "expect": [],
+      "note": "Found on real history.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe.runIf(process.platform !== \"win32\")(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe.runIf(process.platform !== \"win32\")(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it(\"adds zero\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a test renamed and skipped",
+      "expect": ["test-skipped"],
+      "note": "The count of tests is the same, so the skip is not a new test's.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it(\"adds zero\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\ndescribe(\"math\", () => {\n  it(\"adds\", () => {\n    expect(add(1, 2)).toBe(3);\n  });\n\n  it.skip(\"adds nothing\", () => {\n    expect(add(0, 0)).toBe(0);\n  });\n});\n"
+      }
+    },
+    {
+      "name": "ts: a module split off with its eslint-disable line",
+      "expect": [],
+      "note": "The suppressed line is copied word for word from a file the base keeps. Found on real history.",
+      "base": {
+        "src/util.ts": "// eslint-disable-next-line no-control-regex\nexport const CONTROL = /[\\u0000-\\u001f]/;\n\nexport function clean(text: string): string {\n  return text.replace(CONTROL, \"\");\n}\n",
+        "src/index.ts": "export { clean } from \"./util\";\n"
+      },
+      "head": {
+        "src/adapter/util.ts": "// eslint-disable-next-line no-control-regex\nexport const CONTROL = /[\\u0000-\\u001f]/;\n\nexport function clean(text: string): string {\n  return text.replace(CONTROL, \"\");\n}\n"
+      }
+    },
+    {
+      "name": "ts: a copied eslint-disable comment over new code",
+      "expect": ["suppression-added"],
+      "note": "Only the comment is copied; the code under it is new.",
+      "base": {
+        "src/util.ts": "// eslint-disable-next-line no-control-regex\nexport const CONTROL = /[\\u0000-\\u001f]/;\n\nexport function clean(text: string): string {\n  return text.replace(CONTROL, \"\");\n}\n",
+        "src/index.ts": "export { clean } from \"./util\";\n"
+      },
+      "head": {
+        "src/adapter/debug.ts": "// eslint-disable-next-line no-control-regex\nexport const BELL = /\\u0007/;\n"
+      }
+    },
+    {
+      "name": "ci: a paths-ignore filter removed",
+      "expect": [],
+      "note": "The workflow runs on more pull requests. Found on real history.",
+      "base": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n    paths-ignore: [\"docs/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked tox run\n      - run: npm test\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked tox run\n      - run: npm test\n"
+      }
+    },
+    {
+      "name": "ci: an option with a value added before the command uv runs",
+      "expect": [],
+      "note": "`--group dev` is an option and its value. Found on real history.",
+      "base": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n    paths-ignore: [\"docs/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked tox run\n      - run: npm test\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "on:\n  pull_request:\n    paths-ignore: [\"docs/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: uv run --locked --no-default-groups --group dev tox run\n      - run: npm test\n"
+      }
+    },
+    {
+      "name": "py: a test replaced by a different test with another value",
+      "expect": [],
+      "note": "An assertion of a new test is not paired with a deleted test's. Found on real history.",
+      "base": {
+        "app/__init__.py": "",
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([10, 20]) == 30\n"
+      },
+      "head": {
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total_of_three():\n    assert total([10, 20, 1]) == 31\n"
+      }
+    },
+    {
+      "name": "rs: an existing test made unix-only while a windows-only test is added",
+      "expect": ["test-skipped"],
+      "note": "A new conditional test does not hide an old one made conditional. Found on real history (ADR 0046).",
+      "base": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[cfg(unix)]\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n\n    #[cfg(windows)]\n    #[test]\n    fn adds_on_windows() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "ts: a file-wide eslint-disable copied into a new file",
+      "expect": ["suppression-added"],
+      "note": "Its two first lines are in a file the base keeps, but a file-wide disable covers new code. Found in review (ADR 0046).",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/legacy.ts": "/* eslint-disable */\nimport { add } from \"./math\";\n\nexport const two = add(1, 1);\n"
+      },
+      "head": {
+        "src/new.ts": "/* eslint-disable */\nimport { add } from \"./math\";\n\nexport const run = (code: any) => eval(code) + add(1, 1);\n"
+      }
+    },
+    {
+      "name": "ts: a @ts-ignore that mentions @ts-expect-error in a test file",
+      "expect": ["suppression-added"],
+      "note": "Found in review.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit(\"adds two numbers\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit(\"adds two numbers\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\n// @ts-ignore not @ts-expect-error\nadd(\"1\", 2);\n"
+      }
+    },
+    {
+      "name": "ts: a test renamed and skipped while another test is added",
+      "expect": ["test-skipped"],
+      "note": "A base test went away, so the new skipped test may be it. Found in review.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit(\"adds two numbers\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit.skip(\"adds two numbers together\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\nit(\"is defined\", () => {\n  expect(add).toBeDefined();\n});\n"
+      }
+    },
+    {
+      "name": "appr: a test renamed with its expected value changed",
+      "expect": ["expected-changed"],
+      "note": "Found in review.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"sums the items\", () => {\n  expect(total([10, 20])).toBe(31);\n});\n"
+      }
+    },
+    {
+      "name": "appr: a snapshot renamed with a new body",
+      "expect": ["snapshot-changed"],
+      "note": "Found in review.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders the total 1`] = `\"31\"`;\n\n"
+      }
+    },
+    {
+      "name": "appr: an indented jest snapshot rewritten",
+      "expect": ["snapshot-changed"],
+      "note": "Jest evaluates the file as JavaScript, indentation and all. Found in review.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\n exports[`renders 1`] = `\"31\"`;\n\n"
+      }
     }
   ]
 }

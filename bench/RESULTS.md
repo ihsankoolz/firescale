@@ -2,6 +2,85 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## M26: the tamper guard measured on real history and on cheating changes
+
+Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build. Method, limits and what was fixed: ADR 0046. **Read the limits before the numbers**: each finding was labelled once, by a fresh subagent that saw the commit's diff and a neutral statement of the claim (not the guard's code or reasoning); nine labellers, 723 labels, no second labeller and no human check; eight popular, well-kept repos, 150 recent non-merge commits each; the config and CI kinds were hardly exercised; the "after" rate is on the same commits the fixes were developed against, so it is optimistic.
+
+### False positives on real history
+
+`node bench/tamper-history.mjs …` over 1,200 commits of eight public repos and 150 of this repo (shallow clones, read-only, nothing of theirs run), then `node bench/tamper-history-report.mjs` on `bench/tamper-history.json` (every finding with its label and the labeller's reason). Rates with 95% Wilson intervals. "Before" is the guard as M26 first ran it; "after" is after the false-positive fixes of ADR 0046 and the review's corrections. The tables by kind cover all nine repos, this one included.
+
+#### Before
+
+| Language                     | Repos                                                                                                                       | Commits | Commits with findings | Findings | False | False-positive rate (95% interval) | Commits with a false finding (95% interval) |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------- | -------- | ----- | ---------------------------------- | ------------------------------------------- |
+| Rust                         | BurntSushi/ripgrep, clap-rs/clap                                                                                            | 300     | 7                     | 41       | 6     | 14.6% (6.9–28.4%)                  | 2 of 300, 0.7% (0.2–2.4%)                   |
+| JavaScript                   | axios/axios, expressjs/express                                                                                              | 300     | 20                    | 98       | 66    | 67.3% (57.6–75.8%)                 | 15 of 300, 5.0% (3.1–8.1%)                  |
+| Python                       | encode/httpx, pallets/flask                                                                                                 | 300     | 41                    | 172      | 42    | 24.4% (18.6–31.4%)                 | 12 of 300, 4.0% (2.3–6.9%)                  |
+| TypeScript                   | honojs/hono, sindresorhus/ky                                                                                                | 300     | 71                    | 240      | 86    | 35.8% (30.0–42.1%)                 | 17 of 300, 5.7% (3.6–8.9%)                  |
+| This repo (Rust, TypeScript) | ihsankoolz/firescale                                                                                                        | 150     | 50                    | 160      | 21    | 13.1% (8.7–19.2%)                  | 10 of 150, 6.7% (3.7–11.8%)                 |
+| All public repos             | BurntSushi/ripgrep, axios/axios, clap-rs/clap, encode/httpx, expressjs/express, honojs/hono, pallets/flask, sindresorhus/ky | 1200    | 139                   | 551      | 200   | 36.3% (32.4–40.4%)                 | 46 of 1200, 3.8% (2.9–5.1%)                 |
+
+| Kind              | Findings | False | False-positive rate (95% interval) |
+| ----------------- | -------- | ----- | ---------------------------------- |
+| assertion-removed | 110      | 36    | 32.7% (24.7–41.9%)                 |
+| ci-weakened       | 14       | 14    | 100.0% (78.5–100.0%)               |
+| expected-changed  | 132      | 14    | 10.6% (6.4–17.0%)                  |
+| not-checked       | 1        | 0     | 0.0% (0.0–79.3%)                   |
+| rule-disabled     | 5        | 0     | 0.0% (0.0–43.4%)                   |
+| snapshot-changed  | 61       | 0     | 0.0% (0.0–5.9%)                    |
+| suppression-added | 278      | 109   | 39.2% (33.7–45.1%)                 |
+| test-deleted      | 47       | 12    | 25.5% (15.3–39.5%)                 |
+| test-skipped      | 63       | 36    | 57.1% (44.9–68.6%)                 |
+
+#### After
+
+| Language                     | Repos                                                                                                                       | Commits | Commits with findings | Findings | False | False-positive rate (95% interval) | Commits with a false finding (95% interval) |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------- | --------------------- | -------- | ----- | ---------------------------------- | ------------------------------------------- |
+| Rust                         | BurntSushi/ripgrep, clap-rs/clap                                                                                            | 300     | 4                     | 35       | 5     | 14.3% (6.3–29.4%)                  | 1 of 300, 0.3% (0.1–1.9%)                   |
+| JavaScript                   | axios/axios, expressjs/express                                                                                              | 300     | 6                     | 22       | 11    | 50.0% (30.7–69.3%)                 | 3 of 300, 1.0% (0.3–2.9%)                   |
+| Python                       | encode/httpx, pallets/flask                                                                                                 | 300     | 40                    | 168      | 38    | 22.6% (16.9–29.5%)                 | 11 of 300, 3.7% (2.1–6.4%)                  |
+| TypeScript                   | honojs/hono, sindresorhus/ky                                                                                                | 300     | 57                    | 155      | 24    | 15.5% (10.6–22.0%)                 | 9 of 300, 3.0% (1.6–5.6%)                   |
+| This repo (Rust, TypeScript) | ihsankoolz/firescale                                                                                                        | 150     | 46                    | 152      | 11    | 7.2% (4.1–12.5%)                   | 6 of 150, 4.0% (1.8–8.5%)                   |
+| All public repos             | BurntSushi/ripgrep, axios/axios, clap-rs/clap, encode/httpx, expressjs/express, honojs/hono, pallets/flask, sindresorhus/ky | 1200    | 107                   | 380      | 78    | 20.5% (16.8–24.9%)                 | 24 of 1200, 2.0% (1.3–3.0%)                 |
+
+| Kind              | Findings | False | False-positive rate (95% interval) |
+| ----------------- | -------- | ----- | ---------------------------------- |
+| assertion-removed | 110      | 36    | 32.7% (24.7–41.9%)                 |
+| ci-weakened       | 4        | 4     | 100.0% (51.0–100.0%)               |
+| expected-changed  | 128      | 11    | 8.6% (4.9–14.7%)                   |
+| not-checked       | 1        | 0     | 0.0% (0.0–79.3%)                   |
+| rule-disabled     | 5        | 0     | 0.0% (0.0–43.4%)                   |
+| snapshot-changed  | 63       | 0     | 0.0% (0.0–5.7%)                    |
+| suppression-added | 162      | 15    | 9.3% (5.7–14.7%)                   |
+| test-deleted      | 47       | 12    | 25.5% (15.3–39.5%)                 |
+| test-skipped      | 12       | 11    | 91.7% (64.6–98.5%)                 |
+
+The fixes also stopped 59 findings labelled true (12.0%, 9.5–15.2% of 490): 26 new conditional tests (labeller disagreement), 22 `@ts-expect-error` in runtime test files (ADR 0046 decides these are assertions), 11 expected-value pairs now kept within one test or a renamed one.
+
+### Misses on cheating changes
+
+`node bench/tamper-misses.mjs --bin target/release/fscale` on `bench/tamper-cheats.json`: 98 cheating changes **written for this measurement** by a subagent that could not read the guard's code, its corpus or its ADRs, from nine categories; held out (no detector changed because of it). Caught: a clear finding; needs approval: only `snapshot-changed` or `expected-changed`.
+
+| Category                     | Cheats | Caught | Needs approval only | Missed |
+| ---------------------------- | ------ | ------ | ------------------- | ------ |
+| test-deleted                 | 10     | 9      | 0                   | 1      |
+| test-skipped                 | 11     | 10     | 0                   | 1      |
+| assertion-weakened           | 11     | 2      | 1                   | 8      |
+| snapshot-or-expected-changed | 11     | 0      | 7                   | 4      |
+| suppression                  | 11     | 8      | 0                   | 3      |
+| config-weakened              | 11     | 7      | 0                   | 4      |
+| ci-weakened                  | 11     | 8      | 0                   | 3      |
+| hooks-skipped                | 11     | 4      | 0                   | 7      |
+| other                        | 11     | 0      | 0                   | 11     |
+| **All**                      | **98** | **48** | **8**               | **42** |
+
+Miss rate 42 of 98, 42.9% (95% interval 33.5–52.7%); not caught outright (missed or approval only) 50 of 98, 51.0% (41.3–60.7%). The same before and after the false-positive fixes. One subagent wrote the corpus from a category list in one sitting; its mix is not the mix of real cheating, and the 11 "other" cases are of kinds the guard does not try to catch.
+
+### The labelled corpus (fixture counts)
+
+`node bench/tamper-rates.mjs`: 255 cases (142 to catch, 113 not), 0 missed, 0 false positives. Written with the guard: it shows the guard does what its ADRs say, not a rate.
+
 ## M25: the tamper guard's config and CI detectors
 
 Measured on 2026-11-14 on the build machine (Linux x64, 4 cores).

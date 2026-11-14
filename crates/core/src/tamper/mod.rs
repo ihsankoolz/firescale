@@ -22,6 +22,7 @@
 //!   cannot loosen the guard for itself.
 //! - Findings are report-only unless the base's policy is `enforced`.
 
+pub mod approval;
 mod ci;
 mod config;
 mod coverage;
@@ -257,12 +258,24 @@ pub enum Kind {
     /// A lint or type-check rule turned off or made weaker in a config file
     /// (M25).
     RuleDisabled,
+    /// A stored snapshot rewritten (M26): needs a person's approval.
+    SnapshotChanged,
+    /// An assertion whose expected value changed and nothing else (M26):
+    /// needs a person's approval.
+    ExpectedChanged,
     /// A changed test file tree-sitter cannot read, on the base or now: its
     /// tests and assertions could not be compared.
     NotChecked,
 }
 
 impl Kind {
+    /// A change that may be right and needs a person to say so (M26, ADR
+    /// 0046), rather than a clear cheat.
+    #[must_use]
+    pub fn needs_approval(self) -> bool {
+        matches!(self, Self::SnapshotChanged | Self::ExpectedChanged)
+    }
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -274,6 +287,8 @@ impl Kind {
             Self::CiWeakened => "CI weakened",
             Self::NoVerify => "hooks skipped",
             Self::RuleDisabled => "rule turned off",
+            Self::SnapshotChanged => "snapshot changed",
+            Self::ExpectedChanged => "expected value changed",
             Self::NotChecked => "not checked",
         }
     }
@@ -340,13 +355,48 @@ pub struct TamperReport {
     /// Changed files the base commit's `verify.tamper.allow` leaves out.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allowed: Vec<AllowedFile>,
+    /// Who approved the change, when the approvals were read from GitHub
+    /// (`fscale tamper --pr-base --approvals`, ADR 0046). `None` everywhere
+    /// else: no approval can be recorded where the change itself runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<Approvals>,
+}
+
+/// The approvals of a pull request, read from GitHub's reviews.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Approvals {
+    /// The commit they had to approve: the pull request's head.
+    pub head: String,
+    /// The people whose latest review approved that commit, other than its
+    /// author, with write access.
+    pub by: Vec<String>,
 }
 
 impl TamperReport {
-    /// True when the findings fail verify.
+    /// True when the findings fail verify: the base's policy is `enforced`
+    /// and a clear finding remains, or a finding that needs approval has
+    /// none where approvals are read (CI). Where the change runs (a laptop,
+    /// the pull request's own job) nothing can approve, so those findings
+    /// are reported and CI decides (ADR 0046).
     #[must_use]
     pub fn blocks(&self) -> bool {
-        self.policy == Policy::Enforced && !self.findings.is_empty()
+        self.policy == Policy::Enforced
+            && self
+                .findings
+                .iter()
+                .any(|finding| self.counts_against(finding))
+    }
+
+    /// True when a finding counts against the change now.
+    #[must_use]
+    pub fn counts_against(&self, finding: &Finding) -> bool {
+        if !finding.kind.needs_approval() {
+            return true;
+        }
+        self.approvals
+            .as_ref()
+            .is_some_and(|approvals| approvals.by.is_empty())
     }
 }
 
@@ -571,6 +621,7 @@ pub fn guard_at(
         findings: Vec::new(),
         not_checked: Vec::new(),
         allowed: Vec::new(),
+        approvals: None,
     };
     if policy.mode == Policy::Off {
         return report;
@@ -601,8 +652,13 @@ pub fn guard_at(
         .flat_map(|path| config::siblings(path))
         .collect();
     configs.extend(related);
+    let snapshot_paths: Vec<&String> = changed
+        .iter()
+        .filter(|path| approval::is_snapshot_path(path))
+        .collect();
     let mut wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
     wanted.extend(configs.iter().map(|path| path.as_str()));
+    wanted.extend(snapshot_paths.iter().map(|path| path.as_str()));
     wanted.sort_unstable();
     wanted.dedup();
     let mut on_base = crate::git::files_at(root, &base.commit, &wanted);
@@ -689,7 +745,7 @@ pub fn guard_at(
     }
 
     // Files the base's `allow` leaves out, for the kinds it names.
-    const KINDS: [Kind; 9] = [
+    const KINDS: [Kind; 11] = [
         Kind::TestDeleted,
         Kind::TestSkipped,
         Kind::AssertionRemoved,
@@ -698,6 +754,8 @@ pub fn guard_at(
         Kind::CiWeakened,
         Kind::NoVerify,
         Kind::RuleDisabled,
+        Kind::SnapshotChanged,
+        Kind::ExpectedChanged,
         Kind::NotChecked,
     ];
     for file in files.iter().chain(
@@ -726,8 +784,21 @@ pub fn guard_at(
         .iter()
         .filter(|file| !allows(&file.path, Kind::SuppressionAdded))
     {
+        // In a test file `@ts-expect-error` asserts that a type error
+        // happens (a type test fails when the error goes away): it is a
+        // check, not a suppression (ADR 0046, found on real history).
+        let type_test = is_test_path(&file.path) || policy.names_test(&file.path);
+        let counted = |found: &Suppression| {
+            let directive = found.text.trim_start_matches(['/', '*', ' ', '{']);
+            !(type_test
+                && matches!(file.language, Language::Js(_))
+                && directive.starts_with("@ts-expect-error"))
+        };
         if let Some(text) = &file.base {
-            for found in suppressions(text, file.language) {
+            for found in suppressions(text, file.language)
+                .into_iter()
+                .filter(|found| counted(found))
+            {
                 *base_keys.entry(found.key.clone()).or_default() += 1;
                 *base_texts
                     .entry((file.path.clone(), found.key, found.text))
@@ -736,7 +807,10 @@ pub fn guard_at(
             }
         }
         if let Ok(Some(text)) = &file.head {
-            for found in suppressions(text, file.language) {
+            for found in suppressions(text, file.language)
+                .into_iter()
+                .filter(|found| counted(found))
+            {
                 report.counts.head_suppressions += 1;
                 head_suppressions.push((file.path.clone(), found));
             }
@@ -819,6 +893,29 @@ pub fn guard_at(
         let implied = lintconfig::implied(&base_measures, &head_measures);
         head_measures.extend(implied);
         config_findings.extend(config::compare(&base_measures, &head_measures));
+    }
+
+    // Snapshots rewritten: on both sides, with a different body (M26).
+    let mut approval_findings: Vec<Finding> = Vec::new();
+    for path in &snapshot_paths {
+        if allows(path, Kind::SnapshotChanged) {
+            continue;
+        }
+        let base_text = on_base
+            .get(path.as_str())
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+        let (Some(base_text), Ok(Some(head_text))) = (base_text, read_head(path)) else {
+            continue;
+        };
+        for (name, line) in approval::rewritten(path, &base_text, &head_text) {
+            approval_findings.push(Finding {
+                kind: Kind::SnapshotChanged,
+                file: (*path).clone(),
+                line,
+                on_base: false,
+                what: format!("snapshot `{name}` was rewritten"),
+            });
+        }
     }
 
     // The test files: by name or folder, by the base's `testPaths`, or (Rust)
@@ -934,6 +1031,12 @@ pub fn guard_at(
     let counts = &mut report.counts;
     for (file, base_file, head_file) in &pairs {
         let path = &file.path;
+        // Assertions that changed only in their values, file by file (M26).
+        if let (Some(before), Some(after)) = (base_file, head_file) {
+            if !allows(path, Kind::ExpectedChanged) {
+                approval_findings.extend(expected_changes(path, before, after));
+            }
+        }
         let count_tests = !allows(path, Kind::TestDeleted);
         let count_skips = !allows(path, Kind::TestSkipped);
         let count_assertions = !allows(path, Kind::AssertionRemoved);
@@ -1021,6 +1124,7 @@ pub fn guard_at(
 
     let mut findings = not_checked;
     findings.extend(config_findings);
+    findings.extend(approval_findings);
     // Fewer tests: name those whose id is gone, up to the shortfall.
     if counts.head_tests < counts.base_tests {
         let mut left = head_ids.clone();
@@ -1047,10 +1151,62 @@ pub fn guard_at(
     }
     // More skipped runs: name the tests that skip more runs than on the
     // base, up to the shortfall.
-    if counts.head_skipped > counts.base_skipped {
-        let mut shortfall = counts.head_skipped - counts.base_skipped;
+    // New tests that are skipped or run only sometimes (a new `#[cfg(unix)]`
+    // test, a test added inside an existing `describe.runIf`) take nothing
+    // away while the change adds at least as many tests: they are left out
+    // of the shortfall. A test renamed and skipped keeps the count of tests
+    // the same, so it is still found (ADR 0046, found on real history).
+    let had_ids: BTreeSet<&str> = base_ids.iter().map(|(id, _, _)| id.as_str()).collect();
+    let new_skipped: usize = head_skips
+        .iter()
+        .filter(|skip| !had_ids.contains(skip.test.id.as_str()) && !skip.test.marker)
+        .map(|skip| skip.weight)
+        .sum();
+    let added_tests = counts.head_tests.saturating_sub(counts.base_tests);
+    // Only while no test of the base went away: a test renamed and skipped
+    // has a new id too, and must not pass for a new test (found in review).
+    let gone_any = base_ids
+        .iter()
+        .any(|(id, _, _)| !head_ids.contains_key(id.as_str()));
+    let excused_skips = if gone_any {
+        0
+    } else {
+        new_skipped.min(added_tests)
+    };
+    // Tests the base had, run there, and skipped now (less those the base
+    // skipped and the change runs again) are counted on their own, so a new
+    // skipped test cannot hide an old one made to not run.
+    let mut skipped_now: BTreeMap<&str, usize> = BTreeMap::new();
+    for skip in &head_skips {
+        *skipped_now.entry(skip.test.id.as_str()).or_default() += skip.weight;
+    }
+    let newly: usize = skipped_now
+        .iter()
+        .filter(|(id, _)| had_ids.contains(*id))
+        .map(|(id, now)| now.saturating_sub(base_skipped_ids.get(*id).copied().unwrap_or(0)))
+        .sum();
+    let run_again: usize = base_skipped_ids
+        .iter()
+        .filter(|(id, _)| head_ids.contains_key(id.as_str()))
+        .map(|(id, had)| had.saturating_sub(skipped_now.get(id.as_str()).copied().unwrap_or(0)))
+        .sum();
+    let converted = newly.saturating_sub(run_again);
+    let net = counts
+        .head_skipped
+        .saturating_sub(counts.base_skipped + excused_skips);
+    if net.max(converted) > 0 {
+        let mut shortfall = net.max(converted);
         let mut left = base_skipped_ids;
-        for skip in &head_skips {
+        // Tests the base had first: those are the ones made to not run.
+        let ordered = head_skips
+            .iter()
+            .filter(|skip| had_ids.contains(skip.test.id.as_str()))
+            .chain(
+                head_skips
+                    .iter()
+                    .filter(|skip| !had_ids.contains(skip.test.id.as_str())),
+            );
+        for skip in ordered {
             if shortfall == 0 {
                 break;
             }
@@ -1152,6 +1308,101 @@ pub fn guard_at(
             (*base > head).then(|| (key.clone(), base - head))
         })
         .collect();
+    let new_files: BTreeMap<&str, &str> = files
+        .iter()
+        .filter(|file| file.base.is_none())
+        .filter_map(|file| match &file.head {
+            Ok(Some(text)) => Some((file.path.as_str(), text.as_str())),
+            _ => None,
+        })
+        .collect();
+    let mut copy_checks = 0usize;
+    let mut copied_from_base = |path: &str, line: usize, key: &str| -> bool {
+        // A file-wide or module-wide suppression covers new code wherever it
+        // is copied: never excused (found in review). And at most 50 lines
+        // are looked up per change, so a file of many suppressions cannot
+        // make the guard slow.
+        if reach_rank(key) > 0 || copy_checks >= 50 {
+            return false;
+        }
+        copy_checks += 1;
+        let Some(text) = new_files.get(path) else {
+            return false;
+        };
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let Some(source) = lines.get(line.saturating_sub(1)).copied() else {
+            return false;
+        };
+        // A comment or attribute on a line of its own suppresses the code
+        // under it: the base must hold both, one above the other. A line
+        // of code with its suppression must be there word for word.
+        let alone = ["//", "#", "/*", "*", "--"]
+            .iter()
+            .any(|mark| source.starts_with(mark));
+        let next = if alone {
+            match lines[line.min(lines.len())..]
+                .iter()
+                .find(|l| !l.is_empty())
+            {
+                Some(next) => Some(*next),
+                None => return false,
+            }
+        } else {
+            None
+        };
+        if source.len() < 12 && next.is_none() {
+            return false;
+        }
+        // Files of the same kind only (a code block in a README is not code).
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let pathspec = format!("*.{extension}");
+        let Ok(out) = run_git(
+            root,
+            &[
+                "grep",
+                "-l",
+                "-F",
+                "-e",
+                source,
+                &base.commit,
+                "--",
+                &pathspec,
+            ],
+        ) else {
+            return false;
+        };
+        if out.code != 0 {
+            return false;
+        }
+        let prefix = format!("{}:", base.commit);
+        let candidates: Vec<String> = out
+            .stdout
+            .lines()
+            .filter_map(|l| l.strip_prefix(&prefix).map(str::to_owned))
+            .take(20)
+            .collect();
+        let wanted: Vec<&str> = candidates.iter().map(String::as_str).collect();
+        crate::git::files_at(root, &base.commit, &wanted)
+            .values()
+            .any(|bytes| {
+                let text = String::from_utf8_lossy(bytes);
+                let base_lines: Vec<&str> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                match next {
+                    Some(next) => base_lines
+                        .windows(2)
+                        .any(|pair| pair[0] == source && pair[1] == next),
+                    // The whole line, not a part of a longer one.
+                    None => base_lines.contains(&source),
+                }
+            })
+    };
     let mut left = base_texts;
     for (path, found) in &head_suppressions {
         let Some(more) = shortfall.get_mut(found.key.as_str()) else {
@@ -1185,6 +1436,12 @@ pub fn guard_at(
             *count -= 1;
             continue;
         }
+        // In a new file, a line that the base holds word for word elsewhere
+        // is a copy of code that keeps its suppression (a file split off,
+        // an adapter copied): not a new one (ADR 0046, real history).
+        if copied_from_base(path, found.line, &found.key) {
+            continue;
+        }
         findings.push(Finding {
             kind: Kind::SuppressionAdded,
             file: path.clone(),
@@ -1194,8 +1451,124 @@ pub fn guard_at(
         });
     }
     findings.sort_by(|a, b| (a.kind, &a.file, a.line).cmp(&(b.kind, &b.file, b.line)));
+    // One finding per place and kind (a CI check counted for several
+    // events, gone from each, is one finding).
+    findings.dedup_by(|a, b| {
+        a.kind == Kind::CiWeakened
+            && a.kind == b.kind
+            && a.file == b.file
+            && a.line == b.line
+            && a.on_base == b.on_base
+    });
     report.findings = findings;
     report
+}
+
+/// The approvals of the pull request `pr`, from GitHub's list of its reviews
+/// (the text of `gh api --paginate repos/{owner}/{repo}/pulls/{n}/reviews`).
+///
+/// # Errors
+///
+/// When the reviews are not that JSON, or the event names no author.
+pub fn approvals_from_reviews(reviews: &str, pr: &github::PullRequest) -> crate::Result<Approvals> {
+    if pr.author.is_empty() {
+        return Err(crate::Error::user(
+            "--approvals: the event names no pull_request.user.login, so a review by the author could not be told apart.",
+        ));
+    }
+    let by = approval::approvers(reviews, &pr.author, &pr.head)
+        .map_err(|message| crate::Error::user(format!("--approvals: {message}")))?;
+    Ok(Approvals {
+        head: pr.head.clone(),
+        by,
+    })
+}
+
+/// The assertions of one file that the change rewrote in their values only:
+/// gone from the base and new now, with the same shape once every literal
+/// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text).
+fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Finding> {
+    let mut left: BTreeMap<&str, usize> = BTreeMap::new();
+    for assertion in &after.assertions {
+        *left.entry(assertion.shape.as_str()).or_default() += 1;
+    }
+    let mut gone: Vec<&Assertion> = Vec::new();
+    for assertion in &before.assertions {
+        match left.get_mut(assertion.shape.as_str()) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => gone.push(assertion),
+        }
+    }
+    let mut had: BTreeMap<&str, usize> = BTreeMap::new();
+    for assertion in &before.assertions {
+        *had.entry(assertion.shape.as_str()).or_default() += 1;
+    }
+    let mut new: Vec<&Assertion> = Vec::new();
+    for assertion in &after.assertions {
+        match had.get_mut(assertion.shape.as_str()) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => new.push(assertion),
+        }
+    }
+    // Paired only within the same test (found on real history: a new test's
+    // assertion was paired with a deleted test's).
+    let test_of = |file: &TestFile, assertion: &Assertion| -> String {
+        assertion
+            .test
+            .and_then(|index| file.tests.get(index))
+            .map(|test| test.id.clone())
+            .unwrap_or_default()
+    };
+    // A test renamed with its value changed: an assertion of a test that is
+    // gone may pair with one of a test that is new (found in review).
+    let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
+    let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
+    const RENAMED: &str = "\u{0}renamed";
+    let gone_ids: Vec<String> = gone
+        .iter()
+        .map(|a| {
+            let id = test_of(before, a);
+            if !id.is_empty() && !after_ids.contains(id.as_str()) {
+                RENAMED.to_owned()
+            } else {
+                id
+            }
+        })
+        .collect();
+    let new_ids: Vec<String> = new
+        .iter()
+        .map(|a| {
+            let id = test_of(after, a);
+            if !id.is_empty() && !before_ids.contains(id.as_str()) {
+                RENAMED.to_owned()
+            } else {
+                id
+            }
+        })
+        .collect();
+    let gone_shapes: Vec<(&str, &str)> = gone
+        .iter()
+        .zip(&gone_ids)
+        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .collect();
+    let new_shapes: Vec<(&str, &str)> = new
+        .iter()
+        .zip(&new_ids)
+        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .collect();
+    approval::pairs(&gone_shapes, &new_shapes)
+        .into_iter()
+        .map(|(old, now)| Finding {
+            kind: Kind::ExpectedChanged,
+            file: path.to_owned(),
+            line: new[now].line,
+            on_base: false,
+            what: format!(
+                "{} (on the base: {}, line {})",
+                new[now].text, gone[old].text, gone[old].line
+            ),
+        })
+        .collect()
 }
 
 /// A suppression key's tool family, how far it reaches (0: a line or an

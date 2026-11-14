@@ -66,6 +66,8 @@ const kinds = [
   'ci-weakened',
   'no-verify',
   'rule-disabled',
+  'snapshot-changed',
+  'expected-changed',
   'not-checked',
 ];
 const languages = {
@@ -77,6 +79,7 @@ const languages = {
   ci: 'CI workflows',
   nv: 'Hook skips',
   lint: 'Lint config',
+  appr: 'Needs approval',
 };
 const tally = Object.fromEntries(kinds.map((kind) => [kind, { cases: 0, caught: 0, missed: 0 }]));
 const byLanguage = Object.fromEntries(
@@ -171,6 +174,6 @@ console.log(`Not-a-finding cases with any finding: ${cleanWithFinding} of ${clea
 for (const line of wrong) console.log(`  ${line}`);
 console.log('');
 console.log(
-  'These are counts on fixtures written with the guard, not a measured false-positive or miss rate (M26).',
+  'These are counts on fixtures written with the guard, not a measured rate: bench/RESULTS.md has the rates measured on real history and on the held-out cheating corpus (ADR 0046).',
 );
 process.exitCode = wrong.length === 0 ? 0 : 1;

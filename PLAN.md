@@ -623,18 +623,21 @@ Decisions in ADR 0045: one measure model for every config detector (compared per
 
 ---
 
-## M26 — Tamper guard: approvals and measured rates ☐
+## M26 — Tamper guard: approvals and measured rates ☑
+
+Decisions in ADR 0046: `snapshot-changed` and `expected-changed` need a person's approval, read only from GitHub reviews in the `pull_request_target` run; rates measured on real history (labelled by fresh subagents) and on a held-out corpus of cheating changes.
 
 **Build**
 
 - Human approval for the ambiguous cases, changed expected values and changed snapshots: verify blocks until a person records an approval. An ADR decides where approvals live so that an agent cannot write its own.
 - A labelled corpus of honest and cheating changes, and a script that measures the false-positive rate and the miss rate.
+- Added by the owner for this milestone: approvals an agent in the working tree cannot write, with the ways to forge them and why each fails (CI is where they are enforced, since nothing is safe locally); at least 1,000 real commits from public JavaScript, TypeScript, Python and Rust repos and this repo, every finding labelled by a fresh subagent, rates per language with intervals; misses on a corpus of cheating changes written for that purpose and kept apart; limits beside every number; false positives fixed, each with a corpus case, rates before and after; no version change, no tag.
 
 **Done when**
 
-- ☐ A changed snapshot and a changed expected value each block until approved, proven by tests.
-- ☐ An approval written by the change under review does not count, proven by a test.
-- ☐ The false-positive rate and the miss rate on the corpus are recorded in `bench/RESULTS.md`.
+- ☑ A changed snapshot and a changed expected value each block until approved, proven by tests (`tamper-approvals.test.ts`, "a changed expected / snapshot: blocks until a person approves the pull request on GitHub").
+- ☑ An approval written by the change under review does not count, proven by a test (same file, "does not count an approval the change could make itself": files and trailers in the change, the author's own review, an older commit, no write access, a bot, a dismissed approval, `--approvals` outside `pull_request_target`).
+- ☑ The false-positive rate and the miss rate on the corpus are recorded in `bench/RESULTS.md`: on 1,200 public commits 36.3% of findings false before the fixes and 20.5% after, with intervals per language; 42 of 98 held-out cheats missed; the limits beside them.
 
 ---
 

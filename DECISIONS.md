@@ -22,6 +22,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M26) Approvals are GitHub reviews by someone other than the author** (ADR 0046). A solo owner cannot approve their own pull request, so a changed snapshot or expected value blocks their own pull requests while `verify.tamper` is `enforced`; merge as an admin, or say if you want another approver source (it must be one an agent with your token cannot use).
+- **(M26) `COLLABORATOR` counts as write access**, as GitHub's `author_association` reports it; a collaborator invited read-only has it too. Say if the workflow should check the exact permission (it needs a wider token).
+- **(M26) 42 of 98 held-out cheats are missed** (assertions weakened in place, golden files, test selection in config, hook files edited, mocks and conftest hooks). Say which of these you want detectors for; fixing them makes that corpus development data, and a new held-out set is needed to measure again.
 - **(M25) `fscale init` now writes `.github/workflows/tamper-guard.yml`, on `pull_request_target`** (ADR 0045), against ADR 0041's "never". To make it a gate, mark `tamper-guard` as a required check and set `verify.tamper` to `"enforced"` on the default branch. Say if you would rather keep `pull_request_target` out and accept that a pull request can edit the job that judges it.
 - **(M25) The job runs `npx --yes firescale@<version>`**, the version that wrote the file, from npm. The version is still 0.4.0, which has no `fscale tamper`, so the job works only once a release with M25 is published and `fscale sync` has written the workflow with that version. No release was made (you asked for none).
 - **(M25) A pull request can add a job named `tamper-guard` to its own workflow.** Branch protection matches required checks by name; look at the `pull_request_target` run.
@@ -129,6 +132,29 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M26 — Tamper guard: approvals and measured rates
+
+**Built** (ADR 0046, `docs/verify.md`, `bench/RESULTS.md`):
+
+1. **Two kinds that need a person's approval**: `snapshot-changed` (Jest/Vitest `.snap` entries, insta `.snap`, syrupy `.ambr`) and `expected-changed` (an assertion of the same test changed only in its literals, inline snapshots included).
+2. **Approvals live on GitHub**: an `APPROVED` review of the pull request's head commit by someone other than its author, with write access, not a bot, whose latest review it is. The `Tamper guard` workflow fetches the reviews with its own read-only token and runs `fscale tamper --pr-base --approvals`; `--approvals` is refused anywhere but a `pull_request_target` run. Nothing in the repo counts. Locally these kinds are reported and never block.
+3. **Real history**: 1,200 commits of eight public repos (two per language) and 150 of this repo, read from git objects only. All 711 findings were labelled true or false by seven fresh subagents that saw the diff and a neutral claim, never the guard's code; two more labelled the 12 findings the fixes moved or added.
+4. **False-positive fixes**, each with a corpus case: `@ts-expect-error` in test files, new conditional tests, suppressions copied with their code, pairs of expected values across tests, a removed trigger filter, options with values in CI commands. Public repos: 36.3% of findings false before (32.4–40.4%), 20.5% after (16.8–24.9%); commits with a false finding 3.8% → 2.0%. 59 findings labelled true are no longer reported (ADR 0046 says which and why).
+5. **Misses**: 98 cheating changes written for the purpose by a subagent that could not see the guard (`bench/tamper-cheats.json`, held out). 48 caught, 8 flagged for approval, 42 missed (42.9%, 33.5–52.7%).
+
+**Limits, beside the numbers:** one label per finding, by subagents of the model family that wrote the guard, with no human check and no agreement rate; eight popular repos, 150 recent commits each; the config and CI kinds barely exercised; the "after" rate measured on the commits the fixes were made against; the cheat corpus written by one subagent from a category list.
+
+**Decided on your behalf** (ADR 0046):
+
+- **Approval findings never block locally or in the pull request's own job**: no approval can be recorded where the change runs, so blocking there would trap an agent with no way out. They block in the `Tamper guard` workflow when the policy is `enforced`.
+- **An approval is of the whole pull request's head commit**, not of each finding: a person reviewing the pull request sees the snapshots and values. A push after it needs a new approval.
+- **`@ts-expect-error` in a test file is an assertion**, not a suppression, also in runtime tests (the labellers called 22 of those suppressions).
+- **New conditional or skipped tests take nothing away** as long as the change adds at least as many tests; an existing test made conditional is still found.
+- **The cheat corpus is held out**: no detector was changed for it.
+- **A `pull_request_target` run with `--pr-base` counts no approval when no reviews were read**, so an older tamper-guard workflow without the reviews step blocks approval findings until `fscale sync` updates it.
+
+**The review** (ADR 0046, "After the review") reproduced six holes in the first fixes and the approval check (copied file-wide suppressions, a mention of `@ts-expect-error`, rename-and-skip while adding a test, renames hiding changed values and snapshots, an indented snapshot file, no `--approvals`), and a slow path; all are fixed with cases, and the history was run again.
 
 ## M25 — Tamper guard: config and CI
 
