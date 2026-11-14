@@ -468,9 +468,20 @@ fn project_step(project: &Project, step: &str) -> Planned {
     if let Some(command) = command_of(&project.commands, step) {
         return Planned::Command(command.clone());
     }
+    // A marker-file ecosystem says why itself (ADR 0051).
+    if let Some(eco) = crate::ecosystems::ecosystem(&project.kind) {
+        let missing = match step {
+            "lint" => eco.lint,
+            "typecheck" => eco.typecheck,
+            _ => eco.test,
+        };
+        return match missing {
+            crate::ecosystems::Missing::NotNeeded(why) => Planned::NotNeeded(why.to_owned()),
+            crate::ecosystems::Missing::Skipped(why) => Planned::Skipped(why.to_owned()),
+        };
+    }
     match (project.kind.as_str(), step) {
         ("rust", "typecheck") => Planned::NotNeeded("cargo clippy already type-checks".to_owned()),
-        ("go", "typecheck") => Planned::NotNeeded("go vet already type-checks".to_owned()),
         ("python", "lint") => Planned::Skipped("no linter was found (looked for ruff)".to_owned()),
         ("python", "typecheck") => {
             Planned::Skipped("no type checker was found (looked for mypy)".to_owned())
@@ -682,10 +693,12 @@ pub fn plan_verify(
         "cargo"
     } else if root_project("python").is_some() {
         "python"
-    } else if root_project("go").is_some() {
-        "go"
     } else {
-        "none"
+        crate::ecosystems::ECOSYSTEMS
+            .iter()
+            .map(|eco| eco.kind)
+            .find(|kind| root_project(kind).is_some())
+            .unwrap_or("none")
     };
 
     let detect = |step: &str| -> Planned {
@@ -715,10 +728,12 @@ pub fn plan_verify(
                 "test" => Planned::Command("cargo test --workspace".to_owned()),
                 _ => Planned::NotNeeded("cargo clippy already type-checks".to_owned()),
             },
-            kind @ ("python" | "go") => root_project(kind).map_or_else(
-                || Planned::Skipped(format!("no {step} command found")),
-                |project| project_step(project, step),
-            ),
+            kind if kind == "python" || crate::ecosystems::ecosystem(kind).is_some() => {
+                root_project(kind).map_or_else(
+                    || Planned::Skipped(format!("no {step} command found")),
+                    |project| project_step(project, step),
+                )
+            }
             _ => Planned::Skipped(format!(
                 "no {step} command found; set verify.{step} in your firescale config"
             )),

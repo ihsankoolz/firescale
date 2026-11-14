@@ -6,34 +6,34 @@
 
 ## Fields
 
-| Field             | Meaning                                                                                                                                                                           |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion`   | Always `2`. Changes only on a breaking change. Version 2 added the per-project fields, `packageManagers`, the project kinds `python` and `go`, and projects found in subfolders.  |
-| `packageManager`  | The JavaScript package manager of the repo root: `"pnpm"`, `"npm"`, `"yarn"`, `"bun"` or `null`.                                                                                  |
-| `packageManagers` | Every package manager in use, the root's and each project's: a sorted subset of `bun`, `cargo`, `go`, `npm`, `pip`, `pipenv`, `pnpm`, `poetry`, `uv`, `yarn`.                     |
-| `lockfiles`       | Sorted lockfiles at the repo root: `Cargo.lock`, `Pipfile.lock`, `bun.lock`, `bun.lockb`, `go.sum`, `package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `yarn.lock`. |
-| `languages`       | Sorted subset of `go`, `javascript`, `python`, `rust`, `typescript`: the root's languages and every project's.                                                                    |
-| `tools`           | Tools of the repo root: a sorted subset of `cargo-workspace`, `docker-compose`, `github-actions`, `nx`, `pnpm-workspace`, `turbo`.                                                |
-| `commands`        | Commands to run from the repo root: optional keys `build`, `test`, `lint`, `typecheck`, one for each script of that name in the root `package.json` (see "Watch-mode scripts").   |
-| `projects`        | Sorted by name. See below.                                                                                                                                                        |
-| `warnings`        | Strings. Things that were skipped, and things that may go wrong, such as a watch-mode script with no run-once sibling (see "Watch-mode scripts").                                 |
-| `notes`           | Sorted strings. Things worth knowing that need no action, such as a watch-mode script replaced by its run-once sibling. Always printed, `[]` when there are none.                 |
+| Field             | Meaning                                                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schemaVersion`   | Always `2`. Changes only on a breaking change. Version 2 added the per-project fields, `packageManagers`, the project kinds `python` and `go`, and projects found in subfolders.                                                                       |
+| `packageManager`  | The JavaScript package manager of the repo root: `"pnpm"`, `"npm"`, `"yarn"`, `"bun"` or `null`.                                                                                                                                                       |
+| `packageManagers` | Every package manager in use, the root's and each project's: a sorted subset of `bun`, `cargo`, `cocoapods`, `conan`, `dart`, `flutter`, `go`, `gradle`, `maven`, `npm`, `nuget`, `pip`, `pipenv`, `pnpm`, `poetry`, `swiftpm`, `uv`, `vcpkg`, `yarn`. |
+| `lockfiles`       | Sorted lockfiles at the repo root: `Cargo.lock`, `Pipfile.lock`, `bun.lock`, `bun.lockb`, `go.sum`, `package-lock.json`, `pnpm-lock.yaml`, `poetry.lock`, `uv.lock`, `yarn.lock`.                                                                      |
+| `languages`       | Sorted subset of `c`, `cpp`, `csharp`, `dart`, `fsharp`, `go`, `java`, `javascript`, `kotlin`, `objective-c`, `python`, `rust`, `swift`, `typescript`, `visual-basic`: the root's languages and every project's.                                       |
+| `tools`           | Tools of the repo root: a sorted subset of `cargo-workspace`, `docker-compose`, `github-actions`, `nx`, `pnpm-workspace`, `turbo`.                                                                                                                     |
+| `commands`        | Commands to run from the repo root: optional keys `build`, `test`, `lint`, `typecheck`, one for each script of that name in the root `package.json` (see "Watch-mode scripts").                                                                        |
+| `projects`        | Sorted by name. See below.                                                                                                                                                                                                                             |
+| `warnings`        | Strings. Things that were skipped, and things that may go wrong, such as a watch-mode script with no run-once sibling (see "Watch-mode scripts").                                                                                                      |
+| `notes`           | Sorted strings. Things worth knowing that need no action, such as a watch-mode script replaced by its run-once sibling. Always printed, `[]` when there are none.                                                                                      |
 
 Each project:
 
-| Field            | Meaning                                                                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `name`           | The name in the project's manifest, or else the name of its folder. `.` for a project at the repo root with no name of its own. |
-| `root`           | Repo-relative folder with forward slashes. `.` is the repo root.                                                                |
-| `kind`           | `node`, `rust`, `python` or `go`.                                                                                               |
-| `source`         | `root` (it is the repo root), `workspace` (a workspace file at the root lists it) or `discovered` (found in a subfolder).       |
-| `languages`      | The project's languages.                                                                                                        |
-| `packageManager` | The project's package manager, or `null` for a Node project that names none and has no lockfile.                                |
-| `lockfiles`      | Names of the lockfiles in the project's folder.                                                                                 |
-| `tools`          | Linters, test runners and other tools found in the project's folder.                                                            |
-| `commands`       | Commands to run **from the project's folder**: optional keys `install`, `build`, `test`, `lint`, `typecheck`.                   |
-| `dependsOn`      | Sorted names of other projects of the same kind in this repo that this one depends on.                                          |
-| `interpreter`    | Python projects only: `source`, `command` and `detail` of the interpreter the commands use. See "The Python interpreter" below. |
+| Field            | Meaning                                                                                                                                      |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`           | The name in the project's manifest, or else the name of its folder. `.` for a project at the repo root with no name of its own.              |
+| `root`           | Repo-relative folder with forward slashes. `.` is the repo root.                                                                             |
+| `kind`           | `node`, `rust`, `python`, or a marker-file ecosystem: `go`, `maven`, `gradle`, `swift`, `xcode`, `cmake`, `meson`, `dotnet`, `dart`, `make`. |
+| `source`         | `root` (it is the repo root), `workspace` (a workspace file at the root lists it) or `discovered` (found in a subfolder).                    |
+| `languages`      | The project's languages.                                                                                                                     |
+| `packageManager` | The project's package manager, or `null` for a Node project that names none and has no lockfile.                                             |
+| `lockfiles`      | Names of the lockfiles in the project's folder.                                                                                              |
+| `tools`          | Linters, test runners and other tools found in the project's folder.                                                                         |
+| `commands`       | Commands to run **from the project's folder**: optional keys `install`, `build`, `test`, `lint`, `typecheck`.                                |
+| `dependsOn`      | Sorted names of other projects of the same kind in this repo that this one depends on.                                                       |
+| `interpreter`    | Python projects only: `source`, `command` and `detail` of the interpreter the commands use. See "The Python interpreter" below.              |
 
 ## Projects in subfolders
 
@@ -45,6 +45,7 @@ Many repos keep their code below the root with no workspace file: a `backend/` w
   - `package.json`: a `node` project.
   - `Cargo.toml`: a `rust` project.
   - `go.mod`: a `go` project.
+  - `pom.xml`: `maven`; `build.gradle(.kts)` or `settings.gradle(.kts)`: `gradle`; `Package.swift`: `swift`; a `*.xcodeproj` or `*.xcworkspace` folder: `xcode` (not beside a `Package.swift`); `CMakeLists.txt`: `cmake`; `meson.build`: `meson` (not beside a `CMakeLists.txt`); a `*.sln`, `*.slnx`, `*.csproj`, `*.fsproj` or `*.vbproj`: `dotnet`; `pubspec.yaml`: `dart`; a `Makefile` with C or C++ sources beside it or a `test` or `check` target, and no other project in the folder: `make` (ADR 0051).
   - `setup.py`, `Pipfile`, or a `pyproject.toml` that describes a package (it has a `[project]`, `[tool.poetry]` or `[build-system]` table): a `python` project. So is a `requirements.txt` together with a `.py` file or one of `pyproject.toml`, `pytest.ini`, `tox.ini`, `setup.cfg`, `conftest.py`, `ruff.toml`, `.ruff.toml`, `mypy.ini`, `manage.py`, `alembic.ini`.
   - A `requirements.txt` with nothing beside it is not a project: it is often only the input of a docs build or a container image. A `pyproject.toml` with only `[tool.*]` tables is not one either: it is shared tool config, often placed above the real projects, and the search goes on below it.
   - A `package.json` that is not valid JSON still makes a project. It has no commands, and the problem is listed under `warnings`.
@@ -58,7 +59,7 @@ Many repos keep their code below the root with no workspace file: a `backend/` w
 At the repo root:
 
 - **packageManager**: the name before `@` in the `packageManager` field of the root `package.json`, if it is one of the four. Otherwise by lockfile, first match of `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `bun.lock`, `bun.lockb`.
-- **languages**: `package.json` gives javascript. A root `tsconfig.json`, or `typescript` in `dependencies` or `devDependencies`, gives typescript. `Cargo.toml` gives rust. `pyproject.toml` or `requirements.txt` gives python. `go.mod` gives go. The languages of every project are added.
+- **languages**: `package.json` gives javascript. A root `tsconfig.json`, or `typescript` in `dependencies` or `devDependencies`, gives typescript. `Cargo.toml` gives rust. `pyproject.toml` or `requirements.txt` gives python. The languages of every project are added, including those of the marker-file ecosystems below.
 - **tools**: `nx.json` gives `nx` (the Nx graph itself is not read), `turbo.json` gives `turbo`, `pnpm-workspace.yaml` gives `pnpm-workspace`, a `[workspace]` table in `Cargo.toml` gives `cargo-workspace`, a `.yml` or `.yaml` file in `.github/workflows` gives `github-actions`, and `docker-compose.yml`, `docker-compose.yaml`, `compose.yml` or `compose.yaml` gives `docker-compose`.
 - **commands**: for each of build, test, lint and typecheck that is a script of the root `package.json`: `"<pm> run <script>"`. The package manager defaults to `npm`. Keys without a script are left out. These are scripts only, because rules such as `agent-ready/commands-documented` compare them with what the repo documents. A test, lint or typecheck script that watches for changes gives way to its run-once sibling, as in a project (see "Watch-mode scripts").
 
@@ -87,6 +88,20 @@ For each project, from the files in its own folder:
   - Name: `name` under `[project]` or `[tool.poetry]` in `pyproject.toml`, else the folder's name.
 - **Rust** (`Cargo.toml`): package manager `cargo`; commands `cargo build`, `cargo test` and `cargo clippy --all-targets -- -D warnings`, each with `--workspace` when the file has a `[workspace]` table.
 - **Go** (`go.mod`): package manager `go`; commands `go build ./...`, `go test ./...` and `go vet ./...`. The name is the last part of the module path.
+
+The marker-file ecosystems (ADR 0051), one entry each in `crates/core/src/ecosystems.rs`. A build wrapper in the folder is used when there is one (`./gradlew`, `./mvnw`; `gradlew` and `mvnw` on Windows, where verify runs commands with `cmd`). A Maven, Gradle, CMake, Meson or .NET build at the repo root takes the same kind's folders below it as members, not projects of their own; Go modules, Swift packages and Dart packages nest as separate projects.
+
+| Kind     | Name from                                     | Commands                                                                                                                                                                                                                             | When a step has no command                                                  |
+| -------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| `maven`  | the project's own `<artifactId>`              | test `mvn -B test`; lint `spotless:check`, `checkstyle:check` or `pmd:check` when the plugin is in `pom.xml`                                                                                                                         | typecheck: not needed (the test step compiles); lint: skipped               |
+| `gradle` | `rootProject.name` in `settings.gradle(.kts)` | test `gradle test`; lint `lint` (Android), `spotlessCheck`, `ktlintCheck`, `detekt` or `checkstyleMain` by plugin; `android` in `tools` for an Android build                                                                         | typecheck: not needed; lint: skipped                                        |
+| `swift`  | `Package(name:)`                              | test `swift test`; lint `swiftlint lint --strict` (`.swiftlint.yml`) or `swift format lint` (`.swift-format`)                                                                                                                        | typecheck: not needed                                                       |
+| `xcode`  | the workspace, else the project               | typecheck `xcodebuild build … -scheme S -destination "generic/platform=iOS Simulator" CODE_SIGNING_ALLOWED=NO` with the one shared scheme and the platform from `SDKROOT`; test only for a macOS app; `pod install` with a `Podfile` | test: skipped, naming the `verify.test` to set (a simulator must be chosen) |
+| `cmake`  | `project(Name)`                               | test `cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure`; package manager `conan` or `vcpkg` from their files                                                                                 | typecheck: not needed (the build is it); lint: skipped (set `verify.lint`)  |
+| `meson`  | `project('name')`                             | test `meson setup build && meson test -C build`                                                                                                                                                                                      | typecheck: not needed; lint: skipped                                        |
+| `dotnet` | the one solution, else the one project        | test `dotnet test X`, lint `dotnet format X --verify-no-changes`, install `dotnet restore X`                                                                                                                                         | several solutions or projects in one folder: skipped (set `verify.test`)    |
+| `dart`   | `name:` in `pubspec.yaml`                     | `flutter test` and `flutter analyze` for a Flutter app (`sdk: flutter`), else `dart test` and `dart analyze`; test only with a `test/` folder; install `flutter pub get` or `dart pub get`                                           | typecheck: not needed (analyze type-checks)                                 |
+| `make`   | the folder                                    | test `make test` or `make check`, lint `make lint`, typecheck `make typecheck` when the Makefile has the target                                                                                                                      | skipped, naming the missing target                                          |
 
 ### Watch-mode scripts
 

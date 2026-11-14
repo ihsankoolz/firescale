@@ -17,7 +17,7 @@ const GITIGNORE: &str = ".gitignore";
 pub struct GitignoreBasics;
 
 /// Entries every repo of a detected language should ignore.
-fn required_entries(languages: &[String]) -> Vec<&'static str> {
+fn required_entries(languages: &[String], root_kinds: &[&str]) -> Vec<&'static str> {
     let has = |name: &str| languages.iter().any(|language| language == name);
     let mut entries = Vec::new();
     if has("javascript") || has("typescript") {
@@ -30,49 +30,38 @@ fn required_entries(languages: &[String]) -> Vec<&'static str> {
         entries.push("__pycache__");
         entries.push(".venv");
     }
+    // The build output of a marker-file ecosystem at the repo root (ADR
+    // 0051). Only at the root: a bare `build` line there would ignore every
+    // `build` folder of the repo, and a project in a subfolder keeps its
+    // own .gitignore.
+    for kind in root_kinds {
+        if let Some(eco) = firescale_core::ecosystems::ecosystem(kind) {
+            for entry in eco.ignored {
+                if !entries.contains(entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+    }
     entries
 }
 
-/// Reduces a `.gitignore` line to a bare name: `/node_modules/`, `**/node_modules/**` -> `node_modules`.
-fn normalise(line: &str) -> String {
-    let mut text = line.trim();
-    if let Some(rest) = text.strip_prefix("**/") {
-        text = rest;
-    }
-    if let Some(rest) = text.strip_prefix('/') {
-        text = rest;
-    }
-    for suffix in ["/**", "/*", "/"] {
-        if let Some(rest) = text.strip_suffix(suffix) {
-            text = rest;
-            break;
-        }
-    }
-    text.to_owned()
-}
-
-/// Covered when the LAST line matching the entry is not a negation (`!entry`).
+/// Covered when git, reading `gitignore` at the repo root, ignores `entry`
+/// (a folder or file name, or a repo-relative path): globs, anchors and
+/// negations count as git counts them (ADR 0051; it was a name match).
 pub(crate) fn is_covered(gitignore: &str, entry: &str) -> bool {
-    let mut covered = false;
-    for line in gitignore
-        .trim_start_matches('\u{feff}')
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-    {
-        match line.strip_prefix('!') {
-            Some(rest) if normalise(rest) == entry => covered = false,
-            Some(_) => {}
-            None if normalise(line) == entry => covered = true,
-            None => {}
-        }
-    }
-    covered
+    firescale_core::walk::gitignore_covers(gitignore, entry)
 }
 
 fn missing_entries(ctx: &RuleContext, gitignore: &str) -> Result<Vec<&'static str>> {
     let facts = detect_facts(ctx.root())?;
-    Ok(required_entries(&facts.languages)
+    let root_kinds: Vec<&str> = facts
+        .projects
+        .iter()
+        .filter(|project| project.root == ".")
+        .map(|project| project.kind.as_str())
+        .collect();
+    Ok(required_entries(&facts.languages, &root_kinds)
         .into_iter()
         .filter(|entry| !is_covered(gitignore, entry))
         .collect())

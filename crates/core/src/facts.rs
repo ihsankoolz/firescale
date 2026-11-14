@@ -78,7 +78,9 @@ pub struct Project {
     pub name: String,
     /// Repo-relative, forward slashes, `.` for the repo root.
     pub root: String,
-    /// `node`, `rust`, `python` or `go`.
+    /// `node`, `rust`, `python`, or a marker-file ecosystem of
+    /// [`crate::ecosystems::ECOSYSTEMS`] (`go`, `maven`, `gradle`, `swift`,
+    /// `xcode`, `cmake`, `meson`, `dotnet`, `dart`, `make`).
     pub kind: String,
     /// `root`, `workspace` or `discovered`.
     pub source: String,
@@ -414,6 +416,9 @@ struct Detail {
     interpreter: Option<Interpreter>,
     /// Node only: the steps whose package script watches for changes.
     watching: Vec<WatchScript>,
+    /// Subfolders of the project that hold no projects of their own,
+    /// repo-relative (ADR 0051).
+    claims: Vec<String>,
 }
 
 pub(crate) const LOCKFILE_NAMES: [&str; 10] = [
@@ -911,6 +916,7 @@ fn node_detail(
         commands: or_else(or_else(scripts.clone(), from_tools.clone()), install),
         interpreter: None,
         watching,
+        claims: Vec::new(),
     };
     let only_tools = Commands {
         install: None,
@@ -956,35 +962,77 @@ fn rust_detail(root: &Path, dir: &str, cargo: &[TomlEntry]) -> Detail {
         },
         interpreter: None,
         watching: Vec::new(),
+        claims: Vec::new(),
     }
 }
 
-/// A folder with a `go.mod`.
-fn go_detail(root: &Path, dir: &str) -> Detail {
-    let names = file_names(root, dir);
+/// The detail of a project of a marker-file ecosystem (ADR 0051).
+fn ecosystem_detail(found: crate::ecosystems::Found, folder: &crate::ecosystems::Folder) -> Detail {
+    let mut tools = found.tools;
+    if folder.files.iter().any(|name| name == "Dockerfile") {
+        tools.push("docker".to_owned());
+    }
     Detail {
-        languages: vec!["go".to_owned()],
-        package_manager: Some("go".to_owned()),
-        lockfiles: names
-            .iter()
-            .filter(|name| *name == "go.sum")
-            .cloned()
-            .collect(),
-        tools: names
-            .iter()
-            .filter(|name| *name == "Dockerfile")
-            .map(|_| "docker".to_owned())
-            .collect(),
-        commands: Commands {
-            build: Some("go build ./...".to_owned()),
-            test: Some("go test ./...".to_owned()),
-            lint: Some("go vet ./...".to_owned()),
-            typecheck: None,
-            install: None,
-        },
+        languages: found.languages,
+        package_manager: found.package_manager,
+        lockfiles: found.lockfiles,
+        tools,
+        commands: found.commands,
         interpreter: None,
         watching: Vec::new(),
+        claims: found.claims,
     }
+}
+
+/// True when a folder above `dir` (up to the root) has one of `manifests`.
+fn nested_member(root: &Path, dir: &str, manifests: &[&str]) -> bool {
+    if dir == "." || manifests.is_empty() {
+        return false;
+    }
+    let parts: Vec<&str> = dir.split('/').collect();
+    (0..parts.len()).any(|depth| {
+        let above = if depth == 0 {
+            ".".to_owned()
+        } else {
+            parts[..depth].join("/")
+        };
+        manifests
+            .iter()
+            .any(|name| exists(root, &in_dir(&above, name)))
+    })
+}
+
+/// The projects of the marker-file ecosystems in `dir`, beside the kinds
+/// already found there (`present`), leaving out kinds whose build at the
+/// repo root takes its subfolders as members (`owned`).
+fn ecosystem_projects(
+    root: &Path,
+    dir: &str,
+    present: &[&str],
+    owned: &[&str],
+    source: &'static str,
+) -> Vec<Raw> {
+    let folder = crate::ecosystems::Folder::read(root, dir);
+    crate::ecosystems::matching(&folder, present)
+        .into_iter()
+        // A member of the root's build of the same kind is not a project
+        // of its own (`owned`), and nor is a folder whose manifest has the
+        // same manifest in a folder above it (a nested CMakeLists.txt).
+        .filter(|eco| !owned.contains(&eco.kind))
+        .filter(|eco| !nested_member(root, dir, eco.manifests))
+        .map(|eco| Raw {
+            name: (eco.name)(&folder).unwrap_or_else(|| folder_name(dir)),
+            root: dir.to_owned(),
+            kind: eco.kind,
+            source,
+            deps: Vec::new(),
+            detail: {
+                let mut detail = ecosystem_detail((eco.found)(&folder), &folder);
+                detail.claims = detail.claims.iter().map(|sub| in_dir(dir, sub)).collect();
+                detail
+            },
+        })
+        .collect()
 }
 
 /// How many levels of `-r` includes between requirements files are followed.
@@ -1541,6 +1589,7 @@ fn python_detail(root: &Path, dir: &str, active: Option<&Path>) -> Detail {
             .filter(|lock| matches!(lock.as_str(), "Pipfile.lock" | "poetry.lock" | "uv.lock"))
             .collect(),
         tools,
+        claims: Vec::new(),
         commands: Commands {
             install,
             build: None,
@@ -1573,20 +1622,6 @@ fn python_name(root: &Path, dir: &str) -> String {
                         && entry.key == "name"
                 })
                 .map(|entry| unquote(&entry.value))
-        })
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| folder_name(dir))
-}
-
-fn go_name(root: &Path, dir: &str) -> String {
-    read_text(root, &in_dir(dir, "go.mod"))
-        .and_then(|text| {
-            text.lines()
-                .find_map(|line| line.trim().strip_prefix("module "))
-                .map(|module| {
-                    let module = module.trim().trim_matches('"');
-                    module.rsplit('/').next().unwrap_or(module).to_owned()
-                })
         })
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| folder_name(dir))
@@ -1827,9 +1862,16 @@ fn discovered_projects(
         .iter()
         .filter(|project| project.root != ".")
         .map(|project| project.root.clone())
+        .chain(
+            known
+                .iter()
+                .flat_map(|project| project.detail.claims.iter().cloned()),
+        )
         .collect();
     for dir in searchable_dirs(root) {
-        if claimed.iter().any(|parent| is_inside(&dir, parent)) {
+        if claimed.iter().any(|parent| {
+            is_inside(&dir, parent) || dir == *parent && !known.iter().any(|p| p.root == dir)
+        }) {
             continue;
         }
         let names = file_names(root, &dir);
@@ -1883,16 +1925,26 @@ fn discovered_projects(
                 detail: python_detail(root, &dir, active),
             });
         }
-        if has("go.mod") {
-            found.push(Raw {
-                name: go_name(root, &dir),
-                root: dir.clone(),
-                kind: "go",
-                source: source::DISCOVERED,
-                deps: Vec::new(),
-                detail: go_detail(root, &dir),
-            });
-        }
+        let present: Vec<&str> = found
+            .iter()
+            .map(|project| project.kind)
+            .chain(
+                known
+                    .iter()
+                    .filter(|project| project.root == dir)
+                    .map(|project| project.kind),
+            )
+            .collect();
+        let owned: Vec<&str> = known
+            .iter()
+            .filter(|project| project.root == ".")
+            .filter(|project| {
+                crate::ecosystems::ecosystem(project.kind).is_some_and(|eco| eco.contains_nested)
+            })
+            .map(|project| project.kind)
+            .collect();
+        let others = ecosystem_projects(root, &dir, &present, &owned, source::DISCOVERED);
+        found.extend(others);
         if !found.is_empty() || known.iter().any(|project| project.root == dir) {
             claimed.push(dir);
         }
@@ -1992,9 +2044,6 @@ pub fn detect_facts_with(root: &Path, active: Option<&Path>) -> Result<RepoFacts
     if exists(root, "pyproject.toml") || exists(root, "requirements.txt") {
         languages.insert("python".to_owned());
     }
-    if exists(root, "go.mod") {
-        languages.insert("go".to_owned());
-    }
 
     let mut tools = BTreeSet::new();
     for (file, tool) in [
@@ -2051,16 +2100,13 @@ pub fn detect_facts_with(root: &Path, active: Option<&Path>) -> Result<RepoFacts
             detail: python_detail(root, ".", active),
         });
     }
-    if exists(root, "go.mod") {
-        raw.push(Raw {
-            name: go_name(root, "."),
-            root: ".".to_owned(),
-            kind: "go",
-            source: source::ROOT,
-            deps: Vec::new(),
-            detail: go_detail(root, "."),
-        });
-    }
+    let at_root: Vec<&str> = raw
+        .iter()
+        .filter(|project| project.root == ".")
+        .map(|project| project.kind)
+        .collect();
+    let root_others = ecosystem_projects(root, ".", &at_root, &[], source::ROOT);
+    raw.extend(root_others);
     let discovered = discovered_projects(
         root,
         &raw,

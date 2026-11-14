@@ -35,7 +35,8 @@ pub struct SetupProblem {
     pub missing_package: Option<String>,
 }
 
-/// Programs that a project's own install command does not provide.
+/// Programs that a project's own install command does not provide. The
+/// marker-file ecosystems add theirs (`ecosystems::Ecosystem::programs`).
 const BASE_PROGRAMS: [&str; 16] = [
     "bun", "cargo", "docker", "go", "node", "npm", "npx", "pip", "pipenv", "pnpm", "poetry", "py",
     "python", "python3", "uv", "yarn",
@@ -96,7 +97,10 @@ fn program_name(raw: &str) -> String {
 
 fn missing(program: &str) -> SetupProblem {
     let name = program_name(program);
-    if BASE_PROGRAMS.contains(&name.as_str()) {
+    let toolchain = crate::ecosystems::ECOSYSTEMS
+        .iter()
+        .any(|eco| eco.programs.contains(&name.as_str()));
+    if BASE_PROGRAMS.contains(&name.as_str()) || toolchain {
         SetupProblem {
             reason: format!("the program `{name}` was not found on the PATH"),
             missing_program: Some(name),
