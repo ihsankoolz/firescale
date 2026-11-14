@@ -818,7 +818,13 @@ mod yaml {
             _ => text
                 .parse::<f64>()
                 .ok()
-                .filter(|_| !text.starts_with('+') && !text.ends_with('.'))
+                .filter(|_| {
+                    // Rust also reads `inf`, `NaN` and `infinity`, which are
+                    // strings in YAML (it writes `.inf` and `.nan`).
+                    text.trim_start_matches('-')
+                        .starts_with(|c: char| c.is_ascii_digit() || c == '.')
+                        && !text.ends_with('.')
+                })
                 .map_or_else(|| Scalar::Str(text.to_owned()), Scalar::Num),
         }
     }
@@ -1516,6 +1522,25 @@ mod tests {
         assert!(has(&entries, "rules.[1].b", "1", 3));
         assert!(has(&entries, "rules.[1].c.[1].y", "2", 4));
         assert!(has(&entries, "extends.[0].[0]", "deep", 6));
+    }
+
+    #[test]
+    fn yaml_words_rust_reads_as_numbers_stay_strings() {
+        let entries = flat(
+            Format::Yaml,
+            "a: inf\nb: NaN\nc: -Infinity\nd: -1.5\ne: .5\n",
+        );
+        assert_eq!(
+            read(Format::Yaml, "a: inf\n").expect("readable")[0].value,
+            Scalar::Str("inf".into())
+        );
+        assert!(has(&entries, "b", "NaN", 2));
+        assert!(has(&entries, "c", "-Infinity", 3));
+        assert_eq!(
+            read(Format::Yaml, "d: -1.5\ne: .5\n").expect("readable")[1].value,
+            Scalar::Num(0.5)
+        );
+        assert!(has(&entries, "d", "-1.5", 4));
     }
 
     #[test]

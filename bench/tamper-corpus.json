@@ -1995,6 +1995,166 @@
       "head": {
         ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"npx fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n"
       }
+    },
+    {
+      "name": "cov: jest global lines threshold lowered",
+      "expect": ["coverage-lowered"],
+      "note": "coverageThreshold.global.lines goes from 80 to 60 in jest.config.js.",
+      "base": {
+        "jest.config.js": "/** @type {import('jest').Config} */\nmodule.exports = {\n  testEnvironment: 'node',\n  coverageThreshold: {\n    global: {\n      branches: 70,\n      lines: 80,\n    },\n  },\n};\n"
+      },
+      "head": {
+        "jest.config.js": "/** @type {import('jest').Config} */\nmodule.exports = {\n  testEnvironment: 'node',\n  coverageThreshold: {\n    global: {\n      branches: 70,\n      lines: 60,\n    },\n  },\n};\n"
+      }
+    },
+    {
+      "name": "cov: vitest thresholds removed",
+      "expect": ["coverage-lowered"],
+      "note": "The thresholds block of vitest.config.ts is gone, and with it both floors.",
+      "base": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n      thresholds: {\n        lines: 85,\n        functions: 85,\n      },\n    },\n  },\n});\n"
+      },
+      "head": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n    },\n  },\n});\n"
+      }
+    },
+    {
+      "name": "cov: nyc check-coverage turned off",
+      "expect": ["coverage-lowered"],
+      "note": "With check-coverage false nyc no longer fails under its thresholds.",
+      "base": {
+        ".nycrc": "{\n  \"all\": true,\n  \"check-coverage\": true,\n  \"lines\": 90,\n  \"branches\": 80\n}\n"
+      },
+      "head": {
+        ".nycrc": "{\n  \"all\": true,\n  \"check-coverage\": false,\n  \"lines\": 90,\n  \"branches\": 80\n}\n"
+      }
+    },
+    {
+      "name": "cov: coverage.py fail_under lowered in pyproject.toml",
+      "expect": ["coverage-lowered"],
+      "note": "[tool.coverage.report] fail_under goes from 90 to 70.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 70\nshow_missing = true\n"
+      }
+    },
+    {
+      "name": "cov: pytest --cov-fail-under dropped from addopts",
+      "expect": ["coverage-lowered"],
+      "note": "The pytest-cov floor in setup.cfg's [tool:pytest] addopts is gone; coverage.py's own fail_under is kept.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[tool:pytest]\naddopts = -q --cov=app --cov-fail-under=85\n\n[coverage:report]\nfail_under = 90\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[tool:pytest]\naddopts = -q --cov=app\n\n[coverage:report]\nfail_under = 90\n"
+      }
+    },
+    {
+      "name": "cov: cargo llvm-cov --fail-under-lines lowered in a Makefile",
+      "expect": ["coverage-lowered"],
+      "note": "The Rust coverage floor on the command line goes from 80 to 50.",
+      "base": {
+        "Makefile": ".PHONY: test coverage\n\ntest:\n\tcargo test --workspace\n\ncoverage:\n\tcargo llvm-cov --workspace --fail-under-lines 80\n"
+      },
+      "head": {
+        "Makefile": ".PHONY: test coverage\n\ntest:\n\tcargo test --workspace\n\ncoverage:\n\tcargo llvm-cov --workspace --fail-under-lines 50\n"
+      }
+    },
+    {
+      "name": "cov: codecov project target lowered and patch status made informational",
+      "expect": ["coverage-lowered"],
+      "note": "target 85% becomes 70%, and the patch status no longer fails the pull request.",
+      "base": {
+        "codecov.yml": "coverage:\n  status:\n    project:\n      default:\n        target: 85%\n        threshold: 1%\n    patch:\n      default:\n        target: 90%\n"
+      },
+      "head": {
+        "codecov.yml": "coverage:\n  status:\n    project:\n      default:\n        target: 70%\n        threshold: 1%\n    patch:\n      default:\n        target: 90%\n        informational: true\n"
+      }
+    },
+    {
+      "name": "cov: coverage.py fail_under moved from setup.cfg to pyproject.toml",
+      "expect": [],
+      "note": "coverage.py reads fail_under from either file: the floor is the same.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[coverage:report]\nfail_under = 90\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = pricing\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      }
+    },
+    {
+      "name": "cov: vitest threshold raised",
+      "expect": [],
+      "note": "lines goes from 85 to 90.",
+      "base": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n      thresholds: {\n        lines: 85,\n        functions: 85,\n      },\n    },\n  },\n});\n"
+      },
+      "head": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n      thresholds: {\n        lines: 90,\n        functions: 85,\n      },\n    },\n  },\n});\n"
+      }
+    },
+    {
+      "name": "cov: jest config moved from package.json to jest.config.js",
+      "expect": [],
+      "note": "The same coverageThreshold, now in its own file, with a branches floor added.",
+      "base": {
+        "package.json": "{\n  \"name\": \"shop\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"jest\"\n  },\n  \"jest\": {\n    \"coverageThreshold\": {\n      \"global\": {\n        \"lines\": 80\n      }\n    }\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"shop\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"jest\"\n  }\n}\n",
+        "jest.config.js": "/** @type {import('jest').Config} */\nmodule.exports = {\n  testEnvironment: 'node',\n  coverageThreshold: {\n    global: {\n      branches: 70,\n      lines: 80,\n    },\n  },\n};\n"
+      }
+    },
+    {
+      "name": "cov: nyc settings moved from .nycrc to .nycrc.yml",
+      "expect": [],
+      "note": "The same settings written in YAML.",
+      "base": {
+        ".nycrc": "{\n  \"all\": true,\n  \"check-coverage\": true,\n  \"lines\": 90,\n  \"branches\": 80\n}\n"
+      },
+      "head": {
+        ".nycrc": null,
+        ".nycrc.yml": "all: true\ncheck-coverage: true\nlines: 90\nbranches: 80\n"
+      }
+    },
+    {
+      "name": "cov: unrelated coverage.py settings changed",
+      "expect": [],
+      "note": "show_missing and branch change; fail_under is kept.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = false\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = false\nskip_covered = true\n"
+      }
+    },
+    {
+      "name": "cov: pytest addopts rewritten as a list with the same floor",
+      "expect": [],
+      "note": "setup.cfg's addopts moved to [tool.pytest.ini_options] in pyproject.toml as a list.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[tool:pytest]\naddopts = -q --cov=app --cov-fail-under=85\n\n[coverage:report]\nfail_under = 90\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[coverage:report]\nfail_under = 90\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n\n[tool.pytest.ini_options]\naddopts = [\"-q\", \"--cov=app\", \"--cov-fail-under\", \"85\"]\n"
+      }
+    },
+    {
+      "name": "cov: cargo tarpaulin fail-under raised",
+      "expect": [],
+      "note": "tarpaulin.toml fail-under goes from 75 to 80.",
+      "base": {
+        "tarpaulin.toml": "[coverage]\nfail-under = 75\nout = [\"Html\"]\n"
+      },
+      "head": {
+        "tarpaulin.toml": "[coverage]\nfail-under = 80\nout = [\"Html\"]\n"
+      }
     }
   ]
 }
