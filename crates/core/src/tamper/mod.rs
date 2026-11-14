@@ -1,21 +1,29 @@
-//! The tamper guard (M23, M24; ADR 0042, ADR 0044): finds a change that
-//! passes verify by weakening its tests or silencing its checks, in
-//! JavaScript, TypeScript, Python (pytest and unittest) and Rust.
+//! The tamper guard (M23, M24, M32; ADR 0042, ADR 0044, ADR 0052): finds a
+//! change that passes verify by weakening its tests or silencing its
+//! checks, in JavaScript, TypeScript, Python (pytest and unittest), Rust,
+//! Java (JUnit and TestNG), Kotlin (JUnit, kotlin.test and Kotest), Swift
+//! (XCTest and Swift Testing), Dart (`package:test` and `flutter_test`), C
+//! (Unity, CMocka, Check, `assert`), C++ (GoogleTest, Catch2, doctest), C#
+//! (xUnit, NUnit, MSTest) and Go (`testing`, testify).
 //!
 //! - It compares syntax trees, not diff lines: each changed test file is
 //!   parsed with tree-sitter on the base commit and in the working tree, and
 //!   its tests (by suite path and name), skipped tests and assertions are
 //!   counted. A reformatted test, or one moved within or between files,
 //!   counts the same. Code that certainly never runs (`if (false)`, after a
-//!   `return`) and assertions that cannot fail (`expect(true).toBe(true)`,
-//!   `assert True`) are not counted.
+//!   `return`, C's `#if 0`) and assertions that cannot fail
+//!   (`expect(true).toBe(true)`, `assert True`, `EXPECT_TRUE(true)`) are
+//!   not counted. C and C++ test macros (`TEST(…)`, `TEST_CASE(…)`) are
+//!   read in the shapes tree-sitter gives them.
 //! - It compares **net counts over the whole change**, so a renamed test, a
 //!   test moved to another file, a test split in two and an assertion
 //!   replaced by a stricter one are not findings. Lint suppressions
-//!   (`eslint-disable`, `# noqa`, `#[allow]`) are counted the same way, per
-//!   rule, in every changed source file.
+//!   (`eslint-disable`, `# noqa`, `#[allow]`, `// swiftlint:disable`,
+//!   `// ignore:`, `// NOLINT`, `#pragma … diagnostic ignored`) are counted
+//!   the same way, per rule, in every changed source file.
 //! - A test deleted together with every module of the repo it uses (its
-//!   subject) is not a finding.
+//!   subject; in C and C++ the headers its file includes in quotes) is not
+//!   a finding.
 //! - The base is the one blame-aware verify resolves (ADR 0037). The policy
 //!   (`verify.tamper`: mode, extra test paths, allowed exceptions) is read
 //!   from the base commit's config, never the working tree's, so a change
@@ -23,19 +31,27 @@
 //! - Findings are report-only unless the base's policy is `enforced`.
 
 pub mod approval;
+mod cfamily;
 mod ci;
 mod config;
 mod coverage;
+mod csharp;
+mod dart;
 mod formats;
 pub mod github;
+mod go;
+mod java;
 mod js;
+mod kotlin;
 mod lintconfig;
 mod noverify;
 mod policy;
 mod python;
 mod reach;
+mod recover;
 mod rust;
 mod suppress;
+mod swift;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -59,6 +75,23 @@ pub enum Language {
     Python,
     /// Rust: `#[test]` and its forms.
     Rust,
+    /// Java: JUnit and TestNG (M32).
+    Java,
+    /// Kotlin: JUnit, kotlin.test and Kotest (M32).
+    Kotlin,
+    /// Swift: XCTest and Swift Testing (M32).
+    Swift,
+    /// C: Unity, CMocka, Check, plain `assert` (M32).
+    C,
+    /// C++: GoogleTest, Catch2 and doctest (M32). Headers too: the C++
+    /// grammar reads C.
+    Cpp,
+    /// C#: xUnit, NUnit and MSTest (M32).
+    CSharp,
+    /// Go: `testing` and testify (M32).
+    Go,
+    /// Dart: `package:test` and `flutter_test` (M32).
+    Dart,
 }
 
 impl Language {
@@ -72,6 +105,15 @@ impl Language {
         match extension.as_str() {
             "py" => Some(Self::Python),
             "rs" => Some(Self::Rust),
+            "java" => Some(Self::Java),
+            "kt" => Some(Self::Kotlin),
+            "swift" => Some(Self::Swift),
+            "c" => Some(Self::C),
+            // A header may be C or C++: the C++ grammar reads both.
+            "cc" | "cpp" | "cxx" | "c++" | "h" | "hh" | "hpp" | "hxx" => Some(Self::Cpp),
+            "cs" => Some(Self::CSharp),
+            "go" => Some(Self::Go),
+            "dart" => Some(Self::Dart),
             _ => None,
         }
     }
@@ -80,33 +122,124 @@ impl Language {
 /// Reads the tests, skips and assertions of a test file.
 #[must_use]
 pub fn read_test_file(source: &str, language: Language) -> TestFile {
+    let file = read_as_written(source, language);
+    // An `#if` that tree-sitter cannot read: read the first branch of each,
+    // when the others hold no test (M32, ADR 0052).
+    let has_branches = matches!(
+        language,
+        Language::C | Language::Cpp | Language::CSharp | Language::Swift
+    );
+    if file.has_errors && has_branches {
+        if let Some(first) = recover::first_branches(source) {
+            let retry = read_as_written(&first, language);
+            if !retry.has_errors {
+                return retry;
+            }
+        }
+    }
+    file
+}
+
+/// Why `why` says the tests of a Dart file not named `*_test.dart` do not
+/// run.
+const DART_NOT_A_TEST_FILE: &str = "dart test runs only files named *_test.dart";
+
+/// Reads a test file, and what its name says about its tests (found in
+/// review): a Go file named for one platform (`calc_linux_test.go`) is built
+/// only there, a conditional skip like `//go:build linux`; `dart test` runs
+/// only files named `*_test.dart`, so the tests of any other file (a helper
+/// that a test file calls) run only through one, and count as not run on
+/// both sides.
+fn read_named(path: &str, source: &str, language: Language) -> TestFile {
+    let mut file = read_test_file(source, language);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    match language {
+        Language::Go if go::platform_only(path) => {
+            for test in &mut file.tests {
+                test.skipped = true;
+            }
+        }
+        Language::Dart if !name.ends_with("_test.dart") => {
+            for test in &mut file.tests {
+                if !test.skipped {
+                    test.skipped = true;
+                    test.why = Some(DART_NOT_A_TEST_FILE);
+                }
+            }
+        }
+        _ => {}
+    }
+    file
+}
+
+fn read_as_written(source: &str, language: Language) -> TestFile {
     match language {
         Language::Js(dialect) => js::read(source, dialect),
         Language::Python => python::read(source),
         Language::Rust => rust::read(source),
+        Language::Java => java::read(source),
+        Language::Kotlin => kotlin::read(source),
+        Language::Swift => swift::read(source),
+        Language::C => cfamily::read(source, false),
+        Language::Cpp => cfamily::read(source, true),
+        Language::CSharp => csharp::read(source),
+        Language::Go => go::read(source),
+        Language::Dart => dart::read(source),
     }
 }
 
 /// True for a path the guard reads as a test file by its name or folder
 /// alone: JS/TS `*.test.*`, `*.spec.*` or in `__tests__`, `test`, `tests`,
 /// `spec`; Python `test_*.py`, `*_test.py` or in `test`, `tests`; Rust in
-/// `tests`. A Rust file elsewhere is a test file when it holds tests
-/// ([`holds_tests`]); the policy can name more (`verify.tamper.testPaths`).
+/// `tests`; Java `*Test.java`, `*Tests.java`, `*IT.java`, `Test*.java` or
+/// in `src/test/`; Kotlin `*Test.kt`, `*Tests.kt`, `*Spec.kt` or in
+/// `src/test/`, `src/*Test/` (`androidTest`, `jvmTest`); Swift
+/// `*Tests.swift`, `*Test.swift` or in `tests` or a folder ending in `Tests`
+/// (`Tests/`, `AppTests/`, `AppUITests/`); Dart `*_test.dart` or in `test`,
+/// `integration_test`; C and C++ `*_test.c`, `*_test.cc`, `*_unittest.cc`,
+/// `test_*.c`, `*Test.cpp`, `*Tests.cpp` or in `test`, `tests`,
+/// `unittest(s)`; C# `*Tests.cs`, `*Test.cs` or in `test`, `tests`,
+/// `*.Tests`, `*.Test`, `*Tests` (a test project); Go `*_test.go` (not under
+/// `testdata` or a folder the go tool ignores). A file elsewhere is a test
+/// file when it holds tests ([`holds_tests`]); the policy can name more
+/// (`verify.tamper.testPaths`).
 #[must_use]
 pub fn is_test_path(path: &str) -> bool {
     match Language::of(path) {
         Some(Language::Js(_)) => js::is_test_path(path),
         Some(Language::Python) => python::is_test_path(path),
         Some(Language::Rust) => rust::is_test_path(path),
+        Some(Language::Java) => java::is_test_path(path),
+        Some(Language::Kotlin) => kotlin::is_test_path(path),
+        Some(Language::Swift) => swift::is_test_path(path),
+        Some(Language::C | Language::Cpp) => cfamily::is_test_path(path),
+        Some(Language::CSharp) => csharp::is_test_path(path),
+        Some(Language::Go) => go::is_test_path(path),
+        Some(Language::Dart) => dart::is_test_path(path),
         None => false,
     }
 }
 
 /// True for source that holds tests although its path does not say so:
-/// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code.
+/// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code; Java and
+/// Kotlin test annotations (`@Test`) and Kotest specs; Swift that imports
+/// XCTest or Testing and defines a test; Dart that imports `package:test`
+/// or `package:flutter_test` and calls `test`; a C or C++ file that
+/// includes a test framework's header and defines a test.
 #[must_use]
 pub fn holds_tests(source: &str, language: Language) -> bool {
-    language == Language::Rust && rust::holds_tests(source)
+    match language {
+        Language::Rust => rust::holds_tests(source),
+        Language::Java => java::holds_tests(source),
+        Language::Kotlin => kotlin::holds_tests(source),
+        Language::Swift => swift::holds_tests(source),
+        Language::C => cfamily::holds_tests(source, false),
+        Language::Cpp => cfamily::holds_tests(source, true),
+        Language::CSharp => csharp::holds_tests(source),
+        Language::Go => go::holds_tests(source),
+        Language::Dart => dart::holds_tests(source),
+        Language::Js(_) | Language::Python => false,
+    }
 }
 
 /// The repo path an import of `spec` in the file `from` names, among the
@@ -124,7 +257,13 @@ fn resolve(
     match language {
         Language::Js(_) => js::resolve(from, spec, exists),
         Language::Python => python::resolve(from, spec, exists),
-        Language::Rust => None,
+        Language::Swift => swift::resolve(from, spec, exists),
+        Language::Dart => dart::resolve(from, spec, exists),
+        Language::C | Language::Cpp => cfamily::resolve(from, spec, exists),
+        // Kotlin reads Java classes and Java reads Kotlin ones.
+        Language::Java | Language::Kotlin => java::resolve(from, spec, exists),
+        Language::Go => go::resolve(from, spec, exists),
+        Language::Rust | Language::CSharp => None,
     }
 }
 
@@ -218,6 +357,11 @@ pub struct Assertion {
     pub weight: usize,
     /// The index of the test it is in, if any.
     pub test: Option<usize>,
+    /// It runs only sometimes inside its test: under an `#if` (C, C++, C#,
+    /// Swift) that does not also hold the test, or after a `return` under
+    /// one. Counted, and also counted apart: an assertion made conditional
+    /// is a removal (ADR 0052, found in review).
+    pub conditional: bool,
 }
 
 /// What a test file holds.
@@ -937,9 +1081,9 @@ pub fn guard_at(
         let base_file = file
             .base
             .as_deref()
-            .map(|text| read_test_file(text, file.language));
+            .map(|text| read_named(&file.path, text, file.language));
         let head_file = match &file.head {
-            Ok(Some(text)) => Some(read_test_file(text, file.language)),
+            Ok(Some(text)) => Some(read_named(&file.path, text, file.language)),
             Ok(None) => None,
             Err(()) => Some(TestFile {
                 has_errors: true,
@@ -980,6 +1124,17 @@ pub fn guard_at(
     // modules of the repo, every such module is deleted, and none of those
     // names is left in the change.
     let existed_on_base = |path: &str| deleted.contains(&path.to_owned()) || exists_now(path);
+    // Go names no import for its own package: the names each deleted Go
+    // file declared, so a test is excused only by the file that declared
+    // what it uses, not by another file of its package (M32).
+    let go_declared: BTreeMap<&str, BTreeSet<String>> = files
+        .iter()
+        .filter(|file| file.language == Language::Go && deleted.contains(&file.path))
+        .filter_map(|file| {
+            let text = file.base.as_deref()?;
+            Some((file.path.as_str(), go::top_level_names(text)))
+        })
+        .collect();
     let excused = |file: &Changed, read: &TestFile, test: &TestCase| -> bool {
         let mut modules: BTreeSet<String> = BTreeSet::new();
         let mut names: Vec<&String> = Vec::new();
@@ -1004,6 +1159,11 @@ pub fn guard_at(
                 // A helper of the tests (a factory, a fixture module) is
                 // not what they test: deleting it with them excuses nothing.
                 Some(module) if is_test_path(&module) || policy.names_test(&module) => {}
+                Some(module)
+                    if spec == go::PACKAGE
+                        && !go_declared
+                            .get(module.as_str())
+                            .is_some_and(|declared| declared.contains(name)) => {}
                 Some(module) => {
                     modules.insert(module);
                     names.push(name);
@@ -1026,8 +1186,16 @@ pub fn guard_at(
     let mut head_skips: Vec<Skip<'_>> = Vec::new();
     let mut base_focus: BTreeSet<String> = BTreeSet::new();
     let mut head_focus: Vec<(String, usize, String)> = Vec::new();
-    let mut base_shapes: Vec<(String, String, String, usize)> = Vec::new();
+    // Each assertion of the base: its shape, text, file, line and test.
+    let mut base_shapes: Vec<BaseAssertion> = Vec::new();
     let mut head_shapes: BTreeMap<String, usize> = BTreeMap::new();
+    // Assertions that run whenever their test does (not `conditional`), on
+    // each side, and those of the head by shape and by test.
+    let (mut base_always, mut head_always) = (0usize, 0usize);
+    let mut head_always_shapes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut head_always_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
+    // The same, by file and test: which one went is named by its test first.
+    let mut head_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     let counts = &mut report.counts;
     for (file, base_file, head_file) in &pairs {
         let path = &file.path;
@@ -1081,16 +1249,36 @@ pub fn guard_at(
                     continue;
                 }
                 counts.base_assertions += assertion.weight;
+                if !assertion.conditional {
+                    base_always += assertion.weight;
+                }
+                let test = test_id(read, assertion);
                 for _ in 0..assertion.weight {
-                    base_shapes.push((
-                        assertion.shape.clone(),
-                        assertion.text.clone(),
-                        path.clone(),
-                        assertion.line,
-                    ));
+                    base_shapes.push(BaseAssertion {
+                        shape: assertion.shape.clone(),
+                        text: assertion.text.clone(),
+                        file: path.clone(),
+                        line: assertion.line,
+                        test: test.clone(),
+                        conditional: assertion.conditional,
+                    });
                 }
             }
         }
+        // A file whose every test is skipped on the base and now (the whole
+        // file under `#if canImport(…)`, `@TestOn(…)`, a platform's name): a
+        // new test in it is no more skipped than the others were (found on
+        // real history, M32: Alamofire's `#if canImport(_Concurrency)`).
+        let all_skipped = |read: &TestFile| {
+            let tests: Vec<&TestCase> = read.tests.iter().filter(|t| !t.marker).collect();
+            !tests.is_empty() && tests.iter().all(|t| skipped_weight(t) >= t.weight)
+        };
+        let file_wide = base_file.as_ref().is_some_and(all_skipped)
+            && head_file.as_ref().is_some_and(all_skipped);
+        let base_here: BTreeSet<&str> = base_file
+            .iter()
+            .flat_map(|read| read.tests.iter().map(|t| t.id.as_str()))
+            .collect();
         if let Some(read) = head_file {
             for test in &read.tests {
                 if count_tests && !test.marker {
@@ -1098,7 +1286,12 @@ pub fn guard_at(
                     *head_ids.entry(test.id.clone()).or_default() += test.weight;
                 }
                 if count_skips {
-                    let skipped = skipped_weight(test);
+                    let skipped =
+                        if file_wide && !test.marker && !base_here.contains(test.id.as_str()) {
+                            0
+                        } else {
+                            skipped_weight(test)
+                        };
                     counts.head_skipped += skipped;
                     if skipped > 0 {
                         head_skips.push(Skip {
@@ -1116,7 +1309,20 @@ pub fn guard_at(
             if count_assertions {
                 for assertion in &read.assertions {
                     counts.head_assertions += assertion.weight;
+                    let key = (
+                        assertion.shape.clone(),
+                        path.clone(),
+                        test_id(read, assertion),
+                    );
                     *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
+                    *head_in_test.entry(key.clone()).or_default() += assertion.weight;
+                    if !assertion.conditional {
+                        head_always += assertion.weight;
+                        *head_always_shapes
+                            .entry(assertion.shape.clone())
+                            .or_default() += assertion.weight;
+                        *head_always_in_test.entry(key).or_default() += assertion.weight;
+                    }
                 }
             }
         }
@@ -1163,16 +1369,16 @@ pub fn guard_at(
         .map(|skip| skip.weight)
         .sum();
     let added_tests = counts.head_tests.saturating_sub(counts.base_tests);
-    // Only while no test of the base went away: a test renamed and skipped
-    // has a new id too, and must not pass for a new test (found in review).
-    let gone_any = base_ids
+    // Less one for each run of a base test that went away: a test renamed
+    // and skipped has a new id too, and must not pass for a new test (found
+    // in review). At most that many of the new skipped tests can be such
+    // (found on real history, M32: Humanizer renamed one test and added six
+    // more under the `#if NET6_0_OR_GREATER` its file already had).
+    let gone_runs = base_ids
         .iter()
-        .any(|(id, _, _)| !head_ids.contains_key(id.as_str()));
-    let excused_skips = if gone_any {
-        0
-    } else {
-        new_skipped.min(added_tests)
-    };
+        .filter(|(id, _, _)| !head_ids.contains_key(id.as_str()))
+        .count();
+    let excused_skips = new_skipped.saturating_sub(gone_runs).min(added_tests);
     // Tests the base had, run there, and skipped now (less those the base
     // skipped and the change runs again) are counted on their own, so a new
     // skipped test cannot hide an old one made to not run.
@@ -1250,25 +1456,40 @@ pub fn guard_at(
         });
     }
     // Fewer assertions: name those whose text is gone, up to the shortfall.
-    if counts.head_assertions < counts.base_assertions {
-        let mut left = head_shapes;
-        let mut missing: Vec<&(String, String, String, usize)> = Vec::new();
-        for entry in &base_shapes {
-            match left.get_mut(&entry.0) {
-                Some(count) if *count > 0 => *count -= 1,
-                _ => missing.push(entry),
-            }
-        }
-        let shortfall = counts.base_assertions - counts.head_assertions;
+    // The same text kept in the same test pairs first, then anywhere: a
+    // copy the change kept in another test is not taken for the one it
+    // removed (found on real history: Alamofire commented out the first of
+    // several identical assertions, and the last was named). Fewer
+    // assertions that run whenever their test does is a removal too: an
+    // assertion moved under an `#if` inside its test (ADR 0052, found in
+    // review); the larger shortfall is named.
+    let total_short = counts
+        .base_assertions
+        .saturating_sub(counts.head_assertions);
+    let always_short = base_always.saturating_sub(head_always);
+    if total_short > 0 || always_short > 0 {
+        let (missing, shortfall) = if always_short > total_short {
+            let always: Vec<&BaseAssertion> = base_shapes
+                .iter()
+                .filter(|entry| !entry.conditional)
+                .collect();
+            (
+                unpaired(&always, head_always_shapes, head_always_in_test),
+                always_short,
+            )
+        } else {
+            let all: Vec<&BaseAssertion> = base_shapes.iter().collect();
+            (unpaired(&all, head_shapes, head_in_test), total_short)
+        };
         let mut named: BTreeSet<(&String, usize)> = BTreeSet::new();
-        for (_, shown, file, line) in missing.into_iter().take(shortfall) {
-            if named.insert((file, *line)) {
+        for entry in missing.into_iter().take(shortfall) {
+            if named.insert((&entry.file, entry.line)) {
                 findings.push(Finding {
                     kind: Kind::AssertionRemoved,
-                    file: file.clone(),
-                    line: *line,
+                    file: entry.file.clone(),
+                    line: entry.line,
                     on_base: true,
-                    what: shown.clone(),
+                    what: entry.text.clone(),
                 });
             }
         }
@@ -1484,6 +1705,57 @@ pub fn approvals_from_reviews(reviews: &str, pr: &github::PullRequest) -> crate:
     })
 }
 
+/// One run of an assertion of the base.
+struct BaseAssertion {
+    shape: String,
+    text: String,
+    file: String,
+    line: usize,
+    test: String,
+    conditional: bool,
+}
+
+/// The assertions of the base that no assertion of the head pairs with:
+/// one with the same shape in the same file and test first, then one with
+/// the same shape anywhere.
+fn unpaired<'a>(
+    base: &[&'a BaseAssertion],
+    mut left: BTreeMap<String, usize>,
+    mut in_test: BTreeMap<(String, String, String), usize>,
+) -> Vec<&'a BaseAssertion> {
+    let mut kept = vec![false; base.len()];
+    for (index, entry) in base.iter().enumerate() {
+        let key = (entry.shape.clone(), entry.file.clone(), entry.test.clone());
+        if let Some(count) = in_test.get_mut(&key).filter(|count| **count > 0) {
+            *count -= 1;
+            if let Some(total) = left.get_mut(&entry.shape) {
+                *total = total.saturating_sub(1);
+            }
+            kept[index] = true;
+        }
+    }
+    let mut missing = Vec::new();
+    for (entry, kept) in base.iter().zip(kept) {
+        if kept {
+            continue;
+        }
+        match left.get_mut(&entry.shape) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => missing.push(*entry),
+        }
+    }
+    missing
+}
+
+/// The id of the test an assertion is in, or "" outside any test.
+fn test_id(file: &TestFile, assertion: &Assertion) -> String {
+    assertion
+        .test
+        .and_then(|index| file.tests.get(index))
+        .map(|test| test.id.clone())
+        .unwrap_or_default()
+}
+
 /// The assertions of one file that the change rewrote in their values only:
 /// gone from the base and new now, with the same shape once every literal
 /// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text).
@@ -1623,6 +1895,23 @@ fn covers(wide: &str, narrow: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Humanizer: an `#if` gives one loop body two heads, and tree-sitter
+    // reads the whole class as an error. The first branch is read instead.
+    #[test]
+    fn an_if_with_two_heads_is_read_by_its_first_branch() {
+        let source = "public class GenderTests\n{\n    [Fact]\n    public void Adds()\n    {\n        foreach (var name in Names)\n        {\n#if NET5_0_OR_GREATER\n            foreach (var gender in Enum.GetValues<Gender>())\n#else\n            foreach (var gender in (Gender[])Enum.GetValues(typeof(Gender)))\n#endif\n            {\n                Assert.Equal(name, Make(name, gender));\n            }\n        }\n    }\n}\n";
+        let file = read_test_file(source, Language::CSharp);
+        assert!(!file.has_errors, "{:?}", file.error_line);
+        assert_eq!(file.tests.len(), 1);
+        assert_eq!(file.assertions.len(), 1);
+        assert_eq!(file.assertions[0].line, 14);
+        // An assertion in the other branch is never dropped unseen: the file
+        // is read as written, or not read.
+        let hidden = source.replace("#else\n", "#else\n            Assert.True(Legacy);\n");
+        let file = read_test_file(&hidden, Language::CSharp);
+        assert!(file.has_errors || file.assertions.len() == 2, "{file:?}");
+    }
 
     #[test]
     fn a_wider_suppression_covers_a_narrower_one() {

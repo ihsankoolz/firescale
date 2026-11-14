@@ -33,11 +33,24 @@ pub struct Suppression {
 /// The suppressions in a source file.
 #[must_use]
 pub fn suppressions(source: &str, language: Language) -> Vec<Suppression> {
+    // The languages of M32 read their own (ADR 0052).
+    match language {
+        Language::Java => return super::java::suppressions(source),
+        Language::Kotlin => return super::kotlin::suppressions(source),
+        Language::Swift => return super::swift::suppressions(source),
+        Language::C => return super::cfamily::suppressions(source, false),
+        Language::Cpp => return super::cfamily::suppressions(source, true),
+        Language::CSharp => return super::csharp::suppressions(source),
+        Language::Go => return super::go::suppressions(source),
+        Language::Dart => return super::dart::suppressions(source),
+        Language::Js(_) | Language::Python | Language::Rust => {}
+    }
     let grammar: tree_sitter::Language = match language {
         Language::Js(JsDialect::TypeScript) => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         Language::Js(JsDialect::Tsx) => tree_sitter_typescript::LANGUAGE_TSX.into(),
         Language::Python => tree_sitter_python::LANGUAGE.into(),
         Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+        _ => return Vec::new(),
     };
     let Some(tree) = parse(source, &grammar) else {
         return Vec::new();
@@ -105,7 +118,7 @@ pub fn suppressions(source: &str, language: Language) -> Vec<Suppression> {
 }
 
 /// White space squeezed, at most 120 characters, `…` when cut.
-fn shown(raw: &str) -> String {
+pub(super) fn shown(raw: &str) -> String {
     let squeezed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if squeezed.chars().count() <= 120 {
         return squeezed;
@@ -116,7 +129,7 @@ fn shown(raw: &str) -> String {
 }
 
 /// `rest` when `body` starts with `word` and the word ends there.
-fn directive<'a>(body: &'a str, word: &str) -> Option<&'a str> {
+pub(super) fn directive<'a>(body: &'a str, word: &str) -> Option<&'a str> {
     let rest = body.strip_prefix(word)?;
     match rest.chars().next() {
         None => Some(rest),
@@ -136,7 +149,7 @@ fn directive_nocase<'a>(body: &'a str, word: &str) -> Option<&'a str> {
 }
 
 /// Keys of `tool:rule` for each rule in a list, or `tool:*` for none.
-fn keyed(tool: &str, rules: impl IntoIterator<Item = String>) -> Vec<String> {
+pub(super) fn keyed(tool: &str, rules: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut keys: Vec<String> = rules
         .into_iter()
         .map(|rule| rule.trim().to_owned())

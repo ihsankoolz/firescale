@@ -102,7 +102,20 @@ async function tamper(
 const kinds = (report?: Tamper): string[] =>
   [...new Set((report?.findings ?? []).map((finding) => finding.kind))].sort();
 
-const LANGUAGES = ['ts', 'js', 'py', 'rs'];
+const LANGUAGES = [
+  'ts',
+  'js',
+  'py',
+  'rs',
+  'java',
+  'kotlin',
+  'swift',
+  'dart',
+  'c',
+  'cpp',
+  'cs',
+  'go',
+];
 const KINDS = [
   'test-deleted',
   'test-skipped',
@@ -209,6 +222,39 @@ describe('what a finding says', () => {
     expect(human.stdout).toContain(
       '  assertion removed: src/math.test.ts:10 (on the base commit): expect(sub(3, 1)).toBe(2)\n',
     );
+  });
+
+  // Found on real history (M32, ADR 0052): Alamofire commented out the first
+  // of several identical assertions, and the last copy, still there, was named.
+  it('names the assertion that went, not a copy of it in another test', async () => {
+    const test = (name: string, body: string): string =>
+      `it("${name}", () => {\n  const cart = make();\n${body}});\n\n`;
+    const same = '  expect(cart.total()).toBe(0);\n';
+    const base = {
+      'src/cart.ts': 'export const make = () => ({ total: () => 0 });\n',
+      'src/cart.test.ts':
+        'import { make } from "./cart";\n\n' +
+        test('starts empty', same) +
+        test('stays empty', same) +
+        test('is empty again', same),
+    };
+    const head = {
+      'src/cart.test.ts':
+        'import { make } from "./cart";\n\n' +
+        test('starts empty', '') +
+        test('stays empty', same) +
+        test('is empty again', same),
+    };
+    const { tamper: report } = await tamper(await caseRepo(base, head));
+    expect(report?.findings).toEqual([
+      {
+        kind: 'assertion-removed',
+        file: 'src/cart.test.ts',
+        line: 5,
+        onBase: true,
+        what: 'expect(cart.total()).toBe(0)',
+      },
+    ]);
   });
 
   it('makes a file it cannot parse a finding of its own, which blocks when enforced', async () => {

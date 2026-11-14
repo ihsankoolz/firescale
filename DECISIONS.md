@@ -42,6 +42,14 @@ M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull requ
 - Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
 - Test by hand: the starter on a device or simulator (`npx expo start`), and `npx expo-doctor` with the network.
 
+## M32 — Tamper guard: Java, Kotlin, Swift, Dart, C, C++, C# and Go
+
+**Built** (ADR 0052, `docs/verify.md`): a tamper-guard reader per language, with each one's test frameworks, skips, assertions and suppressions; eight grammar crates, pinned; parse errors that cannot hide a test no longer make a file "not checked"; a removed assertion is named in its own test rather than as a copy elsewhere; new conditional tests are excused but for one per base test that went away.
+
+**Decided on your behalf** (ADR 0052): which frameworks each reader knows; a parse error is harmless when none of its words could name a test, a skip or an assertion; C and C++ macros alone on their line are blanked; an `#if` tree-sitter cannot read is read by its first branches when the others name no test.
+
+**Proof:** 458 corpus cases, 0 missed, 0 false positives; 1,000 real commits of eight repos, each finding labelled by a fresh subagent: false findings 29.5% → 6.8% (4.9–9.3%), commits with a false finding 8.5% → 2.0%. A fresh review found ten ways to weaken a test unseen; all but the ones ADR 0052 lists are fixed.
+
 ## M31 — Ecosystems: Java, Kotlin, Android, Swift, Xcode, C, C++, .NET, Dart
 
 **Built** (ADR 0051, `docs/facts.md`): one table of ecosystems found by a marker file, read by facts, verify, doctor, setup, the step cache and the gitignore rule; Maven, Gradle, SwiftPM, Xcode, CMake, Meson, .NET, Dart/Flutter and Make added; gitignore lines read with git's matcher; the stack packs' shared helpers in one module.
@@ -70,6 +78,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M32) The binary grew from 11.5 MB to 31.0 MB** (ADR 0052): the eight grammars' parse tables. Start-up is unchanged. Keep it, or ask for the grammars as an optional build (two packages), or for grammars loaded on demand as WebAssembly.
+- **(M32) `not-checked` still blocks when the guard is enforced** (ADR 0052): 2 in 1,000 real commits after the fixes, both false. Say if it should report without blocking.
+- **(M32) None of the new languages' test frameworks ran here**, and no cheating corpus was written for them (ADR 0052): the readers follow the frameworks' documentation; their misses are not measured.
 - **(M31) Swift, Xcode, .NET and Flutter commands have not run anywhere** (ADR 0051): their tools are not in the build environment. Try `fscale verify` in one repo of each; Xcode tests need `verify.test` with a simulator for iOS apps.
 - **(M31) `core/gitignore-basics` now asks for build output of a root project of the new kinds** (`target` for Maven, `.gradle` and `build` for Gradle, `build` for CMake, `bin` and `obj` for .NET, `.build` for Swift, `.dart_tool`), and reads gitignore lines as git does. Repos that relied on a name match may see a finding change.
 - **(M30) The Expo starter is the blank TypeScript template, not Expo Router, and has no images** (ADR 0050): app.json names no icon, adaptive icon or favicon, so store builds need them added. Say if you want the Router template (about 20 packages and 30 images) instead.

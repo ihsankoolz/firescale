@@ -45,6 +45,14 @@ const NAMES = {
   ts: 'TypeScript',
   py: 'Python',
   rs: 'Rust',
+  java: 'Java',
+  kotlin: 'Kotlin',
+  swift: 'Swift',
+  dart: 'Dart',
+  c: 'C',
+  cpp: 'C++',
+  cs: 'C#',
+  go: 'Go',
   this: 'This repo (Rust, TypeScript)',
 };
 for (const [title, set] of Object.entries(data.sets)) {

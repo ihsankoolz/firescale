@@ -443,6 +443,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
                     .collect::<Vec<_>>()
                     .join(" "),
                 test: inside.and_then(|block| block.test),
+                conditional: false,
                 weight: inside.map_or(1, |block| block.weight),
             });
             return true;

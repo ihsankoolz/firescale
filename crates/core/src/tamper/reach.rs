@@ -135,7 +135,8 @@ impl Dead {
     }
 }
 
-/// True for a literal `false` condition, in parentheses or not.
+/// True for a literal `false` condition, in parentheses or not; in C and
+/// C++ also a literal `0` (`if (0)`), and C++'s `condition_clause`.
 fn is_false(condition: Node<'_>, src: &[u8]) -> bool {
     let mut at = condition;
     for _ in 0..8 {
@@ -144,7 +145,14 @@ fn is_false(condition: Node<'_>, src: &[u8]) -> bool {
                 Some(inner) => at = inner,
                 None => return false,
             },
+            // C++: `if (false)` holds its condition in a clause, with an
+            // optional initializer (`if (int x = f(); false)`).
+            "condition_clause" => match at.child_by_field_name("value") {
+                Some(inner) => at = inner,
+                None => return false,
+            },
             "false" => return true,
+            "number_literal" => return text(at, src) == "0",
             "boolean_literal" => return text(at, src) == "false",
             _ => return false,
         }

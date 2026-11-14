@@ -509,6 +509,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .and_then(|index| file.tests.get(index))
                         .map_or(1, |test| test.weight),
                     test,
+                    conditional: false,
                 });
                 // What is inside is a token tree: no more macro calls.
                 false
