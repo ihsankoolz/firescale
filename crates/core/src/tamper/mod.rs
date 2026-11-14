@@ -1,6 +1,8 @@
 //! The tamper guard (M23, M24; ADR 0042, ADR 0044): finds a change that
 //! passes verify by weakening its tests or silencing its checks, in
-//! JavaScript, TypeScript, Python (pytest and unittest) and Rust.
+//! JavaScript, TypeScript, Python (pytest and unittest) and Rust; and since
+//! M32 (ADR 0052) also in Swift (XCTest and Swift Testing) and Dart
+//! (`package:test` and `flutter_test`).
 //!
 //! - It compares syntax trees, not diff lines: each changed test file is
 //!   parsed with tree-sitter on the base commit and in the working tree, and
@@ -12,8 +14,9 @@
 //! - It compares **net counts over the whole change**, so a renamed test, a
 //!   test moved to another file, a test split in two and an assertion
 //!   replaced by a stricter one are not findings. Lint suppressions
-//!   (`eslint-disable`, `# noqa`, `#[allow]`) are counted the same way, per
-//!   rule, in every changed source file.
+//!   (`eslint-disable`, `# noqa`, `#[allow]`, `// swiftlint:disable`,
+//!   `// ignore:`) are counted the same way, per rule, in every changed
+//!   source file.
 //! - A test deleted together with every module of the repo it uses (its
 //!   subject) is not a finding.
 //! - The base is the one blame-aware verify resolves (ADR 0037). The policy
@@ -130,8 +133,11 @@ pub fn read_test_file(source: &str, language: Language) -> TestFile {
 /// True for a path the guard reads as a test file by its name or folder
 /// alone: JS/TS `*.test.*`, `*.spec.*` or in `__tests__`, `test`, `tests`,
 /// `spec`; Python `test_*.py`, `*_test.py` or in `test`, `tests`; Rust in
-/// `tests`. A Rust file elsewhere is a test file when it holds tests
-/// ([`holds_tests`]); the policy can name more (`verify.tamper.testPaths`).
+/// `tests`; Swift `*Tests.swift`, `*Test.swift` or in `tests` or a folder
+/// ending in `Tests` (`Tests/`, `AppTests/`, `AppUITests/`); Dart
+/// `*_test.dart` or in `test`, `integration_test`. A Rust, Swift or Dart
+/// file elsewhere is a test file when it holds tests ([`holds_tests`]); the
+/// policy can name more (`verify.tamper.testPaths`).
 #[must_use]
 pub fn is_test_path(path: &str) -> bool {
     match Language::of(path) {
@@ -150,7 +156,9 @@ pub fn is_test_path(path: &str) -> bool {
 }
 
 /// True for source that holds tests although its path does not say so:
-/// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code.
+/// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code, Swift that
+/// imports XCTest or Testing and defines a test, Dart that imports
+/// `package:test` or `package:flutter_test` and calls `test`.
 #[must_use]
 pub fn holds_tests(source: &str, language: Language) -> bool {
     match language {
@@ -182,10 +190,10 @@ fn resolve(
     match language {
         Language::Js(_) => js::resolve(from, spec, exists),
         Language::Python => python::resolve(from, spec, exists),
+        Language::Swift => swift::resolve(from, spec, exists),
         Language::Rust
         | Language::Java
         | Language::Kotlin
-        | Language::Swift
         | Language::C
         | Language::Cpp
         | Language::CSharp

@@ -118,7 +118,7 @@ pub fn suppressions(source: &str, language: Language) -> Vec<Suppression> {
 }
 
 /// White space squeezed, at most 120 characters, `…` when cut.
-fn shown(raw: &str) -> String {
+pub(super) fn shown(raw: &str) -> String {
     let squeezed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if squeezed.chars().count() <= 120 {
         return squeezed;
@@ -149,7 +149,7 @@ fn directive_nocase<'a>(body: &'a str, word: &str) -> Option<&'a str> {
 }
 
 /// Keys of `tool:rule` for each rule in a list, or `tool:*` for none.
-fn keyed(tool: &str, rules: impl IntoIterator<Item = String>) -> Vec<String> {
+pub(super) fn keyed(tool: &str, rules: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut keys: Vec<String> = rules
         .into_iter()
         .map(|rule| rule.trim().to_owned())
