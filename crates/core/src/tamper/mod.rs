@@ -529,7 +529,7 @@ fn files_in(root: &Path, commit: &str) -> BTreeSet<String> {
 /// Tracked files whose changes git does not show: `assume-unchanged`, and
 /// `skip-worktree` outside a sparse checkout (where it marks the folders
 /// left out, which are not on disk on purpose).
-fn hidden_from_git(root: &Path) -> BTreeSet<String> {
+pub(crate) fn hidden_from_git(root: &Path) -> BTreeSet<String> {
     let sparse = run_git(root, &["config", "--bool", "core.sparseCheckout"])
         .is_ok_and(|out| out.stdout.trim() == "true");
     let Ok(out) = run_git(root, &["-c", "core.quotepath=off", "ls-files", "-v", "-z"]) else {

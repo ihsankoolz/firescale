@@ -322,6 +322,11 @@ pub(crate) fn check_of(command: &str) -> Option<String> {
     let first = *words.first()?;
     let program = first.rsplit(['/', '\\']).next().unwrap_or(first);
     let program = program.strip_suffix(".exe").unwrap_or(program);
+    // `firescale@0.5.0`, `eslint@9` (but not a scoped name's leading `@`).
+    let program = match program.rfind('@') {
+        Some(at) if at > 0 => &program[..at],
+        _ => program,
+    };
     let rest: Vec<&str> = words[1..].to_vec();
     let sub = rest.iter().copied().find(|w| !w.starts_with('-'));
     let has = |flag: &str| rest.contains(&flag);
@@ -371,7 +376,7 @@ pub(crate) fn check_of(command: &str) -> Option<String> {
                 _ => check_of(&rest[index + 1..].join(" ")),
             }
         }
-        "fscale" | "firescale" => matches!(sub?, "verify" | "check")
+        "fscale" | "firescale" => matches!(sub?, "verify" | "check" | "tamper")
             .then(|| format!("fscale {}", sub.unwrap_or_default())),
         "vitest" | "jest" | "mocha" | "ava" | "tap" | "eslint" | "tsc" | "vue-tsc" | "oxlint"
         | "stylelint" | "pytest" | "py.test" | "tox" | "nox" | "flake8" | "mypy" | "pyright"
@@ -506,6 +511,10 @@ mod tests {
             ("pnpm test", "pnpm test"),
             ("npm run test:unit -- --run", "npm test:unit"),
             ("npx --yes firescale verify --affected", "fscale verify"),
+            (
+                "npx --yes firescale@0.5.0 tamper --pr-base",
+                "fscale tamper",
+            ),
             ("CI=1 uv run pytest -q", "pytest"),
             ("python -m pytest tests", "pytest"),
             ("cargo test --workspace", "cargo test"),

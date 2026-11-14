@@ -1784,6 +1784,217 @@
       "head": {
         "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n"
       }
+    },
+    {
+      "name": "ci: the verify step deleted from the workflow",
+      "expect": ["ci-weakened"],
+      "note": "Read from the base's copy of the workflow.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: the lint step made unable to fail with || true",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint || true\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: continue-on-error added to the verify step",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n        continue-on-error: true\n"
+      }
+    },
+    {
+      "name": "ci: the workflow no longer runs on pull requests",
+      "expect": ["ci-weakened"],
+      "note": "Its checks stop gating pull requests.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: the workflow file deleted",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": null
+      }
+    },
+    {
+      "name": "ci: a job turned off with if: false",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    if: false\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: the steps moved to another job and renamed",
+      "expect": [],
+      "note": "Counted over the whole change, not per job.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n  checks:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint the code\n        run: npm run lint\n      - name: Definition of done\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: a flag added to the verify command",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base --jobs 2\n"
+      }
+    },
+    {
+      "name": "ci: the workflow file renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": null,
+        ".github/workflows/checks.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: an install step made unable to fail",
+      "expect": [],
+      "note": "An install is not a check.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci || true\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: a job and a trigger added",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\n  merge_group:\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run build\n"
+      }
+    },
+    {
+      "name": "nv: --no-verify added to a package.json script",
+      "expect": ["no-verify"],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit --no-verify -m wip\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: git commit -n in a new shell script",
+      "expect": ["no-verify"],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "scripts/save.sh": "#!/bin/sh\ngit add -A\ngit commit -anm \"save\"\n"
+      }
+    },
+    {
+      "name": "nv: --no-verify on a push in a workflow",
+      "expect": ["no-verify"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n      - run: git push --no-verify origin HEAD\n"
+      }
+    },
+    {
+      "name": "nv: the agent stop hook removed",
+      "expect": ["no-verify"],
+      "note": "The hook that runs fscale verify before an agent stops.",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.json": "{\n  \"hooks\": {}\n}\n"
+      }
+    },
+    {
+      "name": "nv: a commit script that keeps the hooks",
+      "expect": [],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m \"work in progress\"\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: cargo publish --no-verify",
+      "expect": [],
+      "note": "Skips a build, not a git hook.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "scripts/release.sh": "#!/bin/sh\ncargo publish --no-verify\n"
+      }
+    },
+    {
+      "name": "nv: a --no-verify command moved from package.json to a shell script",
+      "expect": [],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit --no-verify -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"sh scripts/save.sh\"\n  }\n}\n",
+        "scripts/save.sh": "#!/bin/sh\ngit add -A && git commit --no-verify -m wip\n"
+      }
+    },
+    {
+      "name": "nv: the stop hook command reworded",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"npx fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n"
+      }
     }
   ]
 }

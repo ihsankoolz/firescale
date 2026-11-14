@@ -111,7 +111,29 @@ const KINDS = [
   'not-checked',
 ];
 
+// The config and CI detectors of M25 (ADR 0045), each with its own prefix.
+const DETECTORS: Record<string, string> = {
+  'cov:': 'coverage-lowered',
+  'ci:': 'ci-weakened',
+  'nv:': 'no-verify',
+  'lint:': 'rule-disabled',
+};
+
 describe('the tamper guard on the labelled corpus', () => {
+  it('has a caught case and a not-a-finding case for each config and CI detector', () => {
+    for (const [prefix, kind] of Object.entries(DETECTORS)) {
+      const cases = corpus.cases.filter((c) => c.name.startsWith(`${prefix} `));
+      expect(
+        cases.some((c) => c.expect.includes(kind)),
+        `${prefix} ${kind}`,
+      ).toBe(true);
+      expect(
+        cases.some((c) => c.expect.length === 0),
+        prefix,
+      ).toBe(true);
+    }
+  });
+
   it('has a caught case for every kind, and not-a-finding cases, in every language', () => {
     for (const language of LANGUAGES) {
       const cases = corpus.cases.filter((c) => c.name.startsWith(`${language}:`));
