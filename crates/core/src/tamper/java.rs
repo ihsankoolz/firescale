@@ -130,6 +130,31 @@ pub(super) const SKIPS_FIRST: &str = "its first statement skips it";
 /// Why a test whose body does nothing does not run.
 pub(super) const DOES_NOTHING: &str = "its body does nothing";
 
+/// Why a test the runner does not find never runs (found in review: one
+/// word took a test out of the run, unseen).
+pub(super) const NOT_FOUND_METHOD: &str =
+    "the runner does not run a private or static test, or one that returns a value";
+pub(super) const NOT_FOUND_CLASS: &str =
+    "the runner does not run an abstract class, or an inner class without @Nested";
+
+/// The keywords among a declaration's modifiers (`private`, `static`,
+/// `abstract`), not its annotations.
+pub(super) fn modifier_words<'s>(declaration: Node<'_>, src: &'s [u8]) -> Vec<&'s str> {
+    let mut cursor = declaration.walk();
+    let Some(modifiers) = declaration
+        .children(&mut cursor)
+        .find(|child| child.kind() == "modifiers")
+    else {
+        return Vec::new();
+    };
+    let mut cursor = modifiers.walk();
+    modifiers
+        .children(&mut cursor)
+        .filter(|child| !child.kind().contains("annotation"))
+        .map(|child| text(child, src))
+        .collect()
+}
+
 /// No Java statement does nothing: an empty `;` is not a named node.
 fn never_noop(_statement: Node<'_>, _src: &[u8]) -> bool {
     false
@@ -586,6 +611,9 @@ enum Scope {
         junit3: bool,
         /// The identifiers its fields use.
         fields: BTreeSet<String>,
+        /// The runner does not run it: abstract, or an inner class without
+        /// `@Nested`.
+        unrun: bool,
     },
     Method,
 }
@@ -594,6 +622,7 @@ enum Scope {
 struct Around<'a> {
     names: Vec<&'a str>,
     skipped: bool,
+    unrun: bool,
     junit3: bool,
     fields: Vec<&'a BTreeSet<String>>,
 }
@@ -604,6 +633,7 @@ impl<'a> Around<'a> {
         let mut around = Self {
             names: Vec::new(),
             skipped: false,
+            unrun: false,
             junit3: false,
             fields: Vec::new(),
         };
@@ -613,10 +643,12 @@ impl<'a> Around<'a> {
                 skipped,
                 junit3,
                 fields,
+                unrun,
             } = scope
             {
                 around.names.push(name);
                 around.skipped |= *skipped;
+                around.unrun |= *unrun;
                 around.junit3 = *junit3;
                 around.fields.push(fields);
             }
@@ -635,7 +667,29 @@ fn test_case(method: Node<'_>, src: &[u8], around: &Around<'_>) -> Option<TestCa
         return None;
     }
     let skipped = own.skipped || around.skipped;
-    let why = if skipped { None } else { not_run(method, src) };
+    let modifiers = modifier_words(method, src);
+    // `@TestFactory` returns its tests; the other test annotations need
+    // `void`.
+    let factory = annotations(method)
+        .into_iter()
+        .any(|annotation| annotation_name(annotation, src) == "TestFactory");
+    let returns_value = !factory
+        && method
+            .child_by_field_name("type")
+            .is_some_and(|ty| text(ty, src) != "void");
+    let why = if skipped {
+        None
+    } else if around.unrun {
+        Some(NOT_FOUND_CLASS)
+    } else if modifiers
+        .iter()
+        .any(|word| matches!(*word, "private" | "static"))
+        || returns_value
+    {
+        Some(NOT_FOUND_METHOD)
+    } else {
+        not_run(method, src)
+    };
     let mut uses: BTreeSet<String> = around.fields.iter().copied().flatten().cloned().collect();
     identifiers(method, src, &mut uses);
     let id = around
@@ -703,6 +757,15 @@ pub(super) fn read(source: &str) -> TestFile {
             let outer_skipped = open
                 .iter()
                 .any(|(_, scope)| matches!(scope, Scope::Class { skipped: true, .. }));
+            let modifiers = modifier_words(node, src);
+            let inner = kind == "class_declaration"
+                && open
+                    .iter()
+                    .any(|(_, scope)| matches!(scope, Scope::Class { .. }))
+                && !modifiers.contains(&"static")
+                && !annotations(node)
+                    .into_iter()
+                    .any(|annotation| annotation_name(annotation, src) == "Nested");
             open.push((
                 node.end_byte(),
                 Scope::Class {
@@ -710,6 +773,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     skipped: outer_skipped || marks(node, src).skipped,
                     junit3: kind == "class_declaration" && extends_test_case(node, src),
                     fields: field_identifiers(node.child_by_field_name("body"), src),
+                    unrun: modifiers.contains(&"abstract") || inner,
                 },
             ));
             return true;
@@ -1785,5 +1849,38 @@ class A {
         );
         assert_eq!(found[0].line, 3);
         assert_eq!(found[0].text, "// NOPMD - generated");
+    }
+
+    // Found in review (M32): one word takes a test out of the run.
+    #[test]
+    fn tests_the_runner_does_not_find_never_run() {
+        let why = |source: &str| read(source).tests.iter().map(|t| t.why).collect::<Vec<_>>();
+        let class = |body: &str| {
+            format!("import org.junit.jupiter.api.Test;\n\nclass CalcTest {{\n{body}}}\n")
+        };
+        assert_eq!(
+            why(&class(
+                "    @Test void adds() { assertEquals(3, add(1, 2)); }\n"
+            )),
+            [None]
+        );
+        for method in [
+            "    @Test private void adds() { assertEquals(3, add(1, 2)); }\n",
+            "    @Test static void adds() { assertEquals(3, add(1, 2)); }\n",
+            "    @Test int adds() { assertEquals(3, add(1, 2)); return 0; }\n",
+        ] {
+            assert_eq!(why(&class(method)), [Some(NOT_FOUND_METHOD)], "{method}");
+        }
+        let factory = "    @TestFactory Stream<DynamicTest> adds() { return Stream.of(dynamicTest(\"a\", () -> {})); }\n";
+        assert_eq!(why(&class(factory)), [None]);
+        assert_eq!(
+            why("abstract class CalcTest {\n    @Test void adds() { assertEquals(3, add(1, 2)); }\n}\n"),
+            [Some(NOT_FOUND_CLASS)]
+        );
+        let nested = |annotation: &str| {
+            format!("class CalcTest {{\n    {annotation}class Inner {{\n        @Test void adds() {{ assertEquals(3, add(1, 2)); }}\n    }}\n}}\n")
+        };
+        assert_eq!(why(&nested("@Nested ")), [None]);
+        assert_eq!(why(&nested("")), [Some(NOT_FOUND_CLASS)]);
     }
 }

@@ -41,7 +41,7 @@ use tree_sitter::{Language, Node};
 use super::java::{
     assertion, assign, assumes_false, children, comment_body, in_test_folder, library_receiver,
     passes, same_package, split_path, squeezed, starts_with_test, syntax_errors, text_block_rows,
-    Literal, CONDITIONS, DOES_NOTHING, SKIPS, SKIPS_FIRST,
+    Literal, CONDITIONS, DOES_NOTHING, NOT_FOUND_CLASS, NOT_FOUND_METHOD, SKIPS, SKIPS_FIRST,
 };
 use super::reach::{self, Grammar};
 use super::suppress::{directive, keyed, shown};
@@ -584,6 +584,9 @@ enum Scope {
         name: String,
         skipped: bool,
         properties: BTreeSet<String>,
+        /// The runner does not run it: abstract, or an `inner` class
+        /// without `@Nested`.
+        unrun: bool,
     },
     Function,
 }
@@ -593,6 +596,7 @@ struct Around {
     names: Vec<String>,
     skipped: bool,
     properties: BTreeSet<String>,
+    unrun: bool,
 }
 
 impl Around {
@@ -602,16 +606,19 @@ impl Around {
             names: Vec::new(),
             skipped: false,
             properties: BTreeSet::new(),
+            unrun: false,
         };
         for (_, scope) in open {
             if let Scope::Class {
                 name,
                 skipped,
                 properties,
+                unrun,
             } = scope
             {
                 around.names.push(name.clone());
                 around.skipped |= *skipped;
+                around.unrun |= *unrun;
                 around.properties.extend(properties.iter().cloned());
             }
         }
@@ -640,8 +647,21 @@ fn test_function(function: Node<'_>, src: &[u8], open: &[(usize, Scope)]) -> Opt
     let name_node = function.child_by_field_name("name");
     let name = name_node.map_or("", |name| text(name, src));
     let skipped = own.skipped || around.skipped;
+    // A return type other than `Unit` (but a `@TestFactory`'s).
+    let factory = own_annotation(function, src, "TestFactory");
+    let returns_value = !factory
+        && children(function)
+            .into_iter()
+            .skip_while(|child| child.kind() != "function_value_parameters")
+            .skip(1)
+            .take_while(|child| child.kind() != "function_body")
+            .any(|child| child.kind().ends_with("_type") && text(child, src) != "Unit");
     let why = if skipped {
         None
+    } else if around.unrun {
+        Some(NOT_FOUND_CLASS)
+    } else if modifier_texts(function, src).contains(&"private") || returns_value {
+        Some(NOT_FOUND_METHOD)
     } else {
         not_run(function, src)
     };
@@ -662,6 +682,32 @@ fn test_function(function: Node<'_>, src: &[u8], open: &[(usize, Scope)]) -> Opt
             1
         },
     })
+}
+
+/// The keyword modifiers of a declaration: `private`, `abstract`, `inner`.
+fn modifier_texts<'s>(declaration: Node<'_>, src: &'s [u8]) -> Vec<&'s str> {
+    children(declaration)
+        .into_iter()
+        .filter(|child| child.kind() == "modifiers")
+        .flat_map(children)
+        .filter(|modifier| modifier.kind() != "annotation")
+        .map(|modifier| text(modifier, src))
+        .collect()
+}
+
+/// Whether a declaration has the annotation `name` (`@Nested`).
+fn own_annotation(declaration: Node<'_>, src: &[u8], name: &str) -> bool {
+    children(declaration)
+        .into_iter()
+        .filter(|child| child.kind() == "modifiers")
+        .flat_map(children)
+        .filter(|modifier| modifier.kind() == "annotation")
+        .any(|annotation| {
+            let written = text(annotation, src).trim_start_matches('@');
+            written == name
+                || written.ends_with(&format!(".{name}"))
+                || written.starts_with(&format!("{name}("))
+        })
 }
 
 /// The bodies of the Kotest spec a class or object extends (the lambda
@@ -962,9 +1008,13 @@ pub(super) fn read(source: &str) -> TestFile {
                     .iter()
                     .any(|(_, scope)| matches!(scope, Scope::Class { skipped: true, .. }));
                 let body = class_body(node).map(children).unwrap_or_default();
+                let modifiers = modifier_texts(node, src);
+                let unrun = modifiers.contains(&"abstract")
+                    || modifiers.contains(&"inner") && !own_annotation(node, src, "Nested");
                 open.push((
                     node.end_byte(),
                     Scope::Class {
+                        unrun,
                         name: node
                             .child_by_field_name("name")
                             .map_or("", |name| text(name, src))
@@ -1822,5 +1872,47 @@ val t = """
         );
         assert_eq!(found[0].line, 2);
         assert_eq!(found[0].text, "// ktlint-disable no-wildcard-imports");
+    }
+
+    // Found in review (M32): one word takes a test out of the run.
+    #[test]
+    fn tests_the_runner_does_not_find_never_run() {
+        let why = |source: &str| read(source).tests.iter().map(|t| t.why).collect::<Vec<_>>();
+        let class = |body: &str| {
+            format!("import org.junit.jupiter.api.Test\n\nclass CalcTest {{\n{body}}}\n")
+        };
+        assert_eq!(
+            why(&class(
+                "    @Test fun adds() { assertEquals(3, add(1, 2)) }\n"
+            )),
+            [None]
+        );
+        assert_eq!(
+            why(&class(
+                "    @Test fun adds(): Unit { assertEquals(3, add(1, 2)) }\n"
+            )),
+            [None]
+        );
+        assert_eq!(
+            why(&class(
+                "    @Test private fun adds() { assertEquals(3, add(1, 2)) }\n"
+            )),
+            [Some(NOT_FOUND_METHOD)]
+        );
+        assert_eq!(
+            why(&class(
+                "    @Test fun adds(): Int { assertEquals(3, add(1, 2)); return 0 }\n"
+            )),
+            [Some(NOT_FOUND_METHOD)]
+        );
+        assert_eq!(
+            why("abstract class CalcTest {\n    @Test fun adds() { assertEquals(3, add(1, 2)) }\n}\n"),
+            [Some(NOT_FOUND_CLASS)]
+        );
+        let inner = |annotation: &str| {
+            format!("class CalcTest {{\n    {annotation}inner class Inner {{\n        @Test fun adds() {{ assertEquals(3, add(1, 2)) }}\n    }}\n}}\n")
+        };
+        assert_eq!(why(&inner("@Nested ")), [None]);
+        assert_eq!(why(&inner("")), [Some(NOT_FOUND_CLASS)]);
     }
 }

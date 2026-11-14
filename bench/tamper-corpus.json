@@ -5538,6 +5538,96 @@
       "head": {
         "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\nfinal class CalcTests: XCTestCase {\n#if os(Linux)\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n#endif\n}\n"
       }
+    },
+    {
+      "name": "go: a test file renamed for one platform",
+      "expect": ["test-skipped"],
+      "note": "`calc_plan9_test.go` is built only on Plan 9, as `//go:build plan9` would be (ADR 0052, found in review).",
+      "base": {
+        "calc.go": "package calc\n\nfunc Add(a, b int) int { return a + b }\n",
+        "go.mod": "module example.com/calc\n\ngo 1.22\n",
+        "calc_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n"
+      },
+      "head": {
+        "calc_test.go": null,
+        "calc_plan9_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a test file renamed to a name go builds everywhere",
+      "expect": [],
+      "note": "`linux_test.go` names no platform: the part before the first `_` does not count.",
+      "base": {
+        "calc.go": "package calc\n\nfunc Add(a, b int) int { return a + b }\n",
+        "go.mod": "module example.com/calc\n\ngo 1.22\n",
+        "calc_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n"
+      },
+      "head": {
+        "calc_test.go": null,
+        "linux_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "dart: a test file renamed so dart test does not run it",
+      "expect": ["test-skipped"],
+      "note": "`dart test` runs only files named `*_test.dart` (ADR 0052, found in review).",
+      "base": {
+        "lib/calc.dart": "int add(int a, int b) => a + b;\n",
+        "pubspec.yaml": "name: calc\n",
+        "test/calc_test.dart": "import 'package:calc/calc.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), 3);\n  });\n}\n"
+      },
+      "head": {
+        "test/calc_test.dart": null,
+        "test/calc_tests.dart": "import 'package:calc/calc.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), 3);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "java: a JUnit 5 test made private",
+      "expect": ["test-skipped"],
+      "note": "JUnit Jupiter does not run a private test method (ADR 0052, found in review).",
+      "base": {
+        "src/main/java/calc/Calc.java": "package calc;\n\nclass Calc { static int add(int a, int b) { return a + b; } }\n",
+        "src/test/java/calc/CalcTest.java": "package calc;\n\nimport org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nclass CalcTest {\n    @Test\n    void adds() {\n        assertEquals(3, Calc.add(1, 2));\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/calc/CalcTest.java": "package calc;\n\nimport org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.assertEquals;\n\nclass CalcTest {\n    @Test\n    private void adds() {\n        assertEquals(3, Calc.add(1, 2));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: a JUnit test made private",
+      "expect": ["test-skipped"],
+      "note": "JUnit does not run a private test function (ADR 0052, found in review).",
+      "base": {
+        "src/main/kotlin/calc/Calc.kt": "package calc\n\nfun add(a: Int, b: Int) = a + b\n",
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.junit.jupiter.api.Test\nimport kotlin.test.assertEquals\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertEquals(3, add(1, 2))\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.junit.jupiter.api.Test\nimport kotlin.test.assertEquals\n\nclass CalcTest {\n    @Test\n    private fun adds() {\n        assertEquals(3, add(1, 2))\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: an XCTest method made private",
+      "expect": ["test-deleted"],
+      "note": "XCTest does not find a private method: it is no longer a test (ADR 0052, found in review).",
+      "base": {
+        "Sources/Calc/Calc.swift": "func add(_ a: Int, _ b: Int) -> Int { a + b }\n",
+        "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\nfinal class CalcTests: XCTestCase {\n    private func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: an xUnit test class made internal",
+      "expect": ["test-skipped"],
+      "note": "xUnit runs public classes only (ADR 0052, found in review).",
+      "base": {
+        "src/Calc.cs": "public static class Calc { public static int Add(int a, int b) => a + b; }\n",
+        "tests/App.Tests/CalcTests.cs": "using Xunit;\n\npublic class CalcTests\n{\n    [Fact]\n    public void Adds() => Assert.Equal(3, Calc.Add(1, 2));\n}\n"
+      },
+      "head": {
+        "tests/App.Tests/CalcTests.cs": "using Xunit;\n\ninternal class CalcTests\n{\n    [Fact]\n    public void Adds() => Assert.Equal(3, Calc.Add(1, 2));\n}\n"
+      }
     }
   ]
 }

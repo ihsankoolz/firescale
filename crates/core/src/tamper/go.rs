@@ -170,6 +170,76 @@ const BUILTINS: [&str; 41] = [
     "_",
 ];
 
+/// Go's operating systems and architectures, as `go/build` knows them for
+/// file names (`syslist.go`).
+const KNOWN_OS: [&str; 17] = [
+    "aix",
+    "android",
+    "darwin",
+    "dragonfly",
+    "freebsd",
+    "hurd",
+    "illumos",
+    "ios",
+    "js",
+    "linux",
+    "nacl",
+    "netbsd",
+    "openbsd",
+    "plan9",
+    "solaris",
+    "wasip1",
+    "windows",
+];
+const KNOWN_ARCH: [&str; 23] = [
+    "386",
+    "amd64",
+    "amd64p32",
+    "arm",
+    "armbe",
+    "arm64",
+    "arm64be",
+    "loong64",
+    "mips",
+    "mipsle",
+    "mips64",
+    "mips64le",
+    "mips64p32",
+    "mips64p32le",
+    "ppc",
+    "ppc64",
+    "ppc64le",
+    "riscv",
+    "riscv64",
+    "s390",
+    "s390x",
+    "sparc",
+    "sparc64",
+];
+
+/// Whether a Go file's name builds it on one platform only, as `go/build`
+/// reads it: `calc_linux_test.go`, `calc_arm64_test.go`,
+/// `calc_windows_amd64_test.go`. The part before the first `_` does not
+/// count (`linux_test.go` builds everywhere). Found in review: renaming a
+/// test file to one of these took its tests off most machines, unseen.
+pub(super) fn platform_only(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let Some(stem) = name.strip_suffix(".go") else {
+        return false;
+    };
+    let stem = stem.strip_suffix("_test").unwrap_or(stem);
+    let Some((_, rest)) = stem.split_once('_') else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('_').collect();
+    let known = |word: &str| KNOWN_OS.contains(&word) || KNOWN_ARCH.contains(&word);
+    match parts.as_slice() {
+        [.., os, arch] if KNOWN_OS.contains(os) && KNOWN_ARCH.contains(arch) => true,
+        [.., last] => known(last),
+        [] => false,
+    }
+}
+
 /// Why `why` says a test under `//go:build ignore` does not run.
 const NEVER_BUILT: &str = "under //go:build ignore, which is never built";
 
@@ -2079,5 +2149,27 @@ const s = "//nolint:errcheck"
 var r = `// #nosec G101`
 "#;
         assert!(keys(source).is_empty());
+    }
+
+    #[test]
+    fn file_names_that_build_on_one_platform() {
+        for name in [
+            "calc_linux_test.go",
+            "calc_plan9_test.go",
+            "a/b/calc_arm64_test.go",
+            "calc_windows_amd64_test.go",
+            "x_wasip1.go",
+        ] {
+            assert!(platform_only(name), "{name}");
+        }
+        for name in [
+            "calc_test.go",
+            "linux_test.go",
+            "calc_linuxish_test.go",
+            "calc_windows_test.txt",
+            "plan9.go",
+        ] {
+            assert!(!platform_only(name), "{name}");
+        }
     }
 }

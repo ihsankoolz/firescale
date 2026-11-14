@@ -140,6 +140,38 @@ pub fn read_test_file(source: &str, language: Language) -> TestFile {
     file
 }
 
+/// Why `why` says the tests of a Dart file not named `*_test.dart` do not
+/// run.
+const DART_NOT_A_TEST_FILE: &str = "dart test runs only files named *_test.dart";
+
+/// Reads a test file, and what its name says about its tests (found in
+/// review): a Go file named for one platform (`calc_linux_test.go`) is built
+/// only there, a conditional skip like `//go:build linux`; `dart test` runs
+/// only files named `*_test.dart`, so the tests of any other file (a helper
+/// that a test file calls) run only through one, and count as not run on
+/// both sides.
+fn read_named(path: &str, source: &str, language: Language) -> TestFile {
+    let mut file = read_test_file(source, language);
+    let name = path.rsplit('/').next().unwrap_or(path);
+    match language {
+        Language::Go if go::platform_only(path) => {
+            for test in &mut file.tests {
+                test.skipped = true;
+            }
+        }
+        Language::Dart if !name.ends_with("_test.dart") => {
+            for test in &mut file.tests {
+                if !test.skipped {
+                    test.skipped = true;
+                    test.why = Some(DART_NOT_A_TEST_FILE);
+                }
+            }
+        }
+        _ => {}
+    }
+    file
+}
+
 fn read_as_written(source: &str, language: Language) -> TestFile {
     match language {
         Language::Js(dialect) => js::read(source, dialect),
@@ -1049,9 +1081,9 @@ pub fn guard_at(
         let base_file = file
             .base
             .as_deref()
-            .map(|text| read_test_file(text, file.language));
+            .map(|text| read_named(&file.path, text, file.language));
         let head_file = match &file.head {
-            Ok(Some(text)) => Some(read_test_file(text, file.language)),
+            Ok(Some(text)) => Some(read_named(&file.path, text, file.language)),
             Ok(None) => None,
             Err(()) => Some(TestFile {
                 has_errors: true,

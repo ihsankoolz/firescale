@@ -628,14 +628,23 @@ fn is_test_method(function: Node<'_>, src: &[u8]) -> bool {
             "class" => type_level = true,
             "parameter" => parameters = true,
             "modifiers" => {
-                type_level |= text(child, src)
-                    .split_whitespace()
-                    .any(|word| matches!(word, "static" | "class"));
+                // XCTest finds instance methods it can see: not `static`
+                // or `class`, not `private` or `fileprivate` (found in
+                // review).
+                type_level |= text(child, src).split_whitespace().any(|word| {
+                    matches!(word, "static" | "class" | "private" | "fileprivate")
+                        || word.starts_with("private(")
+                        || word.starts_with("fileprivate(")
+                });
             }
             _ => {}
         }
     }
-    named_test && !type_level && !parameters
+    // Nor one that returns a value.
+    let returns_value = function
+        .child_by_field_name("return_type")
+        .is_some_and(|ty| !matches!(text(ty, src).trim(), "Void" | "()"));
+    named_test && !type_level && !parameters && !returns_value
 }
 
 /// The modules a test file imports that may hold its subject: those it
@@ -1650,6 +1659,42 @@ let t = """
                 .map(|a| a.conditional)
                 .collect::<Vec<_>>(),
             [true, false]
+        );
+    }
+
+    // Found in review (M32): XCTest does not find these.
+    #[test]
+    fn methods_xctest_does_not_find_are_not_tests() {
+        let count = |method: &str| {
+            read(&format!(
+                "import XCTest\n\nfinal class CalcTests: XCTestCase {{\n{method}}}\n"
+            ))
+            .tests
+            .len()
+        };
+        assert_eq!(
+            count("    func testAdds() { XCTAssertEqual(add(1, 2), 3) }\n"),
+            1
+        );
+        assert_eq!(
+            count("    func testAdds() -> Void { XCTAssertEqual(add(1, 2), 3) }\n"),
+            1
+        );
+        assert_eq!(
+            count("    func testAdds() async throws { XCTAssertEqual(add(1, 2), 3) }\n"),
+            1
+        );
+        assert_eq!(
+            count("    private func testAdds() { XCTAssertEqual(add(1, 2), 3) }\n"),
+            0
+        );
+        assert_eq!(
+            count("    fileprivate func testAdds() { XCTAssertEqual(add(1, 2), 3) }\n"),
+            0
+        );
+        assert_eq!(
+            count("    func testAdds() -> Int { XCTAssertEqual(add(1, 2), 3); return 0 }\n"),
+            0
         );
     }
 }

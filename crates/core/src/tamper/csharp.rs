@@ -170,6 +170,20 @@ const LITERALS: [&str; 13] = [
     "escape_sequence",
 ];
 
+/// Why `why` says a test the runner does not find never runs.
+const NOT_FOUND: &str =
+    "the runner does not run a method that is not public, or a class that is abstract or not public";
+
+/// The keyword modifiers of a declaration (`public`, `abstract`).
+fn modifier_texts<'s>(declaration: Node<'_>, src: &'s [u8]) -> Vec<&'s str> {
+    let mut cursor = declaration.walk();
+    declaration
+        .children(&mut cursor)
+        .filter(|child| child.kind() == "modifier")
+        .map(|child| text(child, src))
+        .collect()
+}
+
 /// Why `why` says a test does not run under `#if false`.
 const NEVER_COMPILED: &str = "under #if false, which is never true";
 
@@ -684,9 +698,15 @@ pub(super) fn read(source: &str) -> TestFile {
         /// A method: a `return` under an `#if` its body opened came before
         /// the node being visited, so the rest runs only sometimes.
         returned: bool,
+        /// A class: it, or a class around it, is abstract, or is not
+        /// public (C#'s default for a class).
+        abstract_class: bool,
+        hidden_class: bool,
     }
     let mut open: Vec<Scope> = vec![Scope {
         returned: false,
+        abstract_class: false,
+        hidden_class: false,
         end: usize::MAX,
         class: None,
         class_skipped: false,
@@ -717,6 +737,8 @@ pub(super) fn read(source: &str) -> TestFile {
                     .map_or(Cond::Other, |condition| condition_of(condition, src));
                 open.push(Scope {
                     returned: false,
+                    abstract_class: false,
+                    hidden_class: false,
                     end: node.end_byte(),
                     class: None,
                     class_skipped: false,
@@ -750,6 +772,8 @@ pub(super) fn read(source: &str) -> TestFile {
                 };
                 open.push(Scope {
                     returned: false,
+                    abstract_class: false,
+                    hidden_class: false,
                     end: node.end_byte(),
                     class: None,
                     class_skipped: false,
@@ -764,8 +788,16 @@ pub(super) fn read(source: &str) -> TestFile {
                 let name = node
                     .child_by_field_name("name")
                     .map(|name| text(name, src).to_owned());
+                let modifiers = modifier_texts(node, src);
+                let outer = open.iter().rev().find(|scope| scope.class.is_some());
+                let abstract_class = outer.is_some_and(|scope| scope.abstract_class)
+                    || modifiers.contains(&"abstract");
+                let hidden_class =
+                    outer.is_some_and(|scope| scope.hidden_class) || !modifiers.contains(&"public");
                 open.push(Scope {
                     returned: false,
+                    abstract_class,
+                    hidden_class,
                     end: node.end_byte(),
                     class: name,
                     class_skipped: class_skipped(node, src),
@@ -797,8 +829,29 @@ pub(super) fn read(source: &str) -> TestFile {
                     let body = node
                         .child_by_field_name("body")
                         .filter(|body| body.kind() == "block");
+                    // Found in review: one word takes a test out of the run.
+                    // Every framework runs public methods of a class it can
+                    // make; xUnit and MSTest only public classes.
+                    let strict = attributes(node).into_iter().any(|attribute| {
+                        matches!(
+                            attribute_name(attribute, src),
+                            "Fact"
+                                | "Theory"
+                                | "SkippableFact"
+                                | "SkippableTheory"
+                                | "TestMethod"
+                                | "DataTestMethod"
+                        )
+                    });
+                    let class = open.iter().rev().find(|scope| scope.class.is_some());
+                    let not_found = !modifier_texts(node, src).contains(&"public")
+                        || class.is_some_and(|class| {
+                            class.abstract_class || strict && class.hidden_class
+                        });
                     let why = if marks.skipped || class_skipped {
                         None
+                    } else if not_found {
+                        Some(NOT_FOUND)
                     } else if compiled == Compiled::Never {
                         Some(NEVER_COMPILED)
                     } else if body.is_some_and(|body| {
@@ -842,6 +895,8 @@ pub(super) fn read(source: &str) -> TestFile {
                 }
                 open.push(Scope {
                     returned: false,
+                    abstract_class: false,
+                    hidden_class: false,
                     end: node.end_byte(),
                     class: None,
                     class_skipped: false,
@@ -1751,5 +1806,22 @@ public class A
         let file = read("public class CalcTests\n{\n#if CALC_STRICT\n    [Fact]\n    public void Adds()\n    {\n        Assert.Equal(3, Calc.Add(1, 2));\n    }\n#endif\n}\n");
         assert!(file.tests[0].skipped);
         assert_eq!(conditional(&file), [false]);
+    }
+
+    // Found in review (M32): one word takes a test out of the run.
+    #[test]
+    fn tests_the_runner_does_not_find_never_run() {
+        let why = |source: &str| read(source).tests.iter().map(|t| t.why).collect::<Vec<_>>();
+        let xunit = |class: &str, method: &str| {
+            format!("using Xunit;\n\n{class} class CalcTests\n{{\n    [Fact]\n    {method} void Adds() => Assert.Equal(3, Calc.Add(1, 2));\n}}\n")
+        };
+        assert_eq!(why(&xunit("public", "public")), [None]);
+        assert_eq!(why(&xunit("public", "private")), [Some(NOT_FOUND)]);
+        assert_eq!(why(&xunit("public", "")), [Some(NOT_FOUND)]);
+        assert_eq!(why(&xunit("internal", "public")), [Some(NOT_FOUND)]);
+        assert_eq!(why(&xunit("public abstract", "public")), [Some(NOT_FOUND)]);
+        // NUnit: only the method's and abstract are judged.
+        let nunit = "using NUnit.Framework;\n\ninternal class CalcTests\n{\n    [Test]\n    public void Adds() => Assert.That(Calc.Add(1, 2), Is.EqualTo(3));\n}\n";
+        assert_eq!(why(nunit), [None]);
     }
 }
