@@ -126,8 +126,8 @@ Opt-in: add `"expo"` to `packs`, or `fscale init --packs core,expo`. It works on
 | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --- |
 | `expo/package-json`      | `expo`, `react`, `react-native` are dependencies; `start`, `android`, `ios` scripts (`web` with react-native-web, `lint` with eslint-config-expo). | high     | yes |
 | `expo/app-config`        | An app config exists; a static one sets `expo.name` and `expo.slug`, and not `expo.sdkVersion`.                                                    | high     | yes |
-| `expo/entry`             | The entry exists: package.json `main`, Expo Router's root layout, or `App` at the root.                                                            | high     | yes |
+| `expo/entry`             | The entry exists: package.json `main`, a route for Expo Router, or `index` or `App` at the root.                                                   | high     | yes |
 | `expo/tsconfig`          | A TypeScript app has `tsconfig.json` (the template's, extending `expo/tsconfig.base`).                                                             | medium   | yes |
 | `expo/eslint`            | ESLint is set up with `eslint-config-expo`, so `expo lint` runs as it is (an app linting with Biome or another linter passes).                     | medium   | yes |
 | `expo/gitignore`         | `.gitignore` ignores `.expo/`, `dist/`, `.env*.local` and app-signing keys.                                                                        | medium   | yes |
-| `expo/public-env-secret` | No `EXPO_PUBLIC_` variable is named like a secret (`SECRET`, `PRIVATE`, `PASSWORD`, `SERVICE_ROLE`).                                               | high     | no  |
+| `expo/public-env-secret` | No `EXPO_PUBLIC_` variable is named like a secret (`SECRET`, `PRIVATE_KEY`, `SERVICE_ROLE`, a final `PASSWORD`).                                   | high     | no  |

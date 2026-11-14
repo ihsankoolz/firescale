@@ -66,3 +66,28 @@ fn an_app_that_lints_with_something_else_passes() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn an_older_eslint_setup_is_not_given_a_flat_config() {
+    let old = with(
+        |p| p == "eslint.config.js",
+        &[(
+            "package.json",
+            "{ \"dependencies\": { \"expo\": \"~51.0.0\" }, \"devDependencies\": { \"eslint\": \"^8.57.0\", \"eslint-config-expo\": \"~7.1.2\" } }\n",
+        )],
+    );
+    assert_eq!(
+        old.check(&EslintConfig, &Options::new()).unwrap()[0].fixable,
+        Fixable::Agent
+    );
+    assert!(old
+        .fix(&EslintConfig, &Options::new())
+        .unwrap()
+        .changed_files
+        .is_empty());
+    let eslintrc = with(|p| p == "eslint.config.js", &[(".eslintrc", "{}\n")]);
+    assert!(eslintrc
+        .check(&EslintConfig, &Options::new())
+        .unwrap()
+        .is_empty());
+}

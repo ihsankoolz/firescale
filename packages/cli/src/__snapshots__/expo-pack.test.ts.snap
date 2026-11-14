@@ -108,7 +108,7 @@ exports[`fscale init --packs core,expo > builds a starter where the expo pack re
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
-    "eslint": "^9.0.0",
+    "eslint": "^9.22.0",
     "eslint-config-expo": "~58.0.4",
     "typescript": "~6.0.3"
   }

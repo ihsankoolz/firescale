@@ -27,7 +27,7 @@ impl BuiltinRule for TsConfig {
             severity: Severity::Medium,
             category: Category::Consistency,
             description: "A TypeScript Expo app has tsconfig.json.".to_owned(),
-            inputs: vec!["tsconfig.json".to_owned(), "package.json".to_owned()],
+            inputs: super::inputs(&["tsconfig.json"]),
             has_fix: true,
             after: vec![super::package_json::ID.to_owned()],
         }

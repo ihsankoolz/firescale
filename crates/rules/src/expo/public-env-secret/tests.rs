@@ -10,7 +10,13 @@ use crate::expo::public_env_secret::{is_public_secret, PublicEnvSecret};
 #[test]
 fn names_read_as_secrets_only_with_a_secret_word() {
     assert!(is_public_secret("EXPO_PUBLIC_STRIPE_SECRET_KEY"));
-    assert!(is_public_secret("EXPO_PUBLIC_PRIVATE_API_KEY"));
+    assert!(is_public_secret("EXPO_PUBLIC_PRIVATE_KEY"));
+    assert!(is_public_secret("EXPO_PUBLIC_ADMIN_PASSWORD"));
+    assert!(is_public_secret("EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY"));
+    // Review of M30: names about a secret are not the secret.
+    assert!(!is_public_secret("EXPO_PUBLIC_RESET_PASSWORD_URL"));
+    assert!(!is_public_secret("EXPO_PUBLIC_PASSWORD_MIN_LENGTH"));
+    assert!(!is_public_secret("EXPO_PUBLIC_PRIVATE_BETA"));
     assert!(!is_public_secret("EXPO_PUBLIC_MAPBOX_TOKEN"));
     assert!(!is_public_secret("EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY"));
     assert!(!is_public_secret("STRIPE_SECRET_KEY"));

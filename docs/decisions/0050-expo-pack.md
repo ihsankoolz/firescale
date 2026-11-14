@@ -6,7 +6,7 @@ Status: accepted (2026-11-14, M30). Follows the stack-pack shape in PLAN.md (M15
 
 docs.expo.dev could not be reached from the build environment. The facts come from Expo's docs source in `expo/expo` at `696b087d` (`docs/pages`, what docs.expo.dev renders), the CLI at branch `sdk-58` (`8a5196f9`), the npm tarballs of `expo@58.0.25` and `expo-template-blank-typescript@58.0.34`, and the npm registry. Then **checked by running the starter**: `npm install`, `tsc --noEmit`, `expo lint`, `expo install --check` (offline) and `expo export --platform android` (offline) all succeed (below).
 
-- **Versions.** SDK 58: `expo` ~58.0.25 (Node `^22.13.0 || ^24.3.0 || …`, so `engines` `>=22.13.0`); from `expo/bundledNativeModules.json`: react 19.3.0, react-native 0.88.1, expo-status-bar ~58.0.5, eslint-config-expo ~58.0.4; from the blank TypeScript template: typescript ~6.0.3, @types/react ~19.3.0; ESLint `^9.0.0`, what `expo lint` installs. **Not npm's latest**: TypeScript 7, ESLint 10 and React 19.3.1 do not match the SDK, and `expo install --check` would flag them.
+- **Versions.** SDK 58: `expo` ~58.0.25 (Node `^22.13.0 || ^24.3.0 || …`, so `engines` `>=22.13.0`); from `expo/bundledNativeModules.json`: react 19.3.0, react-native 0.88.1, expo-status-bar ~58.0.5, eslint-config-expo ~58.0.4; from the blank TypeScript template: typescript ~6.0.3, @types/react ~19.3.0; ESLint `^9.22.0`: `expo lint` installs `^9.0.0`, but the config it writes needs `eslint/config`'s `defineConfig`, from 9.22. **Not npm's latest**: TypeScript 7, ESLint 10 and React 19.3.1 do not match the SDK, and `expo install --check` would flag them.
 - **The starter is the blank TypeScript template**, not the default (Expo Router) one: four runtime dependencies, no plugins, no generated route types, and no image files. The default template needs about 20 packages and 30 images.
 - **No image files.** The template's `app.json` names an icon, an adaptive icon and a favicon; `expo-doctor` checks every image a config names, and a fix writes text. The starter's `app.json` is the template's without those three keys (they are optional in the SDK 58 schema). SDK 58 has no `newArchEnabled` and no top-level `splash`.
 - **ESLint is shipped, not left to `expo lint`**: with no config, `npx expo lint` installs `eslint` and `eslint-config-expo`, writes `eslint.config.js` and adds a script, which needs the network and changes the repo during a check. The starter has the same file, byte for byte (`@expo/cli/static/template/eslint.config.js`).
@@ -36,6 +36,19 @@ The pack applies at the root when there is no package.json yet or it depends on 
 - **Not run**: the app on a device or simulator, an iOS bundle (`expo export --platform ios` needs no Mac but was not tried), the web (needs react-native-web), and `expo-doctor` (needs the network).
 - `adopt --dry-run` proposes no change on an app that is set up, and exactly `tsconfig.json` on one that lacks it (tests).
 - **Real repo**, read-only: `streamyfin/streamyfin` at `1e3062a2` (shallow clone; the pack switched on in a copy; nothing of theirs run). First pass: three findings, two of them false (it lints with Biome; it is a phone and TV app with no web script). Both fixed with tests (an app that lints another way passes; `web` only with react-native-web). Now one finding, true: its `.gitignore` covers `.env` and `.env.local` but not `.env.development.local` and the like, which `expo-doctor` also flags.
+
+## After the review
+
+A fresh subagent reviewed the pack against Expo's SDK 58 sources (`@expo/config` 58.0.12, `expo-router` 58.0.31, `@expo/cli` 58.1) and two real apps, and found, all fixed with tests:
+
+- **No `main` with a root `index.*` was flagged, and the fix would have written an unused App.tsx** (bluesky-social/social-app): Expo tries `index` before `expo/AppEntry` (`resolveEntryPoint`), and so does the rule now.
+- **A workspace root listing `expo`, with its app in a subfolder, got a second app written into it**: a root with `workspaces` or `pnpm-workspace.yaml` and no app config or entry of its own gets one manual finding and nothing written. Every rule's inputs now cover what decides this.
+- **app-config claimed a fix it could not make** (a one-line app.json): only a fix that can add lines is claimed; the message names only the missing key.
+- **Expo Router apps without a root layout were flagged**: Expo Router adds a default one. The rule now asks for a route in the routes folder (`src/app`, `app`, or the `root` set for the expo-router plugin or `extra.router.root` in app.json); a dynamic config is trusted.
+- **The ESLint fix could break an older app** (ESLint 8, eslint-config-expo 7, `.eslintrc`): it is deterministic only with ESLint 9.22 or later and a flat-config eslint-config-expo, and `.eslintrc` counts as a config.
+- **Entries resolved differently from Expo**: platform files (`index.ios.js`), `.mjs`/`.cjs`/`.json`, `node_modules/expo/AppEntry.js` and a `main` in any folder are now handled.
+- **`.env.local` with `.env.*.local`** counts as covering `.env*.local`.
+- **public-env-secret matched words inside names** (`EXPO_PUBLIC_RESET_PASSWORD_URL`): it now looks for a `SECRET` part, `PRIVATE_KEY`, `SERVICE_ROLE`, `SERVICE_KEY`, or a final `PASSWORD`, and skips names ending in `_URL`, `_PATH`, `_LENGTH` and the like. Untracked `.env.local` files are not read; the SKILL.md says so.
 
 ## Consequences
 

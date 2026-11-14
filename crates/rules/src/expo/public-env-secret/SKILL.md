@@ -7,9 +7,9 @@ description: Handles violations of the firescale rule expo/public-env-secret, wh
 
 ## What this rule enforces and why
 
-No `EXPO_PUBLIC_` variable is named like a secret: `SECRET`, `PRIVATE`, `PASSWORD`, `SERVICE_ROLE` or `SERVICE_KEY` in its name. Expo inlines every `EXPO_PUBLIC_` variable into the app bundle; its docs: "Do not store sensitive info, such as private keys, in `EXPO_PUBLIC_` variables. These variables will be visible in plain-text in your compiled application."
+No `EXPO_PUBLIC_` variable is named like a secret: a `SECRET` part, `PRIVATE_KEY`, `SERVICE_ROLE` or `SERVICE_KEY`, or `PASSWORD` at the end (names ending in `_URL`, `_PATH`, `_ENDPOINT`, `_LENGTH` and the like are not). Expo inlines every `EXPO_PUBLIC_` variable into the app bundle; its docs: "Do not store sensitive info, such as private keys, in `EXPO_PUBLIC_` variables. These variables will be visible in plain-text in your compiled application."
 
-The rule reads tracked JavaScript and TypeScript files, `.env*` files, `app.json` and `eas.json` for such names. Public client keys (a maps token, Supabase's publishable key) are fine and not flagged.
+The rule reads tracked JavaScript and TypeScript files, `.env*` files, `app.json` and `eas.json` for such names. Public client keys (a maps token, Supabase's publishable key) are fine and not flagged. Untracked files, such as a local `.env.local`, are not read, though Expo builds them into the app too: check them yourself.
 
 ## Manual fix
 

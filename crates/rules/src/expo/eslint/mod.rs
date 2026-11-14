@@ -17,7 +17,9 @@ pub const ID: &str = "expo/eslint";
 pub struct EslintConfig;
 
 /// The config files `expo lint` looks for (SDK 58, `ESlintPrerequisite`).
-pub const NAMES: [&str; 11] = [
+pub const NAMES: [&str; 12] = [
+    // ESLint 8 reads it, though `expo lint` does not list it.
+    ".eslintrc",
     "eslint.config.js",
     "eslint.config.mjs",
     "eslint.config.cjs",
@@ -50,6 +52,30 @@ fn configured(ctx: &RuleContext, json: &serde_json::Value) -> bool {
         || other_lint
 }
 
+/// The version a dependency is declared with, as (major, minor).
+fn declared(json: &serde_json::Value, package: &str) -> Option<(u64, u64)> {
+    let spec = ["dependencies", "devDependencies"]
+        .iter()
+        .find_map(|field| json.get(field)?.get(package)?.as_str())?;
+    let rest = spec.trim_start_matches(|c: char| !c.is_ascii_digit());
+    let mut parts = rest.split(|c: char| !c.is_ascii_digit());
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
+    Some((major, minor))
+}
+
+/// True when the config `expo lint` writes can load: ESLint 9.22 or later
+/// (`eslint/config`'s `defineConfig`) and an eslint-config-expo with the
+/// flat config (9 or later; SDK-numbered versions such as 58 too). A
+/// declaration that is not a version (a tag, a URL) is trusted.
+fn flat_ready(json: &serde_json::Value) -> bool {
+    if !depends_on(json, "eslint") || !depends_on(json, "eslint-config-expo") {
+        return false;
+    }
+    declared(json, "eslint").is_none_or(|v| v >= (9, 22))
+        && declared(json, "eslint-config-expo").is_none_or(|(major, _)| major >= 9)
+}
+
 impl BuiltinRule for EslintConfig {
     fn meta(&self) -> RuleMeta {
         let mut inputs: Vec<String> = NAMES.iter().map(|name| (*name).to_owned()).collect();
@@ -64,7 +90,7 @@ impl BuiltinRule for EslintConfig {
             category: Category::Consistency,
             description: "ESLint is set up with eslint-config-expo, so `expo lint` runs as it is."
                 .to_owned(),
-            inputs,
+            inputs: super::inputs(&inputs.iter().map(String::as_str).collect::<Vec<_>>()),
             has_fix: true,
             after: vec![super::package_json::ID.to_owned()],
         }
@@ -86,21 +112,19 @@ impl BuiltinRule for EslintConfig {
         if configured(ctx, &json) {
             return Ok(Vec::new());
         }
-        Ok(vec![
-            if depends_on(&json, "eslint") && depends_on(&json, "eslint-config-expo") {
-                finding(
+        Ok(vec![if flat_ready(&json) {
+            finding(
                     "eslint.config.js",
                     "No ESLint config. `fscale sync` creates eslint.config.js as `npx expo lint` writes it, with eslint-config-expo's flat config.".to_owned(),
                     Fixable::Deterministic,
                 )
-            } else {
-                finding(
+        } else {
+            finding(
                     "eslint.config.js",
-                    "No ESLint config, and package.json does not depend on eslint and eslint-config-expo, so `expo lint` would install them and write files first. Add them (`npx expo install eslint eslint-config-expo -- --save-dev`), then run `fscale sync`.".to_owned(),
+                    "No ESLint config, and package.json does not depend on eslint 9.22 or later and a flat-config eslint-config-expo, so `expo lint` would install them and write files first. Add or update them (`npx expo install eslint eslint-config-expo -- --save-dev`), then run `fscale sync`.".to_owned(),
                     Fixable::Agent,
                 )
-            },
-        ])
+        }])
     }
 
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
@@ -111,10 +135,7 @@ impl BuiltinRule for EslintConfig {
         let Ok(Some(json)) = package_json(ctx)? else {
             return Ok(result);
         };
-        if !configured(ctx, &json)
-            && depends_on(&json, "eslint")
-            && depends_on(&json, "eslint-config-expo")
-        {
+        if !configured(ctx, &json) && flat_ready(&json) {
             create(ctx, "eslint.config.js", CONFIG, &mut result)?;
         }
         Ok(result)

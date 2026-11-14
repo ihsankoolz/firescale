@@ -37,3 +37,12 @@ fn missing_lines_are_appended_once_in_the_files_line_endings() {
         .changed_files
         .is_empty());
 }
+
+#[test]
+fn the_env_local_pair_covers_env_star_local() {
+    let f = with(
+        |_| false,
+        &[(".gitignore", ".expo/\ndist/\n.env.local\n.env.*.local\n*.jks\n*.p8\n*.p12\n*.key\n*.mobileprovision\n")],
+    );
+    assert!(f.check(&ExpoGitignore, &Options::new()).unwrap().is_empty());
+}

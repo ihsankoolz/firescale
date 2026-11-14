@@ -49,7 +49,7 @@ impl BuiltinRule for PackageJson {
             severity: Severity::High,
             category: Category::Reliability,
             description: "package.json depends on expo, react and react-native, and has the start, android and ios scripts (web with react-native-web, lint with eslint-config-expo).".to_owned(),
-            inputs: vec!["package.json".to_owned()],
+            inputs: super::inputs(&[]),
             has_fix: true,
             after: Vec::new(),
         }
@@ -78,6 +78,13 @@ impl BuiltinRule for PackageJson {
                 )])
             }
         };
+        if super::workspace_without_app(ctx, &json) {
+            return Ok(vec![finding(
+                "package.json",
+                "The repo root is a workspace with no Expo app of its own (no app config or entry here). The expo pack checks an app at the root: run fscale in the app's folder, or turn the pack off here.".to_owned(),
+                Fixable::Manual,
+            )]);
+        }
         if !depends_on(&json, "expo") {
             return Ok(vec![finding(
                 "package.json",
@@ -137,7 +144,7 @@ impl BuiltinRule for PackageJson {
             }
             Err(()) => return Ok(result),
         };
-        if !depends_on(&json, "expo") {
+        if !depends_on(&json, "expo") || super::workspace_without_app(ctx, &json) {
             return Ok(result);
         }
         let scripts = missing_scripts(&json);

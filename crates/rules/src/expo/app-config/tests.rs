@@ -75,3 +75,21 @@ fn missing_names_are_added_and_sdk_version_is_for_an_agent() {
         .changed_files
         .is_empty());
 }
+
+#[test]
+fn a_config_a_fix_cannot_edit_is_a_manual_finding_naming_only_whats_missing() {
+    let f = with(|_| false, &[("app.json", "{\"expo\":{\"slug\":\"x\"}}\n")]);
+    let found = f.check(&AppConfig, &Options::new()).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].fixable, Fixable::Manual);
+    assert!(
+        found[0].message.contains("expo.name") && !found[0].message.contains("expo.slug"),
+        "{}",
+        found[0].message
+    );
+    assert!(f
+        .fix(&AppConfig, &Options::new())
+        .unwrap()
+        .changed_files
+        .is_empty());
+}

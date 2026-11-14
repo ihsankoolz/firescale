@@ -122,7 +122,7 @@ impl BuiltinRule for AppConfig {
             severity: Severity::High,
             category: Category::Reliability,
             description: "An Expo app config exists; a static one sets expo.name and expo.slug and not expo.sdkVersion.".to_owned(),
-            inputs,
+            inputs: super::inputs(&inputs.iter().map(String::as_str).collect::<Vec<_>>()),
             has_fix: true,
             after: vec![super::package_json::ID.to_owned()],
         }
@@ -160,11 +160,27 @@ impl BuiltinRule for AppConfig {
             )]);
         };
         let mut findings = Vec::new();
-        if missing_names(&config, &slug(ctx)?).is_some() {
+        if let Some(add) = missing_names(&config, &slug(ctx)?) {
+            let keys: Vec<&str> = add
+                .get("expo")
+                .and_then(Value::as_object)
+                .map(|o| o.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            let names = keys
+                .iter()
+                .map(|k| format!("expo.{k}"))
+                .collect::<Vec<_>>()
+                .join(" and ");
+            // Only a fix that can add the keys as new lines is claimed.
+            let fixable = json_with(ctx, file, &add)?.is_some();
             findings.push(finding(
                 file,
-                format!("{file} does not set expo.name and expo.slug, which name the app and its project. `fscale sync` adds them from package.json's name."),
-                Fixable::Deterministic,
+                if fixable {
+                    format!("{file} does not set {names}, which name the app and its project. `fscale sync` adds {} from package.json's name.", if keys.len() == 1 { "it" } else { "them" })
+                } else {
+                    format!("{file} does not set {names}, which name the app and its project. Add {} inside \"expo\" by hand (the file's layout does not let a fix add lines safely).", if keys.len() == 1 { "it" } else { "them" })
+                },
+                if fixable { Fixable::Deterministic } else { Fixable::Manual },
             ));
         }
         if config

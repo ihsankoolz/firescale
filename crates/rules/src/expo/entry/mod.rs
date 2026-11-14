@@ -19,7 +19,11 @@ pub const ID: &str = "expo/entry";
 
 pub struct Entry;
 
-const EXTENSIONS: [&str; 4] = ["tsx", "ts", "jsx", "js"];
+/// The extensions Expo tries (`getBareExtensions`, `@expo/config` 58).
+const EXTENSIONS: [&str; 7] = ["tsx", "ts", "jsx", "js", "mjs", "cjs", "json"];
+
+/// Platform variants Metro picks before the plain file.
+const PLATFORMS: [&str; 3] = ["ios", "android", "native"];
 
 /// The blank TypeScript template's `index.ts` (SDK 58).
 pub const INDEX: &str = "import { registerRootComponent } from 'expo';\n\nimport App from './App';\n\n// registerRootComponent calls AppRegistry.registerComponent('main', () => App);\n// It also ensures that whether you load the app in Expo Go or in a native build,\n// the environment is set up appropriately\nregisterRootComponent(App);\n";
@@ -30,23 +34,86 @@ pub const APP: &str = "import { StatusBar } from 'expo-status-bar';\nimport { St
 /// The same app in JavaScript, for an app without TypeScript.
 pub const APP_JS: &str = "import { StatusBar } from 'expo-status-bar';\nimport { StyleSheet, Text, View } from 'react-native';\n\nexport default function App() {\n  return (\n    <View style={styles.container}>\n      <Text>Open up App.js to start working on your app!</Text>\n      <StatusBar style=\"auto\" />\n    </View>\n  );\n}\n\nconst styles = StyleSheet.create({\n  container: {\n    flex: 1,\n    backgroundColor: '#fff',\n    alignItems: 'center',\n    justifyContent: 'center',\n  },\n});\n";
 
-/// A module path resolved as Metro would: as it is, or with an extension.
+/// A module path resolved as Expo and Metro would: as it is, with an
+/// extension (a platform one too, `index.ios.js`), or as a folder's index.
 fn resolves(ctx: &RuleContext, path: &str) -> bool {
-    let path = path.trim_start_matches("./");
+    let path = path.trim_start_matches("./").replace('\\', "/");
     let file = |p: &str| {
         p.split('/')
             .fold(ctx.root().to_path_buf(), |dir, part| dir.join(part))
             .is_file()
     };
-    file(path)
-        || EXTENSIONS.iter().any(|ext| file(&format!("{path}.{ext}")))
-        || EXTENSIONS
-            .iter()
-            .any(|ext| file(&format!("{path}/index.{ext}")))
+    let with_ext = |stem: &str| {
+        EXTENSIONS.iter().any(|ext| {
+            file(&format!("{stem}.{ext}"))
+                || PLATFORMS
+                    .iter()
+                    .any(|platform| file(&format!("{stem}.{platform}.{ext}")))
+        })
+    };
+    file(&path) || with_ext(&path) || with_ext(&format!("{path}/index"))
 }
 
 fn has_app(ctx: &RuleContext) -> bool {
     resolves(ctx, "App")
+}
+
+/// The folder Expo Router reads routes from: a `root` set for the
+/// expo-router plugin (or `extra.router.root`) in app.json, else `src/app`
+/// when it exists, else `app`.
+fn router_root(ctx: &RuleContext) -> Option<String> {
+    let config = ctx
+        .read("app.json")
+        .ok()
+        .flatten()
+        .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok());
+    let expo = config.as_ref().and_then(|c| c.get("expo").or(Some(c)));
+    let from_plugin = expo
+        .and_then(|e| e.get("plugins"))
+        .and_then(Value::as_array)
+        .and_then(|plugins| {
+            plugins.iter().find_map(|p| {
+                let pair = p.as_array()?;
+                (pair.first()?.as_str()? == "expo-router")
+                    .then(|| pair.get(1)?.get("root")?.as_str().map(str::to_owned))?
+            })
+        });
+    let from_extra = expo
+        .and_then(|e| e.get("extra")?.get("router")?.get("root")?.as_str())
+        .map(str::to_owned);
+    from_plugin.or(from_extra)
+}
+
+/// True when the folder holds a file, at any depth (a route).
+fn has_route(dir: &std::path::Path, depth: usize) -> bool {
+    depth < 20
+        && std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries.filter_map(std::result::Result::ok).any(|e| {
+                let path = e.path();
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => has_route(&path, depth + 1),
+                    Ok(t) if t.is_file() => path
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .is_some_and(|x| EXTENSIONS[..4].contains(&x)),
+                    _ => false,
+                }
+            })
+        })
+}
+
+/// True when `main` names a package's module rather than a file of the app.
+fn is_package(json: &Value, main: &str) -> bool {
+    let main = main.replace('\\', "/");
+    if main.starts_with('.') || main.starts_with("node_modules/") {
+        return main.trim_start_matches("./").starts_with("node_modules/");
+    }
+    let first = if main.starts_with('@') {
+        main.splitn(3, '/').take(2).collect::<Vec<_>>().join("/")
+    } else {
+        main.split('/').next().unwrap_or("").to_owned()
+    };
+    main.contains('/') && (super::depends_on(json, &first) || first == "expo")
 }
 
 /// What is wrong with the entry, if anything.
@@ -56,21 +123,34 @@ enum Problem {
     NewApp,
     /// `main` names a file that is missing, but App is there.
     MissingIndex,
-    NoRouterLayout,
+    NoRoutes,
     Missing(String),
 }
 
 fn problem(ctx: &RuleContext, json: &Value) -> Option<Problem> {
     match json.get("main").and_then(Value::as_str) {
         Some("expo-router/entry") => {
-            let layout = ["app/_layout", "src/app/_layout"].iter().any(|p| {
-                EXTENSIONS
-                    .iter()
-                    .any(|ext| any_exists(ctx, &[&format!("{p}.{ext}")]))
+            // A root layout is optional (Expo Router adds a default one);
+            // the routes folder must hold a route. A dynamic config may
+            // move it where this cannot read.
+            if any_exists(ctx, &super::app_config::DYNAMIC) {
+                return None;
+            }
+            let roots: Vec<String> = match router_root(ctx) {
+                Some(root) => vec![root],
+                None => vec!["src/app".to_owned(), "app".to_owned()],
+            };
+            let found = roots.iter().any(|root| {
+                let dir = root
+                    .trim_start_matches("./")
+                    .split('/')
+                    .fold(ctx.root().to_path_buf(), |dir, part| dir.join(part));
+                has_route(&dir, 0)
             });
-            (!layout).then_some(Problem::NoRouterLayout)
+            (!found).then_some(Problem::NoRoutes)
         }
-        Some(main) if main.starts_with('.') || !main.contains('/') || main.starts_with("src/") => {
+        Some(main) if is_package(json, main) => None,
+        Some(main) => {
             if resolves(ctx, main) {
                 None
             } else if main.trim_start_matches("./") == "index.ts" {
@@ -83,27 +163,25 @@ fn problem(ctx: &RuleContext, json: &Value) -> Option<Problem> {
                 Some(Problem::Missing(main.to_owned()))
             }
         }
-        // A package's own entry (`expo-router/entry`'s kin): Node resolves it.
-        Some(_) => None,
-        None => (!has_app(ctx)).then_some(Problem::NewApp),
+        // No main: Expo tries `index` at the root, then `expo/AppEntry`,
+        // which loads `App` (`resolveEntryPoint`, @expo/config 58).
+        None => (!resolves(ctx, "index") && !has_app(ctx)).then_some(Problem::NewApp),
     }
 }
 
 impl BuiltinRule for Entry {
     fn meta(&self) -> RuleMeta {
         let mut inputs = vec!["package.json".to_owned()];
-        for stem in ["App", "index", "app/_layout", "src/app/_layout"] {
-            for ext in EXTENSIONS {
-                inputs.push(format!("{stem}.{ext}"));
-            }
-        }
-        inputs.push("**/*.{ts,tsx,js,jsx}".to_owned());
+        inputs.extend([
+            "app.json".to_owned(),
+            "**/*.{ts,tsx,js,jsx,mjs,cjs,json}".to_owned(),
+        ]);
         RuleMeta {
             id: ID.to_owned(),
             severity: Severity::High,
             category: Category::Reliability,
-            description: "The app's entry point exists: package.json main, Expo Router's root layout, or App at the root.".to_owned(),
-            inputs,
+            description: "The app's entry point exists: package.json main, a route for Expo Router, or index or App at the root.".to_owned(),
+            inputs: super::inputs(&inputs.iter().map(String::as_str).collect::<Vec<_>>()),
             has_fix: true,
             after: vec![super::package_json::ID.to_owned()],
         }
@@ -134,9 +212,9 @@ impl BuiltinRule for Entry {
                 "package.json's main is index.ts, which does not exist. `fscale sync` creates it, registering App as Expo's template does.".to_owned(),
                 Fixable::Deterministic,
             )],
-            Some(Problem::NoRouterLayout) => vec![finding(
-                "app/_layout.tsx",
-                "package.json's main is expo-router/entry, but there is no root layout (app/_layout or src/app/_layout). Expo Router needs one: create it as Expo Router's docs describe.".to_owned(),
+            Some(Problem::NoRoutes) => vec![finding(
+                "app/index.tsx",
+                "package.json's main is expo-router/entry, but the routes folder (src/app or app, or the root set for expo-router in app.json) holds no route. Add a first route, such as app/index.tsx, as Expo Router's docs describe.".to_owned(),
                 Fixable::Agent,
             )],
             Some(Problem::Missing(main)) => vec![finding(

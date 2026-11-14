@@ -74,3 +74,39 @@ fn an_empty_folder_is_built_by_the_fixes_and_a_second_run_changes_nothing() {
         assert!(f.read(file).is_some(), "{file} was not created");
     }
 }
+
+#[test]
+fn a_workspace_listing_expo_at_its_root_gets_nothing_written() {
+    // Review of M30: the app is in apps/mobile.
+    let f = fixture(&[
+        (
+            "package.json",
+            "{ \"name\": \"mono\", \"workspaces\": [\"apps/*\"], \"devDependencies\": { \"expo\": \"~58.0.25\" } }\n".to_owned(),
+        ),
+        ("apps/mobile/app.json", "{ \"expo\": { \"name\": \"m\", \"slug\": \"m\" } }\n".to_owned()),
+    ]);
+    let found = findings(&f);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].fixable, Fixable::Manual);
+    assert_eq!(fix_all(&f), Vec::<String>::new());
+}
+
+#[test]
+fn every_rule_reads_what_decides_where_the_pack_applies() {
+    for rule in rules() {
+        let inputs = rule.meta().inputs;
+        for shared in [
+            "package.json",
+            "pnpm-workspace.yaml",
+            "app.json",
+            "index.ts",
+            "App.tsx",
+        ] {
+            assert!(
+                inputs.iter().any(|i| i == shared),
+                "{} lacks {shared}",
+                rule.meta().id
+            );
+        }
+    }
+}

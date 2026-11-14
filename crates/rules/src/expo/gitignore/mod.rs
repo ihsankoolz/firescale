@@ -36,8 +36,11 @@ pub const ENTRIES: [(&str, &[&str]); 8] = [
 ];
 
 fn missing(text: &str) -> Vec<&'static str> {
+    // `.env.local` with `.env.*.local` covers what `.env*.local` does.
+    let env_pair = is_covered(text, ".env.local") && is_covered(text, ".env.*.local");
     ENTRIES
         .iter()
+        .filter(|(line, _)| !(*line == ".env*.local" && env_pair))
         .filter(|(_, covers)| !covers.iter().any(|name| is_covered(text, name)))
         .map(|(line, _)| *line)
         .collect()
@@ -50,7 +53,7 @@ impl BuiltinRule for ExpoGitignore {
             severity: Severity::Medium,
             category: Category::Security,
             description: ".gitignore ignores .expo/, dist/, .env*.local and app-signing keys (*.jks, *.p8, *.p12, *.key, *.mobileprovision).".to_owned(),
-            inputs: vec![".gitignore".to_owned(), "package.json".to_owned()],
+            inputs: super::inputs(&[".gitignore"]),
             has_fix: true,
             after: vec!["core/gitignore-basics".to_owned()],
         }

@@ -18,15 +18,10 @@ pub const ID: &str = "expo/public-env-secret";
 
 pub struct PublicEnvSecret;
 
-/// Words that mark a value as a secret. Not `TOKEN` or `KEY` alone: many
-/// public client tokens and keys (maps, analytics, Supabase's publishable
-/// key) are meant to ship.
-const SECRET_WORDS: [&str; 5] = [
-    "SECRET",
-    "PRIVATE",
-    "PASSWORD",
-    "SERVICE_ROLE",
-    "SERVICE_KEY",
+/// Names whose last part says the value is not the secret itself: a link,
+/// a length, a flag (`EXPO_PUBLIC_RESET_PASSWORD_URL`).
+const NOT_SECRET_ENDINGS: [&str; 8] = [
+    "URL", "URI", "PATH", "ENDPOINT", "LENGTH", "ENABLED", "NAME", "ID",
 ];
 
 const EXTENSIONS: [&str; 8] = ["js", "jsx", "ts", "tsx", "mjs", "cjs", "mts", "cts"];
@@ -40,11 +35,28 @@ fn scanned(path: &str) -> bool {
             .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext))
 }
 
-/// An `EXPO_PUBLIC_` name that reads as a secret.
+/// An `EXPO_PUBLIC_` name that reads as a secret: a `SECRET` part, a
+/// `PRIVATE_KEY`, `SERVICE_ROLE` or `SERVICE_KEY` pair, or `PASSWORD` as
+/// the last part. Not `TOKEN` or `KEY` alone: many public client tokens
+/// and keys (maps, analytics, Supabase's publishable key) are meant to ship.
 #[must_use]
 pub fn is_public_secret(name: &str) -> bool {
-    name.strip_prefix("EXPO_PUBLIC_")
-        .is_some_and(|rest| SECRET_WORDS.iter().any(|word| rest.contains(word)))
+    let Some(rest) = name.strip_prefix("EXPO_PUBLIC_") else {
+        return false;
+    };
+    let parts: Vec<&str> = rest.split('_').filter(|p| !p.is_empty()).collect();
+    if parts
+        .last()
+        .is_some_and(|last| NOT_SECRET_ENDINGS.contains(last))
+    {
+        return false;
+    }
+    let pair = |a: &str, b: &str| parts.windows(2).any(|w| w[0] == a && w[1] == b);
+    parts.contains(&"SECRET")
+        || pair("PRIVATE", "KEY")
+        || pair("SERVICE", "ROLE")
+        || pair("SERVICE", "KEY")
+        || parts.last() == Some(&"PASSWORD")
 }
 
 fn first(text: &str) -> Option<(usize, String)> {
@@ -64,14 +76,13 @@ impl BuiltinRule for PublicEnvSecret {
             id: ID.to_owned(),
             severity: Severity::High,
             category: Category::Security,
-            description: "No EXPO_PUBLIC_ variable is named like a secret (SECRET, PRIVATE, PASSWORD, SERVICE_ROLE): Expo inlines them into the app.".to_owned(),
-            inputs: vec![
-                "**/.env*".to_owned(),
-                "**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}".to_owned(),
-                "**/app.json".to_owned(),
-                "**/eas.json".to_owned(),
-                "package.json".to_owned(),
-            ],
+            description: "No EXPO_PUBLIC_ variable is named like a secret (SECRET, PRIVATE_KEY, SERVICE_ROLE, a final PASSWORD): Expo inlines them into the app.".to_owned(),
+            inputs: super::inputs(&[
+                "**/.env*",
+                "**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}",
+                "**/app.json",
+                "**/eas.json",
+            ]),
             has_fix: false,
             after: Vec::new(),
         }

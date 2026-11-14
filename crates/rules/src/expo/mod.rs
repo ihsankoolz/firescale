@@ -34,15 +34,15 @@ mod tests;
 /// The packages a new app gets: SDK 58's versions from
 /// `expo/bundledNativeModules.json` (expo 58.0.25) and the blank TypeScript
 /// template 58.0.34, not npm's latest (TypeScript 7, ESLint 10 and React
-/// 19.3.1 do not match the SDK). ESLint `^9.0.0` is what `expo lint`
-/// installs.
+/// 19.3.1 do not match the SDK). ESLint `^9.22.0`: `expo lint` installs
+/// `^9.0.0`, but its config's `defineConfig` needs 9.22.
 pub const VERSIONS: [(&str, &str, bool); 8] = [
     ("expo", "~58.0.25", false),
     ("expo-status-bar", "~58.0.5", false),
     ("react", "19.3.0", false),
     ("react-native", "0.88.1", false),
     ("@types/react", "~19.3.0", true),
-    ("eslint", "^9.0.0", true),
+    ("eslint", "^9.22.0", true),
     ("eslint-config-expo", "~58.0.4", true),
     ("typescript", "~6.0.3", true),
 ];
@@ -85,14 +85,69 @@ pub(crate) fn depends_on(json: &Value, package: &str) -> bool {
 }
 
 /// True when the pack applies to the repo root: no package.json yet (a new
-/// app), or one that depends on `expo`. A workspace root whose app lives in
-/// a subfolder is left alone; only `expo/package-json` says so.
+/// app), or one that depends on `expo`, unless the root is a workspace with
+/// no app of its own (its app is in a subfolder; only `expo/package-json`
+/// says so).
 pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
     Ok(match package_json(ctx)? {
         Ok(None) => true,
-        Ok(Some(json)) => depends_on(&json, "expo"),
+        Ok(Some(json)) => depends_on(&json, "expo") && !workspace_without_app(ctx, &json),
         Err(()) => false,
     })
+}
+
+/// Files that make the root an app: a config or an entry.
+const ROOT_APP_FILES: [&str; 24] = [
+    "app.json",
+    "app.config.json",
+    "app.config.ts",
+    "app.config.js",
+    "app.config.mts",
+    "app.config.cts",
+    "app.config.mjs",
+    "app.config.cjs",
+    "index.ts",
+    "index.tsx",
+    "index.js",
+    "index.jsx",
+    "index.mjs",
+    "index.cjs",
+    "App.ts",
+    "App.tsx",
+    "App.js",
+    "App.jsx",
+    "app/_layout.tsx",
+    "app/_layout.js",
+    "app/index.tsx",
+    "app/index.js",
+    "src/app/_layout.tsx",
+    "src/app/index.tsx",
+];
+
+/// True when the root is a workspace (`workspaces`, or
+/// `pnpm-workspace.yaml`) and has no app config or entry of its own: a
+/// monorepo listing `expo` at the root for its apps in subfolders. A
+/// workspace that is itself the app (a config or an entry at the root)
+/// is not one.
+pub(crate) fn workspace_without_app(ctx: &RuleContext, json: &Value) -> bool {
+    let workspace = json.get("workspaces").is_some() || any_exists(ctx, &["pnpm-workspace.yaml"]);
+    workspace && !any_exists(ctx, &ROOT_APP_FILES) && json.get("main").is_none()
+}
+
+/// What every rule of the pack reads besides its own files, for the cache:
+/// where the pack applies depends on package.json, a workspace file and the
+/// root's app files.
+pub(crate) fn inputs(own: &[&str]) -> Vec<String> {
+    let mut all: Vec<String> = own.iter().map(|s| (*s).to_owned()).collect();
+    for shared in ["package.json", "pnpm-workspace.yaml"]
+        .iter()
+        .chain(ROOT_APP_FILES.iter())
+    {
+        if !all.iter().any(|a| a == shared) {
+            all.push((*shared).to_owned());
+        }
+    }
+    all
 }
 
 /// True when the app is written in TypeScript: it depends on it, or has no
