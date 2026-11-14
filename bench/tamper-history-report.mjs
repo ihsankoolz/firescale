@@ -28,7 +28,10 @@ export function wilson(k, n) {
   const centre = p + (z * z) / (2 * n);
   const spread = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
   const denominator = 1 + (z * z) / n;
-  return [(100 * (centre - spread)) / denominator, (100 * (centre + spread)) / denominator];
+  return [
+    Math.max(0, (100 * (centre - spread)) / denominator),
+    Math.min(100, (100 * (centre + spread)) / denominator),
+  ];
 }
 
 const pct = (k, n) => (n === 0 ? '–' : `${((100 * k) / n).toFixed(1)}%`);

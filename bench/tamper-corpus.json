@@ -2936,6 +2936,17 @@
       "head": {
         "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total_of_three():\n    assert total([10, 20, 1]) == 31\n"
       }
+    },
+    {
+      "name": "rs: an existing test made unix-only while a windows-only test is added",
+      "expect": ["test-skipped"],
+      "note": "A new conditional test does not hide an old one made conditional. Found on real history (ADR 0046).",
+      "base": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[cfg(unix)]\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n\n    #[cfg(windows)]\n    #[test]\n    fn adds_on_windows() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n"
+      }
     }
   ]
 }

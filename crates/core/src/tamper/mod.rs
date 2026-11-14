@@ -1159,8 +1159,29 @@ pub fn guard_at(
         .sum();
     let added_tests = counts.head_tests.saturating_sub(counts.base_tests);
     let excused_skips = new_skipped.min(added_tests);
-    if counts.head_skipped > counts.base_skipped + excused_skips {
-        let mut shortfall = counts.head_skipped - counts.base_skipped - excused_skips;
+    // Tests the base had, run there, and skipped now (less those the base
+    // skipped and the change runs again) are counted on their own, so a new
+    // skipped test cannot hide an old one made to not run.
+    let mut skipped_now: BTreeMap<&str, usize> = BTreeMap::new();
+    for skip in &head_skips {
+        *skipped_now.entry(skip.test.id.as_str()).or_default() += skip.weight;
+    }
+    let newly: usize = skipped_now
+        .iter()
+        .filter(|(id, _)| had_ids.contains(*id))
+        .map(|(id, now)| now.saturating_sub(base_skipped_ids.get(*id).copied().unwrap_or(0)))
+        .sum();
+    let run_again: usize = base_skipped_ids
+        .iter()
+        .filter(|(id, _)| head_ids.contains_key(id.as_str()))
+        .map(|(id, had)| had.saturating_sub(skipped_now.get(id.as_str()).copied().unwrap_or(0)))
+        .sum();
+    let converted = newly.saturating_sub(run_again);
+    let net = counts
+        .head_skipped
+        .saturating_sub(counts.base_skipped + excused_skips);
+    if net.max(converted) > 0 {
+        let mut shortfall = net.max(converted);
         let mut left = base_skipped_ids;
         // Tests the base had first: those are the ones made to not run.
         let ordered = head_skips
