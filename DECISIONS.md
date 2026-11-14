@@ -2,14 +2,6 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
-## M31 — Ecosystems: Java, Kotlin, Android, Swift, Xcode, C, C++, .NET, Dart
-
-**Built** (ADR 0051, `docs/facts.md`): one table of ecosystems found by a marker file, read by facts, verify, doctor, setup, the step cache and the gitignore rule; Maven, Gradle, SwiftPM, Xcode, CMake, Meson, .NET, Dart/Flutter and Make added; gitignore lines read with git's matcher; the stack packs' shared helpers in one module.
-
-**Decided on your behalf** (ADR 0051): members of a root Maven, Gradle, CMake, Meson or .NET build are not separate projects; a Flutter app owns its platform folders; with Swift and CMake in one folder the sources decide; Xcode builds for a generic simulator with no signing, and iOS tests wait for a `verify.test` naming a simulator; C and C++ lint is never guessed.
-
-**Proof:** real `fscale verify` runs on Maven, Gradle, CMake, Meson and Make projects; five real repos read correctly after fixing what each showed.
-
 ## Review of the long run
 
 M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
@@ -49,6 +41,14 @@ M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull requ
 - Built: seven rules from Expo's SDK 58 template and CLI; the starter installs, typechecks, lints and bundles for Android offline.
 - Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
 - Test by hand: the starter on a device or simulator (`npx expo start`), and `npx expo-doctor` with the network.
+
+## M31 — Ecosystems: Java, Kotlin, Android, Swift, Xcode, C, C++, .NET, Dart
+
+**Built** (ADR 0051, `docs/facts.md`): one table of ecosystems found by a marker file, read by facts, verify, doctor, setup, the step cache and the gitignore rule; Maven, Gradle, SwiftPM, Xcode, CMake, Meson, .NET, Dart/Flutter and Make added; gitignore lines read with git's matcher; the stack packs' shared helpers in one module.
+
+**Decided on your behalf** (ADR 0051): members of a root Maven, Gradle, CMake, Meson or .NET build are not separate projects; a Flutter app owns its platform folders; with Swift and CMake in one folder the sources decide; Xcode builds for a generic simulator with no signing, and iOS tests wait for a `verify.test` naming a simulator; C and C++ lint is never guessed.
+
+**Proof:** real `fscale verify` runs on Maven, Gradle, CMake, Meson and Make projects; five real repos read correctly after fixing what each showed.
 
 ## CI owed
 
