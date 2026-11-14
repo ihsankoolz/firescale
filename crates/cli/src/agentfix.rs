@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use firescale_core::agentrun::{
     append_ledger, diff_guard, now_utc, repo_limits, Adapter, AgentResult, LedgerEntry, Policy,
-    ProgramAdapter, Request, RunWorktree,
+    ProgramAdapter, RepoState, Request, RunWorktree,
 };
 use firescale_core::blame::BaseCommit;
 use firescale_core::check::run_check;
@@ -205,8 +205,9 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
     let branch = format!("fscale/fix/{}-{stamp}", rule_id.replace('/', "-"));
-    let tags_before = git_lines(root, &["tag", "--list"]);
     let worktree = RunWorktree::add(root, &branch)?;
+    // Taken once the run's branch exists: what the agent may not change.
+    let before = RepoState::capture(root);
 
     // 3 to 6. A scoped request under the policy.
     let (max_turns, max_cost, timeout) = limits(root);
@@ -237,7 +238,8 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         &allowed,
         &protected,
         &rule_id,
-        &tags_before,
+        &before,
+        &branch,
     );
     let run = match run {
         Ok(run) => run,
@@ -319,7 +321,8 @@ fn judge(
     allowed: &[String],
     protected: &[String],
     rule_id: &str,
-    tags_before: &[String],
+    before: &RepoState,
+    branch: &str,
 ) -> Result<Run> {
     let fail = |reason: &'static str, detail: String, files: usize, lines: usize| Run {
         result: "fail",
@@ -352,19 +355,15 @@ fn judge(
         .sum();
     let files = changed.len();
 
-    // Never a tag or a push: new tags are a failure, and are removed.
-    let tags_after = git_lines(root, &["tag", "--list"]);
-    let new_tags: Vec<&String> = tags_after
-        .iter()
-        .filter(|t| !tags_before.contains(t))
-        .collect();
-    if !new_tags.is_empty() {
-        for tag in &new_tags {
-            let _ = run_git(root, &["tag", "-d", tag]);
-        }
+    // Nothing outside the worktree: refs, git config, hooks, your HEAD and
+    // files. A change there fails the run and is put back where it can be.
+    let after = RepoState::capture(root);
+    let outside = before.changes(&after, branch);
+    if !outside.is_empty() {
+        before.restore(root, &after, branch);
         return Ok(fail(
-            "pushed-or-tagged",
-            format!("the agent created the tag {}", new_tags[0]),
+            "outside-worktree",
+            format!("the agent {}", outside.join(", ")),
             files,
             lines,
         ));

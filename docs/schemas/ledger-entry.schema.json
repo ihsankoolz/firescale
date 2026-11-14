@@ -31,7 +31,7 @@
         "still-failing",
         "tamper",
         "verify",
-        "pushed-or-tagged"
+        "outside-worktree"
       ]
     },
     "filesChanged": { "type": "integer", "minimum": 0 },

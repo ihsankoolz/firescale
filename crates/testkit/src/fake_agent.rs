@@ -76,9 +76,14 @@ fn run(scenario: &serde_json::Value, input: String) -> ExitCode {
     }
     if let Some(writes) = scenario.get("write").and_then(serde_json::Value::as_object) {
         for (path, content) in writes {
-            let target = path
-                .split('/')
-                .fold(cwd.clone(), |dir, part| dir.join(part));
+            // An absolute path is used as it is: a test of a run that
+            // writes outside its worktree.
+            let target = if std::path::Path::new(path).is_absolute() {
+                std::path::PathBuf::from(path)
+            } else {
+                path.split('/')
+                    .fold(cwd.clone(), |dir, part| dir.join(part))
+            };
             match content.as_str() {
                 Some(text) => {
                     if let Some(parent) = target.parent() {

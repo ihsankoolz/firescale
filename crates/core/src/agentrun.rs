@@ -472,7 +472,7 @@ pub struct LedgerEntry {
     pub result: String,
     /// Why a run failed, as one of a fixed set of codes (a refusal before
     /// the run writes no line): `agent-error`, `over-budget`, `timeout`, `diff-guard`, `no-change`,
-    /// `still-failing`, `tamper`, `verify`, `pushed-or-tagged`.
+    /// `still-failing`, `tamper`, `verify`, `outside-worktree`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub files_changed: usize,
@@ -586,6 +586,150 @@ impl RunWorktree {
     pub fn keep_branch(self) {
         let target = self.path.to_string_lossy().into_owned();
         let _ = run_git(&self.root, &["worktree", "remove", "--force", &target]);
+    }
+}
+
+/// What a run may not change in the person's repo, outside its own
+/// worktree: refs (branches, tags, remotes), the shared git config, the git
+/// hooks, and the working tree and `HEAD` of the checkout. Taken before a
+/// run and compared after it: the worktree shares the repo's refs, config
+/// and hooks, so an agent could otherwise reach them from inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoState {
+    refs: std::collections::BTreeMap<String, String>,
+    config: Vec<u8>,
+    hooks: std::collections::BTreeMap<String, Vec<u8>>,
+    status: Vec<String>,
+    head: String,
+    git_dir: PathBuf,
+}
+
+fn common_dir(root: &Path) -> Option<PathBuf> {
+    let out = run_git(
+        root,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )
+    .ok()?;
+    (out.code == 0).then(|| PathBuf::from(out.stdout.trim()))
+}
+
+impl RepoState {
+    /// The state of the repo at `root` now.
+    #[must_use]
+    pub fn capture(root: &Path) -> Self {
+        let git_dir = common_dir(root).unwrap_or_else(|| root.join(".git"));
+        let lines = |args: &[&str]| -> Vec<String> {
+            run_git(root, args)
+                .ok()
+                .map(|out| {
+                    out.stdout
+                        .lines()
+                        .map(str::to_owned)
+                        .filter(|l| !l.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let refs = lines(&["for-each-ref", "--format=%(refname) %(objectname)"])
+            .into_iter()
+            .filter_map(|line| {
+                line.split_once(' ')
+                    .map(|(r, o)| (r.to_owned(), o.to_owned()))
+            })
+            .collect();
+        let hooks = fs::read_dir(git_dir.join("hooks"))
+            .map(|entries| {
+                entries
+                    .filter_map(std::result::Result::ok)
+                    .filter_map(|entry| {
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        fs::read(entry.path()).ok().map(|bytes| (name, bytes))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            refs,
+            config: fs::read(git_dir.join("config")).unwrap_or_default(),
+            hooks,
+            status: lines(&[
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--",
+                ".",
+                ":(exclude).firescale",
+            ]),
+            head: lines(&["rev-parse", "HEAD"]).join(""),
+            git_dir,
+        }
+    }
+
+    /// What changed since `self`, leaving out the run's own branch: one
+    /// line per change.
+    #[must_use]
+    pub fn changes(&self, after: &Self, own_branch: &str) -> Vec<String> {
+        let own = format!("refs/heads/{own_branch}");
+        let mut out = Vec::new();
+        let names: BTreeSet<&String> = self.refs.keys().chain(after.refs.keys()).collect();
+        for name in names.into_iter().filter(|name| **name != own) {
+            match (self.refs.get(name), after.refs.get(name)) {
+                (None, Some(_)) => out.push(format!("created {name}")),
+                (Some(_), None) => out.push(format!("deleted {name}")),
+                (Some(a), Some(b)) if a != b => out.push(format!("moved {name}")),
+                _ => {}
+            }
+        }
+        if self.config != after.config {
+            out.push("changed the repo's git config".to_owned());
+        }
+        if self.hooks != after.hooks {
+            out.push("changed the repo's git hooks".to_owned());
+        }
+        if self.head != after.head {
+            out.push("moved your HEAD".to_owned());
+        }
+        if self.status != after.status {
+            out.push("changed files in your checkout".to_owned());
+        }
+        out
+    }
+
+    /// Puts back the refs, the git config and the hooks as they were (the
+    /// checkout's files are left for the person: they started clean, and
+    /// `git status` shows what changed).
+    pub fn restore(&self, root: &Path, after: &Self, own_branch: &str) {
+        let own = format!("refs/heads/{own_branch}");
+        for (name, object) in &after.refs {
+            if *name != own && !self.refs.contains_key(name) {
+                let _ = run_git(root, &["update-ref", "-d", name]);
+            } else if let Some(before) = self.refs.get(name).filter(|before| *before != object) {
+                let _ = run_git(root, &["update-ref", name, before]);
+            }
+        }
+        for (name, object) in &self.refs {
+            if !after.refs.contains_key(name) {
+                let _ = run_git(root, &["update-ref", name, object]);
+            }
+        }
+        if self.config != after.config {
+            let _ = fs::write(self.git_dir.join("config"), &self.config);
+        }
+        if self.hooks != after.hooks {
+            let dir = self.git_dir.join("hooks");
+            for name in after
+                .hooks
+                .keys()
+                .filter(|name| !self.hooks.contains_key(*name))
+            {
+                let _ = fs::remove_file(dir.join(name));
+            }
+            for (name, bytes) in &self.hooks {
+                if after.hooks.get(name) != Some(bytes) {
+                    let _ = fs::write(dir.join(name), bytes);
+                }
+            }
+        }
     }
 }
 

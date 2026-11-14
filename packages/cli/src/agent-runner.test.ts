@@ -375,7 +375,39 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
     );
     const tagged = await fix(root, { ...GOOD, commands: [['git', 'tag', 'v9.9.9']] });
     expect(tagged.code).toBe(EXIT_VIOLATIONS);
-    expect(tagged.stdout).toContain('the agent created the tag v9.9.9');
+    expect(tagged.stdout).toContain('the agent created refs/tags/v9.9.9');
     expect(await git(root, 'tag', '--list')).toBe('');
+  });
+
+  it('nothing outside the worktree: a ref, the git config, a hook or your files changed fails the run and is put back', async () => {
+    const root = await repo();
+    const main = await git(root, 'rev-parse', 'main');
+    const outside = path.join(root, 'src', 'app.js').replaceAll('\\', '/');
+    for (const [commands, text] of [
+      [
+        [
+          ['git', 'commit', '--allow-empty', '--quiet', '-m', 'x'],
+          ['git', 'update-ref', 'refs/heads/main', 'HEAD'],
+        ],
+        'moved refs/heads/main',
+      ],
+      [[['git', 'config', 'core.hooksPath', '/dev/null']], "changed the repo's git config"],
+      [[['git', 'branch', 'sneaky']], 'created refs/heads/sneaky'],
+    ] as const) {
+      const result = await fix(root, {
+        ...GOOD,
+        write: { ...GOOD.write, 'src/x.js': 'export {};\n' },
+        commands: commands.map((c) => [...c]),
+      });
+      expect(result.code, text).toBe(EXIT_VIOLATIONS);
+      expect(result.stdout).toContain(text);
+    }
+    expect(await git(root, 'rev-parse', 'main')).toBe(main);
+    expect(await git(root, 'config', '--get', 'core.hooksPath').catch(() => '')).toBe('');
+    expect(await branches(root)).toEqual(['main']);
+    // A write through an absolute path into your checkout.
+    const result = await fix(root, { ...GOOD, write: { ...GOOD.write, [outside]: 'changed\n' } });
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout).toContain('changed files in your checkout');
   });
 });
