@@ -1265,6 +1265,20 @@ pub fn guard_at(
                 }
             }
         }
+        // A file whose every test is skipped on the base and now (the whole
+        // file under `#if canImport(…)`, `@TestOn(…)`, a platform's name): a
+        // new test in it is no more skipped than the others were (found on
+        // real history, M32: Alamofire's `#if canImport(_Concurrency)`).
+        let all_skipped = |read: &TestFile| {
+            let tests: Vec<&TestCase> = read.tests.iter().filter(|t| !t.marker).collect();
+            !tests.is_empty() && tests.iter().all(|t| skipped_weight(t) >= t.weight)
+        };
+        let file_wide = base_file.as_ref().is_some_and(all_skipped)
+            && head_file.as_ref().is_some_and(all_skipped);
+        let base_here: BTreeSet<&str> = base_file
+            .iter()
+            .flat_map(|read| read.tests.iter().map(|t| t.id.as_str()))
+            .collect();
         if let Some(read) = head_file {
             for test in &read.tests {
                 if count_tests && !test.marker {
@@ -1272,7 +1286,12 @@ pub fn guard_at(
                     *head_ids.entry(test.id.clone()).or_default() += test.weight;
                 }
                 if count_skips {
-                    let skipped = skipped_weight(test);
+                    let skipped =
+                        if file_wide && !test.marker && !base_here.contains(test.id.as_str()) {
+                            0
+                        } else {
+                            skipped_weight(test)
+                        };
                     counts.head_skipped += skipped;
                     if skipped > 0 {
                         head_skips.push(Skip {

@@ -5679,6 +5679,18 @@
       "head": {
         "calc_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif true {\n\t\tt.Skip(\"flaky\")\n\t}\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n"
       }
+    },
+    {
+      "name": "swift: a test added to a file wholly under #if, while one is deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "Every test of the file is under `#if canImport(_Concurrency)` on the base and now: the new test is no more conditional than the others (ADR 0052, found on real history). The deleted one is still found.",
+      "base": {
+        "Sources/Calc/Calc.swift": "func add(_ a: Int, _ b: Int) -> Int { a + b }\n",
+        "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\n#if canImport(_Concurrency)\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n    func testZero() {\n        XCTAssertEqual(add(0, 0), 0)\n    }\n    func testNegative() {\n        XCTAssertEqual(add(-1, -2), -3)\n    }\n}\n#endif\n"
+      },
+      "head": {
+        "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\n#if canImport(_Concurrency)\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n    func testPositive() {\n        XCTAssertGreaterThan(add(1, 1), 0)\n    }\n}\n#endif\n"
+      }
     }
   ]
 }

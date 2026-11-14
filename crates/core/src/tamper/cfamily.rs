@@ -748,9 +748,17 @@ impl Facts {
         let mut found = Self::default();
         walk(root, |node| match node.kind() {
             "preproc_def" | "preproc_function_def" => {
+                // A file's own helper that checks (`#define EXPECT_PRINTF(…)
+                // EXPECT_EQ(…)`, as fmt has) is an assertion; one whose body
+                // checks nothing is not.
                 if let Some(name) = node.child_by_field_name("name") {
                     let name = text(name, src);
-                    if is_assertion(name) {
+                    let checks = node.child_by_field_name("value").is_some_and(|value| {
+                        text(value, src)
+                            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                            .any(|word| is_assertion(word) && word != name)
+                    });
+                    if is_assertion(name) && !checks {
                         found.redefined.insert(name.to_owned());
                     }
                 }
@@ -2807,6 +2815,9 @@ const char* b = R"(// NOLINT(x) #pragma GCC diagnostic ignored "-Wall")";
         assert_eq!(cpp(&defined).assertions.len(), 0);
         let undefined = format!("#undef EXPECT_EQ\n{base}");
         assert_eq!(cpp(&undefined).assertions.len(), 0);
+        // fmt's own helper macro checks: it is an assertion.
+        let helper = "#define EXPECT_PRINTF(expected, format, arg) \\\n  EXPECT_EQ(expected, sprintf(format, arg))\n\nTEST(printf_test, octal) {\n  EXPECT_PRINTF(\"42\", \"%o\", 042);\n}\n";
+        assert_eq!(cpp(helper).assertions.len(), 1);
     }
 
     #[test]
