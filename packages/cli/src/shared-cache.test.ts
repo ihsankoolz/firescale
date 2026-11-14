@@ -71,7 +71,6 @@ describe('the generated workflow', () => {
         /^npx --yes firescale@\d+\.\d+\.\d+\S* tamper --pr-base --approvals "\$RUNNER_TEMP\/reviews\.json"$/,
       ),
     ]);
-
   });
 
   it('has a pull request job that can restore caches and never save one', async () => {

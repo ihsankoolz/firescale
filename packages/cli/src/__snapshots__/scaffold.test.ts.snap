@@ -105,7 +105,7 @@ core/ci-exists
 +# firescale-workflow: <digest>
 --- /dev/null
 +++ b/.github/workflows/tamper-guard.yml
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,51 @@
 +# Created by firescale (core/ci-exists). \`fscale sync\` replaces this file
 +# with a newer one only while it is exactly as firescale wrote it (the
 +# digest on the last line says so). Once you edit it, it is yours.
@@ -117,7 +117,10 @@ core/ci-exists
 +# merging them would change with the base GitHub names. Keep it that way:
 +# never check out the pull request's files here, install them or run them.
 +# To make it block, require the tamper-guard check in branch protection
-+# and set verify.tamper to "enforced" on the default branch.
++# and set verify.tamper to "enforced" on the default branch. A changed
++# snapshot or expected value then waits for an approving review of the
++# pull request's last commit by someone else with write access; after
++# approving, re-run this workflow.
 +name: Tamper guard
 +
 +on:
@@ -125,6 +128,7 @@ core/ci-exists
 +
 +permissions:
 +  contents: read
++  pull-requests: read
 +
 +concurrency:
 +  group: tamper-guard-\${{ github.event.pull_request.number }}
@@ -145,8 +149,14 @@ core/ci-exists
 +        with:
 +          node-version: 24
 +          package-manager-cache: false
-+      - run: npx --yes firescale@0.4.0 tamper --pr-base
-+# firescale-workflow: a62e6bb52a83b9ce333bb3fd5c984d7c
++      # The pull request's reviews, from GitHub: the only approvals that count.
++      - run: gh api --paginate "repos/$REPO/pulls/$PR/reviews" > "$RUNNER_TEMP/reviews.json"
++        env:
++          GH_TOKEN: \${{ github.token }}
++          REPO: \${{ github.repository }}
++          PR: \${{ github.event.pull_request.number }}
++      - run: npx --yes firescale@0.4.0 tamper --pr-base --approvals "$RUNNER_TEMP/reviews.json"
++# firescale-workflow: 7044f63325f6176a849b570cfa39a578
 
 core/gitignore-basics
   would create .gitignore

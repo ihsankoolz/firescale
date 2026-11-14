@@ -33,6 +33,10 @@ Options:
                    event GitHub gives, never from refs in the clone
   --head <commit>  tamper: compare <commit> (read from git, nothing checked out)
                    instead of the working tree
+  --approvals <file>
+                   tamper --pr-base, in a pull_request_target run only: the pull
+                   request's reviews from GitHub; a changed snapshot or expected
+                   value then needs an approving review of its head commit
   --explain        graph: show where each edge comes from
   --no-cache       check: run every rule again, ignoring .firescale/cache;
                    verify: run every step again (passes are still stored)
