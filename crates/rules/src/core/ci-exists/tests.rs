@@ -353,7 +353,7 @@ mod fixed_repo {
         assert!(result.notes[0].starts_with("Review .github/workflows/ci.yml"));
         let text = f.read(STARTER).unwrap();
         assert!(super::super::workflow::firescale_wrote(&text));
-        assert!(text.contains("      - run: npx firescale verify --affected --base \"origin/$BASE_REF\" --jobs 2 --shared-cache .firescale/shared\n"));
+        assert!(text.contains("      - run: npx firescale verify --affected --pr-base --jobs 2 --shared-cache .firescale/shared\n"));
         assert!(text.contains(
             "      - run: npx firescale verify --jobs 2 --shared-cache .firescale/shared\n"
         ));
@@ -386,7 +386,34 @@ mod fixed_repo {
         // The setup actions save their own caches in a post step: off here.
         assert!(job.contains("package-manager-cache: false"));
         assert!(!job.contains("cache: npm") && !job.contains("cache: pip"));
-        assert!(!text.contains("pull_request_target"));
+        // pull_request_target starts only the tamper guard, which holds no
+        // cache step and runs nothing from the pull request (ADR 0045).
+        let guard = &text[text.find("  tamper-guard:\n").unwrap()..];
+        let guard = &guard[..guard.find("\n# firescale-workflow").unwrap_or(guard.len())];
+        assert_eq!(
+            text.matches("pull_request_target").count(),
+            3,
+            "on:, its comment and the job's if"
+        );
+        assert!(guard.contains("    if: github.event_name == 'pull_request_target'\n"));
+        assert!(!job.contains("pull_request_target"));
+        assert!(guard.contains("    cache-mode: none\n    permissions:\n      contents: read\n"));
+        assert!(!guard.contains("actions/cache"));
+        assert!(!guard.contains("ref:"));
+        let runs: Vec<&str> = guard
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- run: "))
+            .collect();
+        assert_eq!(
+            runs,
+            [
+                "git fetch --no-tags origin \"$HEAD_SHA\"",
+                &*format!(
+                    "npx --yes firescale@{} tamper --pr-base",
+                    firescale_core::version()
+                )
+            ]
+        );
         // Saves only in the job for pushes, and only on the default branch.
         assert_eq!(text.matches("actions/cache/save@").count(), 3);
         assert_eq!(
@@ -401,8 +428,8 @@ mod fixed_repo {
         let f = Fixture::new(&[], Track::All).unwrap();
         fix(&f);
         let text = f.read(STARTER).unwrap();
-        assert_eq!(text.matches("          fetch-depth: 0\n").count(), 2);
-        assert!(text.contains("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n"));
+        assert_eq!(text.matches("          fetch-depth: 0\n").count(), 3);
+        assert!(text.contains("  cancel-in-progress: ${{ github.event_name != 'push' }}\n"));
     }
 
     #[test]
@@ -797,6 +824,6 @@ mod the_push_trigger {
         assert!(f
             .read(STARTER)
             .unwrap()
-            .contains("  group: ci-${{ github.event.pull_request.number || github.run_id }}\n"));
+            .contains("  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}\n"));
     }
 }

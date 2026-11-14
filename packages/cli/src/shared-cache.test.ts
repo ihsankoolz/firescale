@@ -53,10 +53,24 @@ describe('the generated workflow', () => {
       'svc/main.py': 'x = 1\n',
       'svc/pytest.ini': '',
     });
-    expect(workflow).not.toContain('pull_request_target');
     const all = jobs(workflow);
-    const pullRequest = [...all].filter(([, body]) => body.includes('pull_request'));
+    const pullRequest = [...all].filter(([, body]) => body.includes("== 'pull_request'"));
     expect(pullRequest.map(([name]) => name)).toEqual(['pull-request']);
+    // pull_request_target only starts the tamper guard (ADR 0045), which
+    // runs no code of the pull request, holds no cache step and can write
+    // nothing.
+    const target = [...all].filter(([, body]) => body.includes('pull_request_target'));
+    expect(target.map(([name]) => name)).toEqual(['tamper-guard']);
+    const guard = all.get('tamper-guard') ?? '';
+    expect(guard).toMatch(/^ {4}cache-mode: none$/m);
+    expect(guard).toMatch(/^ {4}permissions:\n {6}contents: read$/m);
+    expect(guard).not.toContain('actions/cache');
+    expect(guard).not.toMatch(/^\s+ref: /m);
+    const runs = [...guard.matchAll(/- run: (.*)$/gm)].map((m) => m[1]);
+    expect(runs).toEqual([
+      'git fetch --no-tags origin "$HEAD_SHA"',
+      expect.stringMatching(/^npx --yes firescale@\d+\.\d+\.\d+\S* tamper --pr-base$/),
+    ]);
     for (const [, body] of pullRequest) {
       // The token itself cannot save.
       expect(body).toMatch(/^ {4}cache-mode: read$/m);
@@ -71,7 +85,7 @@ describe('the generated workflow', () => {
       // It reads the shared step records, and verifies only what changed.
       expect(body).toContain(`path: ${SHARED}`);
       expect(body).toContain(
-        `npx firescale verify --affected --base "origin/$BASE_REF" --jobs 2 --shared-cache ${SHARED}`,
+        `npx firescale verify --affected --pr-base --jobs 2 --shared-cache ${SHARED}`,
       );
       // The whole history, for the merge base.
       expect(body).toContain('fetch-depth: 0');

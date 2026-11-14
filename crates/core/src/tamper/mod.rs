@@ -26,6 +26,7 @@ mod ci;
 mod config;
 mod coverage;
 mod formats;
+pub mod github;
 mod js;
 mod lintconfig;
 mod noverify;
@@ -408,6 +409,159 @@ fn skipped_weight(test: &TestCase) -> usize {
 /// suppressions of all its source files.
 #[must_use]
 pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> TamperReport {
+    guard_at(root, base, &Head::WorkingTree, changed)
+}
+
+/// What the base is compared with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Head {
+    /// The files on disk: what verify and the stop hook judge.
+    WorkingTree,
+    /// A commit, read from git's objects only: nothing is checked out, so
+    /// a commit can be judged without running or writing any of its files
+    /// (`fscale tamper --head`, the CI job of ADR 0045).
+    Commit(String),
+}
+
+/// The files that differ between the base commit and a head commit,
+/// repo-relative (paths under the folder `root` is in).
+///
+/// # Errors
+///
+/// When git cannot compare the two commits.
+pub fn changed_between(
+    root: &Path,
+    base: &BaseCommit,
+    head: &str,
+) -> crate::Result<BTreeSet<String>> {
+    let out = run_git(
+        root,
+        &[
+            "-c",
+            "core.quotepath=off",
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "--relative",
+            "-z",
+            &base.commit,
+            head,
+            "--",
+        ],
+    )?;
+    if out.code != 0 {
+        return Err(crate::Error::user(format!(
+            "git could not compare {} with {head}: {}",
+            base.short(),
+            out.stderr.trim()
+        )));
+    }
+    Ok(out
+        .stdout
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(|path| path.replace('\\', "/"))
+        .collect())
+}
+
+/// The renames git sees between the base commit and a head commit.
+fn renames_between(root: &Path, base: &BaseCommit, head: &str) -> BTreeSet<String> {
+    let Ok(out) = run_git(
+        root,
+        &[
+            "-c",
+            "core.quotepath=off",
+            "diff",
+            "-M",
+            "--name-status",
+            "--relative",
+            "-z",
+            &base.commit,
+            head,
+            "--",
+        ],
+    ) else {
+        return BTreeSet::new();
+    };
+    let parts: Vec<&str> = out.stdout.split('\0').collect();
+    let mut renamed = BTreeSet::new();
+    let mut index = 0;
+    while index < parts.len() {
+        let status = parts[index];
+        if (status.starts_with('R') || status.starts_with('C')) && index + 2 < parts.len() {
+            if status.starts_with('R') {
+                renamed.insert(parts[index + 1].replace('\\', "/"));
+            }
+            index += 3;
+        } else {
+            index += 2;
+        }
+    }
+    renamed
+}
+
+/// Every file a commit holds, under the folder `root` is in.
+fn files_in(root: &Path, commit: &str) -> BTreeSet<String> {
+    run_git(
+        root,
+        &[
+            "-c",
+            "core.quotepath=off",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            commit,
+        ],
+    )
+    .ok()
+    .filter(|out| out.code == 0)
+    .map(|out| {
+        out.stdout
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(|path| path.replace('\\', "/"))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Tracked files whose changes git does not show: `assume-unchanged`, and
+/// `skip-worktree` outside a sparse checkout (where it marks the folders
+/// left out, which are not on disk on purpose).
+fn hidden_from_git(root: &Path) -> BTreeSet<String> {
+    let sparse = run_git(root, &["config", "--bool", "core.sparseCheckout"])
+        .is_ok_and(|out| out.stdout.trim() == "true");
+    let Ok(out) = run_git(root, &["-c", "core.quotepath=off", "ls-files", "-v", "-z"]) else {
+        return BTreeSet::new();
+    };
+    out.stdout
+        .split('\0')
+        .filter_map(|line| {
+            let (tag, path) = line.split_once(' ')?;
+            let tag = tag.chars().next()?;
+            let hidden = tag.is_ascii_lowercase() || (tag == 'S' && !sparse);
+            hidden.then(|| path.replace('\\', "/"))
+        })
+        .collect()
+}
+
+/// [`guard`] against a chosen head: the working tree, or a commit.
+#[must_use]
+pub fn guard_at(
+    root: &Path,
+    base: &BaseCommit,
+    head: &Head,
+    changed: &BTreeSet<String>,
+) -> TamperReport {
+    // Files git is told not to look at are compared all the same: an agent
+    // can hide a deleted test from `git diff` with `git update-index
+    // --skip-worktree` or `--assume-unchanged` (ADR 0045).
+    let mut changed = changed.clone();
+    if *head == Head::WorkingTree {
+        changed.extend(hidden_from_git(root));
+    }
+    let changed = &changed;
     let policy = base_policy(root, base);
     let mut report = TamperReport {
         policy: policy.mode,
@@ -444,6 +598,32 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     wanted.sort_unstable();
     wanted.dedup();
     let mut on_base = crate::git::files_at(root, &base.commit, &wanted);
+    // The head side: from disk, or from the head commit's objects.
+    let in_head: Option<(BTreeMap<String, Vec<u8>>, BTreeSet<String>)> = match head {
+        Head::WorkingTree => None,
+        Head::Commit(commit) => Some((
+            crate::git::files_at(root, commit, &wanted),
+            files_in(root, commit),
+        )),
+    };
+    let read_head = |path: &str| -> Result<Option<String>, ()> {
+        match &in_head {
+            Some((files, _)) => Ok(files
+                .get(path)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())),
+            None => match fs::read(on_disk(path)) {
+                Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(()),
+            },
+        }
+    };
+    let exists_now = |path: &str| -> bool {
+        match &in_head {
+            Some((_, all)) => all.contains(path),
+            None => on_disk(path).is_file(),
+        }
+    };
     let config_files: Vec<Changed> = configs
         .iter()
         .map(|path| Changed {
@@ -452,11 +632,7 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             base: on_base
                 .get(path.as_str())
                 .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
-            head: match fs::read(on_disk(path)) {
-                Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(_) => Err(()),
-            },
+            head: read_head(path),
         })
         .collect();
     let files: Vec<Changed> = sources
@@ -467,22 +643,25 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             base: on_base
                 .remove(path)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
-            head: match fs::read(on_disk(path)) {
-                Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(_) => Err(()),
-            },
+            head: read_head(path),
         })
         .collect();
 
     // What the change deleted: on the base, gone from the working tree, and
     // not the old side of a rename git sees.
-    let renamed: BTreeSet<String> = crate::blame::renames_since(root, base)
-        .into_keys()
-        .collect();
+    let renamed: BTreeSet<String> = match head {
+        Head::WorkingTree => crate::blame::renames_since(root, base)
+            .into_keys()
+            .collect(),
+        Head::Commit(commit) => renames_between(root, base, commit),
+    };
     let deleted: BTreeSet<&String> = changed
         .iter()
-        .filter(|path| !on_disk(path).exists() && !renamed.contains(*path))
+        .filter(|path| match head {
+            Head::WorkingTree => !on_disk(path).exists(),
+            Head::Commit(_) => !exists_now(path),
+        })
+        .filter(|path| !renamed.contains(*path))
         .collect();
     // Every identifier in the files of the change that still exist: a name
     // a deleted test used is "deleted with it" only if it is in none of
@@ -673,8 +852,7 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     // A test whose subject the change deleted: it uses names imported from
     // modules of the repo, every such module is deleted, and none of those
     // names is left in the change.
-    let existed_on_base =
-        |path: &str| deleted.contains(&path.to_owned()) || on_disk(path).is_file();
+    let existed_on_base = |path: &str| deleted.contains(&path.to_owned()) || exists_now(path);
     let excused = |file: &Changed, read: &TestFile, test: &TestCase| -> bool {
         let mut modules: BTreeSet<String> = BTreeSet::new();
         let mut names: Vec<&String> = Vec::new();

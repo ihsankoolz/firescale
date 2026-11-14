@@ -66,6 +66,7 @@ Usage:
   fscale adopt [--dry-run]     Bring an existing repo in: add what is missing, overwrite nothing
   fscale sync [--check]        Repair drift: run the fixes again
   fscale verify [options]      Check, then lint, typecheck and test: the definition of done
+  fscale tamper [options]      Only the tamper guard: what the change weakens, against the base
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
   fscale graph [--explain]     Print the project graph; --explain says where each edge comes from
@@ -82,7 +83,12 @@ Options:
   --json           check, verify, facts, graph, doctor: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
   --affected       check, verify: only what changed, and projects that depend on it
-  --base <ref>     With --affected: also count commits since the merge base with <ref>
+  --base <ref>     With --affected: also count commits since the merge base with <ref>;
+                   verify, tamper: compare with the merge base with <ref>
+  --pr-base        verify, tamper, in GitHub Actions: the base from the pull request
+                   event GitHub gives, never from refs in the clone
+  --head <commit>  tamper: compare <commit> (read from git, nothing checked out)
+                   instead of the working tree
   --explain        graph: show where each edge comes from
   --no-cache       check: run every rule again, ignoring .firescale/cache;
                    verify: run every step again (passes are still stored)
@@ -133,6 +139,10 @@ struct Args {
     progress: Option<bool>,
     jobs: Option<String>,
     shared_cache: Option<String>,
+    /// `--pr-base`: the base from GitHub's pull request event (ADR 0045).
+    pr_base: bool,
+    /// `--head <commit>`: tamper compares this commit, not the working tree.
+    head: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -169,7 +179,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
         match name.as_str() {
             "--version" | "--help" | "--json" | "--sarif" | "--no-cache" | "--dry-run"
             | "--affected" | "--all" | "--force" | "--check" | "--progress" | "--no-progress"
-            | "--explain" => {
+            | "--explain" | "--pr-base" => {
                 if inline.is_some() {
                     return Err(Error::usage(format!(
                         "option {name} does not take a value."
@@ -183,6 +193,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--sarif" => args.sarif = true,
                     "--affected" => args.affected = true,
                     "--explain" => args.explain = true,
+                    "--pr-base" => args.pr_base = true,
                     "--all" => args.all = true,
                     "--force" => args.force = true,
                     "--check" => args.check = true,
@@ -192,7 +203,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 }
             }
             "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs"
-            | "--shared-cache" => {
+            | "--shared-cache" | "--head" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -210,6 +221,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--packs" => args.packs = Some(value),
                     "--jobs" => args.jobs = Some(value),
                     "--shared-cache" => args.shared_cache = Some(value),
+                    "--head" => args.head = Some(value),
                     _ => args.cwd = Some(value),
                 }
             }
@@ -1209,6 +1221,120 @@ fn verify_report(
 }
 
 /// `fscale verify`: the one command that says whether the work is done.
+/// With `--pr-base`, `args` with `--base` set to the base branch's commit
+/// as GitHub's event gives it (ADR 0045); the working tree must be the
+/// commit the run is for.
+fn with_pr_base(root: &Path, args: &Args) -> Result<Args> {
+    if !args.pr_base {
+        return Ok(args.clone());
+    }
+    if args.base.is_some() {
+        return Err(Error::usage(
+            "--pr-base and --base both name the base. Pass one of them.",
+        ));
+    }
+    let pr = tamper::github::pull_request(root, &|name| env::var(name).ok())?;
+    let head = firescale_core::git::run_git(root, &["rev-parse", "HEAD"])?;
+    let head = head.stdout.trim();
+    if head != pr.checked_out && head != pr.head {
+        return Err(Error::user(format!(
+            "--pr-base: the checkout is at {head}, not at the commit GitHub ran for ({}) or the pull request's head ({}).",
+            pr.checked_out, pr.head
+        )));
+    }
+    let mut args = args.clone();
+    args.base = Some(pr.base_tip);
+    Ok(args)
+}
+
+/// `fscale tamper`: the tamper guard alone (ADR 0045). It runs nothing from
+/// the repo: it reads the base commit, and the working tree or (with
+/// `--head` or `--pr-base`) a commit, from git's objects.
+fn tamper_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
+    if !extra.is_empty() {
+        return Err(Error::usage(format!(
+            "tamper takes no arguments, got \"{}\".",
+            extra.join(" ")
+        )));
+    }
+    if args.pr_base && (args.base.is_some() || args.head.is_some()) {
+        return Err(Error::usage(
+            "--pr-base takes the base and the head from GitHub's event. Drop --base and --head, or --pr-base.",
+        ));
+    }
+    let (base, head) = if args.pr_base {
+        let pr = tamper::github::pull_request(root, &|name| env::var(name).ok())?;
+        let commit = tamper::github::merge_base(root, &pr.head, &pr.base_tip)?;
+        (
+            firescale_core::blame::BaseCommit {
+                reference: "the pull request's base branch (from GitHub's event)".to_owned(),
+                commit,
+            },
+            tamper::Head::Commit(pr.head),
+        )
+    } else if let Some(head) = &args.head {
+        let resolved = firescale_core::git::run_git(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{head}^{{commit}}"),
+            ],
+        )?;
+        let head_id = resolved.stdout.trim().to_owned();
+        if resolved.code != 0 || head_id.is_empty() {
+            return Err(Error::usage(format!(
+                "--head \"{head}\" is not a commit in this repo."
+            )));
+        }
+        let reference = args.base.clone().unwrap_or_else(|| format!("{head_id}^"));
+        let commit = tamper::github::merge_base(root, &head_id, &reference)?;
+        (
+            firescale_core::blame::BaseCommit { reference, commit },
+            tamper::Head::Commit(head_id),
+        )
+    } else {
+        match choose_base(root, args.base.as_deref())? {
+            BaseChoice::Compare(base) => (base, tamper::Head::WorkingTree),
+            BaseChoice::Nothing(reason) => {
+                return Err(Error::user(format!(
+                    "the tamper guard has no base to compare with: {reason}."
+                )));
+            }
+        }
+    };
+    let changed = match &head {
+        tamper::Head::Commit(commit) => tamper::changed_between(root, &base, commit)?,
+        tamper::Head::WorkingTree => changed_since(root, &base)?.ok_or_else(|| {
+            Error::user("the files changed since the base could not be listed (a shallow clone?). Fetch the whole history.")
+        })?,
+    };
+    let report = tamper::guard_at(root, &base, &head, &changed);
+    let code = if report.blocks() {
+        EXIT_VIOLATIONS
+    } else {
+        EXIT_OK
+    };
+    let mut stdout = if args.json {
+        let mut text = serde_json::to_string_pretty(&report)
+            .map_err(|error| Error::internal(error.to_string()))?;
+        text.push('\n');
+        text
+    } else {
+        firescale_core::verify::format_tamper_human(&report)
+    };
+    // In GitHub Actions each finding is also an annotation on its line.
+    if !args.json && env::var("GITHUB_ACTIONS").as_deref() == Ok("true") {
+        stdout.push_str(&firescale_core::verify::tamper_annotations(&report));
+    }
+    Ok(Output {
+        stdout,
+        notes: Vec::new(),
+        code,
+    })
+}
+
 fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     if !extra.is_empty() {
         return Err(Error::usage(format!(
@@ -1216,6 +1342,13 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             extra.join(" ")
         )));
     }
+    if args.head.is_some() {
+        return Err(Error::usage(
+            "verify judges the working tree; --head is for `fscale tamper`.",
+        ));
+    }
+    let resolved = with_pr_base(root, args)?;
+    let args = &resolved;
     if args.dry_run {
         if args.json {
             return Err(Error::usage(
@@ -1454,6 +1587,7 @@ fn run() -> Result<Output> {
         "add" => add(&root, &args, rest),
         "schema" => schema(&root, rest),
         "verify" => verify(&root, &args, rest),
+        "tamper" => tamper_command(&root, &args, rest),
         "hooks" => hooks(&root, &args, rest),
         _ => Err(Error::usage(format!("unknown command \"{command}\"."))),
     }

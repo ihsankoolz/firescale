@@ -50,6 +50,10 @@ fn git_command() -> Command {
     // firescale only reads: never refresh the index (`git status` would
     // rewrite `.git/index` and take its lock while an agent commits).
     command.env("GIT_OPTIONAL_LOCKS", "0");
+    // A commit id means what it says: `git replace` refs, which would let
+    // anyone who can write the repo make one commit read as another (the
+    // base the tamper guard compares with, ADR 0045), are never followed.
+    command.env("GIT_NO_REPLACE_OBJECTS", "1");
     if IGNORE_INHERITED_REPO.load(Ordering::SeqCst) {
         for name in REPO_ENV {
             command.env_remove(name);

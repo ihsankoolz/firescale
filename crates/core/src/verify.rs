@@ -3810,6 +3810,62 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
     out
 }
 
+/// What `fscale tamper` prints (ADR 0045): a headline, then the same
+/// section verify prints.
+#[must_use]
+pub fn format_tamper_human(tamper: &crate::tamper::TamperReport) -> String {
+    use crate::tamper::Policy;
+    let base = &tamper.base[..tamper.base.len().min(7)];
+    let count = tamper.findings.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let headline = match tamper.policy {
+        Policy::Off => format!("tamper: off (verify.tamper is \"off\" on the base commit {base})"),
+        _ if count == 0 => {
+            format!("tamper: OK - nothing weakened, compared with the base commit {base}")
+        }
+        Policy::Enforced => format!("tamper: FAILED - {count} finding{plural}"),
+        Policy::Evaluated => format!("tamper: {count} report-only finding{plural}"),
+    };
+    format!("{headline}\n{}", tamper_section(tamper))
+}
+
+/// GitHub Actions annotations for the findings, one line each: errors when
+/// they block, warnings when they are report-only. Every value is escaped,
+/// so a file name or text from the change cannot add a command of its own.
+#[must_use]
+pub fn tamper_annotations(tamper: &crate::tamper::TamperReport) -> String {
+    fn data(text: &str) -> String {
+        text.replace('%', "%25")
+            .replace('\r', "%0D")
+            .replace('\n', "%0A")
+    }
+    fn property(text: &str) -> String {
+        data(text).replace(':', "%3A").replace(',', "%2C")
+    }
+    let level = if tamper.blocks() { "error" } else { "warning" };
+    let mut out = String::new();
+    for finding in &tamper.findings {
+        // A line on the base commit is not a line of the pull request.
+        let place = if finding.on_base {
+            format!("file={}", property(&finding.file))
+        } else {
+            format!("file={},line={}", property(&finding.file), finding.line)
+        };
+        let base_note = if finding.on_base {
+            format!(" (line {} on the base commit)", finding.line)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "::{level} {place},title={}::{}{}\n",
+            property(&format!("tamper guard: {}", finding.kind.as_str())),
+            data(&finding.what),
+            data(&base_note)
+        ));
+    }
+    out
+}
+
 /// The tamper guard's part of the summary: nothing when it found nothing,
 /// checked nothing and was not off.
 fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
@@ -3825,7 +3881,7 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
             _ => "report only; verify.tamper on the base commit decides, and \"enforced\" makes this fail",
         };
         out.push_str(&format!(
-            "\nTamper guard ({how}): compared with the base commit {base}, this change takes away tests or assertions, adds lint suppressions, or changes test files it cannot read.\n"
+            "\nTamper guard ({how}): compared with the base commit {base}, this change takes away tests or assertions, adds lint suppressions, lowers coverage thresholds, weakens CI, skips git hooks, turns rules off, or changes files it cannot read.\n"
         ));
         for finding in &tamper.findings {
             let place = if finding.on_base {
