@@ -66,6 +66,8 @@ const kinds = [
   'ci-weakened',
   'no-verify',
   'rule-disabled',
+  'snapshot-changed',
+  'expected-changed',
   'not-checked',
 ];
 const languages = {
@@ -77,6 +79,7 @@ const languages = {
   ci: 'CI workflows',
   nv: 'Hook skips',
   lint: 'Lint config',
+  appr: 'Needs approval',
 };
 const tally = Object.fromEntries(kinds.map((kind) => [kind, { cases: 0, caught: 0, missed: 0 }]));
 const byLanguage = Object.fromEntries(

@@ -22,6 +22,7 @@
 //!   cannot loosen the guard for itself.
 //! - Findings are report-only unless the base's policy is `enforced`.
 
+pub mod approval;
 mod ci;
 mod config;
 mod coverage;
@@ -257,12 +258,24 @@ pub enum Kind {
     /// A lint or type-check rule turned off or made weaker in a config file
     /// (M25).
     RuleDisabled,
+    /// A stored snapshot rewritten (M26): needs a person's approval.
+    SnapshotChanged,
+    /// An assertion whose expected value changed and nothing else (M26):
+    /// needs a person's approval.
+    ExpectedChanged,
     /// A changed test file tree-sitter cannot read, on the base or now: its
     /// tests and assertions could not be compared.
     NotChecked,
 }
 
 impl Kind {
+    /// A change that may be right and needs a person to say so (M26, ADR
+    /// 0046), rather than a clear cheat.
+    #[must_use]
+    pub fn needs_approval(self) -> bool {
+        matches!(self, Self::SnapshotChanged | Self::ExpectedChanged)
+    }
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -274,6 +287,8 @@ impl Kind {
             Self::CiWeakened => "CI weakened",
             Self::NoVerify => "hooks skipped",
             Self::RuleDisabled => "rule turned off",
+            Self::SnapshotChanged => "snapshot changed",
+            Self::ExpectedChanged => "expected value changed",
             Self::NotChecked => "not checked",
         }
     }
@@ -340,13 +355,48 @@ pub struct TamperReport {
     /// Changed files the base commit's `verify.tamper.allow` leaves out.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allowed: Vec<AllowedFile>,
+    /// Who approved the change, when the approvals were read from GitHub
+    /// (`fscale tamper --pr-base --approvals`, ADR 0046). `None` everywhere
+    /// else: no approval can be recorded where the change itself runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals: Option<Approvals>,
+}
+
+/// The approvals of a pull request, read from GitHub's reviews.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Approvals {
+    /// The commit they had to approve: the pull request's head.
+    pub head: String,
+    /// The people whose latest review approved that commit, other than its
+    /// author, with write access.
+    pub by: Vec<String>,
 }
 
 impl TamperReport {
-    /// True when the findings fail verify.
+    /// True when the findings fail verify: the base's policy is `enforced`
+    /// and a clear finding remains, or a finding that needs approval has
+    /// none where approvals are read (CI). Where the change runs (a laptop,
+    /// the pull request's own job) nothing can approve, so those findings
+    /// are reported and CI decides (ADR 0046).
     #[must_use]
     pub fn blocks(&self) -> bool {
-        self.policy == Policy::Enforced && !self.findings.is_empty()
+        self.policy == Policy::Enforced
+            && self
+                .findings
+                .iter()
+                .any(|finding| self.counts_against(finding))
+    }
+
+    /// True when a finding counts against the change now.
+    #[must_use]
+    pub fn counts_against(&self, finding: &Finding) -> bool {
+        if !finding.kind.needs_approval() {
+            return true;
+        }
+        self.approvals
+            .as_ref()
+            .is_some_and(|approvals| approvals.by.is_empty())
     }
 }
 
@@ -571,6 +621,7 @@ pub fn guard_at(
         findings: Vec::new(),
         not_checked: Vec::new(),
         allowed: Vec::new(),
+        approvals: None,
     };
     if policy.mode == Policy::Off {
         return report;
@@ -601,8 +652,13 @@ pub fn guard_at(
         .flat_map(|path| config::siblings(path))
         .collect();
     configs.extend(related);
+    let snapshot_paths: Vec<&String> = changed
+        .iter()
+        .filter(|path| approval::is_snapshot_path(path))
+        .collect();
     let mut wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
     wanted.extend(configs.iter().map(|path| path.as_str()));
+    wanted.extend(snapshot_paths.iter().map(|path| path.as_str()));
     wanted.sort_unstable();
     wanted.dedup();
     let mut on_base = crate::git::files_at(root, &base.commit, &wanted);
@@ -689,7 +745,7 @@ pub fn guard_at(
     }
 
     // Files the base's `allow` leaves out, for the kinds it names.
-    const KINDS: [Kind; 9] = [
+    const KINDS: [Kind; 11] = [
         Kind::TestDeleted,
         Kind::TestSkipped,
         Kind::AssertionRemoved,
@@ -698,6 +754,8 @@ pub fn guard_at(
         Kind::CiWeakened,
         Kind::NoVerify,
         Kind::RuleDisabled,
+        Kind::SnapshotChanged,
+        Kind::ExpectedChanged,
         Kind::NotChecked,
     ];
     for file in files.iter().chain(
@@ -821,6 +879,29 @@ pub fn guard_at(
         config_findings.extend(config::compare(&base_measures, &head_measures));
     }
 
+    // Snapshots rewritten: on both sides, with a different body (M26).
+    let mut approval_findings: Vec<Finding> = Vec::new();
+    for path in &snapshot_paths {
+        if allows(path, Kind::SnapshotChanged) {
+            continue;
+        }
+        let base_text = on_base
+            .get(path.as_str())
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+        let (Some(base_text), Ok(Some(head_text))) = (base_text, read_head(path)) else {
+            continue;
+        };
+        for (name, line) in approval::rewritten(path, &base_text, &head_text) {
+            approval_findings.push(Finding {
+                kind: Kind::SnapshotChanged,
+                file: (*path).clone(),
+                line,
+                on_base: false,
+                what: format!("snapshot `{name}` was rewritten"),
+            });
+        }
+    }
+
     // The test files: by name or folder, by the base's `testPaths`, or (Rust)
     // because they hold tests on either side.
     let mut not_checked: Vec<Finding> = Vec::new();
@@ -934,6 +1015,12 @@ pub fn guard_at(
     let counts = &mut report.counts;
     for (file, base_file, head_file) in &pairs {
         let path = &file.path;
+        // Assertions that changed only in their values, file by file (M26).
+        if let (Some(before), Some(after)) = (base_file, head_file) {
+            if !allows(path, Kind::ExpectedChanged) {
+                approval_findings.extend(expected_changes(path, before, after));
+            }
+        }
         let count_tests = !allows(path, Kind::TestDeleted);
         let count_skips = !allows(path, Kind::TestSkipped);
         let count_assertions = !allows(path, Kind::AssertionRemoved);
@@ -1021,6 +1108,7 @@ pub fn guard_at(
 
     let mut findings = not_checked;
     findings.extend(config_findings);
+    findings.extend(approval_findings);
     // Fewer tests: name those whose id is gone, up to the shortfall.
     if counts.head_tests < counts.base_tests {
         let mut left = head_ids.clone();
@@ -1196,6 +1284,69 @@ pub fn guard_at(
     findings.sort_by(|a, b| (a.kind, &a.file, a.line).cmp(&(b.kind, &b.file, b.line)));
     report.findings = findings;
     report
+}
+
+/// The approvals of the pull request `pr`, from GitHub's list of its reviews
+/// (the text of `gh api --paginate --slurp repos/{owner}/{repo}/pulls/{n}/reviews`).
+///
+/// # Errors
+///
+/// When the reviews are not that JSON, or the event names no author.
+pub fn approvals_from_reviews(reviews: &str, pr: &github::PullRequest) -> crate::Result<Approvals> {
+    if pr.author.is_empty() {
+        return Err(crate::Error::user(
+            "--approvals: the event names no pull_request.user.login, so a review by the author could not be told apart.",
+        ));
+    }
+    let by = approval::approvers(reviews, &pr.author, &pr.head)
+        .map_err(|message| crate::Error::user(format!("--approvals: {message}")))?;
+    Ok(Approvals {
+        head: pr.head.clone(),
+        by,
+    })
+}
+
+/// The assertions of one file that the change rewrote in their values only:
+/// gone from the base and new now, with the same shape once every literal
+/// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text).
+fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Finding> {
+    let mut left: BTreeMap<&str, usize> = BTreeMap::new();
+    for assertion in &after.assertions {
+        *left.entry(assertion.shape.as_str()).or_default() += 1;
+    }
+    let mut gone: Vec<&Assertion> = Vec::new();
+    for assertion in &before.assertions {
+        match left.get_mut(assertion.shape.as_str()) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => gone.push(assertion),
+        }
+    }
+    let mut had: BTreeMap<&str, usize> = BTreeMap::new();
+    for assertion in &before.assertions {
+        *had.entry(assertion.shape.as_str()).or_default() += 1;
+    }
+    let mut new: Vec<&Assertion> = Vec::new();
+    for assertion in &after.assertions {
+        match had.get_mut(assertion.shape.as_str()) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => new.push(assertion),
+        }
+    }
+    let gone_shapes: Vec<&str> = gone.iter().map(|a| a.shape.as_str()).collect();
+    let new_shapes: Vec<&str> = new.iter().map(|a| a.shape.as_str()).collect();
+    approval::pairs(&gone_shapes, &new_shapes)
+        .into_iter()
+        .map(|(old, now)| Finding {
+            kind: Kind::ExpectedChanged,
+            file: path.to_owned(),
+            line: new[now].line,
+            on_base: false,
+            what: format!(
+                "{} (on the base: {}, line {})",
+                new[now].text, gone[old].text, gone[old].line
+            ),
+        })
+        .collect()
 }
 
 /// A suppression key's tool family, how far it reaches (0: a line or an

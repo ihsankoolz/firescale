@@ -21,6 +21,8 @@ pub struct PullRequest {
     pub head: String,
     /// The commit the run checked out (`GITHUB_SHA`).
     pub checked_out: String,
+    /// The login of the pull request's author (`pull_request.user.login`).
+    pub author: String,
 }
 
 /// The parents of a commit, read from its object.
@@ -127,10 +129,16 @@ pub fn pull_request(root: &Path, read: &dyn Fn(&str) -> Option<String>) -> Resul
             "--pr-base: the event's base {base_sha} is not part of the base branch at {base_tip}, or the history is shallow. {FETCH}"
         )));
     }
+    let author = payload
+        .pointer("/pull_request/user/login")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     Ok(PullRequest {
         base_tip,
         head,
         checked_out,
+        author,
     })
 }
 

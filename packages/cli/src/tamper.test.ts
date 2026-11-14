@@ -117,6 +117,7 @@ const DETECTORS: Record<string, string> = {
   'ci:': 'ci-weakened',
   'nv:': 'no-verify',
   'lint:': 'rule-disabled',
+  'appr:': 'snapshot-changed',
 };
 
 describe('the tamper guard on the labelled corpus', () => {
@@ -372,13 +373,15 @@ describe('the policy keys come from the base commit too', () => {
           'ci-weakened',
           'no-verify',
           'rule-disabled',
+          'snapshot-changed',
+          'expected-changed',
           'not-checked',
         ],
       },
     ]);
     const human = await runCli(['verify', '--no-cache'], root);
     expect(human.stdout).toContain(
-      'verify.tamper.allow on the base commit leaves out src/legacy/old.test.ts (test deleted, test skipped, assertion removed, suppression added, coverage lowered, CI weakened, hooks skipped, rule turned off, not checked).',
+      'verify.tamper.allow on the base commit leaves out src/legacy/old.test.ts (test deleted, test skipped, assertion removed, suppression added, coverage lowered, CI weakened, hooks skipped, rule turned off, snapshot changed, expected value changed, not checked).',
     );
   });
 

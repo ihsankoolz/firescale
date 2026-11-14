@@ -3823,7 +3823,11 @@ pub fn format_tamper_human(tamper: &crate::tamper::TamperReport) -> String {
         _ if count == 0 => {
             format!("tamper: OK - nothing weakened, compared with the base commit {base}")
         }
-        Policy::Enforced => format!("tamper: FAILED - {count} finding{plural}"),
+        Policy::Enforced if tamper.blocks() => format!("tamper: FAILED - {count} finding{plural}"),
+        Policy::Enforced => format!(
+            "tamper: OK - {count} finding{plural} that need{} or have a person's approval, which CI checks",
+            if count == 1 { "s" } else { "" }
+        ),
         Policy::Evaluated => format!("tamper: {count} report-only finding{plural}"),
     };
     format!("{headline}\n{}", tamper_section(tamper))
@@ -3842,9 +3846,14 @@ pub fn tamper_annotations(tamper: &crate::tamper::TamperReport) -> String {
     fn property(text: &str) -> String {
         data(text).replace(':', "%3A").replace(',', "%2C")
     }
-    let level = if tamper.blocks() { "error" } else { "warning" };
+    let blocks = tamper.blocks();
     let mut out = String::new();
     for finding in &tamper.findings {
+        let level = if blocks && tamper.counts_against(finding) {
+            "error"
+        } else {
+            "warning"
+        };
         // A line on the base commit is not a line of the pull request.
         let place = if finding.on_base {
             format!("file={}", property(&finding.file))
@@ -3889,8 +3898,19 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
             } else {
                 format!("{}:{}", finding.file, finding.line)
             };
+            let approval = if !finding.kind.needs_approval() {
+                String::new()
+            } else {
+                match &tamper.approvals {
+                    Some(approvals) if !approvals.by.is_empty() => {
+                        format!(" [approved by {}]", approvals.by.join(", "))
+                    }
+                    Some(_) => " [needs an approving review of the pull request's last commit]".to_owned(),
+                    None => " [needs a person's approval, given in the pull request; it does not block here]".to_owned(),
+                }
+            };
             out.push_str(&format!(
-                "  {}: {place}: {}\n",
+                "  {}: {place}: {}{approval}\n",
                 finding.kind.as_str(),
                 finding.what
             ));

@@ -411,12 +411,14 @@ mod fixed_repo {
             runs,
             [
                 "git fetch --no-tags origin \"$HEAD_SHA\"",
+                "gh api --paginate \"repos/$REPO/pulls/$PR/reviews\" > \"$RUNNER_TEMP/reviews.json\"",
                 &*format!(
-                    "npx --yes firescale@{} tamper --pr-base",
+                    "npx --yes firescale@{} tamper --pr-base --approvals \"$RUNNER_TEMP/reviews.json\"",
                     firescale_core::version()
-                )
+                ),
             ]
         );
+        assert!(guard.contains("permissions:\n  contents: read\n  pull-requests: read\n"));
         // Saves only in the job for pushes, and only on the default branch.
         assert_eq!(text.matches("actions/cache/save@").count(), 3);
         assert_eq!(

@@ -58,15 +58,20 @@ describe('the generated workflow', () => {
     expect([...all.keys()]).toEqual(['tamper-guard']);
     const body = all.get('tamper-guard') ?? '';
     expect(body).toMatch(/^ {4}cache-mode: none$/m);
-    expect(guard).toMatch(/^permissions:\n {2}contents: read$/m);
+    // Its token reads the code and the reviews, and writes nothing.
+    expect(guard).toMatch(/^permissions:\n {2}contents: read\n {2}pull-requests: read$/m);
     expect(body).not.toContain('actions/cache');
     expect(body).not.toMatch(/^\s+ref: /m);
     expect(body).not.toMatch(/^\s+if: /m);
     const runs = [...body.matchAll(/- run: (.*)$/gm)].map((m) => m[1]);
     expect(runs).toEqual([
       'git fetch --no-tags origin "$HEAD_SHA"',
-      expect.stringMatching(/^npx --yes firescale@\d+\.\d+\.\d+\S* tamper --pr-base$/),
+      'gh api --paginate "repos/$REPO/pulls/$PR/reviews" > "$RUNNER_TEMP/reviews.json"',
+      expect.stringMatching(
+        /^npx --yes firescale@\d+\.\d+\.\d+\S* tamper --pr-base --approvals "\$RUNNER_TEMP\/reviews\.json"$/,
+      ),
     ]);
+
   });
 
   it('has a pull request job that can restore caches and never save one', async () => {

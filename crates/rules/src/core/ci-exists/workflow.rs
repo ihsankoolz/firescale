@@ -404,7 +404,10 @@ pub(crate) fn tamper_workflow() -> String {
         "# merging them would change with the base GitHub names. Keep it that way:",
         "# never check out the pull request's files here, install them or run them.",
         "# To make it block, require the tamper-guard check in branch protection",
-        "# and set verify.tamper to \"enforced\" on the default branch.",
+        "# and set verify.tamper to \"enforced\" on the default branch. A changed",
+        "# snapshot or expected value then waits for an approving review of the",
+        "# pull request's last commit by someone else with write access; after",
+        "# approving, re-run this workflow.",
         "name: Tamper guard",
         "",
         "on:",
@@ -412,6 +415,7 @@ pub(crate) fn tamper_workflow() -> String {
         "",
         "permissions:",
         "  contents: read",
+        "  pull-requests: read",
         "",
         "concurrency:",
         "  group: tamper-guard-${{ github.event.pull_request.number }}",
@@ -437,8 +441,20 @@ pub(crate) fn tamper_workflow() -> String {
     lines.push(10, "package-manager-cache: false");
     lines.push(
         6,
+        "# The pull request's reviews, from GitHub: the only approvals that count.",
+    );
+    lines.push(
+        6,
+        "- run: gh api --paginate \"repos/$REPO/pulls/$PR/reviews\" > \"$RUNNER_TEMP/reviews.json\"",
+    );
+    lines.push(8, "env:");
+    lines.push(10, "GH_TOKEN: ${{ github.token }}");
+    lines.push(10, "REPO: ${{ github.repository }}");
+    lines.push(10, "PR: ${{ github.event.pull_request.number }}");
+    lines.push(
+        6,
         &format!(
-            "- run: npx --yes firescale@{} tamper --pr-base",
+            "- run: npx --yes firescale@{} tamper --pr-base --approvals \"$RUNNER_TEMP/reviews.json\"",
             firescale_core::version()
         ),
     );
