@@ -934,7 +934,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 .iter()
                 .any(|(start, end)| *start <= node.start_byte() && node.end_byte() <= *end)
     };
-    let (has_errors, error_line) = syntax_errors(root);
+    let (has_errors, error_line) = syntax_errors(root, src);
     let mut file = TestFile {
         has_errors,
         error_line,

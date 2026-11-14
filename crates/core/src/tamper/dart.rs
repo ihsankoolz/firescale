@@ -32,6 +32,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
+use super::recover;
 use super::suppress::{keyed, shown};
 use super::{Assertion, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
@@ -500,18 +501,6 @@ fn may_be_subject(uri: &str) -> bool {
     }
 }
 
-/// The first line of a syntax error under `root`.
-fn first_error(root: Node<'_>) -> Option<usize> {
-    let mut line = None;
-    walk(root, |node| {
-        if line.is_none() && (node.is_error() || node.is_missing()) {
-            line = Some(node.start_position().row + 1);
-        }
-        line.is_none() && node.has_error()
-    });
-    line
-}
-
 /// Reads the tests, skips and assertions of a Dart test file.
 pub(super) fn read(source: &str) -> TestFile {
     let language: Language = tree_sitter_dart::LANGUAGE.into();
@@ -524,13 +513,12 @@ pub(super) fn read(source: &str) -> TestFile {
     let src = source.as_bytes();
     let root = tree.root_node();
     let dead = reach::Dead::of(root, src, &GRAMMAR);
+    let error_line = recover::first_harmful(root, src);
     let mut file = TestFile {
-        has_errors: root.has_error(),
+        has_errors: error_line.is_some(),
+        error_line,
         ..TestFile::default()
     };
-    if file.has_errors {
-        file.error_line = first_error(root);
-    }
     let whole_file_skipped = file_skipped(root, src);
 
     // Each group and test call, with the byte range it covers.

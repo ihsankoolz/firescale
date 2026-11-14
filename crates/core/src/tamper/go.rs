@@ -52,6 +52,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
+use super::recover;
 use super::{Assertion, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
 
@@ -964,18 +965,12 @@ pub(super) fn read(source: &str) -> TestFile {
     let src = source.as_bytes();
     let root = tree.root_node();
     let dead = reach::Dead::of(root, src, &GRAMMAR);
+    let error_line = recover::first_harmful(root, src);
     let mut file = TestFile {
-        has_errors: root.has_error(),
+        has_errors: error_line.is_some(),
+        error_line,
         ..TestFile::default()
     };
-    if file.has_errors {
-        walk(root, |node| {
-            if file.error_line.is_none() && (node.is_error() || node.is_missing()) {
-                file.error_line = Some(node.start_position().row + 1);
-            }
-            file.error_line.is_none() && node.has_error()
-        });
-    }
     let names = Names::of(root, src);
     let tested = tested_imports(root, src);
     // `Some(true)`: never built; `Some(false)`: built only sometimes.

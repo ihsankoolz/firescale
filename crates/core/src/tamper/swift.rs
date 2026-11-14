@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
+use super::recover;
 use super::suppress::{keyed, shown};
 use super::{Assertion, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
@@ -673,18 +674,6 @@ fn subject_modules(root: Node<'_>, src: &[u8]) -> Vec<String> {
     }
 }
 
-/// The first line of a syntax error under `root`.
-fn first_error(root: Node<'_>) -> Option<usize> {
-    let mut line = None;
-    walk(root, |node| {
-        if line.is_none() && (node.is_error() || node.is_missing()) {
-            line = Some(node.start_position().row + 1);
-        }
-        line.is_none() && node.has_error()
-    });
-    line
-}
-
 /// Reads the tests, skips and assertions of a Swift test file.
 pub(super) fn read(source: &str) -> TestFile {
     let language: Language = tree_sitter_swift::LANGUAGE.into();
@@ -703,13 +692,12 @@ pub(super) fn read(source: &str) -> TestFile {
             .iter()
             .any(|(start, end)| node.start_byte() >= *start && node.end_byte() <= *end)
     };
+    let error_line = recover::first_harmful(root, src);
     let mut file = TestFile {
-        has_errors: root.has_error(),
+        has_errors: error_line.is_some(),
+        error_line,
         ..TestFile::default()
     };
-    if file.has_errors {
-        file.error_line = first_error(root);
-    }
     let classes = test_classes(root, src);
     let skipped_classes = skipped_classes(root, src);
 

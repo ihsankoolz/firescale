@@ -33,6 +33,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
+use super::recover;
 use super::suppress::{directive, keyed, shown};
 use super::{Assertion, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
@@ -143,18 +144,9 @@ pub(super) fn children(node: Node<'_>) -> Vec<Node<'_>> {
 }
 
 /// tree-sitter found syntax errors, and the line of the first one.
-pub(super) fn syntax_errors(root: Node<'_>) -> (bool, Option<usize>) {
-    if !root.has_error() {
-        return (false, None);
-    }
-    let mut line = None;
-    walk(root, |node| {
-        if line.is_none() && (node.is_error() || node.is_missing()) {
-            line = Some(node.start_position().row + 1);
-        }
-        line.is_none() && node.has_error()
-    });
-    (true, line)
+pub(super) fn syntax_errors(root: Node<'_>, src: &[u8]) -> (bool, Option<usize>) {
+    let line = recover::first_harmful(root, src);
+    (line.is_some(), line)
 }
 
 /// A node's text with white space removed: what is compared.
@@ -681,7 +673,7 @@ pub(super) fn read(source: &str) -> TestFile {
     let src = source.as_bytes();
     let root = tree.root_node();
     let dead = reach::Dead::of(root, src, &GRAMMAR);
-    let (has_errors, error_line) = syntax_errors(root);
+    let (has_errors, error_line) = syntax_errors(root, src);
     let mut file = TestFile {
         has_errors,
         error_line,

@@ -53,6 +53,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
+use super::recover;
 use super::suppress::{keyed, shown};
 use super::{Assertion, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
@@ -313,51 +314,6 @@ fn is_noop(statement: Node<'_>, src: &[u8]) -> bool {
     }
 }
 
-/// True for a statement that is a macro call and nothing more, which
-/// may leave out its `;`: `TEST_CASE("x")`, `DEFINE_FLAG(x)`, `END_TEST`.
-fn is_macro_statement(statement: Node<'_>, src: &[u8]) -> bool {
-    match first_named(statement) {
-        Some(inner) if inner.kind() == "identifier" => is_macro_case(text(inner, src)),
-        Some(inner) => called(inner, src).is_some_and(is_macro_case),
-        None => false,
-    }
-}
-
-/// The 1-based line of the first syntax error, if any. A `;` missing after
-/// a macro call is not one: test macros are written without it.
-fn first_error(root: Node<'_>, src: &[u8]) -> Option<usize> {
-    if !root.has_error() {
-        return None;
-    }
-    let mut forgiven: HashSet<usize> = HashSet::new();
-    let mut found = None;
-    walk(root, |node| {
-        if found.is_some() {
-            return false;
-        }
-        if node.is_missing() {
-            if !forgiven.contains(&node.id()) {
-                found = Some(node.start_position().row + 1);
-            }
-            return false;
-        }
-        if node.is_error() {
-            found = Some(node.start_position().row + 1);
-            return false;
-        }
-        if node.kind() == "expression_statement" && is_macro_statement(node, src) {
-            let mut cursor = node.walk();
-            if let Some(last) = node.children(&mut cursor).last() {
-                if last.is_missing() && last.kind() == ";" {
-                    forgiven.insert(last.id());
-                }
-            }
-        }
-        node.has_error()
-    });
-    found
-}
-
 // ------------------------------------------------------------ masking
 
 /// The source as it is parsed: Check's `END_TEST` and the type arguments
@@ -442,6 +398,7 @@ fn mask(source: &str) -> Masked {
     let mut out = bytes.to_vec();
     let mut rows = HashMap::new();
     let mut state = Lex::Code;
+    let mut depth = 0usize;
     let mut at = 0;
     while at < bytes.len() {
         let starts_word = state == Lex::Code
@@ -454,6 +411,13 @@ fn mask(source: &str) -> Masked {
             let word = &source[at..end];
             if word == "END_TEST" {
                 out[at..end].fill(b' ');
+            } else if let Some(macro_end) = Some(depth)
+                .filter(|d| *d == 0)
+                .and_then(|_| bare_macro_line(bytes, at, end))
+            {
+                out[at..macro_end].fill(b' ');
+                at = macro_end;
+                continue;
             } else if let Some(&(_, keep, weighed)) =
                 TEMPLATED.iter().find(|(name, _, _)| *name == bare(word))
             {
@@ -485,12 +449,80 @@ fn mask(source: &str) -> Masked {
             at = end;
             continue;
         }
+        if state == Lex::Code {
+            match bytes[at] {
+                b'(' => depth += 1,
+                b')' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
         let (next, step) = lex_step(bytes, at, state);
         state = next;
         at += step;
     }
     let text = String::from_utf8(out).unwrap_or_else(|_| source.to_owned());
     Masked { text, rows }
+}
+
+/// Where a macro alone on its line ends, when the word at `at..end` starts
+/// one, outside any parentheses: `FMT_BEGIN_NAMESPACE`, `G_BEGIN_DECLS`,
+/// `FMT_PRAGMA_GCC(diagnostic ignored "-Wfoo")`. tree-sitter does not expand
+/// macros and reads one as the start of a declaration, which swallows the
+/// next one into an error; such a line is blanked before parsing (M32,
+/// ADR 0052). The name is upper-case letters, digits and `_`, with one `_`
+/// at least, and names no test or assertion; its arguments, if any, close
+/// on the same line; nothing but a `//` comment follows; the line does not
+/// continue a macro, and the next line does not open a block with `{`.
+fn bare_macro_line(bytes: &[u8], at: usize, end: usize) -> Option<usize> {
+    let word = &bytes[at..end];
+    if !word.contains(&b'_')
+        || !word
+            .iter()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || *b == b'_')
+    {
+        return None;
+    }
+    let line_start = bytes[..at]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |i| i + 1);
+    if !bytes[line_start..at]
+        .iter()
+        .all(|b| *b == b' ' || *b == b'\t')
+    {
+        return None;
+    }
+    let line_end = bytes[end..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map_or(bytes.len(), |i| end + i);
+    let after_name = (end..line_end)
+        .find(|&i| !bytes[i].is_ascii_whitespace())
+        .unwrap_or(line_end);
+    let macro_end = if bytes.get(after_name) == Some(&b'(') {
+        let (_, close) = argument_commas(bytes, after_name)?;
+        if close >= line_end {
+            return None;
+        }
+        close + 1
+    } else {
+        end
+    };
+    let rest = bytes[macro_end..line_end].trim_ascii();
+    if !(rest.is_empty() || rest.starts_with(b"//")) {
+        return None;
+    }
+    // The line before ends with `\`: this is a macro's body.
+    let before = bytes[..line_start.saturating_sub(1)].trim_ascii_end();
+    if before.ends_with(b"\\") {
+        return None;
+    }
+    // A block opened on the next line belongs to the macro.
+    if bytes[line_end..].trim_ascii_start().starts_with(b"{") {
+        return None;
+    }
+    let name = std::str::from_utf8(word).ok()?;
+    (!recover::could_name(name)).then_some(macro_end)
 }
 
 /// The grammar for C or C++.
@@ -1307,7 +1339,7 @@ pub(super) fn read(source: &str, cpp: bool) -> TestFile {
     };
     let dead = reach::Dead::of(root, src, grammar);
     let regions = Regions::of(root, src);
-    let error_line = first_error(root, src);
+    let error_line = recover::first_harmful(root, src);
     let mut imports = BTreeMap::new();
     let mut subjects = Vec::new();
     for include in &facts.includes {
@@ -2346,10 +2378,36 @@ TEST(A, Never) { EXPECT_TRUE(i()); }
         let file = cpp("TEST(A, B) {\n  EXPECT_EQ(1, x);\n");
         assert!(file.has_errors);
         assert!(file.error_line.is_some());
-        assert!(c("void f(void) { int x = }\n").has_errors);
+        // An error that could hide an assertion is one (M32, ADR 0052)...
+        assert!(cpp("TEST(ostream_test, template) {\n  EXPECT_EQ(1, x);\n}\n").has_errors);
         assert!(!cpp("").has_errors);
-        // A lower-case call missing its `;` is an error.
-        assert!(cpp("void f() { run() }\n").has_errors);
+        // ...and one that cannot, or a missing `;`, is not: the tree around
+        // it is whole.
+        assert!(!c("void f(void) { int x = }\n").has_errors);
+        assert!(!cpp("void f() { go() }\n").has_errors);
+    }
+
+    // fmt's test files open a namespace with a macro alone on its line.
+    #[test]
+    fn a_namespace_macro_alone_on_its_line_is_read_past() {
+        let source = "struct test_struct {};\n\nFMT_BEGIN_NAMESPACE\ntemplate <typename Char> struct formatter<test_struct, Char> {\n  auto parse(int ctx) -> int { return ctx; }\n};\nFMT_END_NAMESPACE  // fmt\n\nTEST(core_test, format) {\n  EXPECT_EQ(fmt::format(\"{}\", test_struct()), \"test\");\n}\n";
+        let file = cpp(source);
+        assert!(!file.has_errors, "{:?}", file.error_line);
+        assert_eq!(ids(&file), [("core_test::format", false, None, 1)]);
+        assert_eq!(file.assertions.len(), 1);
+        // Not inside parentheses, a macro's body, or beside other code.
+        assert!(mask("f(\n  MY_CONST\n);\n").text.contains("MY_CONST"));
+        assert!(!mask("G_BEGIN_DECLS\n").text.contains("G_BEGIN_DECLS"));
+        assert_eq!(bare_macro_line(b"#define X \\\n  MY_CONST\n", 15, 23), None);
+        assert_eq!(bare_macro_line(b"MY_CONST x;\n", 0, 8), None);
+        assert_eq!(bare_macro_line(b"GTEST_SKIP_IF\n", 0, 13), None);
+        assert_eq!(bare_macro_line(b"Mixed_Case\n", 0, 10), None);
+        assert_eq!(bare_macro_line(b"MY_SUITE_BEGIN\n{\n", 0, 14), None);
+        assert_eq!(bare_macro_line(b"MY_DEF(a,\n b)\n", 0, 6), None);
+        assert_eq!(bare_macro_line(b"G_BEGIN_DECLS\n", 0, 13), Some(13));
+        // fmt's pragma macros: the call goes too.
+        let pragma = b"FMT_PRAGMA_GCC(diagnostic ignored \"-Wx\")  // why\n";
+        assert_eq!(bare_macro_line(pragma, 0, 14), Some(40));
     }
 
     #[test]

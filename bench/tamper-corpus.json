@@ -5348,6 +5348,88 @@
       "head": {
         "tests/math_test.cc": "#include <gtest/gtest.h>\n#include \"../src/math.h\"\n\nTEST(Math, Adds) {\n  EXPECT_EQ(3, add(1, 2);\n"
       }
+    },
+    {
+      "name": "c: macros tree-sitter cannot expand, an assertion removed",
+      "expect": ["assertion-removed"],
+      "note": "cJSON's `int CJSON_CDECL main(void)` and a foreach macro with no `;` are read past (ADR 0052), so the removed assertion is seen.",
+      "base": {
+        "src/list.h": "struct item { int index; };\n",
+        "tests/list_tests.c": "#include \"unity.h\"\n#include \"../src/list.h\"\n\nvoid test_each(void)\n{\n    int i = 0;\n    list_ForEach(item, list)\n    {\n        TEST_ASSERT_NOT_NULL(item);\n        TEST_ASSERT_EQUAL_INT(i, item->index);\n        i++;\n    }\n}\n\nint CJSON_CDECL main(void)\n{\n    UNITY_BEGIN();\n    RUN_TEST(test_each);\n    return UNITY_END();\n}\n"
+      },
+      "head": {
+        "tests/list_tests.c": "#include \"unity.h\"\n#include \"../src/list.h\"\n\nvoid test_each(void)\n{\n    int i = 0;\n    list_ForEach(item, list)\n    {\n        TEST_ASSERT_NOT_NULL(item);\n        i++;\n    }\n}\n\nint CJSON_CDECL main(void)\n{\n    UNITY_BEGIN();\n    RUN_TEST(test_each);\n    return UNITY_END();\n}\n"
+      }
+    },
+    {
+      "name": "c: macros tree-sitter cannot expand, nothing weakened",
+      "expect": [],
+      "note": "The same file with a new assertion: nothing is weakened, and the macros no longer make it 'not checked' (ADR 0052).",
+      "base": {
+        "src/list.h": "struct item { int index; };\n",
+        "tests/list_tests.c": "#include \"unity.h\"\n#include \"../src/list.h\"\n\nvoid test_each(void)\n{\n    int i = 0;\n    list_ForEach(item, list)\n    {\n        TEST_ASSERT_NOT_NULL(item);\n        TEST_ASSERT_EQUAL_INT(i, item->index);\n        i++;\n    }\n}\n\nint CJSON_CDECL main(void)\n{\n    UNITY_BEGIN();\n    RUN_TEST(test_each);\n    return UNITY_END();\n}\n"
+      },
+      "head": {
+        "tests/list_tests.c": "#include \"unity.h\"\n#include \"../src/list.h\"\n\nvoid test_each(void)\n{\n    int i = 0;\n    list_ForEach(item, list)\n    {\n        TEST_ASSERT_NOT_NULL(item);\n        TEST_ASSERT_EQUAL_INT(i, item->index);\n        TEST_ASSERT_TRUE(item->index >= 0);\n        i++;\n    }\n}\n\nint CJSON_CDECL main(void)\n{\n    UNITY_BEGIN();\n    RUN_TEST(test_each);\n    return UNITY_END();\n}\n"
+      }
+    },
+    {
+      "name": "cpp: a namespace macro alone on its line, a test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "fmt's `FMT_BEGIN_NAMESPACE` and `FMT_PRAGMA_GCC(…)` lines are blanked before parsing (ADR 0052), so the deleted test is seen.",
+      "base": {
+        "src/format.h": "int format();\n",
+        "test/format-test.cc": "#include <gtest/gtest.h>\n#include \"../src/format.h\"\n\nstruct point {};\n\nFMT_BEGIN_NAMESPACE\ntemplate <> struct formatter<point> {\n  auto parse(int ctx) -> int { return ctx; }\n};\nFMT_END_NAMESPACE\n\nFMT_PRAGMA_GCC(diagnostic ignored \"-Wshadow\")\n\nTEST(format_test, point) {\n  EXPECT_EQ(fmt::format(\"{}\", point()), \"(0, 0)\");\n}\n\nTEST(format_test, empty) {\n  EXPECT_EQ(fmt::format(\"\"), \"\");\n}\n"
+      },
+      "head": {
+        "test/format-test.cc": "#include <gtest/gtest.h>\n#include \"../src/format.h\"\n\nstruct point {};\n\nFMT_BEGIN_NAMESPACE\ntemplate <> struct formatter<point> {\n  auto parse(int ctx) -> int { return ctx; }\n};\nFMT_END_NAMESPACE\n\nFMT_PRAGMA_GCC(diagnostic ignored \"-Wshadow\")\n\nTEST(format_test, point) {\n  EXPECT_EQ(fmt::format(\"{}\", point()), \"(0, 0)\");\n}\n"
+      }
+    },
+    {
+      "name": "cpp: a namespace macro alone on its line, nothing weakened",
+      "expect": [],
+      "note": "The same file with a new test: nothing is weakened, and the macro lines no longer make it 'not checked' (ADR 0052).",
+      "base": {
+        "src/format.h": "int format();\n",
+        "test/format-test.cc": "#include <gtest/gtest.h>\n#include \"../src/format.h\"\n\nstruct point {};\n\nFMT_BEGIN_NAMESPACE\ntemplate <> struct formatter<point> {\n  auto parse(int ctx) -> int { return ctx; }\n};\nFMT_END_NAMESPACE\n\nFMT_PRAGMA_GCC(diagnostic ignored \"-Wshadow\")\n\nTEST(format_test, point) {\n  EXPECT_EQ(fmt::format(\"{}\", point()), \"(0, 0)\");\n}\n\nTEST(format_test, empty) {\n  EXPECT_EQ(fmt::format(\"\"), \"\");\n}\n"
+      },
+      "head": {
+        "test/format-test.cc": "#include <gtest/gtest.h>\n#include \"../src/format.h\"\n\nstruct point {};\n\nFMT_BEGIN_NAMESPACE\ntemplate <> struct formatter<point> {\n  auto parse(int ctx) -> int { return ctx; }\n};\nFMT_END_NAMESPACE\n\nFMT_PRAGMA_GCC(diagnostic ignored \"-Wshadow\")\n\nTEST(format_test, point) {\n  EXPECT_EQ(fmt::format(\"{}\", point()), \"(0, 0)\");\n}\n\nTEST(format_test, empty) {\n  EXPECT_EQ(fmt::format(\"\"), \"\");\n}\n\nTEST(format_test, width) {\n  EXPECT_EQ(fmt::format(\"{:3}\", 1), \"  1\");\n}\n"
+      }
+    },
+    {
+      "name": "cpp: a parse error around a new test",
+      "expect": ["not-checked"],
+      "note": "`TEST(ostream_test, template)` passes a keyword to a macro; tree-sitter's error is around the test itself, so the file is not checked (ADR 0052).",
+      "base": {
+        "src/format.h": "int format();\n",
+        "test/ostream-test.cc": "#include <gtest/gtest.h>\n\nTEST(ostream_test, plain) {\n  EXPECT_EQ(fmt::format(\"{}\", 1), \"1\");\n}\n"
+      },
+      "head": {
+        "test/ostream-test.cc": "#include <gtest/gtest.h>\n\nTEST(ostream_test, plain) {\n  EXPECT_EQ(fmt::format(\"{}\", 1), \"1\");\n}\n\nTEST(ostream_test, template) {\n  EXPECT_EQ(fmt::format(\"{}\", 2), \"2\");\n}\n"
+      }
+    },
+    {
+      "name": "cs: an #if gives a loop two heads, an assertion removed",
+      "expect": ["assertion-removed"],
+      "note": "tree-sitter cannot read a block with two heads; the first branch of each `#if` is read instead when the others hold no test (ADR 0052), so the removed assertion is seen.",
+      "base": {
+        "tests/App.Tests/GenderTests.cs": "using Xunit;\n\npublic class GenderTests\n{\n    [Fact]\n    public void EveryGenderHasAWord()\n    {\n        foreach (var name in Names.All)\n        {\n#if NET5_0_OR_GREATER\n            foreach (var gender in Enum.GetValues<Gender>())\n#else\n            foreach (var gender in (Gender[])Enum.GetValues(typeof(Gender)))\n#endif\n            {\n                Assert.NotNull(Words.For(name, gender));\n                Assert.NotEmpty(Words.For(name, gender));\n            }\n        }\n    }\n}\n"
+      },
+      "head": {
+        "tests/App.Tests/GenderTests.cs": "using Xunit;\n\npublic class GenderTests\n{\n    [Fact]\n    public void EveryGenderHasAWord()\n    {\n        foreach (var name in Names.All)\n        {\n#if NET5_0_OR_GREATER\n            foreach (var gender in Enum.GetValues<Gender>())\n#else\n            foreach (var gender in (Gender[])Enum.GetValues(typeof(Gender)))\n#endif\n            {\n                Assert.NotNull(Words.For(name, gender));\n            }\n        }\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: an #if gives a loop two heads, nothing weakened",
+      "expect": [],
+      "note": "The same file with one more assertion: read by its first branches, nothing weakened (ADR 0052).",
+      "base": {
+        "tests/App.Tests/GenderTests.cs": "using Xunit;\n\npublic class GenderTests\n{\n    [Fact]\n    public void EveryGenderHasAWord()\n    {\n        foreach (var name in Names.All)\n        {\n#if NET5_0_OR_GREATER\n            foreach (var gender in Enum.GetValues<Gender>())\n#else\n            foreach (var gender in (Gender[])Enum.GetValues(typeof(Gender)))\n#endif\n            {\n                Assert.NotNull(Words.For(name, gender));\n                Assert.NotEmpty(Words.For(name, gender));\n            }\n        }\n    }\n}\n"
+      },
+      "head": {
+        "tests/App.Tests/GenderTests.cs": "using Xunit;\n\npublic class GenderTests\n{\n    [Fact]\n    public void EveryGenderHasAWord()\n    {\n        foreach (var name in Names.All)\n        {\n#if NET5_0_OR_GREATER\n            foreach (var gender in Enum.GetValues<Gender>())\n#else\n            foreach (var gender in (Gender[])Enum.GetValues(typeof(Gender)))\n#endif\n            {\n                Assert.NotNull(Words.For(name, gender));\n                Assert.NotEmpty(Words.For(name, gender));\n                Assert.DoesNotContain(\" \", Words.For(name, gender));\n            }\n        }\n    }\n}\n"
+      }
     }
   ]
 }

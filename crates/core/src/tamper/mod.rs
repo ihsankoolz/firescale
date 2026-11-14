@@ -48,6 +48,7 @@ mod noverify;
 mod policy;
 mod python;
 mod reach;
+mod recover;
 mod rust;
 mod suppress;
 mod swift;
@@ -121,6 +122,25 @@ impl Language {
 /// Reads the tests, skips and assertions of a test file.
 #[must_use]
 pub fn read_test_file(source: &str, language: Language) -> TestFile {
+    let file = read_as_written(source, language);
+    // An `#if` that tree-sitter cannot read: read the first branch of each,
+    // when the others hold no test (M32, ADR 0052).
+    let has_branches = matches!(
+        language,
+        Language::C | Language::Cpp | Language::CSharp | Language::Swift
+    );
+    if file.has_errors && has_branches {
+        if let Some(first) = recover::first_branches(source) {
+            let retry = read_as_written(&first, language);
+            if !retry.has_errors {
+                return retry;
+            }
+        }
+    }
+    file
+}
+
+fn read_as_written(source: &str, language: Language) -> TestFile {
     match language {
         Language::Js(dialect) => js::read(source, dialect),
         Language::Python => python::read(source),
@@ -1726,6 +1746,23 @@ fn covers(wide: &str, narrow: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Humanizer: an `#if` gives one loop body two heads, and tree-sitter
+    // reads the whole class as an error. The first branch is read instead.
+    #[test]
+    fn an_if_with_two_heads_is_read_by_its_first_branch() {
+        let source = "public class GenderTests\n{\n    [Fact]\n    public void Adds()\n    {\n        foreach (var name in Names)\n        {\n#if NET5_0_OR_GREATER\n            foreach (var gender in Enum.GetValues<Gender>())\n#else\n            foreach (var gender in (Gender[])Enum.GetValues(typeof(Gender)))\n#endif\n            {\n                Assert.Equal(name, Make(name, gender));\n            }\n        }\n    }\n}\n";
+        let file = read_test_file(source, Language::CSharp);
+        assert!(!file.has_errors, "{:?}", file.error_line);
+        assert_eq!(file.tests.len(), 1);
+        assert_eq!(file.assertions.len(), 1);
+        assert_eq!(file.assertions[0].line, 14);
+        // An assertion in the other branch is never dropped unseen: the file
+        // is read as written, or not read.
+        let hidden = source.replace("#else\n", "#else\n            Assert.True(Legacy);\n");
+        let file = read_test_file(&hidden, Language::CSharp);
+        assert!(file.has_errors || file.assertions.len() == 2, "{file:?}");
+    }
 
     #[test]
     fn a_wider_suppression_covers_a_narrower_one() {
