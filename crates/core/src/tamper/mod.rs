@@ -191,14 +191,14 @@ fn resolve(
         Language::Js(_) => js::resolve(from, spec, exists),
         Language::Python => python::resolve(from, spec, exists),
         Language::Swift => swift::resolve(from, spec, exists),
+        Language::Dart => dart::resolve(from, spec, exists),
         Language::Rust
         | Language::Java
         | Language::Kotlin
         | Language::C
         | Language::Cpp
         | Language::CSharp
-        | Language::Go
-        | Language::Dart => None,
+        | Language::Go => None,
     }
 }
 
