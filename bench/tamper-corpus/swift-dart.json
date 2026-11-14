@@ -1,0 +1,759 @@
+{
+  "about": "Labelled changes for the tamper guard in Swift (XCTest, Swift Testing) and Dart (package:test, flutter_test), ADR 0052, in the schema of bench/tamper-corpus.json: expect lists the kinds of finding a case must give, an empty list none. Written together with the readers: the counts show they do what the ADR says, not a measured rate.",
+  "cases": [
+    {
+      "name": "swift: an XCTest method deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n}\n"
+      }
+    },
+    {
+      "name": "swift: an XCTest method renamed so it no longer starts with test",
+      "expect": ["test-deleted"],
+      "note": "XCTest runs only methods named test…: the renamed one is a helper now, so the test is gone though its assertions are still in the file.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func disabled_testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: throw XCTSkip added as the first statement",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "What follows the throw never runs.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() throws {\n        throw XCTSkip(\"flaky\")\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: try XCTSkipIf added as the first statement",
+      "expect": ["test-skipped"],
+      "note": "A conditional skip: the test runs only sometimes.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() throws {\n        try XCTSkipIf(ProcessInfo.processInfo.environment[\"CI\"] != nil)\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: setUpWithError made to skip the whole class",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    override func setUpWithError() throws {\n        throw XCTSkip(\"later\")\n    }\n\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a Swift Testing test given .disabled",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test(.disabled(\"rounding is off\")) func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a @Suite given .enabled(if: false)",
+      "expect": ["test-skipped"],
+      "note": "Every test of the suite stops running.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\", .enabled(if: false))\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: an XCTAssertEqual removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: XCTAssertEqual(cart.total, 5) replaced by XCTAssertTrue(true)",
+      "expect": ["assertion-removed"],
+      "note": "An assertion that cannot fail is not counted.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertTrue(true)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: #expect(…) replaced by #expect(true)",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(true)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: an assertion wrapped in withKnownIssue",
+      "expect": ["assertion-removed"],
+      "note": "A failure inside withKnownIssue is expected, so the assertion can no longer fail the test.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        withKnownIssue {\n            #expect(discounted(100, percent: 10) == 90)\n        }\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: return inserted before the assertions",
+      "expect": ["assertion-removed"],
+      "note": "A bare return followed by a declaration: what follows never runs.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        return\n        let expected = 5\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: assertions wrapped in if false",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        if false {\n            XCTAssertEqual(cart.total, 5)\n            XCTAssertEqual(cart.items.count, 2)\n        }\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a swiftlint:disable:next added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    // swiftlint:disable:next implicit_getter\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a file-wide swiftlint:disable all added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Sources/Shop/Price.swift": "// swiftlint:disable all\npublic func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n"
+      }
+    },
+    {
+      "name": "swift: a swift-format-ignore added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Sources/Shop/Price.swift": "// swift-format-ignore: NeverForceUnwrap\npublic func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n"
+      }
+    },
+    {
+      "name": "swift: a whole test file deleted, its subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": null
+      }
+    },
+    {
+      "name": "swift: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: an XCTest method renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testTotalIsTheSumOfItsItems() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a test moved to another test file",
+      "expect": [],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n}\n",
+        "Tests/ShopTests/CartAddingTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartAddingTests: XCTestCase {\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a test file reformatted",
+      "expect": [],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\") struct DiscountTests {\n  @Test\n  func tenPercentOff() {\n    #expect(\n      discounted(100, percent: 10) == 90\n    )\n  }\n\n  @Test(\"No discount keeps the price\") func noDiscount() { #expect(discounted(100, percent: 0) == 100) }\n}\n"
+      }
+    },
+    {
+      "name": "swift: XCTAssertTrue(a == b) turned into XCTAssertEqual(a, b)",
+      "expect": [],
+      "note": "One assertion for one, and a stricter one.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertTrue(cart.total == 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: tests folded into one @Test with three arguments",
+      "expect": [],
+      "note": "The argument rows weigh the test, so three tests become one test of three runs.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\nstruct DiscountTests {\n    @Test func zero() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n\n    @Test func ten() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test func half() {\n        #expect(discounted(100, percent: 50) == 50)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\nstruct DiscountTests {\n    @Test(arguments: [(0, 100), (10, 90), (50, 50)])\n    func discounts(percent: Int, expected: Int) {\n        #expect(discounted(100, percent: percent) == expected)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a test file deleted with its subject",
+      "expect": [],
+      "note": "Cart.swift, the only file of the module the tests use, is deleted in the same change.",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Sources/Shop/Cart.swift": null,
+        "Tests/ShopTests/CartTests.swift": null
+      }
+    },
+    {
+      "name": "swift: a .disabled trait removed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test(.disabled(\"flaky\")) func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      }
+    },
+    {
+      "name": "swift: a swiftlint directive in a string or a doc comment",
+      "expect": [],
+      "note": "",
+      "base": {
+        "Package.swift": "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"Shop\",\n    targets: [\n        .target(name: \"Shop\"),\n        .testTarget(name: \"ShopTests\", dependencies: [\"Shop\"]),\n    ]\n)\n",
+        "Sources/Shop/Cart.swift": "public struct Cart {\n    public private(set) var items: [Int] = []\n\n    public init() {}\n\n    public mutating func add(_ price: Int) {\n        items.append(price)\n    }\n\n    public var total: Int {\n        items.reduce(0, +)\n    }\n}\n",
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n",
+        "Tests/ShopTests/CartTests.swift": "import XCTest\n@testable import Shop\n\nfinal class CartTests: XCTestCase {\n    func testEmptyCartTotalsZero() {\n        let cart = Cart()\n        XCTAssertEqual(cart.total, 0)\n    }\n\n    func testAddingItemsSumsThem() {\n        var cart = Cart()\n        cart.add(2)\n        cart.add(3)\n        XCTAssertEqual(cart.total, 5)\n        XCTAssertEqual(cart.items.count, 2)\n    }\n}\n",
+        "Tests/ShopTests/DiscountTests.swift": "import Testing\n@testable import Shop\n\n@Suite(\"Discounts\")\nstruct DiscountTests {\n    @Test func tenPercentOff() {\n        #expect(discounted(100, percent: 10) == 90)\n    }\n\n    @Test(\"No discount keeps the price\")\n    func noDiscount() {\n        #expect(discounted(100, percent: 0) == 100)\n    }\n}\n"
+      },
+      "head": {
+        "Sources/Shop/Price.swift": "public func discounted(_ price: Int, percent: Int) -> Int {\n    price - price * percent / 100\n}\n\n/// Never write swiftlint:disable here.\nlet lintHelp = \"// swiftlint:disable all\"\n"
+      }
+    },
+    {
+      "name": "dart: a test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: skip: true added to a test",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  }, skip: true);\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: skip: 'reason' added to a group",
+      "expect": ["test-skipped"],
+      "note": "Both tests of the group stop running.",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  }, skip: 'rounding is off');\n}\n"
+      }
+    },
+    {
+      "name": "dart: @Skip added to the library",
+      "expect": ["test-skipped"],
+      "note": "The whole file stops running.",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "@Skip('later')\nlibrary;\n\nimport 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: markTestSkipped added as the first statement",
+      "expect": ["test-skipped"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    markTestSkipped('flaky');\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: solo: true added to a test",
+      "expect": ["test-skipped"],
+      "note": "solo runs only that test: the file's others stop running.",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  }, solo: true);\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: an expect removed",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n    });\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: expect(cart.total, 5) replaced by expect(true, isTrue)",
+      "expect": ["assertion-removed"],
+      "note": "An assertion that cannot fail is not counted.",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(true, isTrue);\n      expect(cart.count, 2);\n    });\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {});\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: return inserted before the expects",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      return;\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: expects wrapped in if (false)",
+      "expect": ["assertion-removed"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      if (false) {\n        expect(cart.total, 5);\n        expect(cart.count, 2);\n      }\n    });\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: an // ignore: comment added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  // ignore: prefer_expression_function_bodies\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n"
+      }
+    },
+    {
+      "name": "dart: an // ignore_for_file: type=lint added",
+      "expect": ["suppression-added"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "lib/src/price.dart": "// ignore_for_file: type=lint\nint discounted(int price, int percent) => price - price * percent ~/ 100;\n"
+      }
+    },
+    {
+      "name": "dart: a whole test file deleted, its subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": null
+      }
+    },
+    {
+      "name": "dart: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100;\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: a test renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('takes ten percent off the price', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: a group renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Shopping cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: a test moved to another test file",
+      "expect": [],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n}\n",
+        "test/price_zero_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: a test file reformatted",
+      "expect": [],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test(\n    'ten percent off',\n    () {\n      expect(\n        discounted(100, 10),\n        90,\n      );\n    },\n  );\n\n  test('no discount keeps the price', () => expect(discounted(100, 0), 100));\n}\n"
+      }
+    },
+    {
+      "name": "dart: expect(x, isNotNull) turned into expect(x, equals(0))",
+      "expect": [],
+      "note": "One assertion for one, and a stricter one.",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, isNotNull);\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: a test file deleted with its subject",
+      "expect": [],
+      "note": "cart.dart, the only module of the package the tests import, is deleted in the same change.",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "lib/src/cart.dart": null,
+        "test/cart_test.dart": null
+      }
+    },
+    {
+      "name": "dart: skip: true removed",
+      "expect": [],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  }, skip: true);\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: an ignore comment in a string or a doc comment",
+      "expect": [],
+      "note": "",
+      "base": {
+        "pubspec.yaml": "name: shop\nenvironment:\n  sdk: ^3.4.0\ndev_dependencies:\n  test: ^1.25.0\n",
+        "lib/src/cart.dart": "class Cart {\n  final List<int> _items = [];\n\n  void add(int price) => _items.add(price);\n\n  int get count => _items.length;\n\n  int get total => _items.fold(0, (sum, price) => sum + price);\n}\n",
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n",
+        "test/cart_test.dart": "import 'package:shop/src/cart.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  group('Cart', () {\n    test('an empty cart totals zero', () {\n      final cart = Cart();\n      expect(cart.total, equals(0));\n    });\n\n    test('adding items sums them', () {\n      final cart = Cart()\n        ..add(2)\n        ..add(3);\n      expect(cart.total, 5);\n      expect(cart.count, 2);\n    });\n  });\n}\n",
+        "test/price_test.dart": "import 'package:shop/src/price.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('ten percent off', () {\n    expect(discounted(100, 10), 90);\n  });\n\n  test('no discount keeps the price', () {\n    expect(discounted(100, 0), 100);\n  });\n}\n"
+      },
+      "head": {
+        "lib/src/price.dart": "int discounted(int price, int percent) => price - price * percent ~/ 100;\n\n/// Do not add // ignore: comments here.\nconst lintHelp = '// ignore_for_file: type=lint';\n"
+      }
+    }
+  ]
+}
