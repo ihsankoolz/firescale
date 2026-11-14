@@ -11,10 +11,11 @@
 //!   … })` (or a suite's `s.Run("adds", func() { … })`), is a test of its
 //!   own with the id `TestX/adds`; the test around it stays one. A test is
 //!   weighed by the rows of its tables: a `for … range` loop whose body runs
-//!   a subtest with a name that is not literal, or checks something, over a
-//!   composite literal (`tests := []struct{…}{{…}, {…}}` in the same
-//!   function or the file, or written in the loop) has its rows; any
-//!   other, one.
+//!   a subtest (`t.Run(tc.name, …)`) over a composite literal (`tests :=
+//!   []struct{…}{{…}, {…}}` in the same function or the file, or written in
+//!   the loop) has its rows; any other, one. A loop that only checks
+//!   (`for _, f := range files { … t.Fatal(err) }`) is not read as a table:
+//!   it is as often setup as cases.
 //! - It is skipped when its first statement (after `t.Parallel()` and
 //!   `t.Helper()`) is `t.Skip(…)`, `t.Skipf(…)` or `t.SkipNow()` (one inside
 //!   `if testing.Short() { … }` is not: the test runs), when its body does
@@ -750,8 +751,7 @@ fn assignments<'t>(
 
 /// How many cases a test's tables stand for: the rows of each table loop
 /// in `body` (a `for … range` over a composite literal whose body runs a
-/// subtest named by the row, or checks something), else 1. Subtests with
-/// a literal name weigh their own.
+/// subtest), else 1. Subtests with a literal name weigh their own.
 fn weight(body: Node<'_>, root: Node<'_>, src: &[u8], names: &Names, suite: Option<&str>) -> usize {
     let mut rows = 0usize;
     walk(body, |node| {
@@ -775,8 +775,7 @@ fn weight(body: Node<'_>, root: Node<'_>, src: &[u8], names: &Names, suite: Opti
         let mut is_table = false;
         walk(loop_body, |inner| {
             if inner.kind() == "call_expression" {
-                is_table |= subtest(inner, src, names, suite).is_some()
-                    || assertion(inner, src, names, suite).is_some();
+                is_table |= subtest(inner, src, names, suite).is_some();
             }
             !is_table
         });
@@ -1565,8 +1564,18 @@ func TestMap(t *testing.T) {
 
 func TestShared(t *testing.T) {
 	for _, tc := range shared {
-		if Double(tc.in) != tc.want {
-			t.Fail()
+		t.Run(fmt.Sprint(tc.in), func(t *testing.T) {
+			if Double(tc.in) != tc.want {
+				t.Fail()
+			}
+		})
+	}
+}
+
+func TestChecksOnly(t *testing.T) {
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := write(name); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
@@ -1591,12 +1600,13 @@ func TestGenerated(t *testing.T) {
                 ("TestTable", false, None, 3),
                 ("TestMap", false, None, 2),
                 ("TestShared", false, None, 2),
+                ("TestChecksOnly", false, None, 1),
                 ("TestNotATable", false, None, 1),
                 ("TestGenerated", false, None, 1),
             ]
         );
         let weights: Vec<usize> = file.assertions.iter().map(|a| a.weight).collect();
-        assert_eq!(weights, [3, 2, 1, 1]);
+        assert_eq!(weights, [3, 2, 1, 1, 1]);
     }
 
     #[test]
