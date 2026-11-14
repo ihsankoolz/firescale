@@ -281,7 +281,14 @@ describe('blame-aware verify', () => {
     ];
     expect(stored.length).toBeGreaterThan(0);
     for (const file of stored) {
-      expect(await readFile(file, 'utf8'), file).not.toContain(secret);
+      // Other fscale runs share the temp folder: a record written beside
+      // and renamed, or removed when its run ends, can be gone by now, and
+      // a file that is gone holds nothing.
+      const text = await readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return '';
+        throw error;
+      });
+      expect(text, file).not.toContain(secret);
     }
     // The head's .env is untouched, and no worktree is left with a link to it.
     expect(await readFile(path.join(root, '.env'), 'utf8')).toBe(`API_KEY=${secret}\n`);
