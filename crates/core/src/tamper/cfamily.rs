@@ -3,8 +3,10 @@
 //! Test frameworks in C and C++ are macros, which tree-sitter reads as
 //! whatever they look like: `TEST(Suite, Name) { … }` as a function
 //! definition, `TEST_CASE("name") { … }` as a call missing its `;`
-//! followed by a block. Both shapes are read, and a missing `;` after a
-//! macro call (an all-caps name) is not a syntax error.
+//! followed by a block. Both shapes are read. Parse errors that cannot
+//! hide a test (a missing `;` after a macro call, `int CJSON_CDECL main`)
+//! do not stop the file being read ([`super::recover`]), and a macro alone
+//! on its line (`FMT_BEGIN_NAMESPACE`) is blanked before parsing.
 //!
 //! - **GoogleTest**: `TEST`, `TEST_F`, `TEST_P`, `TYPED_TEST`,
 //!   `TYPED_TEST_P` (and Unity Fixture's `TEST`, `IGNORE_TEST`); id

@@ -722,6 +722,25 @@ Added by the owner (refactor, and work with other languages such as Java, Rust, 
 
 ---
 
+## M32 — Tamper guard: Java, Kotlin, Swift, Dart, C, C++, C# and Go ☐
+
+Added by the owner ("go as deep as the options go" on other languages). Decisions in ADR 0052: tree-sitter readers for eight more languages, pinned grammar crates, the same detectors as ADR 0042 and 0044.
+
+**Build**
+
+- A reader per language: tests (JUnit 4 and 5, TestNG, Kotest, XCTest, Swift Testing, `package:test` and `flutter_test`, GoogleTest, Catch2, doctest, Unity, Check, CMocka, xUnit, NUnit, MSTest, Go's `testing` and testify), skips, assertions, and the suppressions of each language's linters and compilers.
+- Parse errors that cannot hide a test do not stop a file being read; bare macro lines and `#if` branches are read past.
+- The labelled corpus covers every new language; the history is measured as in M26.
+
+**Done when**
+
+- ☐ Each language's tests, skips, assertions and suppressions are read, with unit tests on fixtures (`crates/core/src/tamper/{java,kotlin,swift,dart,cfamily,csharp,go}.rs`).
+- ☐ The labelled corpus has cases for every new language, and `node bench/tamper-rates.mjs` reports 0 missed and 0 false positives.
+- ☐ Measured on real history: 1,000 commits of eight public repos, one per language, every finding labelled by a fresh subagent; rates per language with 95% intervals in `bench/RESULTS.md`.
+- ☐ The binary's size is recorded, and its growth is put to the owner.
+
+---
+
 ## Later (not ordered)
 
 - Docs site. Publishing to npm is automated from 0.1.1 on: a pushed tag `v<version>` builds, publishes with npm trusted publishing and verifies (ADR 0021, `RELEASING.md`). The tag is the owner's to push.
