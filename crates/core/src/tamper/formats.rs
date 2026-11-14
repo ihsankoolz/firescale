@@ -51,16 +51,6 @@ impl Scalar {
         }
     }
 
-    /// The value as a number: a number, or a string that is one.
-    #[must_use]
-    pub fn as_number(&self) -> Option<f64> {
-        match self {
-            Self::Num(number) => Some(*number),
-            Self::Str(text) | Self::Other(text) => text.trim().parse().ok(),
-            _ => None,
-        }
-    }
-
     /// The value as a boolean: a boolean, or a string `true`/`false` (INI
     /// and YAML write them so).
     #[must_use]
@@ -111,18 +101,6 @@ impl Entry {
             .map(String::as_str)
             .collect::<Vec<_>>()
             .join(".")
-    }
-
-    /// True when the path, without list indexes, ends with `suffix`.
-    #[must_use]
-    pub fn ends_with(&self, suffix: &[&str]) -> bool {
-        let keys: Vec<&str> = self
-            .path
-            .iter()
-            .filter(|segment| !is_index(segment))
-            .map(String::as_str)
-            .collect();
-        keys.len() >= suffix.len() && keys[keys.len() - suffix.len()..] == *suffix
     }
 }
 
@@ -1625,7 +1603,5 @@ mod tests {
             line: 1,
         };
         assert_eq!(entry.keys(), "rules.no-console");
-        assert!(entry.ends_with(&["rules", "no-console"]));
-        assert!(!entry.ends_with(&["x", "rules", "no-console"]));
     }
 }
