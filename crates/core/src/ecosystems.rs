@@ -880,6 +880,28 @@ fn c_package_manager(f: &Folder) -> Option<String> {
     }
 }
 
+/// True when a `CMakeLists.txt` adds a custom target named `lint` at its
+/// top level (the cmake pack's starter checks formatting with it, ADR
+/// 0055): `fscale verify` builds it as the lint step. One in an `if()`
+/// block may not exist when the build is configured, and building a
+/// missing target fails (found in review); names are case-sensitive, and
+/// comments and strings do not count.
+pub(crate) fn cmake_lint_target(text: &str) -> bool {
+    crate::cmake::commands(text).is_some_and(|commands| {
+        commands.iter().any(|command| {
+            command.name == "add_custom_target"
+                && command.top_level()
+                && command.args.first().is_some_and(|name| name == "lint")
+        })
+    })
+}
+
+const CLANG_FORMAT: Tool = Tool {
+    programs: &["clang-format"],
+    version_args: &["--version"],
+    install: "install clang-format (LLVM's code formatter: `apt install clang-format`, `brew install clang-format`, or LLVM's Windows installer)",
+};
+
 const CMAKE: Ecosystem = Ecosystem {
     kind: "cmake",
     marks: |f| {
@@ -921,27 +943,42 @@ const CMAKE: Ecosystem = Ecosystem {
                 test: Some(format!(
                     "{configure} && cmake --build build --config Debug && ctest --test-dir build -C Debug --output-on-failure"
                 )),
+                lint: f
+                    .text("CMakeLists.txt")
+                    .is_some_and(|text| cmake_lint_target(&text))
+                    .then(|| format!("{configure} && cmake --build build --config Debug --target lint")),
                 ..Commands::default()
             },
         }
     },
     typecheck: Missing::NotNeeded("the test step builds the code, which type-checks it"),
     lint: Missing::Skipped(
-        "no lint command was found (clang-tidy and clang-format need a file list); set verify.lint",
+        "no lint command was found (looked for a `lint` target in CMakeLists.txt; clang-tidy and clang-format need a file list); set verify.lint",
     ),
     test: Missing::Skipped("no test command was found"),
     programs: &[
         "cmake", "ctest", "ninja", "cc", "gcc", "clang", "c++", "g++", "clang++", "cl",
+        "clang-format",
     ],
-    doctor: |_| {
-        vec![
+    doctor: |f| {
+        let mut tools = vec![
             Tool {
                 programs: &["cmake"],
                 version_args: &["--version"],
                 install: "install CMake 3.20 or later from https://cmake.org/download",
             },
             C_COMPILER,
-        ]
+        ];
+        // The starter's lint target runs `cmake/lint.cmake`, which runs
+        // clang-format.
+        let lists = f.text("CMakeLists.txt").unwrap_or_default();
+        let script = f.text("cmake/lint.cmake").unwrap_or_default();
+        if cmake_lint_target(&lists)
+            && (lists.contains("clang-format") || script.contains("clang-format"))
+        {
+            tools.push(CLANG_FORMAT);
+        }
+        tools
     },
     ignored: &["build"],
 };

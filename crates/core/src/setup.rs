@@ -1407,6 +1407,11 @@ pub fn setup_problem(
                 missing_package: None,
             });
         }
+        // The cmake pack's starter, whose lint target runs clang-format
+        // (ADR 0055), says so when it is not installed.
+        if line.starts_with("clang-format was not found on the PATH") {
+            return Some(missing("clang-format"));
+        }
         // cmd: 'vitest' is not recognized as an internal or external command
         if let Some(index) = line.find(" is not recognized as an internal or external command") {
             if let Some(name) = name_after(line, 0).filter(|_| index > 0) {
@@ -1587,6 +1592,23 @@ mod tests {
             reason(collection, 2),
             "the Python module 'jwt' is not installed"
         );
+    }
+
+    // ADR 0055: the cmake starter's lint target without clang-format.
+    #[test]
+    fn the_cmake_starter_without_clang_format_is_a_setup_problem() {
+        let output = "clang-format was not found on the PATH; install it to run the lint target\ngmake[3]: *** [CMakeFiles/lint.dir/build.make:71: CMakeFiles/lint] Error 1\ngmake: *** [Makefile:174: lint] Error 2\n";
+        let p = problem(output, 2).unwrap();
+        assert_eq!(p.missing_program.as_deref(), Some("clang-format"));
+        // As `cmake -P` prints it from cmake/lint.cmake.
+        let script = "-- Configuring done (0.2s)\nCMake Error at /p/cmake/lint.cmake:7 (message):\n  clang-format was not found on the PATH; install it to run the lint target\n\n\ngmake[3]: *** [CMakeFiles/lint.dir/build.make:70: CMakeFiles/lint] Error 1\n";
+        let p = problem(script, 2).unwrap();
+        assert_eq!(p.missing_program.as_deref(), Some("clang-format"));
+        assert!(problem(
+            "error: code should be clang-formatted [-Wclang-format-violations]\n",
+            2
+        )
+        .is_none());
     }
 
     #[test]

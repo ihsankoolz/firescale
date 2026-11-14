@@ -42,6 +42,14 @@ M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull requ
 - Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
 - Test by hand: the starter on a device or simulator (`npx expo start`), and `npx expo-doctor` with the network.
 
+## M35 — Stack pack: C/C++ with CMake
+
+**Built** (ADR 0055, `docs/rules.md`): five rules; `fscale init --packs core,cmake` writes a `CMakeLists.txt` (CMake 3.20, C++20, warnings on, a `lint` target running clang-format), a greeting library, the program, its test and `.clang-format` (Google style); an existing project gets a root `enable_testing()` where its tests would otherwise never run, and an old minimum version (which CMake 4 refuses below 3.5), a missing C++ standard or a missing test is named for a person or an agent. `fscale facts` and `verify` now take a CMake `lint` target as the lint step.
+
+**Decided on your behalf** (ADR 0055): the starter's test is a plain program, not GoogleTest or Catch2 (fetching one needs the network on every fresh build); lint is clang-format through a CMake target, since `verify` runs one command on every system; nothing in an existing `CMakeLists.txt` is changed but adding `enable_testing()`; C or C++ code built another way (Make, Autotools, Meson, Visual Studio, Bazel) is never given a `CMakeLists.txt`.
+
+**Proof:** the starter configured, built, tested, ran and linted here with CMake 3.28 and 4.4 (GCC 13; Clang 18 with Ninja), and `fscale verify` was OK on every step; 23 real projects were checked, with 15 clean and every finding on the others confirmed (rapidjson's `example/` really stops CMake 4.4); zlib and curl were wrongly asked for a C++ standard in the first pass and are not now; a fresh review found the `enable_testing()` fix could write inside a comment, vendored test frameworks hid missing tests, and a conditional `lint` target failed `verify` for any CMake project, all fixed (ADR 0055 "After the review").
+
 ## M34 — Stack pack: Java with Maven
 
 **Built** (ADR 0054, `docs/rules.md`): four rules; `fscale init --packs core,maven` writes a `pom.xml` (Java 21, JUnit 6, Checkstyle with Google's rules), `App.java` and `AppTest.java`; an existing POM gets its source encoding, and a missing Java version or test is named for a person or an agent.
