@@ -788,7 +788,12 @@ pub fn guard_at(
         // happens (a type test fails when the error goes away): it is a
         // check, not a suppression (ADR 0046, found on real history).
         let type_test = is_test_path(&file.path) || policy.names_test(&file.path);
-        let counted = |found: &Suppression| !(type_test && found.text.contains("@ts-expect-error"));
+        let counted = |found: &Suppression| {
+            let directive = found.text.trim_start_matches(['/', '*', ' ', '{']);
+            !(type_test
+                && matches!(file.language, Language::Js(_))
+                && directive.starts_with("@ts-expect-error"))
+        };
         if let Some(text) = &file.base {
             for found in suppressions(text, file.language)
                 .into_iter()
@@ -1158,7 +1163,16 @@ pub fn guard_at(
         .map(|skip| skip.weight)
         .sum();
     let added_tests = counts.head_tests.saturating_sub(counts.base_tests);
-    let excused_skips = new_skipped.min(added_tests);
+    // Only while no test of the base went away: a test renamed and skipped
+    // has a new id too, and must not pass for a new test (found in review).
+    let gone_any = base_ids
+        .iter()
+        .any(|(id, _, _)| !head_ids.contains_key(id.as_str()));
+    let excused_skips = if gone_any {
+        0
+    } else {
+        new_skipped.min(added_tests)
+    };
     // Tests the base had, run there, and skipped now (less those the base
     // skipped and the change runs again) are counted on their own, so a new
     // skipped test cannot hide an old one made to not run.
@@ -1302,7 +1316,16 @@ pub fn guard_at(
             _ => None,
         })
         .collect();
-    let copied_from_base = |path: &str, line: usize| -> bool {
+    let mut copy_checks = 0usize;
+    let mut copied_from_base = |path: &str, line: usize, key: &str| -> bool {
+        // A file-wide or module-wide suppression covers new code wherever it
+        // is copied: never excused (found in review). And at most 50 lines
+        // are looked up per change, so a file of many suppressions cannot
+        // make the guard slow.
+        if reach_rank(key) > 0 || copy_checks >= 50 {
+            return false;
+        }
+        copy_checks += 1;
         let Some(text) = new_files.get(path) else {
             return false;
         };
@@ -1330,18 +1353,30 @@ pub fn guard_at(
         if source.len() < 12 && next.is_none() {
             return false;
         }
+        // Files of the same kind only (a code block in a README is not code).
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let pathspec = format!("*.{extension}");
         let Ok(out) = run_git(
             root,
-            &["grep", "-l", "-F", "-e", source, &base.commit, "--"],
+            &[
+                "grep",
+                "-l",
+                "-F",
+                "-e",
+                source,
+                &base.commit,
+                "--",
+                &pathspec,
+            ],
         ) else {
             return false;
         };
         if out.code != 0 {
             return false;
         }
-        let Some(next) = next else {
-            return true;
-        };
         let prefix = format!("{}:", base.commit);
         let candidates: Vec<String> = out
             .stdout
@@ -1359,9 +1394,13 @@ pub fn guard_at(
                     .map(str::trim)
                     .filter(|l| !l.is_empty())
                     .collect();
-                base_lines
-                    .windows(2)
-                    .any(|pair| pair[0] == source && pair[1] == next)
+                match next {
+                    Some(next) => base_lines
+                        .windows(2)
+                        .any(|pair| pair[0] == source && pair[1] == next),
+                    // The whole line, not a part of a longer one.
+                    None => base_lines.contains(&source),
+                }
             })
     };
     let mut left = base_texts;
@@ -1400,7 +1439,7 @@ pub fn guard_at(
         // In a new file, a line that the base holds word for word elsewhere
         // is a copy of code that keeps its suppression (a file split off,
         // an adapter copied): not a new one (ADR 0046, real history).
-        if copied_from_base(path, found.line) {
+        if copied_from_base(path, found.line, &found.key) {
             continue;
         }
         findings.push(Finding {
@@ -1480,8 +1519,33 @@ fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Find
             .map(|test| test.id.clone())
             .unwrap_or_default()
     };
-    let gone_ids: Vec<String> = gone.iter().map(|a| test_of(before, a)).collect();
-    let new_ids: Vec<String> = new.iter().map(|a| test_of(after, a)).collect();
+    // A test renamed with its value changed: an assertion of a test that is
+    // gone may pair with one of a test that is new (found in review).
+    let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
+    let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
+    const RENAMED: &str = "\u{0}renamed";
+    let gone_ids: Vec<String> = gone
+        .iter()
+        .map(|a| {
+            let id = test_of(before, a);
+            if !id.is_empty() && !after_ids.contains(id.as_str()) {
+                RENAMED.to_owned()
+            } else {
+                id
+            }
+        })
+        .collect();
+    let new_ids: Vec<String> = new
+        .iter()
+        .map(|a| {
+            let id = test_of(after, a);
+            if !id.is_empty() && !before_ids.contains(id.as_str()) {
+                RENAMED.to_owned()
+            } else {
+                id
+            }
+        })
+        .collect();
     let gone_shapes: Vec<(&str, &str)> = gone
         .iter()
         .zip(&gone_ids)

@@ -2947,6 +2947,80 @@
       "head": {
         "src/lib.rs": "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[cfg(unix)]\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3);\n    }\n\n    #[cfg(windows)]\n    #[test]\n    fn adds_on_windows() {\n        assert_eq!(add(2, 2), 4);\n    }\n}\n"
       }
+    },
+    {
+      "name": "ts: a file-wide eslint-disable copied into a new file",
+      "expect": ["suppression-added"],
+      "note": "Its two first lines are in a file the base keeps, but a file-wide disable covers new code. Found in review (ADR 0046).",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/legacy.ts": "/* eslint-disable */\nimport { add } from \"./math\";\n\nexport const two = add(1, 1);\n"
+      },
+      "head": {
+        "src/new.ts": "/* eslint-disable */\nimport { add } from \"./math\";\n\nexport const run = (code: any) => eval(code) + add(1, 1);\n"
+      }
+    },
+    {
+      "name": "ts: a @ts-ignore that mentions @ts-expect-error in a test file",
+      "expect": ["suppression-added"],
+      "note": "Found in review.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit(\"adds two numbers\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit(\"adds two numbers\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\n// @ts-ignore not @ts-expect-error\nadd(\"1\", 2);\n"
+      }
+    },
+    {
+      "name": "ts: a test renamed and skipped while another test is added",
+      "expect": ["test-skipped"],
+      "note": "A base test went away, so the new skipped test may be it. Found in review.",
+      "base": {
+        "src/math.ts": "export const add = (a: number, b: number): number => a + b;\n",
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit(\"adds two numbers\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+      },
+      "head": {
+        "src/math.test.ts": "import { add } from \"./math\";\n\nit.skip(\"adds two numbers together\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\nit(\"is defined\", () => {\n  expect(add).toBeDefined();\n});\n"
+      }
+    },
+    {
+      "name": "appr: a test renamed with its expected value changed",
+      "expect": ["expected-changed"],
+      "note": "Found in review.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"sums the items\", () => {\n  expect(total([10, 20])).toBe(31);\n});\n"
+      }
+    },
+    {
+      "name": "appr: a snapshot renamed with a new body",
+      "expect": ["snapshot-changed"],
+      "note": "Found in review.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders the total 1`] = `\"31\"`;\n\n"
+      }
+    },
+    {
+      "name": "appr: an indented jest snapshot rewritten",
+      "expect": ["snapshot-changed"],
+      "note": "Jest evaluates the file as JavaScript, indentation and all. Found in review.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20])).toBe(30);\n});\n",
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\nexports[`renders 1`] = `\"30\"`;\n\n"
+      },
+      "head": {
+        "src/__snapshots__/cart.test.ts.snap": "// Jest Snapshot v1\n\n exports[`renders 1`] = `\"31\"`;\n\n"
+      }
     }
   ]
 }

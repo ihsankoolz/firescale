@@ -46,14 +46,10 @@ pub fn snapshots(path: &str, text: &str) -> Vec<Snapshot> {
                 .map(|name| (name.to_owned(), String::new()))
         });
     }
-    if text.contains("\nexports[`") || text.starts_with("exports[`") {
+    // Indentation and the quote style do not change what Jest reads.
+    if text.lines().any(|line| exports_name(line).is_some()) {
         // Jest and Vitest: exports[`name`] = `body`;
-        return split_at(&text, |line| {
-            let rest = line.strip_prefix("exports[`")?;
-            let end = rest.find("`]")?;
-            // The body starts on the header line: exports[`a 1`] = `body`;
-            Some((rest[..end].to_owned(), rest[end + 2..].to_owned()))
-        });
+        return split_at(&text, exports_name);
     }
     // insta: one snapshot per file, a `---` header, then the body.
     let body = match text.strip_prefix("---\n") {
@@ -70,6 +66,19 @@ pub fn snapshots(path: &str, text: &str) -> Vec<Snapshot> {
         line: 1,
         body: body.trim_end().to_owned(),
     }]
+}
+
+/// `exports[`name`] = …` (any quote, any indentation): the name, and what
+/// follows on the line (a body may start there).
+fn exports_name(line: &str) -> Option<(String, String)> {
+    let rest = line.trim_start().strip_prefix("exports[")?;
+    let quote = rest
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '`' | '"' | '\''))?;
+    let rest = &rest[1..];
+    let end = rest.find(&format!("{quote}]"))?;
+    Some((rest[..end].to_owned(), rest[end + 2..].to_owned()))
 }
 
 fn split_at(text: &str, name_of: impl Fn(&str) -> Option<(String, String)>) -> Vec<Snapshot> {
@@ -107,11 +116,34 @@ pub fn rewritten(path: &str, base: &str, head: &str) -> Vec<(String, usize)> {
         .into_iter()
         .map(|s| (s.name, s.body))
         .collect();
-    snapshots(path, head)
-        .into_iter()
-        .filter(|s| before.get(&s.name).is_some_and(|body| *body != s.body))
-        .map(|s| (s.name, s.line))
-        .collect()
+    let after = snapshots(path, head);
+    let after_names: std::collections::BTreeSet<&str> =
+        after.iter().map(|s| s.name.as_str()).collect();
+    // Snapshots of renamed tests: those gone, paired in order with those
+    // new; one whose body differs was rewritten too (found in review).
+    let mut gone: Vec<&String> = before
+        .iter()
+        .filter(|(name, _)| !after_names.contains(name.as_str()))
+        .map(|(_, body)| body)
+        .collect();
+    gone.reverse();
+    let mut out = Vec::new();
+    for snapshot in &after {
+        match before.get(&snapshot.name) {
+            Some(body) if *body != snapshot.body => {
+                out.push((snapshot.name.clone(), snapshot.line))
+            }
+            Some(_) => {}
+            None => {
+                if let Some(body) = gone.pop() {
+                    if *body != snapshot.body {
+                        out.push((snapshot.name.clone(), snapshot.line));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// An assertion's shape with every string and number literal replaced by
@@ -348,13 +380,27 @@ mod tests {
         let path = "src/__snapshots__/cart.test.ts.snap";
         let base = "exports[`a 1`] = `1`;\n\nexports[`b 1`] = `2`;\n";
         assert!(rewritten(path, base, base).is_empty());
-        // Added and removed snapshots are not rewritten ones.
+        // An added snapshot is not a rewritten one, nor is a removed one.
+        let added = format!("{base}exports[`c 1`] = `3`;\n");
+        assert!(rewritten(path, base, &added).is_empty());
+        assert!(rewritten(path, base, "exports[`a 1`] = `1`;\n").is_empty());
+        // One removed and one added in the same change read as a test
+        // renamed: the same body is a rename, another body a rewrite (ADR
+        // 0046, after the review: renaming the test hid a rewritten value).
         assert!(rewritten(
             path,
             base,
-            "exports[`a 1`] = `1`;\n\nexports[`c 1`] = `3`;\n"
+            "exports[`a 1`] = `1`;\n\nexports[`c 1`] = `2`;\n"
         )
         .is_empty());
+        assert_eq!(
+            rewritten(
+                path,
+                base,
+                "exports[`a 1`] = `1`;\n\nexports[`c 1`] = `3`;\n"
+            ),
+            [("c 1".to_owned(), 3)]
+        );
         assert_eq!(
             rewritten(
                 path,

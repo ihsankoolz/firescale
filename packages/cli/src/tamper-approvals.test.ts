@@ -203,6 +203,13 @@ describe.each([
     expect(local.code).toBe(EXIT_USAGE);
   });
 
+  it('blocks in the pull_request_target run when no reviews were read at all', async () => {
+    const run = await pullRequest(change);
+    const result = await runCli(['tamper', '--json', '--pr-base'], run.root, run.env);
+    expect(result.code, result.stderr).toBe(EXIT_VIOLATIONS);
+    expect((JSON.parse(result.stdout) as Report).approvals).toEqual({ head: run.head, by: [] });
+  });
+
   it('is reported, not blocking, where the change runs, since nothing can approve there', async () => {
     const run = await pullRequest(change);
     await git(run.root, 'checkout', '--quiet', 'change');

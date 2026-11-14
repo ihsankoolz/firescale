@@ -1338,6 +1338,20 @@ fn tamper_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> 
         })?,
     };
     let mut report = tamper::guard_at(root, &base, &head, &changed);
+    // In a pull_request_target run a change that needs approval blocks
+    // until one is read: no `--approvals` means none (found in review).
+    if args.pr_base
+        && approvals.is_none()
+        && env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request_target")
+    {
+        if let tamper::Head::Commit(_) = &head {
+            let pr = tamper::github::pull_request(root, &|name| env::var(name).ok())?;
+            approvals = Some(tamper::Approvals {
+                head: pr.head,
+                by: Vec::new(),
+            });
+        }
+    }
     report.approvals = approvals;
     let code = if report.blocks() {
         EXIT_VIOLATIONS
