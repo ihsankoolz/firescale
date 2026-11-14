@@ -2,6 +2,46 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## Review of the long run
+
+M25 to M30, built between 2026-11-14 00:59 and 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
+
+**M25, tamper guard: config and CI** ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045)
+
+- Built: config and CI detectors (coverage, lint config, CI steps, `--no-verify`); `fscale tamper --pr-base` reads the base from GitHub's event; a separate `tamper-guard.yml` on `pull_request_target`.
+- Decide: whether `pull_request_target` in generated repos is acceptable (against ADR 0041); making `tamper-guard` a required check and `verify.tamper` "enforced".
+- Test by hand: the workflow on a real pull request once a release with `fscale tamper` is published (0.4.0 on npm has none).
+
+**M26, tamper guard: approvals and measured rates** ([#38](https://github.com/ihsankoolz/firescale/pull/38), ADR 0046)
+
+- Built: snapshot and expected-value changes need an approving GitHub review of the head commit; rates measured on 1,200 public commits (false findings 36.3% → 20.5%) and a held-out cheat corpus (42 of 98 missed).
+- Decide: a solo owner cannot approve their own pull request; `COLLABORATOR` counts as write access; which missed cheat kinds deserve detectors.
+- Test by hand: an approval on a real pull request with a changed snapshot, in the `Tamper guard` run.
+
+**M27, guarded agent runner** ([#39](https://github.com/ihsankoolz/firescale/pull/39), ADR 0047)
+
+- Built: `fscale fix --agent` with the ten guardrails of SPEC §7, a worktree per run, never a push, tag or publish, a ledger with codes and counts only; tested with a stand-in agent.
+- Decide: nothing new beyond the limits listed in ADR 0047 (detached processes outlive a run; `info/exclude` and reflogs are not compared).
+- Test by hand: nothing separately; it is exercised by M28's manual check.
+
+**M28, agent adapters and `fscale ledger`** ([#40](https://github.com/ihsankoolz/firescale/pull/40), ADR 0048)
+
+- Built: Claude Code and Codex adapters (flags from docs, source and `claude --help`; unverified items printed in every run), shipped in the npm package; `fscale ledger [--json]`.
+- Decide: Codex runs cannot be told what not to read or run (refused where the repo denies anything, warned otherwise); Claude Code's `--restricted` ignores your user-level rules; Windows needs the agents as `.exe`. One real `claude -p` ran by accident through a test, now fixed.
+- Test by hand: ADR 0048 "Manual checks": a real `fscale fix --agent claude` and `--agent codex` on a scratch repo, the JSON result fields, Codex's sandbox flags, Windows.
+
+**M29, Supabase pack** ([#41](https://github.com/ihsankoolz/firescale/pull/41), ADR 0049)
+
+- Built: eight rules from the CLI 3.1.0 source and docs, checked against the CLI itself; the starter installs, and the CLI loads its config and makes migrations.
+- Decide: RLS left to an agent rather than fixed; exact pins; Edge Functions and `seed.sql` left out.
+- Test by hand: `npx supabase start && npx supabase test db` in a folder made by `fscale init --packs core,supabase` (needs Docker; the pgTAP test has never run).
+
+**M30, Expo pack** (pull request below, ADR 0050)
+
+- Built: seven rules from Expo's SDK 58 template and CLI; the starter installs, typechecks, lints and bundles for Android offline.
+- Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
+- Test by hand: the starter on a device or simulator (`npx expo start`), and `npx expo-doctor` with the network.
+
 ## CI owed
 
 Nothing is owed. The last open item, M6's npm install test on Windows, passed on 2026-11-11 in the CI run you started by hand on `main` (run 42, commit `9190058`): all ten jobs were green, the checks on Linux, macOS and Windows, the three benchmark jobs and the three npm install jobs.
