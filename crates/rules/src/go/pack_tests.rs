@@ -97,3 +97,49 @@ fn every_rule_reads_what_decides_where_the_pack_applies() {
         }
     }
 }
+
+// Found on a real repo (microservices-demo): its modules are in src/*.
+#[test]
+fn modules_in_subfolders_get_one_finding_and_nothing_written() {
+    let f = fixture(&[
+        (
+            "src/frontend/go.mod",
+            "module frontend\n\ngo 1.26.0\n".to_owned(),
+        ),
+        (
+            "src/frontend/main.go",
+            "package main\n\nfunc main() {}\n".to_owned(),
+        ),
+        (
+            "src/checkout/go.mod",
+            "module checkout\n\ngo 1.26.0\n".to_owned(),
+        ),
+    ]);
+    let found = findings(&f);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].fixable, Fixable::Manual);
+    assert!(
+        found[0].message.contains("src/checkout, src/frontend"),
+        "{}",
+        found[0].message
+    );
+    assert_eq!(fix_all(&f), Vec::<String>::new());
+}
+
+// Found on a real repo (gin): doc.go shows `package main` in a comment.
+#[test]
+fn a_package_main_in_a_doc_comment_is_not_a_program() {
+    let f = fixture(&[
+        (
+            "go.mod",
+            "module github.com/acme/web\n\ngo 1.26.0\n".to_owned(),
+        ),
+        (
+            "doc.go",
+            "/*\nPackage web serves.\n\n\tpackage main\n*/\npackage web\n".to_owned(),
+        ),
+        ("web_test.go", "package web\n".to_owned()),
+    ]);
+    fix_all(&f);
+    assert!(!f.read(".gitignore").unwrap_or_default().contains("/web"));
+}

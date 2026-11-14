@@ -58,16 +58,70 @@ const OTHER_MANIFESTS: [&str; 10] = [
 ];
 
 /// True when the pack applies to the repo root: it has a `go.mod`, or it
-/// has no manifest of another stack (a new module). A repo whose Go module
-/// is in a subfolder is not checked (ADR 0053).
+/// has no Go module anywhere and no manifest of another stack (a new
+/// module). A repo whose modules are in subfolders gets nothing written:
+/// `go/go-mod` names them (ADR 0053, found on a real repo).
 pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
-    Ok(any_exists(ctx, &["go.mod"]) || !any_exists(ctx, &OTHER_MANIFESTS))
+    if any_exists(ctx, &["go.mod"]) {
+        return Ok(true);
+    }
+    Ok(!any_exists(ctx, &OTHER_MANIFESTS) && modules_below(ctx)?.is_empty())
+}
+
+/// The folders below the root that hold a `go.mod`, as the go tool sees
+/// them (not in `testdata`, `vendor`, or folders starting with `.` or `_`).
+pub(crate) fn modules_below(ctx: &RuleContext) -> Result<Vec<String>> {
+    Ok(firescale_core::walk::walk_files(ctx.root())?
+        .into_iter()
+        .filter_map(|path| path.strip_suffix("/go.mod").map(str::to_owned))
+        .filter(|folder| {
+            folder
+                .split('/')
+                .all(|part| !part.starts_with(['.', '_']) && !matches!(part, "testdata" | "vendor"))
+        })
+        .collect())
+}
+
+/// The package a Go file declares: its first line of code, after comments,
+/// blank lines and build constraints. A `package main` in a doc comment's
+/// example is not it (found on a real repo: gin's doc.go).
+#[must_use]
+pub fn package_name(source: &str) -> Option<&str> {
+    let mut in_block = false;
+    for line in source.lines() {
+        let mut line = line.trim();
+        if in_block {
+            let Some(end) = line.find("*/") else {
+                continue;
+            };
+            in_block = false;
+            line = line[end + 2..].trim();
+        }
+        while let Some(rest) = line.strip_prefix("/*") {
+            match rest.find("*/") {
+                Some(end) => line = rest[end + 2..].trim(),
+                None => {
+                    in_block = true;
+                    line = "";
+                }
+            }
+        }
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        return line
+            .strip_prefix("package")
+            .filter(|rest| rest.starts_with([' ', '\t']))
+            .map(|rest| rest.split("//").next().unwrap_or_default().trim())
+            .filter(|name| !name.is_empty());
+    }
+    None
 }
 
 /// What every rule of the pack reads besides its own files, for the cache.
 pub(crate) fn inputs(own: &[&str]) -> Vec<String> {
     let mut all: Vec<String> = own.iter().map(|s| (*s).to_owned()).collect();
-    for shared in std::iter::once("go.mod").chain(OTHER_MANIFESTS) {
+    for shared in ["go.mod", "**/go.mod"].into_iter().chain(OTHER_MANIFESTS) {
         if !all.iter().any(|a| a == shared) {
             all.push(shared.to_owned());
         }
@@ -158,5 +212,23 @@ mod unit {
         assert_eq!(program_name("github.com/acme/tool/v2"), "tool");
         assert_eq!(program_name("hello"), "hello");
         assert_eq!(program_name("example.com/v"), "v");
+    }
+
+    #[test]
+    fn the_package_clause_is_the_first_line_of_code() {
+        assert_eq!(
+            package_name("// Command app.\npackage main\n"),
+            Some("main")
+        );
+        assert_eq!(
+            package_name("//go:build linux\n\npackage calc // why\n"),
+            Some("calc")
+        );
+        assert_eq!(
+            package_name("/*\nPackage gin is a framework.\n\n\tpackage main\n*/\npackage gin\n"),
+            Some("gin")
+        );
+        assert_eq!(package_name("/* one line */ package x\n"), Some("x"));
+        assert_eq!(package_name("func f() {}\n"), None);
     }
 }

@@ -8,7 +8,7 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{applies, finding, go_files, module_path, program_name, MODULE};
+use super::{applies, finding, go_files, module_path, package_name, program_name, MODULE};
 use crate::core::gitignore_basics::is_covered;
 
 #[cfg(test)]
@@ -49,7 +49,7 @@ fn root_program(ctx: &RuleContext) -> Result<Option<String>> {
                 ctx.read(file)
                     .ok()
                     .flatten()
-                    .is_some_and(|text| text.lines().any(|line| line.trim() == "package main"))
+                    .is_some_and(|text| package_name(&text) == Some("main"))
             });
     if !main_at_root {
         return Ok(None);

@@ -7,7 +7,7 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{applies, create, finding, module_path, GO_VERSION, MODULE};
+use super::{any_exists, applies, create, finding, module_path, modules_below, GO_VERSION, MODULE};
 
 #[cfg(test)]
 mod tests;
@@ -50,6 +50,20 @@ impl BuiltinRule for GoMod {
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
         if !applies(ctx)? {
+            // Modules in subfolders: said once, nothing written.
+            if !any_exists(ctx, &["go.mod"]) {
+                let below = modules_below(ctx)?;
+                if !below.is_empty() {
+                    return Ok(vec![finding(
+                        &format!("{}/go.mod", below[0]),
+                        format!(
+                            "The go pack checks a Go module at the repo root, and this repo's modules are in {}. Nothing is checked or written; move the module to the root, or turn the pack off.",
+                            below.join(", ")
+                        ),
+                        Fixable::Manual,
+                    )]);
+                }
+            }
             return Ok(Vec::new());
         }
         let Some(text) = ctx.read("go.mod")? else {
