@@ -50,9 +50,12 @@ async function main(argv: string[]): Promise<number> {
     const version = await run(adapter.program, adapter.versionArgs, process.cwd(), '');
     if (version.code !== 0) return 127;
     const line = version.stdout.trim().split('\n')[0] ?? '';
-    const unverified =
-      adapter.unverified.length > 0 ? `; unverified: ${adapter.unverified.join('; ')}` : '';
-    process.stdout.write(`${adapter.name} ${line} (firescale adapter${unverified})\n`);
+    // `fscale fix --agent` prints this under "Agent:", so what was not
+    // confirmed from the agent itself is in every run's output.
+    const unverified = adapter.unverified.map(
+      (item) => `unverified (ADR 0048, check by hand): ${item}\n`,
+    );
+    process.stdout.write(`${adapter.name} ${line}\n${unverified.join('')}`);
     return 0;
   }
   if (rest.length === 2 && rest[0] === 'auth' && rest[1] === 'status') {

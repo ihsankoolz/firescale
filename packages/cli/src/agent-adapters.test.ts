@@ -138,6 +138,9 @@ describe('fscale fix --agent claude', () => {
     });
     const result = await runCli(['fix', '--agent', 'claude', '--rule', RULE], root, env);
     expect(result.code, result.stderr + result.stdout).toBe(EXIT_OK);
+    // What was not confirmed from Claude Code itself is in the output.
+    expect(result.stdout).toContain('Agent: claude 9.9.9 (stand-in)');
+    expect(result.stdout).toContain('unverified (ADR 0048, check by hand): the fields');
 
     const logged = await calls();
     expect(logged.map((call) => call.args[0])).toEqual(['--version', 'auth', '-p']);
@@ -265,8 +268,8 @@ describe('the adapter protocol entry point', () => {
         error ? reject(error) : resolve(out),
       );
     });
-    expect(stdout).toContain('codex 9.9.9 (stand-in)');
-    expect(stdout).toContain('unverified: `--sandbox workspace-write`');
+    expect(stdout).toContain('codex 9.9.9 (stand-in)\n');
+    expect(stdout).toContain('unverified (ADR 0048, check by hand): `--sandbox workspace-write`');
   });
 });
 
