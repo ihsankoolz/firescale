@@ -73,7 +73,9 @@ Exit code 0 when the run passed (or there was nothing to fix), 1 when it failed,
 The adapters are TypeScript (`packages/agents`, shipped in the `firescale` npm package as `agents/`), started with Node (`FSCALE_NODE`; `FSCALE_AGENTS` points at another `cli.js`). Where each flag was confirmed, and what was not, is in ADR 0048. **Unverified** (printed under `Agent:` in every run's output too):
 
 - `claude`: the fields of the JSON result of `claude -p --output-format json` (`total_cost_usd`, `num_turns`, `is_error`, `subtype`). The docs list them for the SDK's result message. If they differ, a run that worked reads as failed, and its cost is missing.
-- `codex`: `--sandbox workspace-write` and `-c sandbox_workspace_write.network_access=false` (Codex's documentation could not be reached; its shared options were not read). Codex has no flags for tool lists, denied paths, turns or spend: the diff guard, the re-check and the time limit are what hold a Codex run.
+- `codex`: `--sandbox workspace-write` and `-c sandbox_workspace_write.network_access=false` (Codex's documentation could not be reached; its shared options were not read).
+
+**Codex cannot be limited like Claude Code.** `codex exec` takes no list of tools, commands or paths to deny, and it runs shell commands and reads files as its sandbox allows, your untracked `.env` files included. So `--agent codex` is refused in a repo whose own agent settings deny anything, and every Codex run prints a warning. The diff guard, the re-check and the time limit still hold what it writes.
 
 What to check by hand before you trust a real agent: see "Manual checks" in ADR 0048.
 

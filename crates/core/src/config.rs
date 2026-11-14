@@ -693,7 +693,7 @@ fn check_agent(name: &str, value: Option<&Value>) -> Result<()> {
     for (key, value) in object {
         let ok = match key.as_str() {
             "maxTurns" | "timeoutSeconds" => value.as_u64().is_some_and(|n| n >= 1),
-            "maxCostUsd" => value.as_f64().is_some_and(|n| n >= 0.0),
+            "maxCostUsd" => value.as_f64().is_some_and(|n| n > 0.0 && n.is_finite()),
             other => {
                 return Err(Error::user(format!(
                     "{name}: unknown key \"{other}\" in agent. Allowed keys: maxTurns, maxCostUsd, timeoutSeconds."
@@ -704,7 +704,7 @@ fn check_agent(name: &str, value: Option<&Value>) -> Result<()> {
             return Err(Error::user(format!(
                 "{name}: agent.{key} must be {}.",
                 if key == "maxCostUsd" {
-                    "a number of 0 or more"
+                    "a number above 0 (an agent given no budget cannot run)"
                 } else {
                     "a whole number of 1 or more"
                 }
@@ -846,7 +846,12 @@ mod tests {
             ),
             (
                 json!({ "maxCostUsd": -1 }),
-                "agent.maxCostUsd must be a number of 0 or more",
+                "agent.maxCostUsd must be a number above 0",
+            ),
+            // Claude Code refuses a budget of 0 (review of M28).
+            (
+                json!({ "maxCostUsd": 0 }),
+                "agent.maxCostUsd must be a number above 0",
             ),
             (json!({ "model": "x" }), "unknown key \"model\" in agent"),
         ] {

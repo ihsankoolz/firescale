@@ -40,12 +40,13 @@ export const claude: Adapter = {
   invocation(request: Request): Invocation {
     const { policy } = request;
     // A command is denied with and without arguments (`Bash(git push)`,
-    // `Bash(git push *)`); a rule the repo wrote (`Bash(curl *)`, `Write`)
-    // is passed as it is. A Read deny keeps Grep and Glob out too, and an
+    // `Bash(git push *)`); a rule the repo wrote (`Bash(curl *)`, `Write`,
+    // `mcp__server__tool`) is passed as it is: only words with a space
+    // are commands. A Read deny keeps Grep and Glob out too, and an
     // Edit deny covers every tool that edits files.
     const denied = [
       ...policy.deniedCommands.flatMap((command) =>
-        command.includes('(') || /^[A-Z][A-Za-z]*$/.test(command)
+        command.includes('(') || /^[A-Za-z][A-Za-z0-9_]*$/.test(command)
           ? [command]
           : [`Bash(${command})`, `Bash(${command} *)`],
       ),

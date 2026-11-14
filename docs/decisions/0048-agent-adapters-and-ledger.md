@@ -48,7 +48,13 @@ Codex's documentation site could not be reached from the build environment. Conf
 
 The run: `codex exec --json --ephemeral --ignore-user-config --skip-git-repo-check --sandbox workspace-write -c sandbox_workspace_write.network_access=false -`. Turns are counted from `turn.completed`; a `turn.failed` or `error` event, or a non-zero exit, fails the run. No cost is reported, so a Codex line in the ledger has none, and `fscale ledger` says so (`-`).
 
-**Unverified**: `--sandbox workspace-write` and the `-c` key, which live in Codex's shared options that were not read. If wrong, Codex exits with a usage error and the run fails (safe). And: `codex exec` has no flags for a tool list, denied paths, turns or spend. Those parts of the policy cannot be passed on; the diff guard, the re-check, the tamper guard and the time limit hold a Codex run. This is said in the docs.
+**Unverified**: `--sandbox workspace-write` and the `-c` key, which live in Codex's shared options that were not read. A wrong flag stops Codex with a usage error and the run fails; a wrong `-c` key may be ignored without a word, leaving the network on.
+
+**Not enforceable with Codex** (review of M28): `codex exec` takes no list of tools, commands or paths to deny, and its sandbox runs shell commands without asking and does not limit reads. So a Codex run can read files the policy denies (your untracked `.env` in the checkout the worktree points at included) and send them to the model, and can run commands the policy denies; the diff guard only sees what it writes. Therefore:
+
+- **A repo whose own agent settings deny anything** (`.claude/settings*.json` `deny` or `ask` rules) **refuses `--agent codex`**, naming the rules: a Codex run would be wider than they allow.
+- **Every Codex run prints a warning** in its output, that its reads and commands are not limited.
+- The guardrails that rely on "the policy denies the shell" (ADR 0047's push guard and detached processes) do not hold for Codex.
 
 The unverified items are printed under `Agent:` in the output of every `fscale fix --agent` run, from the adapter's `--version` answer, and listed in docs/fix.md.
 
@@ -70,11 +76,27 @@ On a machine with each agent installed and signed in, in a scratch repo with one
 2. **Claude Code limits**: in the same repo, set `agent.maxTurns` to 1 and run again; expect a failed run (`agent-error` or `over-budget`). Add `.claude/settings.json` with a `hooks` entry that writes a file; expect the file not to appear (hooks off).
 3. **Codex**: `fscale fix --agent codex --rule core/env-example`. If Codex rejects `--sandbox workspace-write` or the `-c` key, the run fails with `agent-error`: check `codex exec --help` and send the right spelling.
 4. **Codex sandbox**: confirm from Codex's docs that `workspace-write` with network off is what `exec` uses, and that `--ignore-user-config` keeps MCP servers out.
-5. **Windows**: a `claude` or `codex` installed by npm is a `.cmd` file, which Node does not start without a shell. The adapters start the program by name, so they need the `.exe` (Claude Code's native installer). Confirm, or tell me to add a `.cmd` path.
+5. **Windows**: a `claude` or `codex` installed by npm is a `.cmd` file, which Node does not start without a shell. The adapters start the program by name, so they need the `.exe` (Claude Code's native installer); with only a `.cmd` on the PATH, the pre-flight says so by name. Confirm, or tell me to start the `.cmd`'s script with Node.
+
+## After the review
+
+A fresh subagent reviewed the adapters and the ledger (never starting a real agent) and found, all fixed with tests where testable:
+
+- **Codex got none of the policy** and has a shell (above): refused with repo deny rules, warned otherwise, docs corrected (`agent-adapters.test.ts`, "fscale fix --agent codex and the repo's own settings").
+- **The adapters were not found after a pnpm or global npm install** (the binary is deeper than the search goes): the `fscale` launcher passes `FSCALE_AGENTS` when `agents/cli.js` is installed beside it; the npm smoke test loads the installed adapters.
+- **An npm `.cmd` agent on Windows failed with no reason**: the adapter names the file and what to install.
+- **The adapter tests left copies of the stand-in in the temp folder** (300 MB on the build machine): every scratch folder is now removed after its test.
+- **A cost of 1e305 in the ledger made the sum infinite** and `--json` print `null`: a cost of a million dollars or more is a damaged line.
+- **`agent.maxCostUsd: 0`** passed the config check, and Claude Code refuses it: the config now asks for a number above 0.
+- **A repo rule like `mcp__server__tool` became `Bash(mcp__server__tool)`**: any single word is passed as a tool name.
+- **Codex output with no events read as a success**: a Codex run needs a completed turn.
+- **The pre-flight had no time limit**, and a missing Node was reported as a missing agent: `--version` and `auth status` get 60 s each, and Node gets its own message.
+- **Escape codes in a hand-edited ledger reached the terminal**: control characters in names print as `?`.
 
 ## Known limits
 
-- Codex: no tool list, denied paths, turn or spend limit in `exec`; no cost in the ledger.
+- Codex: no tool list, denied commands or paths, turn or spend limit in `exec`; it reads and runs what its sandbox allows; no cost in the ledger.
+- Claude Code's `--restricted` loads no settings file, so your own user-level deny rules do not apply to a run either (the runner's and the repo's do). Edit and Write are allowed without asking even where the repo's `defaultMode` would ask: a run has no one to ask, and the diff guard holds what it writes.
 - Claude Code's `--max-budget-usd` is its own estimate and can be passed a little; the runner checks the reported cost after the run (ADR 0047).
 - On Windows the adapters need the agent as an `.exe` (above).
 - The adapters' `--version` output is what `fscale fix --agent` prints under `Agent:`; an adapter cannot be asked for its unverified list on its own.

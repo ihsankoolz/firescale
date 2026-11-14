@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
@@ -18,7 +19,13 @@ import {
 // real model is ever called.
 
 const fixtures = fixtureSet();
-afterEach(fixtures.cleanup);
+const scratch: string[] = [];
+afterEach(async () => {
+  await fixtures.cleanup();
+  await Promise.all(
+    scratch.splice(0).map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5 })),
+  );
+});
 
 // Built from parts, so this repo's own core/env-example does not read the
 // fixture's code as code of this repo.
@@ -79,8 +86,9 @@ async function repo(files: Record<string, string> = {}, agent: Record<string, nu
 }
 
 async function fix(root: string, scenario: Scenario, extra: string[] = ['--rule', RULE]) {
-  const dir = path.join(root, '..', `agent-${path.basename(root)}`);
-  await mkdir(dir, { recursive: true });
+  // Outside the fixture repo, which must stay clean; removed after the test.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'fscale-agent-'));
+  scratch.push(dir);
   const file = path.join(dir, 'scenario.json');
   const log = path.join(dir, 'log.jsonl');
   await writeFile(file, JSON.stringify(scenario));
@@ -359,7 +367,8 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
 
   it('never pushes or tags: a push from inside the run goes nowhere, and a tag fails the run', async () => {
     const root = await repo();
-    const remote = path.join(root, '..', `remote-${path.basename(root)}.git`);
+    const remote = path.join(await mkdtemp(path.join(os.tmpdir(), 'fscale-remote-')), 'remote.git');
+    scratch.push(path.dirname(remote));
     await runGit(path.dirname(root), ['init', '--quiet', '--bare', remote]);
     await git(root, 'remote', 'add', 'origin', remote);
     const pushed = await fix(root, {
@@ -446,7 +455,11 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
 
     it('a remote with its own pushurl still gets no push', async () => {
       const root = await repo();
-      const remote = path.join(root, '..', `remote-url-${path.basename(root)}.git`);
+      const remote = path.join(
+        await mkdtemp(path.join(os.tmpdir(), 'fscale-remote-')),
+        'remote.git',
+      );
+      scratch.push(path.dirname(remote));
       await runGit(path.dirname(root), ['init', '--quiet', '--bare', remote]);
       await git(root, 'remote', 'add', 'origin', remote);
       await git(root, 'config', 'remote.origin.pushurl', remote);

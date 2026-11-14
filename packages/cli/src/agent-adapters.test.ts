@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runGit } from '@firescale/sdk';
@@ -12,7 +13,21 @@ import { BIN, commitAll, EXIT_OK, EXIT_USAGE, FAKE_AGENT, runCli } from './test-
 // (crates/testkit/src/fake_cli.rs). No real agent, no model.
 
 const fixtures = fixtureSet();
-afterEach(fixtures.cleanup);
+// Folders for the stand-ins, outside the fixture repos (which must stay
+// clean for the pre-flight), removed after each test (review of M28).
+const scratch: string[] = [];
+afterEach(async () => {
+  await fixtures.cleanup();
+  await Promise.all(
+    scratch.splice(0).map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5 })),
+  );
+});
+
+async function scratchDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
+  scratch.push(dir);
+  return dir;
+}
 
 const EXE = process.platform === 'win32' ? '.exe' : '';
 const FAKE_CLI = path.join(path.dirname(BIN), `fscale-fake-cli${EXE}`);
@@ -73,12 +88,9 @@ interface Logged {
   cwd: string;
 }
 
-let stands = 0;
-
 /** A folder with the stand-in under the agent's name, and the run's env. */
-async function standIn(root: string, agent: 'claude' | 'codex', stand: Stand) {
-  stands += 1;
-  const dir = path.join(root, '..', `cli-${path.basename(root)}-${stands}`);
+async function standIn(_root: string, agent: 'claude' | 'codex', stand: Stand) {
+  const dir = await scratchDir('fscale-cli-');
   const bin = path.join(dir, 'bin');
   await mkdir(bin, { recursive: true });
   await copyFile(FAKE_CLI, path.join(bin, `${agent}${EXE}`));
@@ -251,6 +263,49 @@ describe('fscale fix --agent codex', () => {
   });
 });
 
+describe("fscale fix --agent codex and the repo's own settings", () => {
+  it("refuses Codex when the repo's settings deny anything, since Codex cannot be told", async () => {
+    const root = await repo();
+    await mkdir(path.join(root, '.claude'), { recursive: true });
+    await writeFile(
+      path.join(root, '.claude', 'settings.json'),
+      JSON.stringify({ permissions: { deny: ['Bash(curl *)', 'Read(config/private/**)'] } }),
+    );
+    await commitAll(root, 'settings');
+    const { env, calls } = await standIn(root, 'codex', { output: CODEX_OK });
+    const result = await runCli(['fix', '--agent', 'codex', '--rule', RULE], root, env);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain('Codex cannot be told to');
+    expect(result.stderr).toContain('`Bash(curl *)`');
+    // Pre-flight only: Codex never ran.
+    expect((await calls()).every((call) => call.args[0] !== 'exec')).toBe(true);
+    expect(await ledgerLines(root)).toEqual([]);
+  });
+
+  it('warns on every Codex run that its reads and commands are not limited', async () => {
+    const root = await repo();
+    const { env } = await standIn(root, 'codex', {
+      output: CODEX_OK,
+      write: { '.env.example': 'NODE_ENV=\nAPI_URL=\n' },
+    });
+    const result = await runCli(['fix', '--agent', 'codex', '--rule', RULE], root, env);
+    expect(result.code, result.stderr).toBe(EXIT_OK);
+    expect(result.stdout).toContain('Warning: Codex runs with a shell');
+  });
+
+  it('fails a Codex run that completed no turn', async () => {
+    const root = await repo();
+    const { env } = await standIn(root, 'codex', {
+      output: '',
+      write: { '.env.example': 'NODE_ENV=\nAPI_URL=\n' },
+    });
+    const result = await runCli(['fix', '--agent', 'codex', '--rule', RULE], root, env);
+    expect(result.code).not.toBe(EXIT_OK);
+    const [entry] = await ledgerLines(root);
+    expect(entry).toMatchObject({ result: 'fail', reason: 'agent-error' });
+  });
+});
+
 describe('the adapter protocol entry point', () => {
   it('says which agent version it found, and what is unverified', async () => {
     const root = await repo();
@@ -276,8 +331,7 @@ describe('the adapter protocol entry point', () => {
 describe('fscale ledger after a run', () => {
   it('shows the cost a fake-agent run reported', async () => {
     const root = await repo();
-    const dir = path.join(root, '..', `fake-${path.basename(root)}`);
-    await mkdir(dir, { recursive: true });
+    const dir = await scratchDir('fscale-fake-');
     const scenario = path.join(dir, 'scenario.json');
     await writeFile(
       scenario,

@@ -101,7 +101,9 @@ fn limits(root: &Path) -> (u32, f64, u64) {
     };
     (
         get("maxTurns").map_or(30, |v| v.clamp(1.0, 1000.0) as u32),
-        get("maxCostUsd").map_or(2.0, |v| v.max(0.0)),
+        get("maxCostUsd")
+            .filter(|v| *v > 0.0 && v.is_finite())
+            .map_or(2.0, |v| v),
         get("timeoutSeconds").map_or(900, |v| v.clamp(1.0, 86_400.0) as u64),
     )
 }
@@ -184,6 +186,25 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         return Err(Error::user(format!(
             "the repo's own agent settings let no agent edit files ({why}); an agent run never has wider permissions than they give."
         )));
+    }
+    // Codex's `exec` takes no list of tools, commands or paths to deny
+    // (ADR 0048): where the repo's own settings deny something, a Codex run
+    // would be wider than they allow.
+    if agent_name == "codex" {
+        let mut denied: Vec<&str> = limits_of_repo
+            .denied
+            .iter()
+            .chain(&limits_of_repo.denied_paths)
+            .map(String::as_str)
+            .collect();
+        denied.sort_unstable();
+        denied.dedup();
+        if !denied.is_empty() {
+            return Err(Error::user(format!(
+                "the repo's own agent settings deny {}, and Codex cannot be told to: `codex exec` takes no list of tools, commands or paths to deny, so a Codex run would have wider permissions than the repo gives. Use --agent claude, or remove those rules if Codex may do this.",
+                denied.iter().map(|d| format!("`{d}`")).collect::<Vec<_>>().join(", ")
+            )));
+        }
     }
 
     // The rule and its violations, checked now.
@@ -341,6 +362,9 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         ));
     }
     out.push_str(&format!("Agent: {}\n", version_line));
+    if agent_name == "codex" {
+        out.push_str("Warning: Codex runs with a shell and can read any file the sandbox allows, your untracked .env files included; firescale cannot pass it the denied commands and paths. The diff guard, the re-check and the time limit are what held this run (ADR 0048).\n");
+    }
 
     // 10. The ledger: codes and counts only.
     let entry = LedgerEntry {

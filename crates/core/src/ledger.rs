@@ -9,6 +9,9 @@ use serde::Serialize;
 
 use crate::agentrun::LedgerEntry;
 
+/// Costs at or above this are damaged lines.
+pub const MAX_COST_USD: f64 = 1_000_000.0;
+
 /// Runs, passes and cost of one group of ledger lines.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,7 +81,11 @@ pub struct LedgerSummary {
 /// cost that is not a number of 0 or more.
 fn entry(line: &str) -> Option<LedgerEntry> {
     let entry: LedgerEntry = serde_json::from_str(line).ok()?;
-    let cost_ok = entry.cost_usd.is_none_or(|c| c.is_finite() && c >= 0.0);
+    // A cost of a million dollars or more is no run's report: it would
+    // only make the sums overflow.
+    let cost_ok = entry
+        .cost_usd
+        .is_none_or(|c| c.is_finite() && (0.0..MAX_COST_USD).contains(&c));
     let ok = entry.schema == 1
         && matches!(entry.result.as_str(), "pass" | "fail")
         && !entry.rule.is_empty()
@@ -151,10 +158,18 @@ fn reasons(tally: &Tally) -> String {
         .join(", ")
 }
 
+/// A name as the terminal shows it: control characters (escape codes in a
+/// hand-edited ledger) become `?`.
+fn printable(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect()
+}
+
 fn table(out: &mut String, heading: &str, groups: &[Group]) {
     let width = groups
         .iter()
-        .map(|group| group.name.chars().count())
+        .map(|group| printable(&group.name).chars().count())
         .chain([heading.chars().count()])
         .max()
         .unwrap_or(0);
@@ -163,7 +178,7 @@ fn table(out: &mut String, heading: &str, groups: &[Group]) {
         let tally = &group.tally;
         let mut line = format!(
             "{:<width$}  {:>4}  {:>6}  {:>4}  {}",
-            group.name,
+            printable(&group.name),
             tally.runs,
             tally.passed,
             percent(tally),
@@ -242,14 +257,23 @@ mod tests {
     #[test]
     fn skips_and_names_damaged_lines() {
         let negative = PASS.replace("0.25", "-1");
+        let huge = PASS.replace("0.25", "1e305");
         let wrong = PASS.replace("\"pass\"", "\"maybe\"");
         let text = format!(
-            "{PASS}\nnot json\n\n{negative}\n{wrong}\n{{\"schema\":1}}\n{}",
+            "{PASS}\nnot json\n\n{negative}\n{wrong}\n{{\"schema\":1}}\n{}\n{huge}\n{huge}",
             &PASS[..40]
         );
         let summary = summarise("ledger", Some(&text));
         assert_eq!(summary.total.runs, 1);
-        assert_eq!(summary.damaged_lines, vec![2, 4, 5, 6, 7]);
+        assert_eq!(summary.damaged_lines, vec![2, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn control_characters_in_names_never_reach_the_terminal() {
+        let text = PASS.replace("claude", "cl\\u001b[31maude");
+        let human = format_human(&summarise("ledger", Some(&text)));
+        assert!(!human.contains('\u{1b}'), "{human}");
+        assert!(human.contains("cl?[31maude"), "{human}");
     }
 
     #[test]

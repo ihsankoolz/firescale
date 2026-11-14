@@ -18,7 +18,13 @@ import type { Adapter, AgentResult, Invocation, Request } from './protocol.js';
  *   (`cli/src/login.rs`).
  *
  * Unverified (in Codex's shared options, which were not read): `--sandbox
- * workspace-write`, `-c sandbox_workspace_write.network_access=false`.
+ * workspace-write`, `-c sandbox_workspace_write.network_access=false`. A
+ * wrong flag stops Codex with a usage error; a wrong `-c` key may be
+ * ignored without a word, leaving the network on.
+ *
+ * Not enforceable: `codex exec` takes no list of tools, commands or paths to
+ * deny, and its sandbox does not limit reads. The runner refuses Codex when
+ * the repo's own settings deny anything, and warns on every Codex run.
  */
 export const codex: Adapter = {
   name: 'codex',
@@ -27,7 +33,7 @@ export const codex: Adapter = {
   authArgs: ['login', 'status'],
   unverified: [
     '`--sandbox workspace-write` and `-c sandbox_workspace_write.network_access=false` (Codex shared options, not read)',
-    'tool lists, denied paths and turn or spend limits: `codex exec` has no flags for them; the runner enforces paths with its diff guard, and time with its time limit',
+    'tool lists, denied commands and paths, and turn or spend limits: `codex exec` has no flags for them; the diff guard sees only what Codex writes, not what it reads or runs',
   ],
   invocation(request: Request): Invocation {
     return {
@@ -60,11 +66,17 @@ export const codex: Adapter = {
       if (event.type === 'turn.completed') turns += 1;
       if (event.type === 'turn.failed' || event.type === 'error') failed = String(event.type);
     }
-    const ok = code === 0 && failed === undefined;
+    // No completed turn means the events were not what this adapter reads
+    // (or Codex did nothing): never a success.
+    const ok = code === 0 && failed === undefined && turns > 0;
     return {
       ok,
       turns,
-      ...(ok ? {} : { error: `Codex ended with ${failed ?? `exit ${code}`}` }),
+      ...(ok
+        ? {}
+        : {
+            error: `Codex ended with ${failed ?? (code === 0 ? 'no completed turn' : `exit ${code}`)}`,
+          }),
     };
   },
 };

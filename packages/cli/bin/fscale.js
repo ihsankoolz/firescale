@@ -106,6 +106,7 @@ function findBinary() {
 }
 
 const binary = findBinary();
+const agents = path.join(here, '..', 'agents', 'cli.js');
 if (process.env.FSCALE_LOG?.split(',').includes('launcher')) {
   process.stderr.write(`launcher: binary ${binary}\n`);
 }
@@ -121,6 +122,11 @@ const result = spawnSync(binary, process.argv.slice(2), {
     // Tell the binary where the Node host and Node itself are, so it never has to search.
     FSCALE_NODE_HOST: process.env.FSCALE_NODE_HOST ?? path.join(here, '..', 'dist', 'host.js'),
     FSCALE_NODE: process.env.FSCALE_NODE ?? process.execPath,
+    // And where the agent adapters are (`fscale fix --agent claude|codex`),
+    // when this is an npm install; a source checkout finds them itself.
+    ...(process.env.FSCALE_AGENTS === undefined && existsSync(agents)
+      ? { FSCALE_AGENTS: agents }
+      : {}),
   },
 });
 

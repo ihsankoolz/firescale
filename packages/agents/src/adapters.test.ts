@@ -15,7 +15,7 @@ const request: Request = {
   prompt: 'Fix core/env-example.',
   policy: {
     allowedTools: ['Read', 'Glob', 'Grep', 'Edit', 'Write'],
-    deniedCommands: ['git push', 'Bash(curl *)', 'WebFetch'],
+    deniedCommands: ['git push', 'Bash(curl *)', 'WebFetch', 'mcp__server__tool'],
     deniedPaths: ['.env', '**/.claude/**'],
     maxTurns: 12,
     maxCostUsd: 1.5,
@@ -48,7 +48,7 @@ describe('the Claude Code adapter', () => {
       '--allowedTools',
       'Read,Glob,Grep,Edit,Write',
       '--disallowedTools',
-      'Bash(git push),Bash(git push *),Bash(curl *),WebFetch,Read(.env),Edit(.env),Read(**/.claude/**),Edit(**/.claude/**)',
+      'Bash(git push),Bash(git push *),Bash(curl *),WebFetch,mcp__server__tool,Read(.env),Edit(.env),Read(**/.claude/**),Edit(**/.claude/**)',
     ]);
     // The prompt is never an argument: it could hold anything.
     expect(args.join(' ')).not.toContain('Fix core/env-example');
@@ -126,6 +126,12 @@ describe('the Codex adapter', () => {
       .map((event) => JSON.stringify(event))
       .join('\n');
     expect(codex.parse(events, 0)).toEqual({ ok: true, turns: 2 });
+    // Exit 0 with no completed turn is not a success.
+    expect(codex.parse('', 0)).toEqual({
+      ok: false,
+      turns: 0,
+      error: 'Codex ended with no completed turn',
+    });
   });
 
   it('fails on turn.failed, error events or a non-zero exit', () => {

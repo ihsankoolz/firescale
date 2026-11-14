@@ -10,7 +10,9 @@
  * on its standard input, and prints one JSON result line.
  */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { claude } from './claude.js';
 import { codex } from './codex.js';
 import type { Adapter, AgentResult, Request } from './protocol.js';
@@ -20,6 +22,23 @@ export const ADAPTERS: Record<string, Adapter> = { claude, codex };
 interface Ran {
   code: number;
   stdout: string;
+}
+
+/**
+ * On Windows an agent installed by npm is a `.cmd` file, which Node starts
+ * only through a shell; the adapters never use one (arguments would need
+ * quoting for `cmd.exe`). Names the file, so the error can say so.
+ */
+function windowsShim(program: string): string | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const dirs = (process.env['PATH'] ?? process.env['Path'] ?? '').split(path.delimiter);
+  for (const dir of dirs.filter(Boolean)) {
+    for (const ext of ['.cmd', '.bat']) {
+      const candidate = path.join(dir, `${program}${ext}`);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
 }
 
 function run(program: string, args: string[], cwd: string, stdin: string): Promise<Ran> {
@@ -48,7 +67,15 @@ async function main(argv: string[]): Promise<number> {
   }
   if (rest.length === 1 && rest[0] === '--version') {
     const version = await run(adapter.program, adapter.versionArgs, process.cwd(), '');
-    if (version.code !== 0) return 127;
+    if (version.code !== 0) {
+      const shim = version.code === 127 ? windowsShim(adapter.program) : undefined;
+      process.stderr.write(
+        shim
+          ? `${adapter.program} is installed as ${shim}, an npm .cmd file, which firescale does not start (it would need a shell). Install ${adapter.program} as an .exe (for Claude Code, its native installer).\n`
+          : `${adapter.program} did not answer ${adapter.versionArgs.join(' ')}: is it installed and on the PATH?\n`,
+      );
+      return 127;
+    }
     const line = version.stdout.trim().split('\n')[0] ?? '';
     // `fscale fix --agent` prints this under "Agent:", so what was not
     // confirmed from the agent itself is in every run's output.
