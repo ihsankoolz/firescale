@@ -83,7 +83,7 @@ export const claude: Adapter = {
       .map((line) => line.trim())
       .filter((line) => line.startsWith('{'))
       .pop();
-    let parsed: Record<string, unknown> = {};
+    let parsed: Record<string, unknown>;
     try {
       parsed = last ? (JSON.parse(last) as Record<string, unknown>) : {};
     } catch {
