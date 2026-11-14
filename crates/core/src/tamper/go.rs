@@ -291,6 +291,25 @@ fn is_suite_t(operand: Node<'_>, src: &[u8]) -> bool {
 /// A statement after which the rest of its block does not run: a call of
 /// `Skip`, `Skipf` or `SkipNow` on a name or on `s.T()`.
 fn stops(statement: Node<'_>, src: &[u8]) -> bool {
+    // `if true { t.Skip(…) }` skips as surely (found in review).
+    if statement.kind() == "if_statement"
+        && statement.child_by_field_name("initializer").is_none()
+        && statement
+            .child_by_field_name("condition")
+            .is_some_and(|condition| condition.kind() == "true")
+    {
+        return statement
+            .child_by_field_name("consequence")
+            .and_then(statements)
+            .and_then(|list| {
+                let mut cursor = list.walk();
+                let first = list
+                    .named_children(&mut cursor)
+                    .find(|inner| !inner.is_extra() && !is_noop(*inner, src));
+                first
+            })
+            .is_some_and(|first| stops(first, src));
+    }
     statement_call(statement)
         .and_then(|call| method_call(call, src))
         .is_some_and(|(operand, name)| {
@@ -2171,5 +2190,13 @@ var r = `// #nosec G101`
         ] {
             assert!(!platform_only(name), "{name}");
         }
+    }
+
+    #[test]
+    fn a_skip_under_if_true_skips() {
+        let file = read("package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif true {\n\t\tt.Skip(\"flaky\")\n\t}\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n");
+        assert!(file.tests[0].skipped);
+        let file = read("package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif testing.Short() {\n\t\tt.Skip(\"slow\")\n\t}\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n");
+        assert!(!file.tests[0].skipped);
     }
 }

@@ -7,8 +7,10 @@
 //!   plain string is its source text), as in JavaScript.
 //! - It is skipped with a `skip:` argument other than `false` or `null` (on
 //!   the test or a group around it: a string gives the reason, any other
-//!   value skips it at least sometimes), with `@Skip(…)` on the library or
-//!   on `main` (the whole file), when its body starts with
+//!   value skips it at least sometimes), with `testOn:` or an
+//!   `onPlatform:` that holds a `Skip(…)` (it runs only sometimes), with
+//!   `@Skip(…)` or `@TestOn(…)` on the library, its first import or `main`
+//!   (the whole file), when its body starts with
 //!   `markTestSkipped(…)`, or when its body does nothing or never runs. A
 //!   `solo: true` test or group is focused: the file's other tests do not
 //!   run.
@@ -18,7 +20,7 @@
 //!   `verifyZeroInteractions` (with the chain after it:
 //!   `verify(m.f()).called(1)`), unless it never runs (after a `return`,
 //!   inside `if (false)`) or cannot fail (`expect(true, isTrue)`,
-//!   `expect(1, 1)`, `expect(1, equals(1))`).
+//!   `expect(1, 1)`, `expect(1, equals(1))`, `expect(x, anything)`).
 //! - Subjects: the names an import `show`s, the prefix of an import `as`,
 //!   and, when a file has one other import of its own package, the names
 //!   its tests use that it does not define; `package:<name>/x.dart` is
@@ -299,6 +301,10 @@ fn cannot_fail(call: Node<'_>, src: &[u8]) -> bool {
     let [actual, matcher] = positional.as_slice() else {
         return false;
     };
+    // `anything` matches every value (found in review).
+    if matcher.kind() == "identifier" && text(*matcher, src) == "anything" {
+        return true;
+    }
     let constant = |node: &Node<'_>| reach::constant(*node, &LITERALS);
     if !constant(actual) {
         return false;
@@ -355,14 +361,16 @@ fn marked_skipped(block: Node<'_>, src: &[u8]) -> bool {
         .is_some_and(|call| callee(call, src) == Some("markTestSkipped"))
 }
 
-/// True for an `@Skip` annotation among the children of `node`.
+/// True for an `@Skip` annotation among the children of `node`, or a
+/// `@TestOn(…)`: the file runs only on some platforms, a conditional skip
+/// (found in review).
 fn has_skip_annotation(node: Node<'_>, src: &[u8]) -> bool {
     let mut cursor = node.walk();
     let found = node.named_children(&mut cursor).any(|child| {
         child.kind() == "annotation"
-            && child
-                .child_by_field_name("name")
-                .is_some_and(|name| text(name, src).rsplit('.').next() == Some("Skip"))
+            && child.child_by_field_name("name").is_some_and(|name| {
+                matches!(text(name, src).rsplit('.').next(), Some("Skip" | "TestOn"))
+            })
     });
     found
 }
@@ -375,6 +383,15 @@ fn file_skipped(root: Node<'_>, src: &[u8]) -> bool {
         .named_children(&mut cursor)
         .any(|child| match child.kind() {
             "library_name" => has_skip_annotation(child, src),
+            // With no `library` directive, the file's annotations are read
+            // as the first import's.
+            "import_or_export" => {
+                let mut inner = child.walk();
+                let annotated = child
+                    .named_children(&mut inner)
+                    .any(|directive| has_skip_annotation(directive, src));
+                annotated
+            }
             "function_declaration" => {
                 let is_main = child
                     .child_by_field_name("signature")
@@ -582,6 +599,10 @@ pub(super) fn read(source: &str) -> TestFile {
                 // `skip: false` and `skip: null` run it; a reason or any
                 // other value skips it, at least sometimes.
                 "skip" => own_skip |= !matches!(value.kind(), "false" | "null_literal"),
+                // It runs only on some platforms, or is skipped on some
+                // (found in review).
+                "testOn" => own_skip = true,
+                "onPlatform" => own_skip |= text(*value, src).contains("Skip("),
                 "solo" => own_focus |= value.kind() == "true",
                 _ => {}
             }
@@ -940,8 +961,10 @@ void main() {
         assert_eq!(ids(&library), [("a", true, false)]);
         let on_main = read("import 'package:test/test.dart';\n\n@Skip()\nvoid main() {\n  test('a', () { expect(a, 1); });\n}\n");
         assert_eq!(ids(&on_main), [("a", true, false)]);
+        // `@TestOn` runs the file only on some platforms: a conditional
+        // skip, as a Go build constraint is (changed after review, M32).
         let other = read("@TestOn('vm')\nlibrary;\n\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('a', () { expect(a, 1); });\n}\n");
-        assert_eq!(ids(&other), [("a", false, false)]);
+        assert_eq!(ids(&other), [("a", true, false)]);
     }
 
     #[test]
@@ -1278,5 +1301,27 @@ const t = """
 """;
 "#;
         assert!(keys(source).is_empty(), "{:?}", keys(source));
+    }
+
+    // Found in review (M32).
+    #[test]
+    fn platform_conditions_and_matchers_that_match_anything() {
+        let body = "void main() {\n  test('adds', () {\n    expect(add(1, 2), 3);\n  });\n}\n";
+        let plain = format!("import 'package:test/test.dart';\n\n{body}");
+        assert!(!read(&plain).tests[0].skipped);
+        for head in [
+            format!("@TestOn('windows')\nlibrary;\n\nimport 'package:test/test.dart';\n\n{body}"),
+            format!("@TestOn('windows')\n\nimport 'package:test/test.dart';\n\n{body}"),
+        ] {
+            assert!(read(&head).tests[0].skipped, "{head}");
+        }
+        let on = |argument: &str| {
+            read(&format!("import 'package:test/test.dart';\n\nvoid main() {{\n  test('adds', () {{\n    expect(add(1, 2), 3);\n  }}, {argument});\n}}\n")).tests[0].skipped
+        };
+        assert!(on("onPlatform: {'vm': Skip('slow')}"));
+        assert!(!on("onPlatform: {'vm': Timeout.factor(2)}"));
+        assert!(on("testOn: 'browser'"));
+        let file = read("import 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), anything);\n  });\n}\n");
+        assert!(file.assertions.is_empty());
     }
 }

@@ -132,10 +132,25 @@ pub(super) fn first_branches(source: &str) -> Option<String> {
             out.push_str(line);
         }
     }
+    // The `#elif`/`#else` lines themselves name nothing; any other line of
+    // a branch left out is looked at, Swift's `#expect` too (found in
+    // review).
+    let is_branch_line = |line: &str| {
+        line.trim_start().strip_prefix('#').is_some_and(|rest| {
+            let word = rest.trim_start();
+            ["elif", "elseif", "else", "endif", "if"]
+                .iter()
+                .any(|directive| {
+                    word.strip_prefix(directive).is_some_and(|after| {
+                        after.is_empty() || after.starts_with(|c: char| !c.is_ascii_alphanumeric())
+                    })
+                })
+        })
+    };
     let names_nothing = !names_any(
         left_out
             .lines()
-            .filter(|line| !line.trim_start().starts_with('#'))
+            .filter(|line| !is_branch_line(line))
             .collect::<Vec<_>>()
             .join("\n")
             .as_bytes(),
@@ -273,6 +288,12 @@ mod tests {
             first_branches("#if A\nx\n#else\nTEST(a, b) {}\n#endif\n"),
             None
         );
+        // Swift's `#expect` is not a directive (found in review).
+        assert_eq!(
+            first_branches("#if os(Linux)\nx\n#else\n#expect(total == 3)\n#endif\n"),
+            None
+        );
+        assert!(first_branches("#if A\nx\n#elseif B\ny\n#else\nz\n#endif\n").is_some());
     }
 
     #[test]

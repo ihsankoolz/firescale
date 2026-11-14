@@ -5628,6 +5628,57 @@
       "head": {
         "tests/App.Tests/CalcTests.cs": "using Xunit;\n\ninternal class CalcTests\n{\n    [Fact]\n    public void Adds() => Assert.Equal(3, Calc.Add(1, 2));\n}\n"
       }
+    },
+    {
+      "name": "dart: an expected value replaced by anything",
+      "expect": ["assertion-removed"],
+      "note": "`anything` matches every value: the expectation cannot fail (ADR 0052, found in review).",
+      "base": {
+        "lib/calc.dart": "int add(int a, int b) => a + b;\n",
+        "pubspec.yaml": "name: calc\n",
+        "test/calc_test.dart": "import 'package:calc/calc.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), 3);\n  });\n}\n"
+      },
+      "head": {
+        "test/calc_test.dart": "import 'package:calc/calc.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), anything);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "dart: a test file limited to one platform with @TestOn",
+      "expect": ["test-skipped"],
+      "note": "`@TestOn('windows')` runs the file only on Windows (ADR 0052, found in review).",
+      "base": {
+        "lib/calc.dart": "int add(int a, int b) => a + b;\n",
+        "pubspec.yaml": "name: calc\n",
+        "test/calc_test.dart": "import 'package:calc/calc.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), 3);\n  });\n}\n"
+      },
+      "head": {
+        "test/calc_test.dart": "@TestOn('windows')\nimport 'package:calc/calc.dart';\nimport 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), 3);\n  });\n}\n"
+      }
+    },
+    {
+      "name": "java: an AssertJ assertion with nothing chained",
+      "expect": ["assertion-removed"],
+      "note": "`assertThat(x);` alone checks nothing (ADR 0052, found in review).",
+      "base": {
+        "src/main/java/calc/Calc.java": "package calc;\n\nclass Calc { static int add(int a, int b) { return a + b; } }\n",
+        "src/test/java/calc/CalcTest.java": "package calc;\n\nimport org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass CalcTest {\n    @Test\n    void adds() {\n        assertThat(Calc.add(1, 2)).isEqualTo(3);\n    }\n}\n"
+      },
+      "head": {
+        "src/test/java/calc/CalcTest.java": "package calc;\n\nimport org.junit.jupiter.api.Test;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nclass CalcTest {\n    @Test\n    void adds() {\n        assertThat(Calc.add(1, 2));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "go: a skip under if true",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "`if true { t.Skip(…) }` skips as surely as `t.Skip(…)` (ADR 0052, found in review).",
+      "base": {
+        "calc.go": "package calc\n\nfunc Add(a, b int) int { return a + b }\n",
+        "go.mod": "module example.com/calc\n\ngo 1.22\n",
+        "calc_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n"
+      },
+      "head": {
+        "calc_test.go": "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tif true {\n\t\tt.Skip(\"flaky\")\n\t}\n\tif Add(1, 2) != 3 {\n\t\tt.Fatal(\"want 3\")\n\t}\n}\n"
+      }
     }
   ]
 }
