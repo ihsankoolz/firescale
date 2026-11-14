@@ -100,7 +100,12 @@ impl BuiltinRule for AgentsMdExists {
             format!("{AGENTS_MD}/**"),
             CLAUDE_MD.to_owned(),
         ];
-        inputs.extend(FACTS_INPUTS.iter().map(|input| (*input).to_owned()));
+        inputs.extend(
+            FACTS_INPUTS
+                .iter()
+                .chain(firescale_core::ecosystems::MARKER_GLOBS.iter())
+                .map(|input| (*input).to_owned()),
+        );
         RuleMeta {
             id: ID.to_owned(),
             severity: Severity::Medium,

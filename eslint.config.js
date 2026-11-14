@@ -5,7 +5,7 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', 'target/**'],
+    ignores: ['**/dist/**', '**/node_modules/**', 'target/**', '.claude/worktrees/**'],
   },
   js.configs.recommended,
   tseslint.configs.strict,

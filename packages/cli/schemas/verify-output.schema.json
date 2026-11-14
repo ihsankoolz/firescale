@@ -37,7 +37,26 @@
     },
     "runner": {
       "description": "How the commands of the repo root were chosen: all three from the config, Nx, Turborepo, package.json scripts, Cargo, a Python or Go project at the root, none found, or projects when the root has no commands of its own and the projects below it supply them.",
-      "enum": ["config", "nx", "turbo", "scripts", "cargo", "python", "go", "projects", "none"]
+      "enum": [
+        "config",
+        "nx",
+        "turbo",
+        "scripts",
+        "cargo",
+        "python",
+        "go",
+        "projects",
+        "none",
+        "maven",
+        "gradle",
+        "swift",
+        "xcode",
+        "cmake",
+        "meson",
+        "dotnet",
+        "dart",
+        "make"
+      ]
     },
     "stepsTotal": {
       "description": "Steps that should run: every step except the ones whose status is off or not-affected.",
@@ -88,7 +107,21 @@
           },
           "kind": {
             "description": "The kind of that project. Absent for a root step and for a folder that is only named in the config.",
-            "enum": ["go", "node", "python", "rust"]
+            "enum": [
+              "go",
+              "node",
+              "python",
+              "rust",
+              "maven",
+              "gradle",
+              "swift",
+              "xcode",
+              "cmake",
+              "meson",
+              "dotnet",
+              "dart",
+              "make"
+            ]
           },
           "status": {
             "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it. not-affected: --affected found that no change reaches the step's project, so it was not run (ADR 0032); not the same as skipped.",
@@ -329,7 +362,21 @@
                 "type": "string"
               },
               "kind": {
-                "enum": ["go", "node", "python", "rust"]
+                "enum": [
+                  "go",
+                  "node",
+                  "python",
+                  "rust",
+                  "maven",
+                  "gradle",
+                  "swift",
+                  "xcode",
+                  "cmake",
+                  "meson",
+                  "dotnet",
+                  "dart",
+                  "make"
+                ]
               },
               "affected": {
                 "type": "boolean"

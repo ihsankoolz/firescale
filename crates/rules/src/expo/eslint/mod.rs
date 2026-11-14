@@ -52,18 +52,6 @@ fn configured(ctx: &RuleContext, json: &serde_json::Value) -> bool {
         || other_lint
 }
 
-/// The version a dependency is declared with, as (major, minor).
-fn declared(json: &serde_json::Value, package: &str) -> Option<(u64, u64)> {
-    let spec = ["dependencies", "devDependencies"]
-        .iter()
-        .find_map(|field| json.get(field)?.get(package)?.as_str())?;
-    let rest = spec.trim_start_matches(|c: char| !c.is_ascii_digit());
-    let mut parts = rest.split(|c: char| !c.is_ascii_digit());
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
-    Some((major, minor))
-}
-
 /// True when the config `expo lint` writes can load: ESLint 9.22 or later
 /// (`eslint/config`'s `defineConfig`) and an eslint-config-expo with the
 /// flat config (9 or later; SDK-numbered versions such as 58 too). A
@@ -72,8 +60,9 @@ fn flat_ready(json: &serde_json::Value) -> bool {
     if !depends_on(json, "eslint") || !depends_on(json, "eslint-config-expo") {
         return false;
     }
-    declared(json, "eslint").is_none_or(|v| v >= (9, 22))
-        && declared(json, "eslint-config-expo").is_none_or(|(major, _)| major >= 9)
+    crate::stackkit::declared_version(json, "eslint").is_none_or(|v| v >= (9, 22))
+        && crate::stackkit::declared_version(json, "eslint-config-expo")
+            .is_none_or(|(major, _)| major >= 9)
 }
 
 impl BuiltinRule for EslintConfig {

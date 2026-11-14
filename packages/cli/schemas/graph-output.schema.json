@@ -33,7 +33,23 @@
           },
           "kind": {
             "description": "For a project: node, python, rust or go. For a shared node: folder or file.",
-            "enum": ["node", "python", "rust", "go", "folder", "file"]
+            "enum": [
+              "node",
+              "python",
+              "rust",
+              "go",
+              "folder",
+              "file",
+              "maven",
+              "gradle",
+              "swift",
+              "xcode",
+              "cmake",
+              "meson",
+              "dotnet",
+              "dart",
+              "make"
+            ]
           },
           "name": {
             "description": "For a project: its name in fscale facts.",

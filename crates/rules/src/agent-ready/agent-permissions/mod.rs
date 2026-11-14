@@ -189,6 +189,7 @@ impl BuiltinRule for AgentPermissions {
         inputs.extend(
             super::managed::FACTS_INPUTS
                 .iter()
+                .chain(firescale_core::ecosystems::MARKER_GLOBS.iter())
                 .map(|input| (*input).to_owned()),
         );
         RuleMeta {

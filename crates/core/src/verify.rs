@@ -465,12 +465,40 @@ fn command_of<'a>(commands: &'a crate::facts::Commands, step: &str) -> &'a Optio
 /// What one step of a project found by `fscale facts` will do, from the
 /// commands detected for it.
 fn project_step(project: &Project, step: &str) -> Planned {
-    if let Some(command) = command_of(&project.commands, step) {
+    let elsewhere = crate::ecosystems::ecosystem(&project.kind)
+        .is_some_and(|eco| eco.only_on.is_some_and(|os| os != std::env::consts::OS));
+    if let Some(command) = command_of(&project.commands, step)
+        .as_ref()
+        .filter(|_| !elsewhere)
+    {
         return Planned::Command(command.clone());
+    }
+    // A marker-file ecosystem says why itself (ADR 0051).
+    if let Some(eco) = crate::ecosystems::ecosystem(&project.kind) {
+        // Xcode builds only on macOS: elsewhere there is nothing to set up.
+        if eco.only_on.is_some_and(|os| os != std::env::consts::OS) {
+            return Planned::NotNeeded(format!(
+                "{} projects build only on {}",
+                eco.kind,
+                if eco.only_on == Some("macos") {
+                    "macOS"
+                } else {
+                    eco.only_on.unwrap_or_default()
+                }
+            ));
+        }
+        let missing = match step {
+            "lint" => eco.lint,
+            "typecheck" => eco.typecheck,
+            _ => eco.test,
+        };
+        return match missing {
+            crate::ecosystems::Missing::NotNeeded(why) => Planned::NotNeeded(why.to_owned()),
+            crate::ecosystems::Missing::Skipped(why) => Planned::Skipped(why.to_owned()),
+        };
     }
     match (project.kind.as_str(), step) {
         ("rust", "typecheck") => Planned::NotNeeded("cargo clippy already type-checks".to_owned()),
-        ("go", "typecheck") => Planned::NotNeeded("go vet already type-checks".to_owned()),
         ("python", "lint") => Planned::Skipped("no linter was found (looked for ruff)".to_owned()),
         ("python", "typecheck") => {
             Planned::Skipped("no type checker was found (looked for mypy)".to_owned())
@@ -682,10 +710,12 @@ pub fn plan_verify(
         "cargo"
     } else if root_project("python").is_some() {
         "python"
-    } else if root_project("go").is_some() {
-        "go"
     } else {
-        "none"
+        crate::ecosystems::ECOSYSTEMS
+            .iter()
+            .map(|eco| eco.kind)
+            .find(|kind| root_project(kind).is_some())
+            .unwrap_or("none")
     };
 
     let detect = |step: &str| -> Planned {
@@ -715,10 +745,12 @@ pub fn plan_verify(
                 "test" => Planned::Command("cargo test --workspace".to_owned()),
                 _ => Planned::NotNeeded("cargo clippy already type-checks".to_owned()),
             },
-            kind @ ("python" | "go") => root_project(kind).map_or_else(
-                || Planned::Skipped(format!("no {step} command found")),
-                |project| project_step(project, step),
-            ),
+            kind if kind == "python" || crate::ecosystems::ecosystem(kind).is_some() => {
+                root_project(kind).map_or_else(
+                    || Planned::Skipped(format!("no {step} command found")),
+                    |project| project_step(project, step),
+                )
+            }
             _ => Planned::Skipped(format!(
                 "no {step} command found; set verify.{step} in your firescale config"
             )),
@@ -1424,8 +1456,23 @@ fn shell(command: &str) -> Command {
     // understand. With /S, cmd strips the outer pair of quotes and runs the rest.
     shell
         .args(["/D", "/S", "/C"])
-        .raw_arg(format!("\"{command}\""));
+        .raw_arg(format!("\"{}\"", windows_wrapper(command)));
     shell
+}
+
+/// `./gradlew test` as cmd runs it: `.\gradlew test`, which finds
+/// `gradlew.bat` in the folder (ADR 0051). Only a first word that is `./`
+/// and a name with no other slash; anything else is left as written.
+#[cfg(any(windows, test))]
+fn windows_wrapper(command: &str) -> String {
+    let Some(rest) = command.strip_prefix("./") else {
+        return command.to_owned();
+    };
+    let word = rest.split_whitespace().next().unwrap_or("");
+    if word.is_empty() || word.contains(['/', '\\']) {
+        return command.to_owned();
+    }
+    format!(".\\{rest}")
 }
 
 /// The platform shell, set up to run one command line.
@@ -3968,6 +4015,39 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
 pub fn format_verify_json(report: &VerifyReport) -> String {
     let json = serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_owned());
     format!("{json}\n")
+}
+
+#[cfg(test)]
+mod wrapper_tests {
+    use super::windows_wrapper;
+
+    #[test]
+    fn a_wrapper_in_the_folder_runs_with_cmd() {
+        assert_eq!(windows_wrapper("./gradlew test"), ".\\gradlew test");
+        assert_eq!(windows_wrapper("./mvnw -B test"), ".\\mvnw -B test");
+        assert_eq!(windows_wrapper("./scripts/t.sh"), "./scripts/t.sh");
+        assert_eq!(windows_wrapper("npm test"), "npm test");
+    }
+    #[test]
+    fn an_xcode_project_needs_nothing_off_macos() {
+        let project = crate::facts::Project {
+            kind: "xcode".to_owned(),
+            commands: crate::facts::Commands {
+                typecheck: Some("xcodebuild build".to_owned()),
+                ..crate::facts::Commands::default()
+            },
+            ..crate::facts::Project::default()
+        };
+        let planned = super::project_step(&project, "typecheck");
+        if cfg!(target_os = "macos") {
+            assert!(matches!(planned, super::Planned::Command(_)));
+        } else {
+            assert!(
+                matches!(planned, super::Planned::NotNeeded(_)),
+                "{planned:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

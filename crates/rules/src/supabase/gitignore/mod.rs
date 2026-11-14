@@ -34,9 +34,9 @@ fn missing(ctx: &RuleContext) -> Result<Vec<&'static str>> {
     Ok(ENTRIES
         .into_iter()
         .filter(|entry| {
-            !is_covered(&inner, entry)
-                && !is_covered(&root, &format!("{DIR}/{entry}"))
-                && !is_covered(&root, entry)
+            // The root's line must reach `supabase/<entry>` as git reads
+            // it: `/.temp` there is the root's own folder, not this one.
+            !is_covered(&inner, entry) && !is_covered(&root, &format!("{DIR}/{entry}"))
         })
         .collect())
 }

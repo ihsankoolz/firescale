@@ -29,7 +29,27 @@
       "description": "Every package manager in use: the root's and each project's.",
       "type": "array",
       "items": {
-        "enum": ["bun", "cargo", "go", "npm", "pip", "pipenv", "pnpm", "poetry", "uv", "yarn"]
+        "enum": [
+          "bun",
+          "cargo",
+          "go",
+          "npm",
+          "pip",
+          "pipenv",
+          "pnpm",
+          "poetry",
+          "uv",
+          "yarn",
+          "maven",
+          "gradle",
+          "swiftpm",
+          "cocoapods",
+          "conan",
+          "vcpkg",
+          "nuget",
+          "flutter",
+          "dart"
+        ]
       }
     },
     "lockfiles": {
@@ -46,7 +66,12 @@
           "pnpm-lock.yaml",
           "poetry.lock",
           "uv.lock",
-          "yarn.lock"
+          "yarn.lock",
+          "gradle.lockfile",
+          "Package.resolved",
+          "Podfile.lock",
+          "pubspec.lock",
+          "packages.lock.json"
         ]
       }
     },
@@ -54,7 +79,23 @@
       "description": "Languages detected from marker files, at the root and in every project.",
       "type": "array",
       "items": {
-        "enum": ["go", "javascript", "python", "rust", "typescript"]
+        "enum": [
+          "go",
+          "javascript",
+          "python",
+          "rust",
+          "typescript",
+          "java",
+          "kotlin",
+          "swift",
+          "objective-c",
+          "c",
+          "cpp",
+          "csharp",
+          "fsharp",
+          "visual-basic",
+          "dart"
+        ]
       }
     },
     "tools": {
@@ -118,7 +159,21 @@
             "type": "string"
           },
           "kind": {
-            "enum": ["go", "node", "python", "rust"]
+            "enum": [
+              "go",
+              "node",
+              "python",
+              "rust",
+              "maven",
+              "gradle",
+              "swift",
+              "xcode",
+              "cmake",
+              "meson",
+              "dotnet",
+              "dart",
+              "make"
+            ]
           },
           "source": {
             "description": "How the project was found: it is the repo root, a workspace file at the root lists it, or a marker file was found in a subfolder.",
@@ -127,7 +182,23 @@
           "languages": {
             "type": "array",
             "items": {
-              "enum": ["go", "javascript", "python", "rust", "typescript"]
+              "enum": [
+                "go",
+                "javascript",
+                "python",
+                "rust",
+                "typescript",
+                "java",
+                "kotlin",
+                "swift",
+                "objective-c",
+                "c",
+                "cpp",
+                "csharp",
+                "fsharp",
+                "visual-basic",
+                "dart"
+              ]
             }
           },
           "packageManager": {
@@ -143,6 +214,15 @@
               "poetry",
               "uv",
               "yarn",
+              "maven",
+              "gradle",
+              "swiftpm",
+              "cocoapods",
+              "conan",
+              "vcpkg",
+              "nuget",
+              "flutter",
+              "dart",
               null
             ]
           },
@@ -160,7 +240,12 @@
                 "pnpm-lock.yaml",
                 "poetry.lock",
                 "uv.lock",
-                "yarn.lock"
+                "yarn.lock",
+                "gradle.lockfile",
+                "Package.resolved",
+                "Podfile.lock",
+                "pubspec.lock",
+                "packages.lock.json"
               ]
             }
           },
@@ -266,7 +351,23 @@
               },
               "kind": {
                 "description": "For a project: node, python, rust or go. For a shared node: folder or file.",
-                "enum": ["node", "python", "rust", "go", "folder", "file"]
+                "enum": [
+                  "node",
+                  "python",
+                  "rust",
+                  "go",
+                  "folder",
+                  "file",
+                  "maven",
+                  "gradle",
+                  "swift",
+                  "xcode",
+                  "cmake",
+                  "meson",
+                  "dotnet",
+                  "dart",
+                  "make"
+                ]
               },
               "name": {
                 "description": "For a project: its name in fscale facts.",

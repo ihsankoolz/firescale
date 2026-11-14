@@ -11,11 +11,13 @@
 //! table header CLI v3 refuses, or adds a new migration. It never edits a
 //! migration or replaces a file a person wrote.
 
-use firescale_core::jsonedit::{holds, insert_merge, merged};
-use firescale_core::model::{Finding, FixResult, Fixable};
 use firescale_core::rule::{BuiltinPack, RuleContext};
 use firescale_core::Result;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Map};
+
+pub(crate) use crate::stackkit::{
+    create, declared_version, depends_on, finding, package_json, package_json_with,
+};
 
 #[path = "config/mod.rs"]
 pub mod config;
@@ -59,34 +61,6 @@ pub const SCRIPTS: [(&str, &str); 3] = [
 pub const DIR: &str = "supabase";
 pub const CONFIG: &str = "supabase/config.toml";
 pub const MIGRATIONS: &str = "supabase/migrations";
-
-pub(crate) fn finding(file: &str, message: String, fixable: Fixable) -> Finding {
-    Finding {
-        message,
-        file: file.to_owned(),
-        range: None,
-        project: None,
-        fixable,
-        severity: None,
-    }
-}
-
-/// The root package.json, parsed. `Err(())` when it exists but is not JSON.
-pub(crate) fn package_json(ctx: &RuleContext) -> Result<std::result::Result<Option<Value>, ()>> {
-    let Some(text) = ctx.read("package.json")? else {
-        return Ok(Ok(None));
-    };
-    Ok(serde_json::from_str(text.trim_start_matches('\u{feff}'))
-        .map(Some)
-        .map_err(|_| ()))
-}
-
-/// True when package.json lists the package in any dependency list.
-pub(crate) fn depends_on(json: &Value, package: &str) -> bool {
-    ["dependencies", "devDependencies", "peerDependencies"]
-        .iter()
-        .any(|field| json.get(field).and_then(|deps| deps.get(package)).is_some())
-}
 
 /// True when the pack works at the repo root: the root has a `supabase/`
 /// folder, or no Supabase project is in a subfolder (the pack is on, so the
@@ -155,34 +129,6 @@ pub(crate) fn elsewhere(ctx: &RuleContext) -> Option<String> {
     walk(ctx.root(), "", 0)
 }
 
-/// The version of a declared dependency as (major, minor), from a spec such
-/// as `^2.108.0`; `None` for a tag, a URL or no declaration.
-pub(crate) fn declared_version(json: &Value, package: &str) -> Option<(u64, u64)> {
-    let spec = ["dependencies", "devDependencies"]
-        .iter()
-        .find_map(|field| json.get(field)?.get(package)?.as_str())?;
-    let rest = spec.trim_start_matches(|c: char| !c.is_ascii_digit());
-    let mut parts = rest.split(|c: char| !c.is_ascii_digit());
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().and_then(|m| m.parse().ok()).unwrap_or(0);
-    Some((major, minor))
-}
-
-/// Creates a file firescale owns, or does nothing when anything is there.
-pub(crate) fn create(
-    ctx: &RuleContext,
-    file: &str,
-    content: &str,
-    result: &mut FixResult,
-) -> Result<()> {
-    if ctx.root().join(file).symlink_metadata().is_ok() {
-        return Ok(());
-    }
-    ctx.create_tracked(file, content)?;
-    result.changed_files.push(file.to_owned());
-    Ok(())
-}
-
 /// The package.json of a new project.
 #[must_use]
 pub fn new_package_json() -> String {
@@ -213,22 +159,6 @@ pub fn new_package_json() -> String {
         "{}\n",
         serde_json::to_string_pretty(&value).unwrap_or_default()
     )
-}
-
-/// What package.json would become with `add` merged in as new lines, or
-/// `None` when that would change a line (or the file is not JSON).
-pub(crate) fn package_json_with(ctx: &RuleContext, add: &Value) -> Result<Option<String>> {
-    let Some(text) = ctx.read("package.json")? else {
-        return Ok(None);
-    };
-    let Ok(have) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else {
-        return Ok(None);
-    };
-    let target = merged(&have, add);
-    if !holds(&target, add) {
-        return Ok(None);
-    }
-    Ok(insert_merge(&text, &target))
 }
 
 /// The SQL files of `supabase/migrations` the CLI applies, in its order

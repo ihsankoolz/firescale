@@ -868,6 +868,75 @@ impl Doctor<'_> {
         }
     }
 
+    /// The programs each marker-file ecosystem needs (ADR 0051): a JDK,
+    /// Maven or Gradle, Swift, Xcode, CMake and a compiler, Meson, the .NET
+    /// SDK, Dart or Flutter, make. One line per program, and per project
+    /// folder; a program found for one folder is not asked again.
+    fn toolchains(&mut self) {
+        let projects: Vec<(String, &'static crate::ecosystems::Ecosystem)> = self
+            .facts
+            .projects
+            .iter()
+            .filter_map(|p| crate::ecosystems::ecosystem(&p.kind).map(|eco| (p.root.clone(), eco)))
+            .collect();
+        let mut asked: BTreeSet<String> = BTreeSet::new();
+        for (folder, eco) in projects {
+            // Xcode builds only on macOS: nothing to install elsewhere.
+            if eco.only_on.is_some_and(|os| os != std::env::consts::OS) {
+                continue;
+            }
+            let dir = dir_of(self.root, &folder);
+            let found = crate::ecosystems::Folder::read(self.root, &folder);
+            for tool in (eco.doctor)(&found) {
+                let name = tool.programs.join(" or ");
+                if !asked.insert(name.clone()) {
+                    continue;
+                }
+                // The first program that answers, with the first line that
+                // has a version in it (`java -version` can print a "Picked
+                // up …" line first).
+                let answer = tool.programs.iter().find_map(|program| {
+                    // MSVC's `cl` takes no `--version`: run alone, it
+                    // prints its version and exits 0.
+                    let args: &[&str] = if *program == "cl" {
+                        &[]
+                    } else {
+                        tool.version_args
+                    };
+                    let out = self.machine.run(&dir, program, args)?;
+                    let version = out.lines().find_map(find_version).unwrap_or_default();
+                    Some((*program, version))
+                });
+                let subject = subject_in(&folder, tool.programs.first().copied().unwrap_or("tool"));
+                match answer {
+                    Some((program, version)) => self.add(
+                        "tools",
+                        Some(&folder),
+                        subject,
+                        Status::Ok,
+                        if version.is_empty() {
+                            format!("{program} is installed")
+                        } else {
+                            format!("{program} {version}")
+                        },
+                        None,
+                    ),
+                    None => self.add(
+                        "tools",
+                        Some(&folder),
+                        subject,
+                        Status::Problem,
+                        format!(
+                            "{name} is not installed, or not on the PATH, and this {} project needs it.",
+                            eco.kind
+                        ),
+                        Some(tool.install.to_owned()),
+                    ),
+                }
+            }
+        }
+    }
+
     // --- Python: interpreter, virtual environment, dependencies
 
     fn python(&mut self) {
@@ -1686,6 +1755,7 @@ pub fn run_doctor(root: &Path, facts: &RepoFacts, machine: &dyn Machine) -> Doct
     doctor.package_managers();
     doctor.rust();
     doctor.go();
+    doctor.toolchains();
     doctor.python();
     doctor.node_dependencies();
     doctor.env();

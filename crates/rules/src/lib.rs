@@ -10,6 +10,7 @@ pub mod expo;
 pub mod group_project;
 pub mod nextjs;
 pub mod python;
+mod stackkit;
 pub mod supabase;
 
 /// Every built-in pack, in the order they are listed to users.

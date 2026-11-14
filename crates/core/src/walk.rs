@@ -140,3 +140,53 @@ mod tests {
         assert_eq!(walk_files(fixture.root()).unwrap(), ["a/b.txt", "c.txt"]);
     }
 }
+
+/// True when the lines of a `.gitignore` at the repo root ignore `path`
+/// (repo-relative, `/`-separated) as git would: globs (`[Bb]in/`,
+/// `/build*/`), anchors (`/.temp` is only the root's), directory-only
+/// lines and negations, with the last matching line deciding. A path that
+/// could be a folder or a file is ignored when either is, or when
+/// everything in it is.
+#[must_use]
+pub fn gitignore_covers(text: &str, path: &str) -> bool {
+    let root = Path::new("/");
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
+    for line in text.trim_start_matches('\u{feff}').lines() {
+        // A line git cannot read is skipped, as git skips it.
+        let _ = builder.add_line(None, line.trim_end_matches('\r'));
+    }
+    let Ok(matcher) = builder.build() else {
+        return false;
+    };
+    let path = root.join(path.trim_start_matches('/'));
+    // `node_modules/**` ignores what is in the folder, not the folder:
+    // as good, so a file inside it is asked too.
+    [true, false].into_iter().any(|is_dir| {
+        matcher
+            .matched_path_or_any_parents(&path, is_dir)
+            .is_ignore()
+    }) || matcher
+        .matched_path_or_any_parents(path.join("fscale-probe"), false)
+        .is_ignore()
+}
+
+#[cfg(test)]
+mod covers_tests {
+    use super::gitignore_covers;
+
+    #[test]
+    fn reads_gitignore_lines_as_git_does() {
+        assert!(gitignore_covers("[Bb]in/\n[Oo]bj/\n", "bin"));
+        assert!(gitignore_covers("/build*/\n", "build"));
+        assert!(gitignore_covers("**/node_modules/**\n", "node_modules"));
+        assert!(gitignore_covers("target\n", "target"));
+        assert!(gitignore_covers("\u{feff}.venv/\r\n", ".venv"));
+        // Anchored to the root: not a folder below it.
+        assert!(!gitignore_covers("/.temp\n", "supabase/.temp"));
+        assert!(gitignore_covers("supabase/.temp\n", "supabase/.temp"));
+        // The last matching line decides.
+        assert!(!gitignore_covers("build/\n!build/\n", "build"));
+        assert!(!gitignore_covers("# target\n", "target"));
+        assert!(gitignore_covers("*.jks\n", "release.jks"));
+    }
+}

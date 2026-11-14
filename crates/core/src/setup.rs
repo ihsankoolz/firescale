@@ -35,7 +35,8 @@ pub struct SetupProblem {
     pub missing_package: Option<String>,
 }
 
-/// Programs that a project's own install command does not provide.
+/// Programs that a project's own install command does not provide. The
+/// marker-file ecosystems add theirs (`ecosystems::Ecosystem::programs`).
 const BASE_PROGRAMS: [&str; 16] = [
     "bun", "cargo", "docker", "go", "node", "npm", "npx", "pip", "pipenv", "pnpm", "poetry", "py",
     "python", "python3", "uv", "yarn",
@@ -83,6 +84,55 @@ fn is_local_module(module: &str, root: &Path, dir: &Path) -> bool {
     false
 }
 
+/// What a build tool says when the machine lacks a toolchain, and what is
+/// missing. The messages are the tools' own (gradlew and mvnw scripts, the
+/// Android Gradle plugin, Meson, CMake, xcodebuild, the .NET host).
+const TOOLCHAIN_MESSAGES: [(&str, &str); 9] = [
+    (
+        "JAVA_HOME is not set and no 'java' command could be found",
+        "no JDK was found (set JAVA_HOME or put java on the PATH)",
+    ),
+    (
+        "ERROR: JAVA_HOME is set to an invalid directory",
+        "JAVA_HOME names a folder with no JDK",
+    ),
+    (
+        "SDK location not found",
+        "the Android SDK was not found (set ANDROID_HOME, or sdk.dir in local.properties)",
+    ),
+    (
+        "Could not detect Ninja",
+        "Ninja, which Meson builds with, is not installed",
+    ),
+    (
+        "No CMAKE_C_COMPILER could be found",
+        "no C compiler was found for CMake",
+    ),
+    (
+        "No CMAKE_CXX_COMPILER could be found",
+        "no C++ compiler was found for CMake",
+    ),
+    (
+        "xcode-select: error: tool 'xcodebuild' requires Xcode",
+        "xcodebuild needs Xcode, not only the command line tools",
+    ),
+    (
+        "You must install or update .NET to run this application",
+        "the .NET runtime this project targets is not installed",
+    ),
+    (
+        "A compatible .NET SDK was not found",
+        "the .NET SDK version global.json asks for is not installed",
+    ),
+];
+
+fn toolchain_missing(line: &str) -> Option<&'static str> {
+    TOOLCHAIN_MESSAGES
+        .iter()
+        .find(|(message, _)| line.contains(message))
+        .map(|(_, reason)| *reason)
+}
+
 /// A program named by a "not found" message, without a path or `.exe`.
 fn program_name(raw: &str) -> String {
     let base = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
@@ -96,7 +146,10 @@ fn program_name(raw: &str) -> String {
 
 fn missing(program: &str) -> SetupProblem {
     let name = program_name(program);
-    if BASE_PROGRAMS.contains(&name.as_str()) {
+    let toolchain = crate::ecosystems::ECOSYSTEMS
+        .iter()
+        .any(|eco| eco.programs.contains(&name.as_str()));
+    if BASE_PROGRAMS.contains(&name.as_str()) || toolchain {
         SetupProblem {
             reason: format!("the program `{name}` was not found on the PATH"),
             missing_program: Some(name),
@@ -1342,6 +1395,18 @@ pub fn setup_problem(
         if line.starts_with("Python was not found") {
             return Some(missing("python"));
         }
+        // A toolchain the build needs is missing from the machine (ADR 0051):
+        // the Gradle and Maven wrappers without a JDK, an Android build
+        // without the SDK, Meson without Ninja, CMake without a compiler.
+        if let Some(reason) = toolchain_missing(line) {
+            return Some(SetupProblem {
+                reason: reason.to_owned(),
+                missing_program: None,
+                missing_service: None,
+                start_services: None,
+                missing_package: None,
+            });
+        }
         // cmd: 'vitest' is not recognized as an internal or external command
         if let Some(index) = line.find(" is not recognized as an internal or external command") {
             if let Some(name) = name_after(line, 0).filter(|_| index > 0) {
@@ -1417,6 +1482,26 @@ pub fn setup_problem(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod toolchain_tests {
+    use super::toolchain_missing;
+
+    #[test]
+    fn a_missing_toolchain_is_setup_not_a_failure() {
+        assert!(toolchain_missing(
+            "ERROR: JAVA_HOME is not set and no 'java' command could be found in your PATH."
+        )
+        .is_some());
+        assert!(toolchain_missing("SDK location not found. Define a valid SDK location with an ANDROID_HOME environment variable").is_some());
+        assert!(toolchain_missing("ERROR: Could not detect Ninja v1.8.2 or newer").is_some());
+        assert!(toolchain_missing(
+            "CMake Error at CMakeLists.txt:2 (project): No CMAKE_CXX_COMPILER could be found."
+        )
+        .is_some());
+        assert!(toolchain_missing("FAILED: CalcTest > adds()").is_none());
+    }
 }
 
 #[cfg(test)]

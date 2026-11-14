@@ -16,66 +16,71 @@ const GITIGNORE: &str = ".gitignore";
 
 pub struct GitignoreBasics;
 
-/// Entries every repo of a detected language should ignore.
-fn required_entries(languages: &[String]) -> Vec<&'static str> {
+/// Entries every repo of a detected language should ignore: names for the
+/// languages, and for each marker-file ecosystem's project its build output
+/// (ADR 0051) — a bare name for a project at the root, a path for one in a
+/// subfolder (`native/build`), which git reads as that folder only.
+fn required_entries(languages: &[String], kinds: &[(&str, &str)]) -> Vec<String> {
     let has = |name: &str| languages.iter().any(|language| language == name);
-    let mut entries = Vec::new();
+    let mut entries: Vec<String> = Vec::new();
     if has("javascript") || has("typescript") {
-        entries.push("node_modules");
+        entries.push("node_modules".to_owned());
     }
     if has("rust") {
-        entries.push("target");
+        entries.push("target".to_owned());
     }
     if has("python") {
-        entries.push("__pycache__");
-        entries.push(".venv");
+        entries.push("__pycache__".to_owned());
+        entries.push(".venv".to_owned());
+    }
+    for (root, kind) in kinds {
+        if let Some(eco) = firescale_core::ecosystems::ecosystem(kind) {
+            for entry in eco.ignored {
+                let path = if *root == "." {
+                    (*entry).to_owned()
+                } else {
+                    format!("{root}/{entry}")
+                };
+                if !entries.contains(&path) {
+                    entries.push(path);
+                }
+            }
+        }
     }
     entries
 }
 
-/// Reduces a `.gitignore` line to a bare name: `/node_modules/`, `**/node_modules/**` -> `node_modules`.
-fn normalise(line: &str) -> String {
-    let mut text = line.trim();
-    if let Some(rest) = text.strip_prefix("**/") {
-        text = rest;
-    }
-    if let Some(rest) = text.strip_prefix('/') {
-        text = rest;
-    }
-    for suffix in ["/**", "/*", "/"] {
-        if let Some(rest) = text.strip_suffix(suffix) {
-            text = rest;
-            break;
-        }
-    }
-    text.to_owned()
-}
-
-/// Covered when the LAST line matching the entry is not a negation (`!entry`).
+/// Covered when git, reading `gitignore` at the repo root, ignores `entry`
+/// (a folder or file name, or a repo-relative path): globs, anchors and
+/// negations count as git counts them (ADR 0051; it was a name match).
 pub(crate) fn is_covered(gitignore: &str, entry: &str) -> bool {
-    let mut covered = false;
-    for line in gitignore
-        .trim_start_matches('\u{feff}')
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-    {
-        match line.strip_prefix('!') {
-            Some(rest) if normalise(rest) == entry => covered = false,
-            Some(_) => {}
-            None if normalise(line) == entry => covered = true,
-            None => {}
-        }
-    }
-    covered
+    firescale_core::walk::gitignore_covers(gitignore, entry)
 }
 
-fn missing_entries(ctx: &RuleContext, gitignore: &str) -> Result<Vec<&'static str>> {
+fn missing_entries(ctx: &RuleContext, gitignore: &str) -> Result<Vec<String>> {
     let facts = detect_facts(ctx.root())?;
-    Ok(required_entries(&facts.languages)
-        .into_iter()
-        .filter(|entry| !is_covered(gitignore, entry))
-        .collect())
+    let kinds: Vec<(&str, &str)> = facts
+        .projects
+        .iter()
+        .map(|project| (project.root.as_str(), project.kind.as_str()))
+        .collect();
+    let mut missing = Vec::new();
+    for entry in required_entries(&facts.languages, &kinds) {
+        if is_covered(gitignore, &entry) {
+            continue;
+        }
+        // A subfolder project's own .gitignore counts for its build output.
+        if let Some((folder, name)) = entry.rsplit_once('/') {
+            let own = ctx
+                .read(&format!("{folder}/.gitignore"))?
+                .unwrap_or_default();
+            if is_covered(&own, name) {
+                continue;
+            }
+        }
+        missing.push(entry);
+    }
+    Ok(missing)
 }
 
 impl BuiltinRule for GitignoreBasics {
@@ -119,6 +124,7 @@ impl BuiltinRule for GitignoreBasics {
                 "**/alembic.ini",
             ]
             .iter()
+            .chain(firescale_core::ecosystems::MARKER_GLOBS.iter())
             .map(|name| (*name).to_owned())
             .collect(),
             has_fix: true,

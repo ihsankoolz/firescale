@@ -13,6 +13,7 @@ pub mod check;
 pub mod config;
 pub mod diff;
 pub mod doctor;
+pub mod ecosystems;
 pub mod error;
 pub mod explain;
 pub mod facts;

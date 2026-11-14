@@ -704,6 +704,24 @@ One milestone and one pull request per pack, with the same "Build" and "Done whe
 
 ---
 
+## M31 — Ecosystems: Java, Kotlin, Android, Swift, Xcode, C, C++, .NET, Dart ☑
+
+Added by the owner (refactor, and work with other languages such as Java, Rust, C, Swift and Xcode, and mobile). Decisions in ADR 0051: project support, no new parsers, no new packs.
+
+**Build**
+
+- One table of ecosystems found by a marker file (`crates/core/src/ecosystems.rs`), read by facts, verify, doctor, setup, the step cache and `core/gitignore-basics`; Go moved into it.
+- Maven, Gradle (Java, Kotlin, Android), SwiftPM, Xcode, CMake, Meson, .NET, Dart/Flutter and Make.
+- gitignore lines read as git reads them; one copy of the stack packs' shared helpers.
+
+**Done when**
+
+- ☑ Each ecosystem is found, named and given its commands, with tests on fixtures (`crates/core/src/ecosystems/tests.rs`).
+- ☑ `fscale verify` runs the real tools on a Maven, Gradle, CMake, Meson and Make project in the build environment, and fails on a failing test.
+- ☑ Five real repos (nowinandroid, swift-argument-parser, nlohmann/json, eShop, flutter/gallery) are read as one project each, as their own tools see them.
+
+---
+
 ## Later (not ordered)
 
 - Docs site. Publishing to npm is automated from 0.1.1 on: a pushed tag `v<version>` builds, publishes with npm trusted publishing and verifies (ADR 0021, `RELEASING.md`). The tag is the owner's to push.

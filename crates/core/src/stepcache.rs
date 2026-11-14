@@ -580,6 +580,12 @@ fn probes(command: &str) -> Vec<(String, Vec<&'static str>)> {
     };
     let stem = file_stem(&program);
     let path = program.contains(['/', '\\']);
+    // The Gradle and Maven wrappers are the repo's own scripts (keyed by
+    // where they are), but the JDK they start is the machine's.
+    if matches!(stem.as_str(), "gradlew" | "mvnw") {
+        // `-version`, which every JDK knows (8 has no `--version`).
+        return vec![("java".to_owned(), vec!["-version"])];
+    }
     if path && !is_venv_interpreter(&program) {
         return Vec::new();
     }
@@ -598,6 +604,16 @@ fn probes(command: &str) -> Vec<(String, Vec<&'static str>)> {
         out.push(("rustc".to_owned(), vec!["--version"]));
     } else if stem == "go" {
         out.push((program.clone(), vec!["version"]));
+    } else if matches!(stem.as_str(), "mvn" | "gradle") {
+        out.push((program.clone(), vec!["--version"]));
+        out.push(("java".to_owned(), vec!["-version"]));
+    } else if matches!(
+        stem.as_str(),
+        "swift" | "cmake" | "meson" | "dotnet" | "dart" | "flutter"
+    ) {
+        out.push((program.clone(), vec!["--version"]));
+    } else if stem == "xcodebuild" {
+        out.push((program.clone(), vec!["-version"]));
     }
     out
 }
@@ -2080,6 +2096,13 @@ mod tests {
         assert_eq!(probes("venv\\Scripts\\python.exe -m pytest").len(), 1);
         assert_eq!(probes("python3.12 -m pytest").len(), 1);
         assert_eq!(probes("pnpm test").len(), 2);
+        // A build wrapper is not run, but the JDK it starts is asked.
+        assert_eq!(
+            probes("./gradlew test"),
+            vec![("java".to_owned(), vec!["-version"])]
+        );
+        assert_eq!(probes("mvn -B test").len(), 2);
+        assert_eq!(probes("swift test").len(), 1);
     }
 
     #[test]
