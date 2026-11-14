@@ -23,16 +23,65 @@ pub struct LocalSmtp;
 /// migration guide): older ones may not read it.
 const RENAMED_IN: (u64, u64) = (2, 108);
 
+/// The table headers of a config, by 1-based line, outside multi-line
+/// strings (`"""` and `\'\'\'`).
+fn headers(text: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut in_string: Option<&str> = None;
+    for (index, line) in text.lines().enumerate() {
+        if in_string.is_none() {
+            if let Some(name) = table_header(line) {
+                out.push((index + 1, name));
+                continue;
+            }
+        }
+        for quote in [r#"""""#, "\'\'\'"] {
+            let count = line.matches(quote).count();
+            if count % 2 == 1 {
+                in_string = match in_string {
+                    Some(q) if q == quote => None,
+                    None => Some(quote),
+                    other => other,
+                };
+            }
+        }
+    }
+    out
+}
+
+fn is_inbucket(name: &str) -> bool {
+    name == "inbucket" || name.starts_with("inbucket.")
+}
+
 /// The 1-based lines of `[inbucket]` and `[inbucket.*]` headers.
 fn inbucket_lines(text: &str) -> Vec<usize> {
-    text.lines()
-        .enumerate()
-        .filter(|(_, line)| {
-            table_header(line)
-                .is_some_and(|name| name == "inbucket" || name.starts_with("inbucket."))
-        })
-        .map(|(index, _)| index + 1)
+    headers(text)
+        .into_iter()
+        .filter(|(_, name)| is_inbucket(name))
+        .map(|(line, _)| line)
         .collect()
+}
+
+/// True when the config already has `[local_smtp]`: renaming would make a
+/// second table of that name, which TOML forbids.
+fn has_local_smtp(text: &str) -> bool {
+    headers(text)
+        .iter()
+        .any(|(_, name)| name == "local_smtp" || name.starts_with("local_smtp."))
+}
+
+/// The command that updates the CLI with the repo's own package manager.
+fn update_command(ctx: &RuleContext) -> &'static str {
+    let root = ctx.root();
+    if root.join("pnpm-lock.yaml").exists() {
+        "pnpm add -D supabase@latest"
+    } else if root.join("yarn.lock").exists() {
+        "yarn add -D supabase@latest"
+    } else if root.join("bun.lock").exists() || root.join("bun.lockb").exists() {
+        "bun add -d supabase@latest"
+    } else {
+        "npm install --save-dev supabase@latest"
+    }
 }
 
 /// The CLI's version spec when package.json allows a CLI older than the
@@ -53,11 +102,11 @@ fn older_cli(ctx: &RuleContext) -> Result<Option<String>> {
 /// The config with each `[inbucket…]` header renamed, everything else as it
 /// was (the keys are the same: CLI 3.1.0 loads them under `[local_smtp]`).
 fn renamed(text: &str) -> String {
+    let lines: Vec<usize> = inbucket_lines(text);
     text.split_inclusive('\n')
-        .map(|piece| {
-            if table_header(piece)
-                .is_some_and(|name| name == "inbucket" || name.starts_with("inbucket."))
-            {
+        .enumerate()
+        .map(|(index, piece)| {
+            if lines.contains(&(index + 1)) {
                 piece.replacen("inbucket", "local_smtp", 1)
             } else {
                 piece.to_owned()
@@ -73,7 +122,7 @@ impl BuiltinRule for LocalSmtp {
             severity: Severity::High,
             category: Category::Reliability,
             description: "supabase/config.toml has no [inbucket] table, which Supabase CLI v3 refuses; it is [local_smtp] now.".to_owned(),
-            inputs: vec![CONFIG.to_owned(), "package.json".to_owned()],
+            inputs: super::inputs(&["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"]),
             has_fix: true,
             after: vec![super::config::ID.to_owned()],
         }
@@ -95,14 +144,18 @@ impl BuiltinRule for LocalSmtp {
             return Ok(Vec::new());
         };
         let older = older_cli(ctx)?;
+        let both = has_local_smtp(&text);
+        let message = if both {
+            format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load, and a [local_smtp] table too. Move the settings you want into [local_smtp] and delete [inbucket] by hand (renaming would make two tables of one name).")
+        } else if let Some(spec) = &older {
+            format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load. package.json allows a CLI older than 2.108 (\"supabase\": \"{spec}\"), which may not read [local_smtp]: update the CLI (`{}`), then run `fscale sync` to rename it.", update_command(ctx))
+        } else {
+            format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load (`supabase start` and the db commands fail). `fscale sync` renames it to [local_smtp]; its keys stay as they are.")
+        };
         Ok(vec![finding(
             CONFIG,
-            if let Some(spec) = &older {
-                format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load. package.json allows a CLI older than 2.108 (\"supabase\": \"{spec}\"), which may not read [local_smtp]: update the CLI (`npm install --save-dev supabase@latest`), then run `fscale sync` to rename it.")
-            } else {
-                format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load (`supabase start` and the db commands fail). `fscale sync` renames it to [local_smtp]; its keys stay as they are.")
-            },
-            if older.is_some() {
+            message,
+            if both || older.is_some() {
                 Fixable::Manual
             } else {
                 Fixable::Deterministic
@@ -118,7 +171,7 @@ impl BuiltinRule for LocalSmtp {
         let Some(text) = ctx.read(CONFIG)? else {
             return Ok(result);
         };
-        if inbucket_lines(&text).is_empty() {
+        if inbucket_lines(&text).is_empty() || has_local_smtp(&text) {
             return Ok(result);
         }
         ctx.write(CONFIG, &renamed(&text))?;

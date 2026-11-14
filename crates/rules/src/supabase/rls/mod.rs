@@ -33,6 +33,25 @@ fn exposed(ctx: &RuleContext) -> Result<Vec<String>> {
     ))
 }
 
+/// `schema.table` as SQL reads it: a part that is not lower-case letters,
+/// digits and `_` is quoted, so `public."Todos"` stays `Todos`.
+fn sql_name(name: &str) -> String {
+    name.split('.')
+        .map(|part| {
+            let plain = part
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                && !part.starts_with(|c: char| c.is_ascii_digit());
+            if plain {
+                part.to_owned()
+            } else {
+                format!("\"{}\"", part.replace('"', "\"\""))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
 impl BuiltinRule for Rls {
     fn meta(&self) -> RuleMeta {
         RuleMeta {
@@ -40,7 +59,7 @@ impl BuiltinRule for Rls {
             severity: Severity::High,
             category: Category::Security,
             description: "Every table the migrations create in a schema the API exposes has row level security enabled.".to_owned(),
-            inputs: vec![format!("{MIGRATIONS}/*.sql"), CONFIG.to_owned()],
+            inputs: super::inputs(&[&format!("{MIGRATIONS}/*.sql")]),
             has_fix: false,
             after: Vec::new(),
         }
@@ -55,7 +74,7 @@ impl BuiltinRule for Rls {
             return Ok(Vec::new());
         }
         let schemas = exposed(ctx)?;
-        let migrations = migrations(ctx)?;
+        let migrations = migrations(ctx);
         Ok(sql::tables(&migrations)
             .into_iter()
             .filter(|table| {
@@ -70,7 +89,8 @@ impl BuiltinRule for Rls {
                     &format!("{MIGRATIONS}/{}", table.created_in),
                     format!(
                         "Table {} is in a schema the API exposes, and no migration enables row level security on it: any role with a grant can read and write it through the API. Add a migration with `alter table {} enable row level security;` and the policies its users need.",
-                        table.name, table.name
+                        table.name,
+                        sql_name(&table.name)
                     ),
                     Fixable::Agent,
                 )

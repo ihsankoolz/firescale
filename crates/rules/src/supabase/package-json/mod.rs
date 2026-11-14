@@ -30,6 +30,24 @@ const LOCKFILES: [&str; 5] = [
     "bun.lockb",
 ];
 
+/// Manifests of other stacks: a Supabase project in a Flutter, Python, Go,
+/// Rust or Deno repo gets no package.json written for it.
+const OTHER_STACKS: [&str; 7] = [
+    "pubspec.yaml",
+    "pyproject.toml",
+    "requirements.txt",
+    "go.mod",
+    "Cargo.toml",
+    "deno.json",
+    "deno.jsonc",
+];
+
+pub(crate) fn other_stack(ctx: &RuleContext) -> Option<&'static str> {
+    OTHER_STACKS
+        .into_iter()
+        .find(|name| ctx.root().join(name).is_file())
+}
+
 fn has_lockfile(ctx: &RuleContext) -> bool {
     LOCKFILES.iter().any(|name| ctx.root().join(name).exists())
 }
@@ -52,7 +70,20 @@ impl BuiltinRule for PackageJson {
             severity: Severity::High,
             category: Category::Reliability,
             description: "package.json has the Supabase CLI (`supabase`) as a dev dependency, so `npx supabase` runs the repo's version.".to_owned(),
-            inputs: vec!["package.json".to_owned()],
+            inputs: super::inputs(&[
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "yarn.lock",
+                "bun.lock",
+                "bun.lockb",
+                "pubspec.yaml",
+                "pyproject.toml",
+                "requirements.txt",
+                "go.mod",
+                "Cargo.toml",
+                "deno.json",
+                "deno.jsonc",
+            ]),
             has_fix: true,
             after: Vec::new(),
         }
@@ -77,6 +108,14 @@ impl BuiltinRule for PackageJson {
         }
         let json = match package_json(ctx)? {
             Ok(Some(json)) => json,
+            Ok(None) if other_stack(ctx).is_some() => {
+                let manifest = other_stack(ctx).unwrap_or_default();
+                return Ok(vec![finding(
+                    "package.json",
+                    format!("No package.json, and this is not a JavaScript project ({manifest}), so none is created. Run the Supabase CLI the way Supabase documents for your setup (a pinned global install, or `npx supabase@<version>`), or turn the supabase/package-json rule off."),
+                    Fixable::Manual,
+                )])
+            }
             Ok(None) => {
                 return Ok(vec![finding(
                     "package.json",
@@ -112,6 +151,7 @@ impl BuiltinRule for PackageJson {
             return Ok(result);
         }
         match package_json(ctx)? {
+            Ok(None) if other_stack(ctx).is_some() => {}
             Ok(None) => {
                 create(ctx, "package.json", &new_package_json(), &mut result)?;
                 if !result.changed_files.is_empty() {

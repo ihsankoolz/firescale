@@ -61,8 +61,13 @@ pub fn new_config(project_id: &str) -> String {
 fn with_project_id(text: &str, project_id: &str) -> String {
     let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let line = format!("project_id = \"{project_id}\"{eol}");
-    let mut offset = 0;
-    for piece in text.split_inclusive('\n') {
+    // A byte order mark stays first.
+    let mut offset = if text.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    for piece in text[offset..].split_inclusive('\n') {
         if table_header(piece).is_some() {
             return format!("{}{line}{eol}{}", &text[..offset], &text[offset..]);
         }
@@ -85,7 +90,7 @@ impl BuiltinRule for Config {
             description:
                 "supabase/config.toml exists and sets project_id, which the Supabase CLI requires."
                     .to_owned(),
-            inputs: vec![CONFIG.to_owned(), "package.json".to_owned()],
+            inputs: super::inputs(&[]),
             has_fix: true,
             after: vec![super::package_json::ID.to_owned()],
         }
@@ -123,8 +128,13 @@ impl BuiltinRule for Config {
         match ctx.read(CONFIG)? {
             None => create(ctx, CONFIG, &new_config(&id), &mut result)?,
             Some(text) if config_value(&text, None, "project_id").is_none() => {
-                ctx.write(CONFIG, &with_project_id(&text, &id))?;
-                result.changed_files.push(CONFIG.to_owned());
+                // Written only when the key is then read back at the top
+                // level: never a change the next run would repeat.
+                let updated = with_project_id(&text, &id);
+                if config_value(&updated, None, "project_id").is_some() {
+                    ctx.write(CONFIG, &updated)?;
+                    result.changed_files.push(CONFIG.to_owned());
+                }
             }
             Some(_) => {}
         }

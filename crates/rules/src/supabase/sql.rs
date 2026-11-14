@@ -46,7 +46,12 @@ pub fn statements(text: &str) -> Vec<String> {
                 continue;
             }
             '\'' => {
-                // A string: kept as '' so statements still read in shape.
+                // A string: kept as '' so statements still read in shape. A
+                // backslash escapes only in an E'…' string: with PostgreSQL's
+                // default standard_conforming_strings, '\' is a whole string.
+                let escapes = i >= 1
+                    && matches!(chars[i - 1], 'e' | 'E')
+                    && !(i >= 2 && (chars[i - 2].is_alphanumeric() || chars[i - 2] == '_'));
                 i += 1;
                 while i < chars.len() {
                     if chars[i] == '\'' {
@@ -56,7 +61,7 @@ pub fn statements(text: &str) -> Vec<String> {
                         }
                         break;
                     }
-                    if chars[i] == '\\' {
+                    if escapes && chars[i] == '\\' {
                         i += 1;
                     }
                     i += 1;
@@ -94,14 +99,18 @@ pub fn statements(text: &str) -> Vec<String> {
                 if chars.get(j) == Some(&'$')
                     && !chars[i + 1..j].first().is_some_and(char::is_ascii_digit)
                 {
-                    let tag: String = chars[i..=j].iter().collect();
-                    let rest: String = chars[j + 1..].iter().collect();
-                    match rest.find(&tag) {
-                        Some(at) => {
-                            i = j + 1 + rest[..at].chars().count() + tag.chars().count();
+                    // Find the closing tag in place: no copy of the rest.
+                    let tag = &chars[i..=j];
+                    let mut k = j + 1;
+                    let mut end = chars.len();
+                    while k + tag.len() <= chars.len() {
+                        if chars[k] == '$' && &chars[k..k + tag.len()] == tag {
+                            end = k + tag.len();
+                            break;
                         }
-                        None => i = chars.len(),
+                        k += 1;
                     }
+                    i = end;
                     current.push_str("$$");
                     continue;
                 }
@@ -295,11 +304,11 @@ fn apply(state: &mut BTreeMap<String, Table>, file: &str, statement: &str) {
             }
             return;
         }
-        // Several actions can be listed; the last switch of RLS wins.
+        // Several actions can be listed; the last switch of RLS wins. Only
+        // ENABLE turns it on: FORCE does nothing without it (and "no force"
+        // is not "force").
         let on = lower.rfind("enable row level security");
         let off = lower.rfind("disable row level security");
-        let forced = lower.rfind("force row level security");
-        let on = on.max(forced);
         if let Some(table) = state.get_mut(&name) {
             match (on, off) {
                 (Some(a), Some(b)) => table.rls = a > b,
@@ -353,6 +362,40 @@ mod tests {
                 ("public.memos", true),
             ]
         );
+    }
+
+    #[test]
+    fn a_backslash_ends_a_standard_string_and_escapes_only_in_e_strings() {
+        let tables = run(&[(
+            "1.sql",
+            "create table files (n text); select * from files where n like 'a\\_%' escape '\\';\ncreate table other (id int); select E'it\\'s';\nalter table files enable row level security; alter table other enable row level security;",
+        )]);
+        assert!(tables.iter().all(|t| t.rls), "{tables:?}");
+        assert_eq!(tables.len(), 2);
+    }
+
+    #[test]
+    fn force_alone_is_not_rls() {
+        let tables = run(&[(
+            "1.sql",
+            "create table a (id int); alter table a force row level security;\ncreate table b (id int); alter table b enable row level security; alter table b no force row level security;",
+        )]);
+        assert_eq!(
+            tables
+                .iter()
+                .map(|t| (t.name.as_str(), t.rls))
+                .collect::<Vec<_>>(),
+            vec![("public.a", false), ("public.b", true)]
+        );
+    }
+
+    #[test]
+    fn many_function_bodies_are_read_in_linear_time() {
+        let body = "create function f() returns void as $fn$ begin perform 1; end; $fn$ language plpgsql;\n";
+        let text = body.repeat(20_000);
+        let started = std::time::Instant::now();
+        assert_eq!(statements(&text).len(), 20_000);
+        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
     }
 
     #[test]

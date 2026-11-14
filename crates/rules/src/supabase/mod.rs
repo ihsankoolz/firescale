@@ -89,22 +89,28 @@ pub(crate) fn depends_on(json: &Value, package: &str) -> bool {
 }
 
 /// True when the pack works at the repo root: the root has a `supabase/`
-/// folder, or its package.json depends on the CLI or the client, or no
-/// Supabase project is in a subfolder (the pack is on, so the root is where
-/// it goes: a new project, or one beside another stack's package.json).
+/// folder, or no Supabase project is in a subfolder (the pack is on, so the
+/// root is where it goes: a new project, or one beside another stack's
+/// package.json). Dependencies do not count: a workspace often lists the
+/// CLI or the client at its root while its project is in a subfolder.
 pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
     if ctx.root().join(DIR).is_dir() {
         return Ok(true);
     }
-    Ok(match package_json(ctx)? {
-        Ok(None) => elsewhere(ctx).is_none(),
-        Ok(Some(json)) => {
-            depends_on(&json, "supabase")
-                || depends_on(&json, "@supabase/supabase-js")
-                || elsewhere(ctx).is_none()
+    Ok(!matches!(package_json(ctx)?, Err(())) && elsewhere(ctx).is_none())
+}
+
+/// What every rule of the pack reads besides its own files, for the cache:
+/// where the pack applies depends on package.json, the root `supabase/`
+/// config and any Supabase project in a subfolder.
+pub(crate) fn inputs(own: &[&str]) -> Vec<String> {
+    let mut all: Vec<String> = own.iter().map(|s| (*s).to_owned()).collect();
+    for shared in ["package.json", CONFIG, "**/supabase/config.toml"] {
+        if !all.iter().any(|a| a == shared) {
+            all.push(shared.to_owned());
         }
-        Err(()) => false,
-    })
+    }
+    all
 }
 
 /// A folder below the root, at most three deep, that holds a Supabase
@@ -227,7 +233,7 @@ pub(crate) fn package_json_with(ctx: &RuleContext, add: &Value) -> Result<Option
 
 /// The SQL files of `supabase/migrations` the CLI applies, in its order
 /// (byte-wise by name), with their text: `<digits>_<name>.sql` only.
-pub(crate) fn migrations(ctx: &RuleContext) -> Result<Vec<(String, String)>> {
+pub(crate) fn migrations(ctx: &RuleContext) -> Vec<(String, String)> {
     let mut names: Vec<String> = migration_entries(ctx)
         .into_iter()
         .filter(|(name, is_file)| *is_file && migration_names::version(name).is_some())
@@ -236,12 +242,17 @@ pub(crate) fn migrations(ctx: &RuleContext) -> Result<Vec<(String, String)>> {
     names.sort_unstable();
     let mut out = Vec::new();
     for name in names {
-        let path = format!("{MIGRATIONS}/{name}");
-        if let Some(text) = ctx.read(&path)? {
-            out.push((name, text));
+        // Read as bytes: a migration in another encoding is read lossily,
+        // never a reason to stop the whole check.
+        let path = MIGRATIONS
+            .split('/')
+            .fold(ctx.root().to_path_buf(), |dir, part| dir.join(part))
+            .join(&name);
+        if let Ok(bytes) = std::fs::read(path) {
+            out.push((name, String::from_utf8_lossy(&bytes).into_owned()));
         }
     }
-    Ok(out)
+    out
 }
 
 /// Every entry of `supabase/migrations`, with whether it is a file.
@@ -269,7 +280,8 @@ pub(crate) fn migration_entries(ctx: &RuleContext) -> Vec<(String, bool)> {
 /// what this pack needs; not a TOML parser.
 pub(crate) fn config_value(text: &str, table: Option<&str>, key: &str) -> Option<String> {
     let mut current: Option<String> = None;
-    for line in text.trim_start_matches('\u{feff}').lines() {
+    let mut lines = text.trim_start_matches('\u{feff}').lines();
+    while let Some(line) = lines.next() {
         let line = line.trim();
         if let Some(header) = table_header(line) {
             current = Some(header);
@@ -281,22 +293,43 @@ pub(crate) fn config_value(text: &str, table: Option<&str>, key: &str) -> Option
         let Some((name, value)) = line.split_once('=') else {
             continue;
         };
-        if name.trim().trim_matches('"') == key {
-            let value = value.trim();
-            // A comment after the value.
-            let value = match value.find(" #") {
-                Some(at) if !value.starts_with('"') || value[..at].ends_with('"') => &value[..at],
-                _ => value,
-            };
-            return Some(value.trim().to_owned());
+        if name.trim().trim_matches('"') != key {
+            continue;
         }
+        let mut value = strip_comment(value).trim().to_owned();
+        // An array over several lines: read on to its closing bracket.
+        if value.starts_with('[') && !value.ends_with(']') {
+            for more in lines.by_ref() {
+                value.push(' ');
+                value.push_str(strip_comment(more).trim());
+                if value.ends_with(']') {
+                    break;
+                }
+            }
+        }
+        return Some(value);
     }
     None
 }
 
+/// A TOML value without a `#` comment after it (a `#` inside a string
+/// stays).
+fn strip_comment(value: &str) -> &str {
+    let mut quote: Option<char> = None;
+    for (at, c) in value.char_indices() {
+        match (quote, c) {
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), c) if c == q => quote = None,
+            (None, '#') => return &value[..at],
+            _ => {}
+        }
+    }
+    value
+}
+
 /// The name of a `[table]` or `[[array]]` header, without brackets.
 pub(crate) fn table_header(line: &str) -> Option<String> {
-    let line = line.trim();
+    let line = line.trim_start_matches('\u{feff}').trim();
     let line = match line.find('#') {
         Some(at) if line[..at].trim_end().ends_with(']') => line[..at].trim_end(),
         _ => line,

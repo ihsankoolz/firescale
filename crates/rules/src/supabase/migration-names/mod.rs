@@ -37,7 +37,7 @@ impl BuiltinRule for MigrationNames {
             severity: Severity::High,
             category: Category::Reliability,
             description: "Every SQL file in supabase/migrations is named <timestamp>_<name>.sql, with no timestamp used twice; the CLI skips any other.".to_owned(),
-            inputs: vec![format!("{MIGRATIONS}/*")],
+            inputs: super::inputs(&[&format!("{MIGRATIONS}/*")]),
             has_fix: false,
             after: Vec::new(),
         }

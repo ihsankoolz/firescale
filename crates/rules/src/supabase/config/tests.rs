@@ -57,4 +57,9 @@ fn project_id_goes_before_the_first_table_in_the_files_line_endings() {
         with_project_id("# only", "x"),
         "# only\nproject_id = \"x\"\n"
     );
+    // A byte order mark before the first table (review of M29): the key
+    // goes after it, before the table, and is read back.
+    let out = with_project_id("\u{feff}[api]\n[db]\n", "x");
+    assert_eq!(out, "\u{feff}project_id = \"x\"\n\n[api]\n[db]\n");
+    assert!(crate::supabase::config_value(&out, None, "project_id").is_some());
 }

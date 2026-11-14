@@ -65,3 +65,23 @@ fn renames_only_the_headers() {
     );
     assert!(inbucket_lines(&out).is_empty());
 }
+
+#[test]
+fn a_config_with_both_tables_or_inbucket_in_a_string_is_not_renamed() {
+    let both = "project_id = \"x\"\n[inbucket]\nport = 1\n[local_smtp]\nport = 2\n";
+    let f = project(|_| false, &[("supabase/config.toml", both)]);
+    let found = f.check(&local_smtp::LocalSmtp, &Options::new()).unwrap();
+    assert_eq!(found[0].fixable, Fixable::Manual);
+    assert!(f
+        .fix(&local_smtp::LocalSmtp, &Options::new())
+        .unwrap()
+        .changed_files
+        .is_empty());
+
+    let quoted = "project_id = \"x\"\n[auth]\nnote = \"\"\"\n[inbucket]\n\"\"\"\n";
+    let g = project(|_| false, &[("supabase/config.toml", quoted)]);
+    assert!(g
+        .check(&local_smtp::LocalSmtp, &Options::new())
+        .unwrap()
+        .is_empty());
+}

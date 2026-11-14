@@ -116,3 +116,54 @@ fn an_existing_package_json_of_another_stack_gets_the_cli_added() {
         .contains("\"supabase\": \"3.1.0\""));
     assert_eq!(fix_all(&f), Vec::<String>::new());
 }
+
+#[test]
+fn a_workspace_listing_the_cli_at_its_root_with_the_project_in_a_subfolder_gets_nothing_written() {
+    // Review of M29: hoisted dependencies must not make a second project.
+    let f = fixture(&[
+        (
+            "package.json",
+            "{ \"name\": \"mono\", \"devDependencies\": { \"supabase\": \"3.1.0\" } }\n".to_owned(),
+        ),
+        (
+            "apps/db/supabase/config.toml",
+            "project_id = \"db\"\n".to_owned(),
+        ),
+    ]);
+    assert_eq!(ids(&findings(&f)), vec![package_json::ID]);
+    assert_eq!(fix_all(&f), Vec::<String>::new());
+}
+
+#[test]
+fn a_supabase_project_in_another_stack_gets_no_package_json() {
+    let f = fixture(&[
+        ("pubspec.yaml", "name: app\n".to_owned()),
+        ("supabase/config.toml", "project_id = \"x\"\n".to_owned()),
+    ]);
+    let found = f
+        .check(&package_json::PackageJson, &Options::new())
+        .unwrap();
+    assert_eq!(found[0].fixable, Fixable::Manual);
+    assert!(found[0].message.contains("pubspec.yaml"));
+    assert!(fix_all(&f).iter().all(|file| file != "package.json"));
+}
+
+#[test]
+fn every_rule_reads_what_decides_where_the_pack_applies() {
+    // Review of M29: the cache key of each rule covers package.json and
+    // every Supabase project's config, or a cached run hides findings.
+    for rule in rules() {
+        let inputs = rule.meta().inputs;
+        for shared in [
+            "package.json",
+            "supabase/config.toml",
+            "**/supabase/config.toml",
+        ] {
+            assert!(
+                inputs.iter().any(|i| i == shared),
+                "{} lacks {shared}",
+                rule.meta().id
+            );
+        }
+    }
+}

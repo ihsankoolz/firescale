@@ -53,7 +53,9 @@ fn scanned(path: &str) -> bool {
 pub fn is_public_secret(name: &str) -> bool {
     PUBLIC_PREFIXES.iter().any(|p| name.starts_with(p))
         && name.contains("SUPABASE")
-        && (name.contains("SECRET") || name.contains("SERVICE_ROLE"))
+        && (name.contains("SECRET")
+            || name.contains("SERVICE_ROLE")
+            || name.contains("SERVICE_KEY"))
 }
 
 /// The first such name in a text, with its 1-based line.
@@ -75,12 +77,12 @@ impl BuiltinRule for PublicSecretKey {
             severity: Severity::High,
             category: Category::Security,
             description: "No Supabase secret or service-role key has a name that ships it to the client (NEXT_PUBLIC_, VITE_, EXPO_PUBLIC_, PUBLIC_, …).".to_owned(),
-            inputs: vec![
-                "**/.env*".to_owned(),
-                "**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,vue,svelte,astro}".to_owned(),
-                "**/app.json".to_owned(),
-                "**/eas.json".to_owned(),
-            ],
+            inputs: super::inputs(&[
+                "**/.env*",
+                "**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts,vue,svelte,astro}",
+                "**/app.json",
+                "**/eas.json",
+            ]),
             has_fix: false,
             after: Vec::new(),
         }

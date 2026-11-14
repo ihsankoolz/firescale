@@ -56,7 +56,7 @@ impl BuiltinRule for DbTests {
             category: Category::Reliability,
             description: "supabase/tests has at least one pgTAP test for `supabase test db`."
                 .to_owned(),
-            inputs: vec![format!("{TESTS}/**")],
+            inputs: super::inputs(&[&format!("{TESTS}/**")]),
             has_fix: true,
             after: vec![super::config::ID.to_owned()],
         }

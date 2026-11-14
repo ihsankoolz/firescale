@@ -48,7 +48,7 @@ impl BuiltinRule for SupabaseGitignore {
             severity: Severity::Medium,
             category: Category::Security,
             description: "supabase/.branches and supabase/.temp, the Supabase CLI's local state, are ignored by git.".to_owned(),
-            inputs: vec![FILE.to_owned(), ".gitignore".to_owned()],
+            inputs: super::inputs(&[FILE, ".gitignore"]),
             has_fix: true,
             after: vec![super::config::ID.to_owned()],
         }

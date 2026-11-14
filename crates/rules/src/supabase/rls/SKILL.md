@@ -9,7 +9,7 @@ description: Fixes violations of the firescale rule supabase/rls by adding a mig
 
 Every table the migrations in `supabase/migrations` create in a schema the API exposes (`[api] schemas` in `supabase/config.toml`, by default `public` and `graphql_public`) has row level security enabled once the last migration has run. Supabase's docs: a table in an exposed schema without RLS is readable and writable by any role with a grant on it, through the API, with the publishable key every client holds.
 
-The rule reads the migrations: `create table`, `alter table … enable/disable row level security`, `rename to`, `set schema` and `drop table`. Tables made another way (a function, `supabase/schemas/`, the dashboard) are not seen; `supabase db lint` checks a running database.
+The rule reads the migrations: `create table`, `alter table … enable/disable row level security`, `rename to`, `set schema` and `drop table`. Tables made another way (a function, a `DO` block, `supabase/schemas/`, the dashboard) are not seen, nor RLS switched on inside a `DO` block; an unqualified name counts as `public` even after `set search_path`. `supabase db lint` checks a running database.
 
 ## Manual fix
 

@@ -71,3 +71,44 @@ fn the_exposed_schemas_come_from_the_config() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].message.contains("api.things"));
 }
+
+#[test]
+fn a_schemas_array_over_several_lines_is_read() {
+    let f = project(
+        |_| false,
+        &[
+            (
+                "supabase/config.toml",
+                "project_id = \"x\"\n[api]\nschemas = [\n  \"public\", # main\n  \"api\",\n]\n",
+            ),
+            (
+                "supabase/migrations/20261114010000_t.sql",
+                "create table notes2 (id int);\n",
+            ),
+        ],
+    );
+    assert_eq!(f.check(&rls::Rls, &Options::new()).unwrap().len(), 1);
+}
+
+#[test]
+fn a_migration_in_another_encoding_is_read_not_fatal() {
+    let f = project(|_| false, &[]);
+    std::fs::write(
+        f.root()
+            .join("supabase")
+            .join("migrations")
+            .join("20261114010000_latin.sql"),
+        b"-- caf\xe9\ncreate table \"Todos\" (id int);\n",
+    )
+    .unwrap();
+    let found = f.check(&rls::Rls, &Options::new()).unwrap();
+    assert_eq!(found.len(), 1);
+    // A mixed-case name is quoted in the suggested SQL.
+    assert!(
+        found[0]
+            .message
+            .contains("alter table public.\"Todos\" enable"),
+        "{}",
+        found[0].message
+    );
+}
