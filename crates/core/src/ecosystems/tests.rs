@@ -597,3 +597,31 @@ fn an_ios_app_with_one_macos_target_still_builds_for_ios() {
         .contains("iOS Simulator"));
     assert_eq!(project.commands.test, None);
 }
+
+// ADR 0055: the cmake pack's starter has a `lint` target, built as the lint
+// step; clang-format is then a tool `fscale doctor` checks.
+#[test]
+fn a_cmake_lint_target_is_the_lint_step() {
+    let starter = "cmake_minimum_required(VERSION 3.20)\nproject(app LANGUAGES CXX)\nfind_program(CLANG_FORMAT clang-format)\nif(CLANG_FORMAT)\n  add_custom_target(lint\n    COMMAND x)\nendif()\n";
+    let project = only_project(&[("CMakeLists.txt", starter)]);
+    assert_eq!(
+        project.commands.lint.as_deref(),
+        Some("cmake -S . -B build && cmake --build build --config Debug --target lint")
+    );
+    let f = fixture(&[("CMakeLists.txt", starter)]);
+    let cmake = ecosystem("cmake").unwrap();
+    let tools: Vec<&str> = (cmake.doctor)(&Folder::read(f.root(), "."))
+        .iter()
+        .map(|tool| tool.programs[0])
+        .collect();
+    assert_eq!(tools, ["cmake", "cc", "clang-format"]);
+    for text in [
+        "project(x)\n# add_custom_target(lint COMMAND x)\n",
+        "project(x)\nadd_custom_target(linter COMMAND x)\n",
+        "project(x)\nadd_custom_target(format COMMAND lint)\n",
+    ] {
+        let project = only_project(&[("CMakeLists.txt", text)]);
+        assert_eq!(project.commands.lint, None, "{text}");
+    }
+    assert!(super::cmake_lint_target("ADD_CUSTOM_TARGET ( lint)"));
+}
