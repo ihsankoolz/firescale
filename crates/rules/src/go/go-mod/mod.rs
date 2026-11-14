@@ -7,7 +7,10 @@ use firescale_core::model::{
 use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
-use super::{any_exists, applies, create, finding, module_path, modules_below, GO_VERSION, MODULE};
+use super::{
+    any_exists, applies, create, finding, module_path, modules_below, other_stack, GO_VERSION,
+    MODULE,
+};
 
 #[cfg(test)]
 mod tests;
@@ -55,8 +58,11 @@ impl BuiltinRule for GoMod {
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
         if !applies(ctx)? {
-            // Modules in subfolders: said once, nothing written.
-            if !any_exists(ctx, &["go.mod"]) {
+            // Modules in subfolders of a repo that is no other stack's:
+            // said once, nothing written. In a Node or Java repo, a Go
+            // module below is that repo's business (found on okhttp with
+            // the maven pack).
+            if !any_exists(ctx, &["go.mod"]) && !other_stack(ctx, &["go.mod"], &["go"])? {
                 let below = modules_below(ctx)?;
                 if !below.is_empty() {
                     return Ok(vec![finding(

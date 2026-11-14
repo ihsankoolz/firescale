@@ -9,7 +9,8 @@ use firescale_core::rule::{BuiltinRule, RuleContext};
 use firescale_core::Result;
 
 use super::{
-    any_exists, applies, create, finding, poms_below, without_comments, JAVA_RELEASE, VERSIONS,
+    any_exists, applies, create, finding, other_stack, poms_below, without_comments, JAVA_RELEASE,
+    VERSIONS,
 };
 
 #[cfg(test)]
@@ -183,8 +184,10 @@ impl BuiltinRule for Pom {
 
     fn check(&self, ctx: &RuleContext) -> Result<Vec<Finding>> {
         if !applies(ctx)? {
-            // A Maven project in a subfolder: said once, nothing written.
-            if !any_exists(ctx, &["pom.xml"]) {
+            // A Maven project in a subfolder of a repo that is no other
+            // stack's: said once, nothing written. In a Gradle or Node repo
+            // a pom.xml below is that repo's business (found on okhttp).
+            if !any_exists(ctx, &["pom.xml"]) && !other_stack(ctx, &["pom.xml"], &["java"])? {
                 let below = poms_below(ctx)?;
                 if !below.is_empty() {
                     return Ok(vec![finding(

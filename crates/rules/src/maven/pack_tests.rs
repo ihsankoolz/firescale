@@ -98,3 +98,13 @@ fn every_rule_reads_what_decides_where_the_pack_applies() {
         }
     }
 }
+
+// Found on okhttp: a Gradle repo with a test fixture's pom.xml below.
+#[test]
+fn a_pom_below_another_stack_is_that_stacks_business() {
+    let f = fixture(&[
+        ("build.gradle.kts", "plugins { java }\n".to_owned()),
+        ("maven-tests/pom.xml", "<project/>\n".to_owned()),
+    ]);
+    assert_eq!(findings(&f), Vec::<Diagnostic>::new());
+}
