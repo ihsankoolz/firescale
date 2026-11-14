@@ -1,0 +1,570 @@
+{
+  "about": "Labelled C# and Go changes for the tamper guard (M32, ADR 0052), in the schema of bench/tamper-corpus.json: expect lists the kinds of finding a case must give; an empty list means none. Each case is a git repo whose main branch has base and whose working tree on a branch has head (null deletes a file). Written together with the C# and Go readers: their counts show the readers do what the ADR says, not a measured rate.",
+  "cases": [
+    {
+      "name": "cs: a test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "xUnit [Fact] and its Assert.Equal are gone; Pricing.Discount still exists.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a whole test file deleted, its subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "Pricing.cs stays, so the tests were not deleted with their subject.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": null
+      }
+    },
+    {
+      "name": "cs: Skip added to a Fact",
+      "expect": ["test-skipped"],
+      "note": "[Fact(Skip = \"…\")] keeps the test and its assertion but xUnit does not run it.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact(Skip = \"flaky on CI\")]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: Ignore added to an NUnit fixture",
+      "expect": ["test-skipped"],
+      "note": "[TestFixture, Ignore(\"…\")] turns off every test of the class.",
+      "base": {
+        "src/Shop/Cart.cs": "namespace Shop;\n\npublic class Cart\n{\n    private readonly List<int> items = new();\n    public int Count => items.Count;\n    public void Add(int item) => items.Add(item);\n}\n",
+        "tests/Shop.Tests/CartTests.cs": "using NUnit.Framework;\nusing Shop;\n\nnamespace Shop.Tests;\n\n[TestFixture]\npublic class CartTests\n{\n    [Test]\n    public void AddsAnItem()\n    {\n        var cart = new Cart();\n        cart.Add(1);\n        Assert.That(cart.Count, Is.EqualTo(1));\n    }\n\n    [Test]\n    public void StartsEmpty()\n    {\n        Assert.That(new Cart().Count, Is.Zero);\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/CartTests.cs": "using NUnit.Framework;\nusing Shop;\n\nnamespace Shop.Tests;\n\n[TestFixture, Ignore(\"broken\")]\npublic class CartTests\n{\n    [Test]\n    public void AddsAnItem()\n    {\n        var cart = new Cart();\n        cart.Add(1);\n        Assert.That(cart.Count, Is.EqualTo(1));\n    }\n\n    [Test]\n    public void StartsEmpty()\n    {\n        Assert.That(new Cart().Count, Is.Zero);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: Assert.Ignore as the first statement",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "NUnit stops the test at Assert.Ignore: what follows never runs.",
+      "base": {
+        "src/Shop/Cart.cs": "namespace Shop;\n\npublic class Cart\n{\n    private readonly List<int> items = new();\n    public int Count => items.Count;\n    public void Add(int item) => items.Add(item);\n}\n",
+        "tests/Shop.Tests/CartTests.cs": "using NUnit.Framework;\nusing Shop;\n\nnamespace Shop.Tests;\n\n[TestFixture]\npublic class CartTests\n{\n    [Test]\n    public void AddsAnItem()\n    {\n        var cart = new Cart();\n        cart.Add(1);\n        Assert.That(cart.Count, Is.EqualTo(1));\n    }\n\n    [Test]\n    public void StartsEmpty()\n    {\n        Assert.That(new Cart().Count, Is.Zero);\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/CartTests.cs": "using NUnit.Framework;\nusing Shop;\n\nnamespace Shop.Tests;\n\n[TestFixture]\npublic class CartTests\n{\n    [Test]\n    public void AddsAnItem()\n    {\n        Assert.Ignore(\"later\");\n        var cart = new Cart();\n        cart.Add(1);\n        Assert.That(cart.Count, Is.EqualTo(1));\n    }\n\n    [Test]\n    public void StartsEmpty()\n    {\n        Assert.That(new Cart().Count, Is.Zero);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: an assertion removed",
+      "expect": ["assertion-removed"],
+      "note": "The test stays and still does something, but checks nothing.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        _ = total;\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: an assertion replaced by one that cannot fail",
+      "expect": ["assertion-removed"],
+      "note": "Assert.True(true) checks nothing.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.True(true);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "A [Fact] whose body does nothing passes without testing anything.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a return before the assertion",
+      "expect": ["assertion-removed"],
+      "note": "The assertion after the return never runs.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        return;\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a test wrapped in #if false",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "Code under #if false is never compiled.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n#if false\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n#endif\n}\n"
+      }
+    },
+    {
+      "name": "cs: an InlineData row deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "Each [InlineData] row is one run of the theory.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/TotalTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class TotalTests\n{\n    [Theory]\n    [InlineData(1, 2, 3)]\n    [InlineData(2, 2, 4)]\n    [InlineData(5, 5, 10)]\n    public void Adds(int a, int b, int want)\n    {\n        Assert.Equal(want, Pricing.Total(a, b));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/TotalTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class TotalTests\n{\n    [Theory]\n    [InlineData(1, 2, 3)]\n    [InlineData(2, 2, 4)]\n    public void Adds(int a, int b, int want)\n    {\n        Assert.Equal(want, Pricing.Total(a, b));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a FluentAssertions check removed",
+      "expect": ["assertion-removed"],
+      "note": "x.Should().Be(…) is an assertion.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/DiscountTests.cs": "using FluentAssertions;\nusing Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class DiscountTests\n{\n    [Fact]\n    public void TakesATenthOverAHundred()\n    {\n        var discount = Pricing.Discount(200);\n        discount.Should().Be(20);\n        discount.Should().BePositive();\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/DiscountTests.cs": "using FluentAssertions;\nusing Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class DiscountTests\n{\n    [Fact]\n    public void TakesATenthOverAHundred()\n    {\n        var discount = Pricing.Discount(200);\n        discount.Should().BePositive();\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: #pragma warning disable added",
+      "expect": ["suppression-added"],
+      "note": "A compiler or analyzer warning turned off in source.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\n#pragma warning disable CA1822 // later\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n"
+      }
+    },
+    {
+      "name": "cs: SuppressMessage added",
+      "expect": ["suppression-added"],
+      "note": "[SuppressMessage(\"…\", \"CA1062:…\")] turns an analyzer rule off for a member.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    [System.Diagnostics.CodeAnalysis.SuppressMessage(\"Design\", \"CA1062:Validate arguments\")]\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n"
+      }
+    },
+    {
+      "name": "cs: a ReSharper disable comment added",
+      "expect": ["suppression-added"],
+      "note": "// ReSharper disable once … silences an inspection.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    // ReSharper disable once ArrangeMethodOrOperatorBody\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n"
+      }
+    },
+    {
+      "name": "cs: an expected value changed",
+      "expect": ["expected-changed"],
+      "note": "Assert.Equal(3, …) became Assert.Equal(4, …): the code may be right, a person decides.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(4, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "Its tests could not be compared.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n"
+      }
+    },
+    {
+      "name": "cs: a test renamed",
+      "expect": [],
+      "note": "Same test and assertion under a new name.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPricesTogether()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a test moved to another file",
+      "expect": [],
+      "note": "The second test moved to its own class and file.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n}\n",
+        "tests/Shop.Tests/DiscountTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class DiscountTests\n{\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a test file reformatted",
+      "expect": [],
+      "note": "Block namespace, braces and attributes on one line: the same tests.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class PricingTests\n{\n    [Fact]\n    public void AddsTwoPrices()\n    {\n        var total = Pricing.Total(1, 2);\n        Assert.Equal(3, total);\n    }\n\n    [Fact]\n    public void GivesNoDiscountUnderAHundred()\n    {\n        Assert.Equal(0, Pricing.Discount(99));\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/PricingTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests\n{\n    public class PricingTests\n    {\n        [Fact] public void AddsTwoPrices() { var total = Pricing.Total(1, 2); Assert.Equal(3, total); }\n\n        [Fact]\n        public void GivesNoDiscountUnderAHundred() =>\n            Assert.Equal(\n                0,\n                Pricing.Discount(99));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: an assertion made stricter",
+      "expect": [],
+      "note": "Assert.NotNull became Assert.Equal on a value.",
+      "base": {
+        "src/Shop/Cart.cs": "namespace Shop;\n\npublic class Cart\n{\n    private readonly List<int> items = new();\n    public int Count => items.Count;\n    public void Add(int item) => items.Add(item);\n}\n",
+        "tests/Shop.Tests/CartTests.cs": "using NUnit.Framework;\nusing Shop;\n\nnamespace Shop.Tests;\n\n[TestFixture]\npublic class CartTests\n{\n    [Test]\n    public void AddsAnItem()\n    {\n        var cart = new Cart();\n        cart.Add(1);\n        Assert.NotNull(cart);\n    }\n\n    [Test]\n    public void StartsEmpty()\n    {\n        Assert.That(new Cart().Count, Is.Zero);\n    }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/CartTests.cs": "using NUnit.Framework;\nusing Shop;\n\nnamespace Shop.Tests;\n\n[TestFixture]\npublic class CartTests\n{\n    [Test]\n    public void AddsAnItem()\n    {\n        var cart = new Cart();\n        cart.Add(1);\n        Assert.That(cart.Count, Is.EqualTo(1));\n    }\n\n    [Test]\n    public void StartsEmpty()\n    {\n        Assert.That(new Cart().Count, Is.Zero);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: three facts folded into a theory",
+      "expect": [],
+      "note": "Three [Fact]s became one [Theory] with three [InlineData] rows.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n",
+        "tests/Shop.Tests/TotalTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class TotalTests\n{\n    [Fact]\n    public void AddsOneAndTwo() { Assert.Equal(3, Pricing.Total(1, 2)); }\n\n    [Fact]\n    public void AddsTwoAndTwo() { Assert.Equal(4, Pricing.Total(2, 2)); }\n\n    [Fact]\n    public void AddsFiveAndFive() { Assert.Equal(10, Pricing.Total(5, 5)); }\n}\n"
+      },
+      "head": {
+        "tests/Shop.Tests/TotalTests.cs": "using Shop;\nusing Xunit;\n\nnamespace Shop.Tests;\n\npublic class TotalTests\n{\n    [Theory]\n    [InlineData(1, 2, 3)]\n    [InlineData(2, 2, 4)]\n    [InlineData(5, 5, 10)]\n    public void Adds(int a, int b, int want)\n    {\n        Assert.Equal(want, Pricing.Total(a, b));\n    }\n}\n"
+      }
+    },
+    {
+      "name": "cs: a pragma's warning swapped for its restore",
+      "expect": [],
+      "note": "The same warning disabled and restored around a smaller block: still one disable.",
+      "base": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\n#pragma warning disable CA1822\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n"
+      },
+      "head": {
+        "src/Shop/Pricing.cs": "namespace Shop;\n\n#pragma warning disable CA1822\n\npublic static class Pricing\n{\n    public static int Total(int a, int b) => a + b;\n#pragma warning restore CA1822\n    public static int Discount(int total) => total > 100 ? total / 10 : 0;\n}\n"
+      }
+    },
+    {
+      "name": "go: a test deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "TestDiscount and its t.Errorf are gone; Discount still exists.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a whole test file deleted, its subject kept",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "pricing.go stays, so the tests were not deleted with their subject.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": null
+      }
+    },
+    {
+      "name": "go: t.Skip added first",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "The test stops at t.Skip: its check never runs.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tt.Skip(\"flaky\")\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a check removed",
+      "expect": ["assertion-removed"],
+      "note": "The if with its t.Errorf is gone; the test still calls Total.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\t_ = Total(1, 2)\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a test body emptied",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "A test whose body does nothing passes without testing anything.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n}\n"
+      }
+    },
+    {
+      "name": "go: a return before the check",
+      "expect": ["assertion-removed"],
+      "note": "The t.Errorf after the return never runs.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\t_ = Total(1, 2)\n\treturn\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: the test file built only with go:build ignore",
+      "expect": ["test-skipped", "assertion-removed"],
+      "note": "//go:build ignore keeps the go tool from building the file.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "//go:build ignore\n\npackage pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a table row deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "Each row of a table that t.Run ranges over is one subtest.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\ttests := []struct {\n\t\tname string\n\t\ta, b int\n\t\twant int\n\t}{\n\t\t{name: \"small\", a: 1, b: 2, want: 3},\n\t\t{name: \"equal\", a: 2, b: 2, want: 4},\n\t\t{name: \"large\", a: 50, b: 60, want: 110},\n\t}\n\tfor _, tc := range tests {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tif got := Total(tc.a, tc.b); got != tc.want {\n\t\t\t\tt.Errorf(\"Total(%d, %d) = %d, want %d\", tc.a, tc.b, got, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\ttests := []struct {\n\t\tname string\n\t\ta, b int\n\t\twant int\n\t}{\n\t\t{name: \"small\", a: 1, b: 2, want: 3},\n\t\t{name: \"equal\", a: 2, b: 2, want: 4},\n\t}\n\tfor _, tc := range tests {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tif got := Total(tc.a, tc.b); got != tc.want {\n\t\t\t\tt.Errorf(\"Total(%d, %d) = %d, want %d\", tc.a, tc.b, got, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a subtest deleted",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "t.Run with a literal name is a test of its own (TestDiscount/a_tenth_over_a_hundred).",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestDiscount(t *testing.T) {\n\tt.Run(\"none under a hundred\", func(t *testing.T) {\n\t\tif Discount(99) != 0 {\n\t\t\tt.Fatal(\"want no discount\")\n\t\t}\n\t})\n\tt.Run(\"a tenth over a hundred\", func(t *testing.T) {\n\t\tif Discount(200) != 20 {\n\t\t\tt.Fatal(\"want 20\")\n\t\t}\n\t})\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestDiscount(t *testing.T) {\n\tt.Run(\"none under a hundred\", func(t *testing.T) {\n\t\tif Discount(99) != 0 {\n\t\t\tt.Fatal(\"want no discount\")\n\t\t}\n\t})\n}\n"
+      }
+    },
+    {
+      "name": "go: a testify assertion made unable to fail",
+      "expect": ["assertion-removed"],
+      "note": "assert.Equal(t, 3, got) became assert.True(t, true).",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tgot := Total(1, 2)\n\trequire.NotZero(t, got)\n\tassert.Equal(t, 3, got)\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tgot := Total(1, 2)\n\trequire.NotZero(t, got)\n\tassert.True(t, true)\n}\n"
+      }
+    },
+    {
+      "name": "go: nolint added",
+      "expect": ["suppression-added"],
+      "note": "//nolint:errcheck silences golangci-lint's errcheck on the line.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n\n// Save writes the total.\nfunc Save(w io.Writer, total int) {\n\tfmt.Fprintf(w, \"%d\", total) //nolint:errcheck\n}\n"
+      }
+    },
+    {
+      "name": "go: nosec added",
+      "expect": ["suppression-added"],
+      "note": "// #nosec G101 silences gosec.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n\nconst apiKey = \"not-a-real-key\" // #nosec G101\n"
+      }
+    },
+    {
+      "name": "go: lint:ignore added",
+      "expect": ["suppression-added"],
+      "note": "staticcheck's //lint:ignore SA1019 silences a deprecation warning.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\n//lint:ignore U1000 kept for later\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n"
+      }
+    },
+    {
+      "name": "go: an expected value changed",
+      "expect": ["expected-changed"],
+      "note": "assert.Equal(t, 3, got) became assert.Equal(t, 4, got): a person decides.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tgot := Total(1, 2)\n\trequire.NotZero(t, got)\n\tassert.Equal(t, 3, got)\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tgot := Total(1, 2)\n\trequire.NotZero(t, got)\n\tassert.Equal(t, 4, got)\n}\n"
+      }
+    },
+    {
+      "name": "go: a test file that does not parse",
+      "expect": ["not-checked"],
+      "note": "Its tests could not be compared.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}"
+      }
+    },
+    {
+      "name": "go: a test renamed",
+      "expect": [],
+      "note": "Same test and check under a new name.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotalAddsBothPrices(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a test moved to another file",
+      "expect": [],
+      "note": "TestDiscount moved to discount_test.go in the same package.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n",
+        "pricing/discount_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a test file reformatted",
+      "expect": [],
+      "note": "One-line bodies split over lines, an import block: the same tests.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"testing\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tgot := Total(1, 2)\n\tif got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\",\n\t\t\tgot)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tgot := Discount(99)\n\tif got != 0 { t.Errorf(\"Discount(99) = %d, want 0\", got) }\n}\n"
+      }
+    },
+    {
+      "name": "go: a check made stricter",
+      "expect": [],
+      "note": "require.NotZero(t, got) became require.Equal(t, 3, got).",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tgot := Total(1, 2)\n\trequire.NotZero(t, got)\n\tassert.Equal(t, 3, got)\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n\t\"github.com/stretchr/testify/require\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tgot := Total(1, 2)\n\trequire.Equal(t, 3, got)\n\tassert.Equal(t, 3, got)\n}\n"
+      }
+    },
+    {
+      "name": "go: tests deleted with their subject",
+      "expect": [],
+      "note": "pricing.go and pricing_test.go deleted together, and nothing else uses Total or Discount.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n",
+        "main.go": "package main\n\nfunc main() {}\n"
+      },
+      "head": {
+        "pricing/pricing.go": null,
+        "pricing/pricing_test.go": null
+      }
+    },
+    {
+      "name": "go: three tests folded into a table",
+      "expect": [],
+      "note": "Three tests became one table with three rows that t.Run ranges over.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotalSmall(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestTotalEqual(t *testing.T) {\n\tif got := Total(2, 2); got != 4 {\n\t\tt.Errorf(\"Total(2, 2) = %d, want 4\", got)\n\t}\n}\n\nfunc TestTotalLarge(t *testing.T) {\n\tif got := Total(50, 60); got != 110 {\n\t\tt.Errorf(\"Total(50, 60) = %d, want 110\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\ttests := []struct {\n\t\tname string\n\t\ta, b int\n\t\twant int\n\t}{\n\t\t{name: \"small\", a: 1, b: 2, want: 3},\n\t\t{name: \"equal\", a: 2, b: 2, want: 4},\n\t\t{name: \"large\", a: 50, b: 60, want: 110},\n\t}\n\tfor _, tc := range tests {\n\t\tt.Run(tc.name, func(t *testing.T) {\n\t\t\tif got := Total(tc.a, tc.b); got != tc.want {\n\t\t\t\tt.Errorf(\"Total(%d, %d) = %d, want %d\", tc.a, tc.b, got, tc.want)\n\t\t\t}\n\t\t})\n\t}\n}\n"
+      }
+    },
+    {
+      "name": "go: a slow test skipped in short mode",
+      "expect": [],
+      "note": "t.Skip inside if testing.Short() { … }: the test still runs in a normal go test.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif testing.Short() {\n\t\tt.Skip(\"slow\")\n\t}\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      }
+    }
+  ]
+}
