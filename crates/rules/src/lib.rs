@@ -9,6 +9,7 @@ pub mod core;
 pub mod group_project;
 pub mod nextjs;
 pub mod python;
+pub mod supabase;
 
 /// Every built-in pack, in the order they are listed to users.
 #[must_use]
@@ -19,6 +20,7 @@ pub fn builtin_packs() -> Vec<BuiltinPack> {
         group_project::pack(),
         nextjs::pack(),
         python::pack(),
+        supabase::pack(),
     ]
 }
 
