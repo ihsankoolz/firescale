@@ -197,7 +197,7 @@ fn cmake_configures_builds_and_runs_ctest() {
     assert_eq!(project.package_manager.as_deref(), Some("vcpkg"));
     assert_eq!(
         project.commands.test.as_deref(),
-        Some("cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure")
+        Some("cmake -S . -B build && cmake --build build --config Debug && ctest --test-dir build -C Debug --output-on-failure")
     );
 }
 
@@ -338,12 +338,10 @@ fn projects_in_subfolders_are_found_beside_a_node_app() {
 }
 
 #[test]
-fn the_wrapper_form_follows_the_shell_verify_uses() {
-    if cfg!(windows) {
-        assert_eq!(wrapper("gradlew"), "gradlew");
-    } else {
-        assert_eq!(wrapper("gradlew"), "./gradlew");
-    }
+fn the_wrapper_is_written_the_same_on_every_os() {
+    // Files that quote commands (AGENTS.md, permissions) must not change
+    // with the OS; verify turns `./gradlew` into `.\gradlew` for cmd.
+    assert_eq!(wrapper("gradlew"), "./gradlew");
 }
 
 #[test]
@@ -462,4 +460,140 @@ fn a_flutter_apps_platform_folders_are_its_own() {
     let mut kinds = kinds;
     kinds.sort_unstable();
     assert_eq!(kinds, [(".", "dart"), ("tool", "cmake")]);
+}
+
+fn kinds_of(files: &[(&str, &str)]) -> Vec<(String, String)> {
+    let f = fixture(files);
+    let mut kinds: Vec<(String, String)> = detect_facts_with(f.root(), None)
+        .unwrap()
+        .projects
+        .into_iter()
+        .map(|p| (p.root, p.kind))
+        .collect();
+    kinds.sort();
+    kinds
+}
+
+fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter()
+        .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+        .collect()
+}
+
+#[test]
+fn a_react_native_apps_native_folders_are_its_own() {
+    // Review of M31: they are built by the app's CLI, and an ios/ folder
+    // made verify need Xcode on Linux.
+    let kinds = kinds_of(&[
+        (
+            "package.json",
+            "{ \"name\": \"app\", \"dependencies\": { \"react-native\": \"0.88.1\" } }\n",
+        ),
+        ("android/settings.gradle", "rootProject.name = 'app'\n"),
+        (
+            "ios/App.xcworkspace/contents.xcworkspacedata",
+            "<Workspace/>\n",
+        ),
+        ("ios/App.xcodeproj/project.pbxproj", "SDKROOT = iphoneos;\n"),
+    ]);
+    assert_eq!(kinds, pairs(&[(".", "node")]));
+}
+
+#[test]
+fn a_python_or_node_package_with_a_native_build_is_one_project() {
+    // pybind/cmake_example, meson-python (numpy), cmake-js.
+    let py = kinds_of(&[
+        ("pyproject.toml", "[build-system]\nrequires = [\"scikit-build-core\", \"pybind11\"]\nbuild-backend = \"scikit_build_core.build\"\n"),
+        ("CMakeLists.txt", "project(cmake_example LANGUAGES CXX)\n"),
+        ("src/main.cpp", "int f() { return 0; }\n"),
+    ]);
+    assert_eq!(py, pairs(&[(".", "python")]));
+    let meson = kinds_of(&[
+        (
+            "pyproject.toml",
+            "[build-system]\nbuild-backend = \"mesonpy\"\n",
+        ),
+        ("meson.build", "project('numpy', 'c')\n"),
+    ]);
+    assert_eq!(meson, pairs(&[(".", "python")]));
+    let node = kinds_of(&[
+        (
+            "package.json",
+            "{ \"name\": \"addon\", \"devDependencies\": { \"cmake-js\": \"7.3.0\" } }\n",
+        ),
+        ("CMakeLists.txt", "project(addon CXX)\n"),
+    ]);
+    assert_eq!(node, pairs(&[(".", "node")]));
+}
+
+#[test]
+fn bundle_folders_vendored_code_and_capitalised_samples_hold_no_projects() {
+    let kinds = kinds_of(&[
+        ("App.xcodeproj/project.pbxproj", "SDKROOT = iphoneos;\n"),
+        (
+            "App.xcodeproj/project.xcworkspace/contents.xcworkspacedata",
+            "<Workspace/>\n",
+        ),
+        ("deps/jemalloc/msvc/jemalloc.sln", "\n"),
+        ("third_party/zlib/CMakeLists.txt", "project(zlib C)\n"),
+        (
+            "Examples/Demo/Package.swift",
+            "let package = Package(name: \"Demo\")\n",
+        ),
+    ]);
+    assert_eq!(kinds, pairs(&[(".", "xcode")]));
+}
+
+#[test]
+fn an_android_apps_ndk_code_and_a_recursive_make_are_members() {
+    let ndk = kinds_of(&[
+        ("settings.gradle", "rootProject.name = 'ndk'\n"),
+        (
+            "app/build.gradle",
+            "android { externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt' } } }\n",
+        ),
+        ("app/src/main/cpp/CMakeLists.txt", "project(native CXX)\n"),
+    ]);
+    assert_eq!(ndk, pairs(&[(".", "gradle")]));
+    let make = kinds_of(&[
+        ("Makefile", "test:\n\t$(MAKE) -C src test\n"),
+        ("src/Makefile", "test:\n\t./run\n"),
+        ("src/main.c", "int main(void) { return 0; }\n"),
+    ]);
+    assert_eq!(make, pairs(&[(".", "make")]));
+}
+
+#[test]
+fn a_swift_package_with_c_modules_is_swift() {
+    // apple/swift-crypto: Sources/ holds C (BoringSSL) beside Swift.
+    let kinds = kinds_of(&[
+        (
+            "Package.swift",
+            "let package = Package(name: \"swift-crypto\")\n",
+        ),
+        ("CMakeLists.txt", "project(SwiftCrypto LANGUAGES C Swift)\n"),
+        ("Sources/CCryptoBoringSSL/crypto.c", "int x;\n"),
+        ("Sources/Crypto/Crypto.swift", "struct C {}\n"),
+    ]);
+    assert_eq!(kinds, pairs(&[(".", "swift")]));
+}
+
+#[test]
+fn an_ios_app_with_one_macos_target_still_builds_for_ios() {
+    let project = only_project(&[
+        (
+            "App.xcodeproj/project.pbxproj",
+            "SDKROOT = iphoneos;\nSDKROOT = macosx;\n",
+        ),
+        (
+            "App.xcodeproj/xcshareddata/xcschemes/App.xcscheme",
+            "<Scheme/>\n",
+        ),
+    ]);
+    assert!(project
+        .commands
+        .typecheck
+        .unwrap()
+        .contains("iOS Simulator"));
+    assert_eq!(project.commands.test, None);
 }

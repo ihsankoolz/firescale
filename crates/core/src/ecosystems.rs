@@ -124,6 +124,9 @@ pub struct Ecosystem {
     /// Kinds that take the folder when they are there too: a Makefile
     /// beside a `pom.xml` belongs to Maven.
     pub yields_to: &'static [&'static str],
+    /// The one operating system its builds run on (`macos` for Xcode):
+    /// elsewhere its steps are not needed, and doctor asks for nothing.
+    pub only_on: Option<&'static str>,
     /// True when a project of this kind builds the same kind's projects in
     /// its subfolders as members (Gradle's `include`, Maven's `<modules>`,
     /// CMake's `add_subdirectory`, a .NET solution): they are not projects
@@ -147,6 +150,34 @@ pub struct Ecosystem {
     /// Build output and local state `core/gitignore-basics` asks git to ignore.
     pub ignored: &'static [&'static str],
 }
+
+/// The files whose presence decides which ecosystems a folder holds, as
+/// globs: the inputs of every rule that reads facts, so adding one
+/// invalidates a cached result.
+pub const MARKER_GLOBS: [&str; 22] = [
+    "**/go.mod",
+    "**/pom.xml",
+    "**/build.gradle",
+    "**/build.gradle.kts",
+    "**/settings.gradle",
+    "**/settings.gradle.kts",
+    "**/Package.swift",
+    "**/*.xcodeproj/project.pbxproj",
+    "**/*.xcworkspace/contents.xcworkspacedata",
+    "**/CMakeLists.txt",
+    "**/meson.build",
+    "**/*.sln",
+    "**/*.slnx",
+    "**/*.csproj",
+    "**/*.fsproj",
+    "**/*.vbproj",
+    "**/pubspec.yaml",
+    "**/Makefile",
+    "**/makefile",
+    "**/GNUmakefile",
+    "**/binding.gyp",
+    "**/Podfile",
+];
 
 /// The ecosystems, in the order a folder is matched.
 pub const ECOSYSTEMS: [Ecosystem; 10] = [
@@ -180,15 +211,12 @@ pub fn matching(folder: &Folder, present: &[&str]) -> Vec<&'static Ecosystem> {
     out
 }
 
-/// A wrapper script in the project's folder, as the shell verify uses runs
-/// it: `./gradlew` with `sh`, `gradlew` (which finds `gradlew.bat`) with
-/// `cmd`.
+/// A wrapper script in the project's folder: `./gradlew`. The same text on
+/// every machine, so files that quote it (AGENTS.md, agent permissions)
+/// do not change with the OS; verify runs it as `.\gradlew` with `cmd` on
+/// Windows, which finds `gradlew.bat`.
 fn wrapper(name: &str) -> String {
-    if cfg!(windows) {
-        name.to_owned()
-    } else {
-        format!("./{name}")
-    }
+    format!("./{name}")
 }
 
 /// Source languages of C-family files directly in the folder or in `src/`,
@@ -197,7 +225,7 @@ fn c_family(folder: &Folder) -> Vec<String> {
     // The folder's own files, and source folders three levels down
     // (`include/nlohmann/detail/*.hpp`), at most 2,000 names.
     let mut names: Vec<String> = folder.files.clone();
-    let mut queue: Vec<(PathBuf, usize)> = ["src", "lib", "include", "source", "Sources"]
+    let mut queue: Vec<(PathBuf, usize)> = ["src", "lib", "include", "source"]
         .iter()
         .filter(|sub| folder.has_dir(sub))
         .map(|sub| (folder.path.join(sub), 1))
@@ -276,6 +304,7 @@ const GO: Ecosystem = Ecosystem {
     kind: "go",
     marks: |f| f.has("go.mod"),
     yields_to: &[],
+    only_on: None,
     contains_nested: false,
     manifests: &[],
     name: |f| {
@@ -337,6 +366,7 @@ const MAVEN: Ecosystem = Ecosystem {
     kind: "maven",
     marks: |f| f.has("pom.xml"),
     yields_to: &[],
+    only_on: None,
     contains_nested: true,
     manifests: &["pom.xml"],
     name: maven_name,
@@ -436,6 +466,7 @@ const GRADLE: Ecosystem = Ecosystem {
     kind: "gradle",
     marks: |f| GRADLE_FILES.iter().any(|name| f.has(name)),
     yields_to: &[],
+    only_on: None,
     contains_nested: true,
     manifests: &GRADLE_FILES,
     name: |f| {
@@ -546,11 +577,41 @@ const SWIFT_TOOL: Tool = Tool {
     install: "install Swift from https://www.swift.org/install (on macOS, with Xcode)",
 };
 
+/// True when a CMake or Meson build in the folder builds a native extension
+/// of another ecosystem's package, and that package's own tool drives it:
+/// scikit-build-core, meson-python, py-build-cmake or a `setup.py` using
+/// CMake (Python); cmake-js or node-gyp (Node); a `Cargo.toml` beside it
+/// (Rust). Then it is not a project of its own.
+fn native_extension(f: &Folder) -> bool {
+    const BACKENDS: [&str; 7] = [
+        "scikit_build_core",
+        "scikit-build",
+        "mesonpy",
+        "meson-python",
+        "py_build_cmake",
+        "CMakeExtension",
+        "cmake_build_extension",
+    ];
+    let python = ["pyproject.toml", "setup.py"].iter().any(|name| {
+        f.text(name)
+            .is_some_and(|text| BACKENDS.iter().any(|backend| text.contains(backend)))
+    });
+    let node = f.has("binding.gyp")
+        || f.text("package.json")
+            .is_some_and(|text| text.contains("cmake-js") || text.contains("node-gyp"));
+    python || node || f.has("Cargo.toml")
+}
+
 /// With both a `Package.swift` and a `CMakeLists.txt`, the sources decide:
 /// C or C++ code makes it a CMake project that also ships a Swift package
 /// (nlohmann/json); Swift code makes it a Swift package that also builds
-/// with CMake (swift-argument-parser).
+/// with CMake (swift-argument-parser). A SwiftPM `Sources/` folder, or a
+/// CMake build that names Swift among its languages, makes it Swift even
+/// with C modules inside (swift-system, swift-crypto).
 fn c_first(f: &Folder) -> bool {
+    if f.has_dir("Sources") || cmake_languages(f).iter().any(|l| l == "swift") {
+        return false;
+    }
     !c_family(f).is_empty()
 }
 
@@ -558,6 +619,7 @@ const SWIFT: Ecosystem = Ecosystem {
     kind: "swift",
     marks: |f| f.has("Package.swift") && !(f.has("CMakeLists.txt") && c_first(f)),
     yields_to: &[],
+    only_on: None,
     contains_nested: false,
     manifests: &[],
     name: |f| {
@@ -644,7 +706,12 @@ fn xcode_destination(f: &Folder) -> &'static str {
         .first()
         .and_then(|dir| fs::read_to_string(f.path.join(dir).join("project.pbxproj")).ok())
         .unwrap_or_default();
-    if pbx.contains("SDKROOT = macosx") {
+    let roots: Vec<&str> = pbx
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("SDKROOT = "))
+        .map(|value| value.trim_end_matches(';').trim())
+        .collect();
+    if !roots.is_empty() && roots.iter().all(|root| *root == "macosx") {
         "generic/platform=macOS"
     } else if pbx.contains("SDKROOT = watchos") {
         "generic/platform=watchOS Simulator"
@@ -664,6 +731,7 @@ const XCODE: Ecosystem = Ecosystem {
     },
     // A Swift package with an Xcode project beside it builds as a package.
     yields_to: &["swift"],
+    only_on: Some("macos"),
     contains_nested: false,
     manifests: &[],
     name: |f| {
@@ -814,10 +882,21 @@ fn c_package_manager(f: &Folder) -> Option<String> {
 
 const CMAKE: Ecosystem = Ecosystem {
     kind: "cmake",
-    marks: |f| f.has("CMakeLists.txt") && !(f.has("Package.swift") && !c_first(f)),
+    marks: |f| {
+        f.has("CMakeLists.txt") && !(f.has("Package.swift") && !c_first(f)) && !native_extension(f)
+    },
     yields_to: &[],
+    only_on: None,
     contains_nested: true,
-    manifests: &["CMakeLists.txt"],
+    // A CMake build below a Gradle build is the NDK code an Android app
+    // builds through `externalNativeBuild`: a member too.
+    manifests: &[
+        "CMakeLists.txt",
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+    ],
     name: |f| project_call(&f.text("CMakeLists.txt")?),
     found: |f| {
         // Configure into `build/`, build, then run CTest there. Configuring
@@ -835,9 +914,12 @@ const CMAKE: Ecosystem = Ecosystem {
             lockfiles: Vec::new(),
             tools: Vec::new(),
             commands: Commands {
-                build: Some(format!("{configure} && cmake --build build")),
+                // `--config` and `-C` choose Debug for a multi-config
+                // generator (Visual Studio, the default on Windows); a
+                // single-config one ignores them.
+                build: Some(format!("{configure} && cmake --build build --config Debug")),
                 test: Some(format!(
-                    "{configure} && cmake --build build && ctest --test-dir build --output-on-failure"
+                    "{configure} && cmake --build build --config Debug && ctest --test-dir build -C Debug --output-on-failure"
                 )),
                 ..Commands::default()
             },
@@ -868,8 +950,9 @@ const CMAKE: Ecosystem = Ecosystem {
 
 const MESON: Ecosystem = Ecosystem {
     kind: "meson",
-    marks: |f| f.has("meson.build"),
+    marks: |f| f.has("meson.build") && !native_extension(f),
     yields_to: &["cmake"],
+    only_on: None,
     contains_nested: true,
     manifests: &["meson.build"],
     name: |f| project_call(&f.text("meson.build")?),
@@ -908,7 +991,7 @@ const MESON: Ecosystem = Ecosystem {
             C_COMPILER,
         ]
     },
-    ignored: &[],
+    ignored: &["build"],
 };
 
 // ---------------------------------------------------------------- .NET
@@ -947,6 +1030,7 @@ const DOTNET: Ecosystem = Ecosystem {
             .any(|ext| !f.files_ending(ext).is_empty())
     },
     yields_to: &[],
+    only_on: None,
     contains_nested: true,
     manifests: &[],
     name: |f| {
@@ -1020,6 +1104,7 @@ const DART: Ecosystem = Ecosystem {
     kind: "dart",
     marks: |f| f.has("pubspec.yaml"),
     yields_to: &[],
+    only_on: None,
     contains_nested: false,
     manifests: &[],
     name: |f| {
@@ -1129,8 +1214,10 @@ const MAKE: Ecosystem = Ecosystem {
             })
     },
     yields_to: &["*"],
-    contains_nested: false,
-    manifests: &[],
+    only_on: None,
+    contains_nested: true,
+    // A Makefile below another is a recursive make's member.
+    manifests: &MAKEFILES,
     name: |_| None,
     found: |f| {
         let targets = make_targets(f);

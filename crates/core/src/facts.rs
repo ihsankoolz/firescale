@@ -25,10 +25,12 @@ pub const FACTS_SCHEMA_VERSION: u32 = 2;
 pub const DISCOVERY_DEPTH: usize = 4;
 
 /// Folders never searched for projects: dependencies, caches, build output,
-/// and folders of examples and test fixtures.
-/// Folders whose name starts with a dot are skipped too, and so is everything
-/// `.gitignore` ignores.
-pub const DISCOVERY_SKIPPED_DIRS: [&str; 26] = [
+/// and folders of examples and test fixtures. Names are compared without
+/// regard to letter case (`Examples`, `Fixtures` in Swift and .NET repos).
+/// Folders whose name starts with a dot are skipped too, and so is
+/// everything `.gitignore` ignores, and the insides of bundle folders
+/// (`App.xcodeproj`, `App.xcworkspace`, `*.xcassets`, `*.app`, `*.framework`).
+pub const DISCOVERY_SKIPPED_DIRS: [&str; 32] = [
     // Sample and test input: a manifest in there is not a project to verify.
     "fixtures",
     "__fixtures__",
@@ -41,6 +43,14 @@ pub const DISCOVERY_SKIPPED_DIRS: [&str; 26] = [
     "node_modules",
     "bower_components",
     "vendor",
+    // Vendored C, C++ and other sources: another project's build, not one
+    // of this repo's (ADR 0051).
+    "deps",
+    "third_party",
+    "third-party",
+    "3rdparty",
+    "external",
+    "extern",
     "site-packages",
     "venv",
     "env",
@@ -916,7 +926,25 @@ fn node_detail(
         commands: or_else(or_else(scripts.clone(), from_tools.clone()), install),
         interpreter: None,
         watching,
-        claims: Vec::new(),
+        // A React Native, Expo, Capacitor or NativeScript app builds its
+        // native folders with its own CLI: they are not projects of their
+        // own (ADR 0051).
+        claims: if [
+            "react-native",
+            "expo",
+            "@capacitor/core",
+            "@nativescript/core",
+        ]
+        .iter()
+        .any(|package| has_node_dependency(json, package))
+        {
+            ["android", "ios"]
+                .iter()
+                .map(|sub| in_dir(dir, sub))
+                .collect()
+        } else {
+            Vec::new()
+        },
     };
     let only_tools = Commands {
         install: None,
@@ -1814,10 +1842,20 @@ fn searchable_dirs(root: &Path) -> Vec<String> {
         .require_git(false)
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_none_or(|name| !DISCOVERY_SKIPPED_DIRS.contains(&name))
+            entry.file_name().to_str().is_none_or(|name| {
+                let lower = name.to_ascii_lowercase();
+                !DISCOVERY_SKIPPED_DIRS.contains(&lower.as_str())
+                    && ![
+                        ".xcodeproj",
+                        ".xcworkspace",
+                        ".xcassets",
+                        ".app",
+                        ".framework",
+                        ".bundle",
+                    ]
+                    .iter()
+                    .any(|suffix| lower.ends_with(suffix))
+            })
         })
         .build();
     for entry in walk.filter_map(|entry| entry.ok()) {

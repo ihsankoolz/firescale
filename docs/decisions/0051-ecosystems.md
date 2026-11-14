@@ -58,6 +58,23 @@ The stack packs (nextjs, supabase, expo) each had their own copies of the same h
 - **Real repos**, read-only shallow clones, `fscale facts` and `core/gitignore-basics`, nothing of theirs run: `android/nowinandroid` (one Gradle project, Android lint through a version-catalog alias), `apple/swift-argument-parser` (one Swift package; its CMake files are members), `nlohmann/json` (one CMake project in C++, not the Swift package or Meson build it also ships), `dotnet/eShop` (the solution, `dotnet test "eShop.slnx"`), `flutter/gallery` (one Flutter app; its five platform runners are its own). Each of these was wrong in the first pass and is a test now.
 - Tests: `crates/core/src/ecosystems/tests.rs` (every kind, the yields, members, claims, the real-repo layouts), the gitignore matcher's tests, and the facts, graph and verify schemas.
 
+## After the review
+
+A fresh subagent compared the change with `main` on fixtures and real repos (redis, okhttp, Alamofire, android/ndk-samples, pybind's cmake_example, swift-system, swift-crypto) and found, all fixed with tests:
+
+- **A React Native, Capacitor or Kotlin Multiplatform app with an `ios/` folder failed verify and doctor on Linux and Windows**, needing Xcode that can never be installed there. Xcode steps are now "not needed" off macOS and doctor asks for nothing (`only_on`); a root React Native, Expo, Capacitor or NativeScript app owns its `android/` and `ios/` folders, as one in a subfolder already did.
+- **Cached checks missed a new marker file** (`pom.xml`, `CMakeLists.txt`, …): `ecosystems::MARKER_GLOBS` is in the inputs of every rule that reads facts.
+- **Python and Node packages with a native build** (scikit-build-core, meson-python as numpy uses, py-build-cmake, cmake-js, node-gyp, a crate beside it) got a second, failing CMake or Meson project: those builds belong to the package.
+- **A phantom Xcode project inside every `.xcodeproj`** (its `project.xcworkspace`): bundle folders are never searched.
+- **Vendored code and capitalised sample folders made projects** (`deps/`, `third_party/`, `Examples/`, `Fixtures/`; redis had 13): those names are skipped, in any letter case; a nested Makefile is a member of a recursive make.
+- **An Android app's NDK CMake folders** became host builds: a CMake build below a Gradle build is a member.
+- **`supabase/gitignore` still took a root `/.temp`** for `supabase/.temp`: the root line must reach the folder.
+- **CMake tests failed with Visual Studio**, a multi-config generator: `--config Debug` and `ctest -C Debug`.
+- **Commands differed by OS** (`gradlew` on Windows) and so flipped AGENTS.md and agent permissions between machines: the text is always `./gradlew`; verify runs it as `.\gradlew` with `cmd`.
+- **Swift packages with C modules** (swift-crypto) read as CMake: a SwiftPM `Sources/` folder or Swift in CMake's `LANGUAGES` makes it Swift.
+- **A missing JDK, Android SDK, Ninja or compiler read as a failure**: their messages are "setup needed" now.
+- Smaller: Meson's and subfolder projects' build output is required as a path (`native/build`, or the folder's own `.gitignore`); an iOS app with one macOS target builds for iOS; `java -version` for JDK 8; MSVC's `cl` is asked without `--version`.
+
 ## Not checked, and limits
 
 - **Swift, Xcode, .NET and Flutter were not run**: their tools are not in the build environment. Their commands come from their tools' documented usage and are checked by tests on fixtures only.

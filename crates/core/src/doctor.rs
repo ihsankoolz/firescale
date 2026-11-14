@@ -881,6 +881,10 @@ impl Doctor<'_> {
             .collect();
         let mut asked: BTreeSet<String> = BTreeSet::new();
         for (folder, eco) in projects {
+            // Xcode builds only on macOS: nothing to install elsewhere.
+            if eco.only_on.is_some_and(|os| os != std::env::consts::OS) {
+                continue;
+            }
             let dir = dir_of(self.root, &folder);
             let found = crate::ecosystems::Folder::read(self.root, &folder);
             for tool in (eco.doctor)(&found) {
@@ -892,7 +896,14 @@ impl Doctor<'_> {
                 // has a version in it (`java -version` can print a "Picked
                 // up …" line first).
                 let answer = tool.programs.iter().find_map(|program| {
-                    let out = self.machine.run(&dir, program, tool.version_args)?;
+                    // MSVC's `cl` takes no `--version`: run alone, it
+                    // prints its version and exits 0.
+                    let args: &[&str] = if *program == "cl" {
+                        &[]
+                    } else {
+                        tool.version_args
+                    };
+                    let out = self.machine.run(&dir, program, args)?;
                     let version = out.lines().find_map(find_version).unwrap_or_default();
                     Some((*program, version))
                 });
