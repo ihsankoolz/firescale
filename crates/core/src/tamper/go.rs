@@ -34,9 +34,12 @@
 //!   `Expect(true).To(BeTrue())`).
 //! - Imports: each import's name and path. A test file's subject is the
 //!   file it is named after (`pricing_test.go` tests `pricing.go`): the
-//!   names it uses that it does not declare, and the import of its own
-//!   package from an external `pricing_test` package, map to
-//!   [`PACKAGE`], which [`resolve`] turns into that file.
+//!   names it uses that it does not declare (and, in an external
+//!   `pricing_test` package, those it takes through its import of
+//!   `…/pricing`: `Total` in `pricing.Total`) map to [`PACKAGE`], which
+//!   [`resolve`] turns into that file. The guard counts only the names that
+//!   file declared ([`top_level_names`]), so a test of another file of the
+//!   package is not excused by deleting this one.
 //! - Suppressions: `//nolint` (`nolint:*`), `//nolint:errcheck,gosec`
 //!   (`nolint:errcheck`, `nolint:gosec`), staticcheck's `//lint:ignore
 //!   SA1019 reason` (`lint-ignore:SA1019`) and `//lint:file-ignore`
@@ -715,8 +718,10 @@ fn assignments<'t>(
             ),
             "var_spec" => {
                 let mut cursor = node.walk();
-                let targets: Vec<Node<'t>> =
-                    node.children_by_field_name("name", &mut cursor).collect();
+                let targets: Vec<Node<'t>> = node
+                    .children_by_field_name("name", &mut cursor)
+                    .filter(|name| name.is_named())
+                    .collect();
                 (
                     Some(targets),
                     node.child_by_field_name("value").map(named_children),
@@ -855,22 +860,96 @@ fn declared(root: Node<'_>, src: &[u8]) -> BTreeSet<String> {
 }
 
 /// The identifiers and type names a node uses (not those of another
-/// package: `T` in `testing.T`).
-fn uses_of(node: Node<'_>, src: &[u8]) -> BTreeSet<String> {
+/// package: `T` in `testing.T`), and the names it takes from the package
+/// under test through one of its `tested` imports (`Total` in
+/// `pricing.Total(…)`, `Cart` in `pricing.Cart`).
+fn uses_of(node: Node<'_>, src: &[u8], tested: &BTreeSet<String>) -> BTreeSet<String> {
     let mut uses = BTreeSet::new();
+    let from_tested = |qualifier: Option<Node<'_>>| {
+        qualifier.is_some_and(|qualifier| {
+            matches!(qualifier.kind(), "identifier" | "package_identifier")
+                && tested.contains(text(qualifier, src))
+        })
+    };
     walk(node, |inner| {
         match inner.kind() {
             "identifier" | "type_identifier" => {
                 uses.insert(text(inner, src).to_owned());
             }
-            "qualified_type" | "comment" | "interpreted_string_literal" | "raw_string_literal" => {
-                return false
+            "selector_expression" => {
+                if from_tested(inner.child_by_field_name("operand")) {
+                    if let Some(field) = inner.child_by_field_name("field") {
+                        uses.insert(text(field, src).to_owned());
+                    }
+                }
             }
+            "qualified_type" => {
+                if from_tested(inner.child_by_field_name("package")) {
+                    if let Some(name) = inner.child_by_field_name("name") {
+                        uses.insert(text(name, src).to_owned());
+                    }
+                }
+                return false;
+            }
+            "comment" | "interpreted_string_literal" | "raw_string_literal" => return false,
             _ => {}
         }
         true
     });
     uses
+}
+
+/// The local names of the imports of the package under test, in an
+/// external test package: `pricing` (or its alias) in `package
+/// pricing_test` importing `…/pricing`.
+fn tested_imports(root: Node<'_>, src: &[u8]) -> BTreeSet<String> {
+    let mut cursor = root.walk();
+    let package = root
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "package_clause")
+        .and_then(|clause| clause.named_child(0))
+        .map(|name| text(name, src).to_owned())
+        .unwrap_or_default();
+    let Some(tested) = package.strip_suffix("_test") else {
+        return BTreeSet::new();
+    };
+    import_specs(root)
+        .into_iter()
+        .filter_map(|spec| {
+            let path = import_path(spec, src)?;
+            (import_name_bare(&path) == tested).then(|| import_name(spec, &path, src))
+        })
+        .filter(|name| !matches!(name.as_str(), "." | "_"))
+        .collect()
+}
+
+/// The names Go source declares at its top level: functions, types,
+/// variables and constants (not methods). What a test of its package can
+/// use from it.
+pub(super) fn top_level_names(source: &str) -> BTreeSet<String> {
+    let language: Language = tree_sitter_go::LANGUAGE.into();
+    let Some(tree) = parse(source, &language) else {
+        return BTreeSet::new();
+    };
+    let src = source.as_bytes();
+    let mut found = BTreeSet::new();
+    walk(tree.root_node(), |node| match node.kind() {
+        "source_file" | "type_declaration" | "var_declaration" | "var_spec_list"
+        | "const_declaration" => true,
+        "function_declaration" | "type_spec" | "type_alias" | "var_spec" | "const_spec" => {
+            let mut cursor = node.walk();
+            // The commas of `const a, b = …` are in the field too.
+            for name in node
+                .children_by_field_name("name", &mut cursor)
+                .filter(|name| name.is_named())
+            {
+                found.insert(text(name, src).to_owned());
+            }
+            false
+        }
+        _ => false,
+    });
+    found
 }
 
 /// Reads the tests, skips and assertions of a Go test file.
@@ -899,6 +978,7 @@ pub(super) fn read(source: &str) -> TestFile {
         });
     }
     let names = Names::of(root, src);
+    let tested = tested_imports(root, src);
     // `Some(true)`: never built; `Some(false)`: built only sometimes.
     let constraint = build_constraint(root, src);
 
@@ -980,7 +1060,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         why,
                         marker: false,
                         focused: false,
-                        uses: uses_of(node, src),
+                        uses: uses_of(node, src, &tested),
                         weight: weight(body, root, src, &names, suite.as_deref()),
                     });
                 }
@@ -1025,7 +1105,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         } else {
                             None
                         };
-                        let mut uses = uses_of(function, src);
+                        let mut uses = uses_of(function, src, &tested);
                         uses.extend(file.tests[parent_test].uses.iter().cloned());
                         scope.test = Some(file.tests.len());
                         scope.path = Some(id.clone());
@@ -1071,43 +1151,29 @@ pub(super) fn read(source: &str) -> TestFile {
             _ => true,
         }
     });
-    file.imports = imports(root, src);
+    file.imports = imports(root, src, &tested);
     file
 }
 
 /// The names a test file takes from elsewhere, each with where from: every
 /// import by its name and path, and the names it uses but does not
-/// declare, which come from its own package ([`PACKAGE`]). An external
-/// test package (`pricing_test`) importing its package (`…/pricing`)
-/// takes that import from [`PACKAGE`] too.
-fn imports(root: Node<'_>, src: &[u8]) -> BTreeMap<String, String> {
+/// declare, which come from its own package ([`PACKAGE`]): unqualified in
+/// an internal test, `pricing.Total` through the `tested` import of an
+/// external test package. The guard counts only those that the file
+/// [`PACKAGE`] resolves to declared ([`top_level_names`]).
+fn imports(root: Node<'_>, src: &[u8], tested: &BTreeSet<String>) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
-    let mut cursor = root.walk();
-    let package = root
-        .named_children(&mut cursor)
-        .find(|child| child.kind() == "package_clause")
-        .and_then(|clause| clause.named_child(0))
-        .map(|name| text(name, src).to_owned())
-        .unwrap_or_default();
-    let tested = package.strip_suffix("_test");
     for spec in import_specs(root) {
         let Some(path) = import_path(spec, src) else {
             continue;
         };
         let name = import_name(spec, &path, src);
-        if matches!(name.as_str(), "." | "_") {
-            continue;
+        if !matches!(name.as_str(), "." | "_") {
+            found.insert(name, path);
         }
-        let last = import_name_bare(&path);
-        let spec = if tested.is_some_and(|tested| tested == last) {
-            PACKAGE.to_owned()
-        } else {
-            path
-        };
-        found.insert(name, spec);
     }
     let declared = declared(root, src);
-    for name in uses_of(root, src) {
+    for name in uses_of(root, src, tested) {
         if declared.contains(&name)
             || found.contains_key(&name)
             || BUILTINS.contains(&name.as_str())
@@ -1856,8 +1922,14 @@ func TestTotal(t *testing.T) {
         );
         assert_eq!(
             external.imports.get("pricing").map(String::as_str),
+            Some("example.com/shop/pricing")
+        );
+        assert_eq!(
+            external.imports.get("Total").map(String::as_str),
             Some(PACKAGE)
         );
+        assert!(external.tests[0].uses.contains("Total"));
+        assert!(!external.tests[0].uses.contains("Rate"));
         assert_eq!(
             external.imports.get("other").map(String::as_str),
             Some("example.com/shop/tax")
@@ -1869,6 +1941,36 @@ func TestTotal(t *testing.T) {
         );
         assert_eq!(resolve("shop/cart_test.go", PACKAGE, &exists), None);
         assert_eq!(resolve("shop/pricing_test.go", "strings", &exists), None);
+    }
+
+    #[test]
+    fn top_level_names_are_what_a_file_gives_its_package() {
+        let names = top_level_names(
+            r#"package pricing
+
+import "fmt"
+
+const Limit, other = 3, 4
+
+var (
+	rate = 0.2
+	Name string
+)
+
+type Cart struct{ items []int }
+
+type Alias = Cart
+
+func Total(a, b int) int { inner := 1; return a + b + inner }
+
+func (c *Cart) Add(item int) { fmt.Println(item) }
+"#,
+        );
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            ["Alias", "Cart", "Limit", "Name", "Total", "other", "rate"]
+        );
     }
 
     #[test]

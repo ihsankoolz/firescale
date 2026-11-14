@@ -1067,6 +1067,17 @@ pub fn guard_at(
     // modules of the repo, every such module is deleted, and none of those
     // names is left in the change.
     let existed_on_base = |path: &str| deleted.contains(&path.to_owned()) || exists_now(path);
+    // Go names no import for its own package: the names each deleted Go
+    // file declared, so a test is excused only by the file that declared
+    // what it uses, not by another file of its package (M32).
+    let go_declared: BTreeMap<&str, BTreeSet<String>> = files
+        .iter()
+        .filter(|file| file.language == Language::Go && deleted.contains(&file.path))
+        .filter_map(|file| {
+            let text = file.base.as_deref()?;
+            Some((file.path.as_str(), go::top_level_names(text)))
+        })
+        .collect();
     let excused = |file: &Changed, read: &TestFile, test: &TestCase| -> bool {
         let mut modules: BTreeSet<String> = BTreeSet::new();
         let mut names: Vec<&String> = Vec::new();
@@ -1091,6 +1102,11 @@ pub fn guard_at(
                 // A helper of the tests (a factory, a fixture module) is
                 // not what they test: deleting it with them excuses nothing.
                 Some(module) if is_test_path(&module) || policy.names_test(&module) => {}
+                Some(module)
+                    if spec == go::PACKAGE
+                        && !go_declared
+                            .get(module.as_str())
+                            .is_some_and(|declared| declared.contains(name)) => {}
                 Some(module) => {
                     modules.insert(module);
                     names.push(name);
