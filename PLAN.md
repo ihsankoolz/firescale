@@ -741,6 +741,23 @@ Added by the owner ("go as deep as the options go" on other languages). Decision
 
 ---
 
+## M33 to M39 — Stack packs for the new languages
+
+Added by the owner ("as deep as the options go"), after project support (M31) and the tamper guard (M32). One milestone, one ADR and one pull request per pack, with the "Done when" list of M15, M16, M29 and M30, in the order the build environment can prove them: Go (M33), Java with Gradle (M34) and C/C++ with CMake (M35) run here; Swift (M36) and .NET (M37) are proven on the macOS and Windows CI runners where they can be; Android (M38) and Flutter (M39) are built from their tools' templates and their run checks are left for the owner.
+
+## M33 — Stack pack: Go ☐
+
+Decisions in ADR 0053: five rules; a starter of `go.mod` (`go 1.26.0`), a `main` package and its test.
+
+**Done when**
+
+- ☑ `fscale init --packs core,go` in an empty folder yields a repo where the pack reports no violations (`go-pack.test.ts`, with snapshots).
+- ☑ In that repo, the stack's own build and test commands succeed. Run by hand on 2026-11-14: `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l .` (nothing) and `go run .`, with Go 1.24.7 fetching the 1.26.0 toolchain; `fscale verify` passes.
+- ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (a `go.mod` without its `go` line).
+- ☑ Every fix is idempotent, proven by tests (each rule's `tests.rs` runs its fix twice; `sync` twice after `init`).
+
+---
+
 ## Later (not ordered)
 
 - Docs site. Publishing to npm is automated from 0.1.1 on: a pushed tag `v<version>` builds, publishes with npm trusted publishing and verifies (ADR 0021, `RELEASING.md`). The tag is the owner's to push.
