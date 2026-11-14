@@ -22,6 +22,9 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M29) `supabase test db` has not run on the starter** (ADR 0049): it needs `supabase start`, so Docker images, which could not be pulled in the build session. Run `npx supabase start && npx supabase test db` in a folder made by `fscale init --packs core,supabase`; the pgTAP test it adds has never run against a database.
+- **(M29) `supabase/rls` is left to an agent, not fixed**: a migration that only enables RLS would cut the app off its own data until policies exist. Say if you would rather have the deterministic `enable` and accept that.
+- **(M29) Exact pins** (`supabase` 3.1.0, `@supabase/supabase-js` 2.119.0) as for Next.js; Edge Functions and `seed.sql` are left out of the pack (ADR 0049 says why). With `core,nextjs,supabase`, package.json keeps Next.js's `engines` (`>=20.9.0`) though supabase-js wants Node 22.
 - **(M28) The manual test with a real agent is open** (ADR 0048, "Manual checks"): run `fscale fix --agent claude` and `--agent codex` on a scratch repo with one real violation, and check the unverified items (Claude Code's JSON result fields; Codex's `--sandbox workspace-write` and the `-c` key). A deliberate real run was not allowed in the build session. One real `claude -p` (Claude Code 2.1.325) did run by accident, through a test that left the stand-in off the PATH; it passed, but with an earlier flag set and no output kept.
 - **(M28) A Codex run cannot be told what not to read or run** (`codex exec` has no flags for it, and runs a shell): it is refused where the repo's own settings deny anything, and warned about everywhere else. Say if `--agent codex` should be refused outright until Codex can be limited.
 - **(M28) Claude Code runs with `--restricted`, which loads no settings file**: your own user-level deny rules do not apply to a run (the runner's and the repo's do), and edits are allowed without asking even where the repo's `defaultMode` would ask. Say if your user-level rules should be read and passed on too.
@@ -136,6 +139,18 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M29 — Stack pack: Supabase
+
+**Built** (ADR 0049, `docs/rules.md`): eight rules — `supabase/package-json`, `config`, `local-smtp`, `gitignore`, `migration-names`, `rls`, `db-tests`, `public-secret-key` — from the CLI's source at v3.1.0 and the docs, and checked against the CLI 3.1.0 for everything that runs without Docker (a one-line config loads; `[inbucket]` is refused; its keys load under `[local_smtp]`). `init --packs core,supabase` builds a starter the pack passes; `npm install`, `supabase --version` and `supabase migration new` work in it.
+
+**Decided on your behalf** (ADR 0049):
+
+- **The pack applies at the root unless the Supabase project is in a subfolder**, so it combines with the nextjs pack in one package.json, and a workspace gets one finding pointing to its project.
+- **`project_id` comes from package.json's name**, cleaned as the CLI cleans names, else `supabase-app`: never the folder's name, so a dry run writes the same file.
+- **RLS, migration names and public secret keys are findings for an agent or a person**, never rewritten: each needs a choice (policies, order, where the code runs).
+
+**Real repo:** `supabase-community/supabase-mcp` (read-only copy): two true findings, `[inbucket]` and no database tests; its RLS migration passes.
 
 ## M28 — Agent adapters and `fscale ledger`
 
