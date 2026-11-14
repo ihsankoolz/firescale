@@ -32,11 +32,18 @@ fn inbucket_lines(text: &str) -> Vec<usize> {
         .collect()
 }
 
-/// True when the repo pins a CLI older than the rename.
-fn older_cli(ctx: &RuleContext) -> Result<bool> {
+/// The CLI's version spec when package.json allows a CLI older than the
+/// rename (its lowest version is older), or `None`.
+fn older_cli(ctx: &RuleContext) -> Result<Option<String>> {
     Ok(match package_json(ctx)? {
-        Ok(Some(json)) => declared_version(&json, "supabase").is_some_and(|v| v < RENAMED_IN),
-        _ => false,
+        Ok(Some(json)) => declared_version(&json, "supabase")
+            .filter(|v| *v < RENAMED_IN)
+            .and_then(|_| {
+                ["dependencies", "devDependencies"]
+                    .iter()
+                    .find_map(|f| json.get(f)?.get("supabase")?.as_str().map(str::to_owned))
+            }),
+        _ => None,
     })
 }
 
@@ -87,12 +94,12 @@ impl BuiltinRule for LocalSmtp {
         let older = older_cli(ctx)?;
         Ok(vec![finding(
             CONFIG,
-            if older {
-                format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load. package.json pins a CLI older than 2.108, which may not read [local_smtp]: update the CLI (`npm install --save-dev supabase@latest`), then run `fscale sync` to rename it.")
+            if let Some(spec) = &older {
+                format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load. package.json allows a CLI older than 2.108 (\"supabase\": \"{spec}\"), which may not read [local_smtp]: update the CLI (`npm install --save-dev supabase@latest`), then run `fscale sync` to rename it.")
             } else {
                 format!("supabase/config.toml has an [inbucket] table (line {first}), which Supabase CLI v3 refuses to load (`supabase start` and the db commands fail). `fscale sync` renames it to [local_smtp]; its keys stay as they are.")
             },
-            if older {
+            if older.is_some() {
                 Fixable::Manual
             } else {
                 Fixable::Deterministic
@@ -102,7 +109,7 @@ impl BuiltinRule for LocalSmtp {
 
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         let mut result = FixResult::default();
-        if !applies(ctx)? || older_cli(ctx)? {
+        if !applies(ctx)? || older_cli(ctx)?.is_some() {
             return Ok(result);
         }
         let Some(text) = ctx.read(CONFIG)? else {
