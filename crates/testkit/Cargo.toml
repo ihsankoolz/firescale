@@ -31,6 +31,17 @@ path = "src/tree_stub.rs"
 name = "fscale-ctrl-break"
 path = "src/ctrl_break.rs"
 
+# A stand-in for an agent CLI behind the runner's adapter protocol (M27):
+# answers --version and `auth status`, and on `run` reads the request from
+# stdin, logs it, makes the edits and runs the commands a scenario file
+# names, and prints a result. Tests and CI never call a real model.
+[[bin]]
+name = "fscale-fake-agent"
+path = "src/fake_agent.rs"
+
+[dependencies]
+serde_json.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
   "Win32_System_Console",

@@ -48,6 +48,24 @@ pub fn skill_body(text: &str) -> String {
 }
 
 /// Builds the text for `fscale explain`.
+/// A rule's SKILL.md, as written.
+///
+/// # Errors
+///
+/// When a custom rule's SKILL.md cannot be read.
+pub fn rule_skill(rule: &ConfiguredRule<'_>) -> Result<String> {
+    match &rule.source {
+        RuleSource::Builtin(builtin) => Ok(builtin.skill().to_owned()),
+        RuleSource::Custom { skill_file, .. } => fs::read_to_string(skill_file).map_err(|error| {
+            Error::user(format!(
+                "Could not read the SKILL.md for \"{}\" at {} ({error}). Every rule needs a SKILL.md next to its rule file.",
+                rule.meta.id,
+                skill_file.display()
+            ))
+        }),
+    }
+}
+
 pub fn explain_rule(rule: &ConfiguredRule<'_>) -> Result<String> {
     let meta = &rule.meta;
     let skill = match &rule.source {

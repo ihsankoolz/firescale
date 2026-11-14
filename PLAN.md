@@ -641,19 +641,22 @@ Decisions in ADR 0046: `snapshot-changed` and `expected-changed` need a person's
 
 ---
 
-## M27 — Guarded agent runner ☐
+## M27 — Guarded agent runner ☑
+
+Decisions in ADR 0047: an adapter is a program speaking a small protocol (`--version`, `auth status`, `run <request.json>`); the runner puts the ten guardrails in order around it; `fake`, from the testkit, is the only adapter until M28.
 
 **Build**
 
 - The runner and every guardrail in SPEC §7, in Rust, each with its own test. That includes guardrail 10: each run appends one line to `.firescale/ledger.jsonl` (rule, agent, pass or fail, diff size, duration; cost when known).
 - A fake agent adapter, so tests and CI never call a real model.
 - The re-check after a run is the referee (SPEC §8): blame-aware verify plus the tamper guard.
+- Added by the owner for this milestone: stand-in agent binaries in the testkit; never wider permissions than the repo's own agent settings; never push, tag or publish; the ledger stores no prompt text, no file contents and no secrets.
 
 **Done when**
 
-- ☐ With the fake agent: a good fix is committed, a bad fix is rolled back, a fix touching a protected path is rejected, and a fix that skips a test is rejected by the tamper guard.
-- ☐ The runner refuses to start on a dirty tree or when secrets are tracked.
-- ☐ Every guardrail in SPEC §7 has a test named after it, and a pass and a fail each append one schema-valid ledger line.
+- ☑ With the fake agent: a good fix is committed, a bad fix is rolled back, a fix touching a protected path is rejected, and a fix that skips a test is rejected by the tamper guard (`agent-runner.test.ts`, guardrails 7 and 8).
+- ☑ The runner refuses to start on a dirty tree or when secrets are tracked (guardrail 1).
+- ☑ Every guardrail in SPEC §7 has a test named after it, and a pass and a fail each append one schema-valid ledger line (guardrails 1 to 10; the ledger lines are validated with `docs/schemas/ledger-entry.schema.json`).
 
 ---
 

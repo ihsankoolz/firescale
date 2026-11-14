@@ -133,6 +133,30 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
 
+## M27 — Guarded agent runner
+
+**Built** (ADR 0047, `docs/fix.md` "fscale fix --agent"):
+
+1. `fscale fix --agent <name> [--rule <id>]`: the ten guardrails of SPEC §7 in order, each with a test named after it (`packages/cli/src/agent-runner.test.ts`), against `fscale-fake-agent`, a stand-in in the testkit. No real model is called anywhere.
+2. The adapter protocol: `--version`, `auth status`, `run <request.json>` printing one JSON result line; the run is a process tree stopped at the time limit.
+3. The policy: read, search and edit only; secrets, protected paths and the config's `protectedPaths` denied; push, tag and publish denied; narrowed by the repo's `.claude/settings.json` denies, and refused when the repo's settings let no agent edit.
+4. Re-check: the rule again, the tamper guard (any finding fails), blame-aware verify against `HEAD`.
+5. The ledger: one schema-valid line per run (`docs/schemas/ledger-entry.schema.json`), never the prompt, file contents or the agent's words.
+6. A new config key, `agent` (`maxTurns`, `maxCostUsd`, `timeoutSeconds`).
+
+**Decided on your behalf** (ADR 0047):
+
+- **A worktree on a new branch** `fscale/fix/<rule>-<time>`, kept with one commit when the run passes, removed when it fails. You merge it yourself.
+- **The rule's `inputs` and its diagnostics' files are what a fix may change.**
+- **Any tamper finding fails a run**, including a changed snapshot or expected value.
+- **`.env.example` and other templates are not secrets**; every other `.env*` is.
+- **Git in a run can reach no remote** (`pushInsteadOf` and `protocol.allow=never`), as well as push being denied in the policy.
+- **`ask` rules in the repo's Claude Code settings count as `deny`**: a run has no person to ask.
+
+**The review** (ADR 0047, "After the review") reproduced twelve ways around the guardrails (the agent committing protected files to its own branch, a rename hiding a deletion, unguarded code in the re-check, `pushurl`, refs and config of the shared repo, locked worktrees, half-applied deny rules, secrets in code, case and nesting in the diff guard, links, agent-chosen ledger reasons, ignored files); all fixed with tests. Left as limits: a process the agent detaches outlives the run; `info/exclude` and reflogs are not compared.
+
+**Not testable here:** a real agent run (M28's manual test).
+
 ## M26 — Tamper guard: approvals and measured rates
 
 **Built** (ADR 0046, `docs/verify.md`, `bench/RESULTS.md`):
