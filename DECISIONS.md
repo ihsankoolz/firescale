@@ -4,7 +4,7 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## Review of the long run
 
-M25 to M30, built between 2026-11-14 00:59 and 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
+M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
 
 **M25, tamper guard: config and CI** ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045)
 
@@ -36,7 +36,7 @@ M25 to M30, built between 2026-11-14 00:59 and 05:00 UTC, one pull request each,
 - Decide: RLS left to an agent rather than fixed; exact pins; Edge Functions and `seed.sql` left out.
 - Test by hand: `npx supabase start && npx supabase test db` in a folder made by `fscale init --packs core,supabase` (needs Docker; the pgTAP test has never run).
 
-**M30, Expo pack** (pull request below, ADR 0050)
+**M30, Expo pack** ([#42](https://github.com/ihsankoolz/firescale/pull/42), ADR 0050)
 
 - Built: seven rules from Expo's SDK 58 template and CLI; the starter installs, typechecks, lints and bundles for Android offline.
 - Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
