@@ -9,6 +9,7 @@ pub mod expo;
 pub mod go;
 #[path = "group-project/mod.rs"]
 pub mod group_project;
+pub mod maven;
 pub mod nextjs;
 pub mod python;
 mod stackkit;
@@ -25,6 +26,7 @@ pub fn builtin_packs() -> Vec<BuiltinPack> {
         python::pack(),
         expo::pack(),
         go::pack(),
+        maven::pack(),
         supabase::pack(),
     ]
 }

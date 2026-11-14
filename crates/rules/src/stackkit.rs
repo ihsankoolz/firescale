@@ -91,3 +91,90 @@ pub(crate) fn json_with(ctx: &RuleContext, file: &str, add: &Value) -> Result<Op
 pub(crate) fn package_json_with(ctx: &RuleContext, add: &Value) -> Result<Option<String>> {
     json_with(ctx, "package.json", add)
 }
+
+/// Root manifests of every stack a pack knows, for [`other_stack`]: a
+/// pack's starter is written only into a repo that has none but its own.
+pub(crate) const MANIFESTS: [&str; 28] = [
+    "package.json",
+    "deno.json",
+    "deno.jsonc",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "setup.cfg",
+    "Pipfile",
+    "Cargo.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "build.sbt",
+    "CMakeLists.txt",
+    "meson.build",
+    "Package.swift",
+    "pubspec.yaml",
+    "Gemfile",
+    "composer.json",
+    "mix.exs",
+    "settings.gradle.kts",
+    // Found in the maven pack's review: Groovy-DSL Gradle, Ant and Bazel
+    // Java repos looked new to Java.
+    "settings.gradle",
+    "build.xml",
+    "WORKSPACE",
+    "WORKSPACE.bazel",
+    "MODULE.bazel",
+    "BUILD.bazel",
+];
+
+/// Source file extensions of every language a pack knows, for
+/// [`other_stack`].
+pub(crate) const CODE: [&str; 26] = [
+    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "rs", "go", "java", "kt", "kts", "scala", "c",
+    "h", "cc", "cpp", "hpp", "cs", "fs", "swift", "rb", "php", "dart", "ex", "exs",
+];
+
+/// True for a path no tool builds from: in a folder whose name starts with
+/// `.` or `_`, or named `testdata`, `vendor` or `node_modules`.
+pub(crate) fn set_aside(path: &str) -> bool {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    parts.pop();
+    parts.iter().any(|folder| {
+        folder.starts_with(['.', '_']) || matches!(*folder, "testdata" | "vendor" | "node_modules")
+    })
+}
+
+/// True when the root holds another stack: a manifest that is not one of
+/// `own` (the pack's own), or source code in a language whose extension is
+/// not one of `code` (the pack's), anywhere outside folders set aside. A
+/// pack writes its starter only into a repo that is new to it: found in
+/// the go pack's review, where a Python project with only `setup.py`
+/// would have been given a Go module.
+pub(crate) fn other_stack(ctx: &RuleContext, own: &[&str], code: &[&str]) -> Result<bool> {
+    let foreign: Vec<&str> = MANIFESTS
+        .iter()
+        .copied()
+        .filter(|name| !own.contains(name))
+        .collect();
+    if any_exists(ctx, &foreign) {
+        return Ok(true);
+    }
+    Ok(firescale_core::walk::walk_files(ctx.root())?
+        .iter()
+        .any(|path| {
+            !set_aside(path)
+                && path.rsplit_once('.').is_some_and(|(_, extension)| {
+                    CODE.contains(&extension) && !code.contains(&extension)
+                })
+        }))
+}
+
+/// What [`other_stack`] reads, as cache inputs: every manifest at the root
+/// and every source file.
+pub(crate) fn other_stack_inputs() -> Vec<String> {
+    MANIFESTS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .chain(CODE.iter().map(|extension| format!("**/*.{extension}")))
+        .collect()
+}

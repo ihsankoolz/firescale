@@ -143,3 +143,14 @@ Opt-in: add `"go"` to `packs`, or `fscale init --packs core,go`. It works on a G
 | `go/tests`     | A module with Go code has a `_test.go` file.                                                                                                     | medium   | no  |
 | `go/go-sum`    | A module that requires other modules has a `go.sum`.                                                                                             | high     | no  |
 | `go/gitignore` | `.gitignore` ignores the root program `go build` writes (`/app` for `example.com/app`), `*.exe`, `*.test`, `*.out`, `go.work` and `go.work.sum`. | medium   | yes |
+
+## The `maven` pack
+
+Opt-in: add `"maven"` to `packs`, or `fscale init --packs core,maven`. It works on a Maven project at the repo root (a repo of another stack, a Gradle one included, is left alone, and a project only in a subfolder gets one finding); its fixes build a starter (a `pom.xml` for Java 21 with JUnit 6 and Checkstyle, a class and its test) and repair what is missing, never replacing a file a person wrote (ADR 0054). `mvn -B test` and, with the starter's Checkstyle, `mvn -B checkstyle:check` are its test and lint commands (ADR 0051).
+
+| Rule               | What it checks                                                                                                                 | Severity | Fix |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------ | -------- | --- |
+| `maven/pom`        | The root has a `pom.xml` with `modelVersion`, `groupId`, `artifactId` and `version` (or a `<parent>` for the first and last).  | high     | yes |
+| `maven/properties` | `pom.xml` sets `project.build.sourceEncoding` (the fix adds UTF-8) and the Java version to build for (for a person to choose). | medium   | yes |
+| `maven/entry`      | The project has Java code under `src/main/java` or `src/test/java` (an aggregator POM is not checked).                         | high     | yes |
+| `maven/tests`      | A project with Java code under `src/main` has a test under `src/test`.                                                         | medium   | no  |

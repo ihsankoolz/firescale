@@ -743,9 +743,9 @@ Added by the owner ("go as deep as the options go" on other languages). Decision
 
 ## M33 to M39 — Stack packs for the new languages
 
-Added by the owner ("as deep as the options go"), after project support (M31) and the tamper guard (M32). One milestone, one ADR and one pull request per pack, with the "Done when" list of M15, M16, M29 and M30, in the order the build environment can prove them: Go (M33), Java with Gradle (M34) and C/C++ with CMake (M35) run here; Swift (M36) and .NET (M37) are proven on the macOS and Windows CI runners where they can be; Android (M38) and Flutter (M39) are built from their tools' templates and their run checks are left for the owner.
+Added by the owner ("as deep as the options go"), after project support (M31) and the tamper guard (M32). One milestone, one ADR and one pull request per pack, with the "Done when" list of M15, M16, M29 and M30, in the order the build environment can prove them: Go (M33), Java with Maven (M34; Gradle's wrapper is a binary a fix cannot write, ADR 0054) and C/C++ with CMake (M35) run here; Swift (M36) and .NET (M37) are proven on the macOS and Windows CI runners where they can be; Android (M38) and Flutter (M39) are built from their tools' templates and their run checks are left for the owner.
 
-## M33 — Stack pack: Go ☐
+## M33 — Stack pack: Go ☑
 
 Decisions in ADR 0053: five rules; a starter of `go.mod` (`go 1.26.0`), a `main` package and its test.
 
@@ -754,6 +754,17 @@ Decisions in ADR 0053: five rules; a starter of `go.mod` (`go 1.26.0`), a `main`
 - ☑ `fscale init --packs core,go` in an empty folder yields a repo where the pack reports no violations (`go-pack.test.ts`, with snapshots).
 - ☑ In that repo, the stack's own build and test commands succeed. Run by hand on 2026-11-14: `go build ./...`, `go vet ./...`, `go test ./...`, `gofmt -l .` (nothing) and `go run .`, with Go 1.24.7 fetching the 1.26.0 toolchain; `fscale verify` passes.
 - ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (a `go.mod` without its `go` line).
+- ☑ Every fix is idempotent, proven by tests (each rule's `tests.rs` runs its fix twice; `sync` twice after `init`).
+
+## M34 — Stack pack: Java with Maven ☐
+
+Decisions in ADR 0054: four rules; a starter of `pom.xml` (Java 21, JUnit 6, Checkstyle with Google's rules), a class and its test.
+
+**Done when**
+
+- ☑ `fscale init --packs core,maven` in an empty folder yields a repo where the pack reports no violations (`maven-pack.test.ts`, with snapshots).
+- ☑ In that repo, the stack's own build and test commands succeed. Run by hand on 2026-11-14 with Maven 3.9.11 and JDK 21: `mvn -B test` (1 test, 0 failures), `mvn -B package -DskipTests`, `mvn -B checkstyle:check` (no finding) and `java -cp target/classes com.example.app.App`; `fscale verify` is OK on every step.
+- ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (a POM without its source encoding).
 - ☑ Every fix is idempotent, proven by tests (each rule's `tests.rs` runs its fix twice; `sync` twice after `init`).
 
 ---

@@ -42,6 +42,14 @@ M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull requ
 - Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
 - Test by hand: the starter on a device or simulator (`npx expo start`), and `npx expo-doctor` with the network.
 
+## M34 — Stack pack: Java with Maven
+
+**Built** (ADR 0054, `docs/rules.md`): four rules; `fscale init --packs core,maven` writes a `pom.xml` (Java 21, JUnit 6, Checkstyle with Google's rules), `App.java` and `AppTest.java`; an existing POM gets its source encoding, and a missing Java version or test is named for a person or an agent.
+
+**Decided on your behalf** (ADR 0054): **Maven instead of Gradle** for Java, since Gradle's wrapper is a binary a fix cannot write; the Maven wrapper is not written (its script is Maven's code; the skill gives the command); Checkstyle in the starter so `fscale verify` runs a lint step; an existing POM's Java version is never set by a fix.
+
+**Proof:** the starter tested, packaged, linted and ran here (Maven 3.9.11, JDK 21), and `fscale verify` was OK on every step in it; commons-lang, spring-petclinic, guava, jsoup, gson, junit4, commons-cli, jackson-databind and metrics get no finding, and okhttp none after one fix; a fresh review found the POM edit could break valid POMs, so it now reads the POM's element structure, and 19 layouts give POMs Maven accepts.
+
 ## M33 — Stack pack: Go
 
 **Built** (ADR 0053, `docs/rules.md`): five rules; `fscale init --packs core,go` writes `go.mod` (`module example.com/app`, `go 1.26.0`), `main.go` and `main_test.go`, and Go's `.gitignore` lines; a missing `go.sum` or test file is named for a person or an agent.

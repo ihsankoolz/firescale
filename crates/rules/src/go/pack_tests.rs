@@ -173,3 +173,12 @@ fn a_nested_modules_files_are_not_the_root_modules() {
     let ids: Vec<String> = findings(&f).into_iter().map(|d| d.rule_id).collect();
     assert!(ids.iter().any(|id| id == "go/entry"), "{ids:?}");
 }
+
+#[test]
+fn a_module_below_another_stack_is_that_stacks_business() {
+    let f = fixture(&[
+        ("package.json", "{ \"name\": \"web\" }\n".to_owned()),
+        ("tools/go.mod", "module tools\n\ngo 1.26.0\n".to_owned()),
+    ]);
+    assert_eq!(findings(&f), Vec::<Diagnostic>::new());
+}
