@@ -1,24 +1,28 @@
-//! The tamper guard (M23, M24; ADR 0042, ADR 0044): finds a change that
-//! passes verify by weakening its tests or silencing its checks, in
-//! JavaScript, TypeScript, Python (pytest and unittest) and Rust; and since
-//! M32 (ADR 0052) also in Swift (XCTest and Swift Testing) and Dart
-//! (`package:test` and `flutter_test`).
+//! The tamper guard (M23, M24, M32; ADR 0042, ADR 0044, ADR 0052): finds a
+//! change that passes verify by weakening its tests or silencing its
+//! checks, in JavaScript, TypeScript, Python (pytest and unittest), Rust,
+//! Swift (XCTest and Swift Testing), Dart (`package:test` and
+//! `flutter_test`), C (Unity, CMocka, Check, `assert`) and C++
+//! (GoogleTest, Catch2, doctest).
 //!
 //! - It compares syntax trees, not diff lines: each changed test file is
 //!   parsed with tree-sitter on the base commit and in the working tree, and
 //!   its tests (by suite path and name), skipped tests and assertions are
 //!   counted. A reformatted test, or one moved within or between files,
 //!   counts the same. Code that certainly never runs (`if (false)`, after a
-//!   `return`) and assertions that cannot fail (`expect(true).toBe(true)`,
-//!   `assert True`) are not counted.
+//!   `return`, C's `#if 0`) and assertions that cannot fail
+//!   (`expect(true).toBe(true)`, `assert True`, `EXPECT_TRUE(true)`) are
+//!   not counted. C and C++ test macros (`TEST(…)`, `TEST_CASE(…)`) are
+//!   read in the shapes tree-sitter gives them.
 //! - It compares **net counts over the whole change**, so a renamed test, a
 //!   test moved to another file, a test split in two and an assertion
 //!   replaced by a stricter one are not findings. Lint suppressions
 //!   (`eslint-disable`, `# noqa`, `#[allow]`, `// swiftlint:disable`,
-//!   `// ignore:`) are counted the same way, per rule, in every changed
-//!   source file.
+//!   `// ignore:`, `// NOLINT`, `#pragma … diagnostic ignored`) are counted
+//!   the same way, per rule, in every changed source file.
 //! - A test deleted together with every module of the repo it uses (its
-//!   subject) is not a finding.
+//!   subject; in C and C++ the headers its file includes in quotes) is not
+//!   a finding.
 //! - The base is the one blame-aware verify resolves (ADR 0037). The policy
 //!   (`verify.tamper`: mode, extra test paths, allowed exceptions) is read
 //!   from the base commit's config, never the working tree's, so a change
@@ -77,7 +81,8 @@ pub enum Language {
     Swift,
     /// C: Unity, CMocka, Check, plain `assert` (M32).
     C,
-    /// C++: GoogleTest and Catch2 (M32).
+    /// C++: GoogleTest, Catch2 and doctest (M32). Headers too: the C++
+    /// grammar reads C.
     Cpp,
     /// C#: xUnit, NUnit and MSTest (M32).
     CSharp,
@@ -135,8 +140,10 @@ pub fn read_test_file(source: &str, language: Language) -> TestFile {
 /// `spec`; Python `test_*.py`, `*_test.py` or in `test`, `tests`; Rust in
 /// `tests`; Swift `*Tests.swift`, `*Test.swift` or in `tests` or a folder
 /// ending in `Tests` (`Tests/`, `AppTests/`, `AppUITests/`); Dart
-/// `*_test.dart` or in `test`, `integration_test`. A Rust, Swift or Dart
-/// file elsewhere is a test file when it holds tests ([`holds_tests`]); the
+/// `*_test.dart` or in `test`, `integration_test`; C and C++ `*_test.c`,
+/// `*_test.cc`, `*_unittest.cc`, `test_*.c`, `*Test.cpp`, `*Tests.cpp` or
+/// in `test`, `tests`, `unittest(s)`. A Rust, Swift, Dart, C or C++ file
+/// elsewhere is a test file when it holds tests ([`holds_tests`]); the
 /// policy can name more (`verify.tamper.testPaths`).
 #[must_use]
 pub fn is_test_path(path: &str) -> bool {
@@ -158,7 +165,8 @@ pub fn is_test_path(path: &str) -> bool {
 /// True for source that holds tests although its path does not say so:
 /// Rust unit tests (`#[test]`, `#[cfg(test)]`) next to the code, Swift that
 /// imports XCTest or Testing and defines a test, Dart that imports
-/// `package:test` or `package:flutter_test` and calls `test`.
+/// `package:test` or `package:flutter_test` and calls `test`, a C or C++
+/// file that includes a test framework's header and defines a test.
 #[must_use]
 pub fn holds_tests(source: &str, language: Language) -> bool {
     match language {
@@ -192,11 +200,10 @@ fn resolve(
         Language::Python => python::resolve(from, spec, exists),
         Language::Swift => swift::resolve(from, spec, exists),
         Language::Dart => dart::resolve(from, spec, exists),
+        Language::C | Language::Cpp => cfamily::resolve(from, spec, exists),
         Language::Rust
         | Language::Java
         | Language::Kotlin
-        | Language::C
-        | Language::Cpp
         | Language::CSharp
         | Language::Go => None,
     }
