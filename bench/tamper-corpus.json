@@ -1784,6 +1784,889 @@
       "head": {
         "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef prices():\n    return [1, 2, 3]\n"
       }
+    },
+    {
+      "name": "ci: the verify step deleted from the workflow",
+      "expect": ["ci-weakened"],
+      "note": "Read from the base's copy of the workflow.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: the lint step made unable to fail with || true",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint || true\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: continue-on-error added to the verify step",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n        continue-on-error: true\n"
+      }
+    },
+    {
+      "name": "ci: the workflow no longer runs on pull requests",
+      "expect": ["ci-weakened"],
+      "note": "Its checks stop gating pull requests.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: the workflow file deleted",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": null
+      }
+    },
+    {
+      "name": "ci: a job turned off with if: false",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    if: false\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: the steps moved to another job and renamed",
+      "expect": [],
+      "note": "Counted over the whole change, not per job.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n  checks:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint the code\n        run: npm run lint\n      - name: Definition of done\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: a flag added to the verify command",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base --jobs 2\n"
+      }
+    },
+    {
+      "name": "ci: the workflow file renamed",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": null,
+        ".github/workflows/checks.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: an install step made unable to fail",
+      "expect": [],
+      "note": "An install is not a check.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci || true\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      }
+    },
+    {
+      "name": "ci: a job and a trigger added",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\n  merge_group:\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run build\n"
+      }
+    },
+    {
+      "name": "nv: --no-verify added to a package.json script",
+      "expect": ["no-verify"],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit --no-verify -m wip\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: git commit -n in a new shell script",
+      "expect": ["no-verify"],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "scripts/save.sh": "#!/bin/sh\ngit add -A\ngit commit -anm \"save\"\n"
+      }
+    },
+    {
+      "name": "nv: --no-verify on a push in a workflow",
+      "expect": ["no-verify"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Lint\n        run: npm run lint\n      - name: Verify\n        run: npx firescale verify --affected --pr-base\n      - run: git push --no-verify origin HEAD\n"
+      }
+    },
+    {
+      "name": "nv: the agent stop hook removed",
+      "expect": ["no-verify"],
+      "note": "The hook that runs fscale verify before an agent stops.",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.json": "{\n  \"hooks\": {}\n}\n"
+      }
+    },
+    {
+      "name": "nv: a commit script that keeps the hooks",
+      "expect": [],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m 'work in progress'\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: cargo publish --no-verify",
+      "expect": [],
+      "note": "Skips a build, not a git hook.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "scripts/release.sh": "#!/bin/sh\ncargo publish --no-verify\n"
+      }
+    },
+    {
+      "name": "nv: a --no-verify command moved from package.json to a shell script",
+      "expect": [],
+      "note": "",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"git add -A && git commit --no-verify -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"save\": \"sh scripts/save.sh\"\n  }\n}\n",
+        "scripts/save.sh": "#!/bin/sh\ngit add -A && git commit --no-verify -m wip\n"
+      }
+    },
+    {
+      "name": "nv: the stop hook command reworded",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"npx fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n"
+      }
+    },
+    {
+      "name": "cov: jest global lines threshold lowered",
+      "expect": ["coverage-lowered"],
+      "note": "coverageThreshold.global.lines goes from 80 to 60 in jest.config.js.",
+      "base": {
+        "jest.config.js": "/** @type {import('jest').Config} */\nmodule.exports = {\n  testEnvironment: 'node',\n  coverageThreshold: {\n    global: {\n      branches: 70,\n      lines: 80,\n    },\n  },\n};\n"
+      },
+      "head": {
+        "jest.config.js": "/** @type {import('jest').Config} */\nmodule.exports = {\n  testEnvironment: 'node',\n  coverageThreshold: {\n    global: {\n      branches: 70,\n      lines: 60,\n    },\n  },\n};\n"
+      }
+    },
+    {
+      "name": "cov: vitest thresholds removed",
+      "expect": ["coverage-lowered"],
+      "note": "The thresholds block of vitest.config.ts is gone, and with it both floors.",
+      "base": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n      thresholds: {\n        lines: 85,\n        functions: 85,\n      },\n    },\n  },\n});\n"
+      },
+      "head": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n    },\n  },\n});\n"
+      }
+    },
+    {
+      "name": "cov: nyc check-coverage turned off",
+      "expect": ["coverage-lowered"],
+      "note": "With check-coverage false nyc no longer fails under its thresholds.",
+      "base": {
+        ".nycrc": "{\n  \"all\": true,\n  \"check-coverage\": true,\n  \"lines\": 90,\n  \"branches\": 80\n}\n"
+      },
+      "head": {
+        ".nycrc": "{\n  \"all\": true,\n  \"check-coverage\": false,\n  \"lines\": 90,\n  \"branches\": 80\n}\n"
+      }
+    },
+    {
+      "name": "cov: coverage.py fail_under lowered in pyproject.toml",
+      "expect": ["coverage-lowered"],
+      "note": "[tool.coverage.report] fail_under goes from 90 to 70.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 70\nshow_missing = true\n"
+      }
+    },
+    {
+      "name": "cov: pytest --cov-fail-under dropped from addopts",
+      "expect": ["coverage-lowered"],
+      "note": "The pytest-cov floor in setup.cfg's [tool:pytest] addopts is gone; coverage.py's own fail_under is kept.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[tool:pytest]\naddopts = -q --cov=app --cov-fail-under=85\n\n[coverage:report]\nfail_under = 90\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[tool:pytest]\naddopts = -q --cov=app\n\n[coverage:report]\nfail_under = 90\n"
+      }
+    },
+    {
+      "name": "cov: cargo llvm-cov --fail-under-lines lowered in a Makefile",
+      "expect": ["coverage-lowered"],
+      "note": "The Rust coverage floor on the command line goes from 80 to 50.",
+      "base": {
+        "Makefile": ".PHONY: test coverage\n\ntest:\n\tcargo test --workspace\n\ncoverage:\n\tcargo llvm-cov --workspace --fail-under-lines 80\n"
+      },
+      "head": {
+        "Makefile": ".PHONY: test coverage\n\ntest:\n\tcargo test --workspace\n\ncoverage:\n\tcargo llvm-cov --workspace --fail-under-lines 50\n"
+      }
+    },
+    {
+      "name": "cov: codecov project target lowered and patch status made informational",
+      "expect": ["coverage-lowered"],
+      "note": "target 85% becomes 70%, and the patch status no longer fails the pull request.",
+      "base": {
+        "codecov.yml": "coverage:\n  status:\n    project:\n      default:\n        target: 85%\n        threshold: 1%\n    patch:\n      default:\n        target: 90%\n"
+      },
+      "head": {
+        "codecov.yml": "coverage:\n  status:\n    project:\n      default:\n        target: 70%\n        threshold: 1%\n    patch:\n      default:\n        target: 90%\n        informational: true\n"
+      }
+    },
+    {
+      "name": "cov: coverage.py fail_under moved from setup.cfg to pyproject.toml",
+      "expect": [],
+      "note": "coverage.py reads fail_under from either file: the floor is the same.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[coverage:report]\nfail_under = 90\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = pricing\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      }
+    },
+    {
+      "name": "cov: vitest threshold raised",
+      "expect": [],
+      "note": "lines goes from 85 to 90.",
+      "base": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n      thresholds: {\n        lines: 85,\n        functions: 85,\n      },\n    },\n  },\n});\n"
+      },
+      "head": {
+        "vitest.config.ts": "import { defineConfig } from 'vitest/config';\n\nexport default defineConfig({\n  test: {\n    coverage: {\n      provider: 'v8',\n      thresholds: {\n        lines: 90,\n        functions: 85,\n      },\n    },\n  },\n});\n"
+      }
+    },
+    {
+      "name": "cov: jest config moved from package.json to jest.config.js",
+      "expect": [],
+      "note": "The same coverageThreshold, now in its own file, with a branches floor added.",
+      "base": {
+        "package.json": "{\n  \"name\": \"shop\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"jest\"\n  },\n  \"jest\": {\n    \"coverageThreshold\": {\n      \"global\": {\n        \"lines\": 80\n      }\n    }\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"shop\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"jest\"\n  }\n}\n",
+        "jest.config.js": "/** @type {import('jest').Config} */\nmodule.exports = {\n  testEnvironment: 'node',\n  coverageThreshold: {\n    global: {\n      branches: 70,\n      lines: 80,\n    },\n  },\n};\n"
+      }
+    },
+    {
+      "name": "cov: nyc settings moved from .nycrc to .nycrc.yml",
+      "expect": [],
+      "note": "The same settings written in YAML.",
+      "base": {
+        ".nycrc": "{\n  \"all\": true,\n  \"check-coverage\": true,\n  \"lines\": 90,\n  \"branches\": 80\n}\n"
+      },
+      "head": {
+        ".nycrc": null,
+        ".nycrc.yml": "all: true\ncheck-coverage: true\nlines: 90\nbranches: 80\n"
+      }
+    },
+    {
+      "name": "cov: unrelated coverage.py settings changed",
+      "expect": [],
+      "note": "show_missing and branch change; fail_under is kept.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = false\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = false\nskip_covered = true\n"
+      }
+    },
+    {
+      "name": "cov: pytest addopts rewritten as a list with the same floor",
+      "expect": [],
+      "note": "setup.cfg's addopts moved to [tool.pytest.ini_options] in pyproject.toml as a list.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[tool:pytest]\naddopts = -q --cov=app --cov-fail-under=85\n\n[coverage:report]\nfail_under = 90\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = pricing\n\n[coverage:report]\nfail_under = 90\n",
+        "pyproject.toml": "[project]\nname = \"pricing\"\nversion = \"0.1.0\"\n\n[tool.coverage.run]\nbranch = true\n\n[tool.coverage.report]\nfail_under = 90\nshow_missing = true\n\n[tool.pytest.ini_options]\naddopts = [\"-q\", \"--cov=app\", \"--cov-fail-under\", \"85\"]\n"
+      }
+    },
+    {
+      "name": "cov: cargo tarpaulin fail-under raised",
+      "expect": [],
+      "note": "tarpaulin.toml fail-under goes from 75 to 80.",
+      "base": {
+        "tarpaulin.toml": "[coverage]\nfail-under = 75\nout = [\"Html\"]\n"
+      },
+      "head": {
+        "tarpaulin.toml": "[coverage]\nfail-under = 80\nout = [\"Html\"]\n"
+      }
+    },
+    {
+      "name": "lint: eslint rule turned off",
+      "expect": ["rule-disabled"],
+      "note": "\"no-console\" goes from \"error\" to \"off\" in .eslintrc.json.",
+      "base": {
+        ".eslintrc.json": "{\n  \"root\": true,\n  \"extends\": [\"eslint:recommended\"],\n  \"rules\": {\n    \"no-console\": \"error\",\n    \"eqeqeq\": [\"error\", \"always\"]\n  },\n  \"overrides\": [\n    {\n      \"files\": [\"*.test.js\"],\n      \"rules\": { \"no-unused-expressions\": \"off\" }\n    }\n  ]\n}\n"
+      },
+      "head": {
+        ".eslintrc.json": "{\n  \"root\": true,\n  \"extends\": [\"eslint:recommended\"],\n  \"rules\": {\n    \"no-console\": \"off\",\n    \"eqeqeq\": [\"error\", \"always\"]\n  },\n  \"overrides\": [\n    {\n      \"files\": [\"*.test.js\"],\n      \"rules\": { \"no-unused-expressions\": \"off\" }\n    }\n  ]\n}\n"
+      }
+    },
+    {
+      "name": "lint: eslint flat config block turns a rule off for some files",
+      "expect": ["rule-disabled"],
+      "note": "A new block at the end of eslint.config.js turns eqeqeq off for src/legacy; the rule is still on for the rest.",
+      "base": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      },
+      "head": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n  {\n    files: [\"src/legacy/**/*.js\"],\n    rules: { eqeqeq: \"off\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: eslint rule lowered to warn",
+      "expect": ["rule-disabled"],
+      "note": "An error that blocks becomes a warning that does not.",
+      "base": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      },
+      "head": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"warn\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: biome rule turned off",
+      "expect": ["rule-disabled"],
+      "note": "noExplicitAny set to off, in the object form with a level.",
+      "base": {
+        "biome.json": "{\n  \"linter\": {\n    \"enabled\": true,\n    \"rules\": {\n      \"recommended\": true,\n      \"suspicious\": { \"noExplicitAny\": \"error\" }\n    }\n  }\n}\n"
+      },
+      "head": {
+        "biome.json": "{\n  \"linter\": {\n    \"enabled\": true,\n    \"rules\": {\n      \"recommended\": true,\n      \"suspicious\": { \"noExplicitAny\": { \"level\": \"off\" } }\n    }\n  }\n}\n"
+      }
+    },
+    {
+      "name": "lint: ruff rule ignored",
+      "expect": ["rule-disabled"],
+      "note": "B008 joins the ignore list in pyproject.toml.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\", \"B008\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff per-file ignore added",
+      "expect": ["rule-disabled"],
+      "note": "A per-file-ignores entry turns S101 and B011 off for the tests: two codes, two findings of one kind.",
+      "base": {
+        "ruff.toml": "line-length = 100\n\n[lint]\nselect = [\"E\", \"F\", \"B\", \"S\"]\n"
+      },
+      "head": {
+        "ruff.toml": "line-length = 100\n\n[lint]\nselect = [\"E\", \"F\", \"B\", \"S\"]\n\n[lint.per-file-ignores]\n\"tests/**\" = [\"S101\", \"B011\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff rule group unselected",
+      "expect": ["rule-disabled"],
+      "note": "B is no longer selected, and no other selected prefix covers it.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"UP\"]\nignore = [\"E501\"]\n"
+      }
+    },
+    {
+      "name": "lint: flake8 code ignored",
+      "expect": ["rule-disabled"],
+      "note": "extend-ignore grows by W605 in setup.cfg.",
+      "base": {
+        "setup.cfg": "[metadata]\nname = shop\n\n[flake8]\nmax-line-length = 100\nextend-ignore = E203\n"
+      },
+      "head": {
+        "setup.cfg": "[metadata]\nname = shop\n\n[flake8]\nmax-line-length = 100\nextend-ignore = E203, W605\n"
+      }
+    },
+    {
+      "name": "lint: mypy strict turned off",
+      "expect": ["rule-disabled"],
+      "note": "strict = True becomes False in mypy.ini.",
+      "base": {
+        "mypy.ini": "[mypy]\npython_version = 3.12\nstrict = True\nwarn_unreachable = True\n\n[mypy-tests.*]\ndisallow_untyped_defs = False\n"
+      },
+      "head": {
+        "mypy.ini": "[mypy]\npython_version = 3.12\nstrict = False\nwarn_unreachable = True\n\n[mypy-tests.*]\ndisallow_untyped_defs = False\n"
+      }
+    },
+    {
+      "name": "lint: mypy errors ignored for a module",
+      "expect": ["rule-disabled"],
+      "note": "A new [[tool.mypy.overrides]] entry sets ignore_errors for the payments package.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\n\n[tool.mypy]\nstrict = true\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\n\n[tool.mypy]\nstrict = true\n\n[[tool.mypy.overrides]]\nmodule = \"shop.payments.*\"\nignore_errors = true\n"
+      }
+    },
+    {
+      "name": "lint: pyright mode lowered to basic",
+      "expect": ["rule-disabled"],
+      "note": "typeCheckingMode strict becomes basic in pyrightconfig.json.",
+      "base": {
+        "pyrightconfig.json": "{\n  \"include\": [\"src\"],\n  \"typeCheckingMode\": \"strict\"\n}\n"
+      },
+      "head": {
+        "pyrightconfig.json": "{\n  \"include\": [\"src\"],\n  \"typeCheckingMode\": \"basic\"\n}\n"
+      }
+    },
+    {
+      "name": "lint: cargo lint allowed",
+      "expect": ["rule-disabled"],
+      "note": "clippy::unwrap_used goes from deny to allow in [lints.clippy].",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"allow\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      }
+    },
+    {
+      "name": "lint: cargo lint newly allowed",
+      "expect": ["rule-disabled"],
+      "note": "A new allow for a rustc lint is a weakening; a new warn or deny would not be.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\ndead_code = \"allow\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      }
+    },
+    {
+      "name": "lint: tsconfig strict removed",
+      "expect": ["rule-disabled"],
+      "note": "TypeScript's default is not strict, so removing \"strict\": true turns its checks off.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      },
+      "head": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      }
+    },
+    {
+      "name": "lint: tsconfig strict check turned off under strict",
+      "expect": ["rule-disabled"],
+      "note": "strictNullChecks false overrides what strict turns on.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      },
+      "head": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"strictNullChecks\": false,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      }
+    },
+    {
+      "name": "lint: eslintrc migrated to eslint.config.js",
+      "expect": [],
+      "note": "The same rules at the same levels and scopes, in the flat format; *.test.js and **/*.test.js are one scope.",
+      "base": {
+        ".eslintrc.json": "{\n  \"root\": true,\n  \"extends\": [\"eslint:recommended\"],\n  \"rules\": {\n    \"no-console\": \"error\",\n    \"eqeqeq\": [\"error\", \"always\"]\n  },\n  \"overrides\": [\n    {\n      \"files\": [\"*.test.js\"],\n      \"rules\": { \"no-unused-expressions\": \"off\" }\n    }\n  ]\n}\n"
+      },
+      "head": {
+        ".eslintrc.json": null,
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: eslint rules made stricter",
+      "expect": [],
+      "note": "A rule raised to error and a new rule at warn: a new warn may as well turn a rule on.",
+      "base": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"off\" },\n  },\n];\n"
+      },
+      "head": {
+        "eslint.config.js": "import js from \"@eslint/js\";\n\nexport default [\n  js.configs.recommended,\n  {\n    rules: {\n      \"no-console\": \"error\",\n      \"no-var\": \"warn\",\n      eqeqeq: [\"error\", \"always\"],\n    },\n  },\n  {\n    files: [\"**/*.test.js\"],\n    rules: { \"no-unused-expressions\": \"error\" },\n  },\n];\n"
+      }
+    },
+    {
+      "name": "lint: biome config moved to biome.jsonc",
+      "expect": [],
+      "note": "Renamed, with a comment; the settings are the same.",
+      "base": {
+        "biome.json": "{\n  \"linter\": {\n    \"rules\": { \"suspicious\": { \"noExplicitAny\": \"error\" } }\n  }\n}\n"
+      },
+      "head": {
+        "biome.json": null,
+        "biome.jsonc": "{\n  // lint settings\n  \"linter\": {\n    \"rules\": { \"suspicious\": { \"noExplicitAny\": \"error\" } }\n  }\n}\n"
+      }
+    },
+    {
+      "name": "lint: ruff rule selected",
+      "expect": [],
+      "note": "extend-select adds SIM: stricter.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nextend-select = [\"SIM\"]\nignore = [\"E501\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff config moved to ruff.toml",
+      "expect": [],
+      "note": "The same select and ignore, from [tool.ruff.lint] to ruff.toml's [lint], ignore spelled extend-ignore.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n\n[tool.ruff]\nline-length = 100\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nignore = [\"E501\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"shop\"\nversion = \"0.1.0\"\n",
+        "ruff.toml": "line-length = 100\n\n[lint]\nselect = [\"E\", \"F\", \"B\", \"UP\"]\nextend-ignore = [\"E501\"]\n"
+      }
+    },
+    {
+      "name": "lint: ruff codes folded into ALL",
+      "expect": [],
+      "note": "Every code selected before is still selected by ALL.",
+      "base": {
+        "ruff.toml": "[lint]\nselect = [\"E4\", \"E7\", \"F401\", \"B\"]\n"
+      },
+      "head": {
+        "ruff.toml": "[lint]\nselect = [\"ALL\"]\n"
+      }
+    },
+    {
+      "name": "lint: flake8 ignore removed",
+      "expect": [],
+      "note": "Fewer ignored codes is stricter.",
+      "base": {
+        ".flake8": "[flake8]\nextend-ignore = E203, W503\n"
+      },
+      "head": {
+        ".flake8": "[flake8]\nextend-ignore = E203\n"
+      }
+    },
+    {
+      "name": "lint: mypy config moved to pyproject.toml",
+      "expect": [],
+      "note": "mypy.ini's sections become [tool.mypy] and an overrides entry.",
+      "base": {
+        "mypy.ini": "[mypy]\npython_version = 3.12\nstrict = True\nwarn_unreachable = True\n\n[mypy-tests.*]\ndisallow_untyped_defs = False\n"
+      },
+      "head": {
+        "mypy.ini": null,
+        "pyproject.toml": "[project]\nname = \"shop\"\n\n[tool.mypy]\npython_version = \"3.12\"\nstrict = true\nwarn_unreachable = true\n\n[[tool.mypy.overrides]]\nmodule = \"tests.*\"\ndisallow_untyped_defs = false\n"
+      }
+    },
+    {
+      "name": "lint: mypy flags folded into strict",
+      "expect": [],
+      "note": "strict turns on every flag that is gone.",
+      "base": {
+        "mypy.ini": "[mypy]\ndisallow_untyped_defs = True\ncheck_untyped_defs = True\nwarn_return_any = True\n"
+      },
+      "head": {
+        "mypy.ini": "[mypy]\nstrict = True\n"
+      }
+    },
+    {
+      "name": "lint: cargo lint denied",
+      "expect": [],
+      "note": "A lint group raised to deny and a new warn: stricter.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"warn\", priority = -1 }\n"
+      },
+      "head": {
+        "Cargo.toml": "[package]\nname = \"shop\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n\n[lints.clippy]\nunwrap_used = \"deny\"\npedantic = { level = \"deny\", priority = -1 }\nexpect_used = \"warn\"\n"
+      }
+    },
+    {
+      "name": "lint: tsconfig made stricter",
+      "expect": [],
+      "note": "New checks on, and the strict-family flags folded into strict.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"noImplicitAny\": true,\n    \"strictNullChecks\": true\n  }\n}\n"
+      },
+      "head": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noUnusedLocals\": true,\n    \"exactOptionalPropertyTypes\": true\n  }\n}\n"
+      }
+    },
+    {
+      "name": "lint: a looser tsconfig for scripts added",
+      "expect": [],
+      "note": "Each tsconfig is compared with itself: a new one that checks less is normal.",
+      "base": {
+        "tsconfig.json": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"strict\": true,\n    \"noUncheckedIndexedAccess\": true,\n    \"outDir\": \"dist\"\n  },\n  \"include\": [\"src\"]\n}\n"
+      },
+      "head": {
+        "tsconfig.scripts.json": "{\n  \"compilerOptions\": { \"checkJs\": false, \"noUnusedLocals\": false },\n  \"include\": [\"scripts\"]\n}\n"
+      }
+    },
+    {
+      "name": "ci: the pull request trigger narrowed to a branch that does not exist",
+      "expect": ["ci-weakened"],
+      "note": "Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    branches: [nope]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: the pull request trigger limited to closed pull requests",
+      "expect": ["ci-weakened"],
+      "note": "Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    types: [closed]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: tests run in the background with &",
+      "expect": ["ci-weakened"],
+      "note": "Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test &\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: tests before && on a line that is not the last",
+      "expect": ["ci-weakened"],
+      "note": "bash -e does not stop on a failure inside an && list. Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test && echo ok\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: tests piped into tee without pipefail",
+      "expect": ["ci-weakened"],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test | tee test.log\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: npm replaced by pnpm",
+      "expect": [],
+      "note": "The same scripts. Found in review.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: pnpm install --frozen-lockfile\n      - name: Test\n        run: |\n          pnpm test\n          pnpm lint\n"
+      }
+    },
+    {
+      "name": "ci: a matrix entry allowed to fail",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    continue-on-error: ${{ matrix.experimental }}\n    strategy:\n      matrix:\n        experimental: [false]\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "ci: ; exit 0 after the last command",
+      "expect": [],
+      "note": "bash -e stops at the failing command first.",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint; exit 0\n"
+      }
+    },
+    {
+      "name": "ci: the pull request branch filter widened",
+      "expect": [],
+      "note": "",
+      "base": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    branches: [main]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      },
+      "head": {
+        ".github/workflows/ci.yml": "name: CI\non:\n  pull_request:\n    branches: [main, \"release/**\"]\n  push:\n    branches: [main]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: npm ci\n      - name: Test\n        run: |\n          npm test\n          npm run lint\n"
+      }
+    },
+    {
+      "name": "cov: a .coveragerc added that hides fail_under in pyproject.toml",
+      "expect": ["coverage-lowered"],
+      "note": "coverage.py reads .coveragerc first and then no other file. Found in review.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\"]\n"
+      },
+      "head": {
+        ".coveragerc": "[run]\nbranch = True\n"
+      }
+    },
+    {
+      "name": "lint: a ruff.toml added that selects fewer rules than pyproject.toml",
+      "expect": ["rule-disabled"],
+      "note": "Ruff reads ruff.toml before pyproject.toml. Found in review.",
+      "base": {
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\"]\n"
+      },
+      "head": {
+        "ruff.toml": "[lint]\nselect = [\"E\"]\n"
+      }
+    },
+    {
+      "name": "lint: an empty eslint.config.js added next to .eslintrc.json",
+      "expect": ["rule-disabled"],
+      "note": "ESLint 9 reads only the flat config. Found in review.",
+      "base": {
+        ".eslintrc.json": "{\n  \"rules\": {\n    \"no-console\": \"error\",\n    \"eqeqeq\": \"error\"\n  }\n}\n",
+        "package.json": "{ \"name\": \"demo\" }\n"
+      },
+      "head": {
+        "eslint.config.js": "export default [];\n"
+      }
+    },
+    {
+      "name": "lint: a pyproject.toml change next to ruff.toml",
+      "expect": [],
+      "note": "pyproject's ruff settings are not read while ruff.toml exists.",
+      "base": {
+        "ruff.toml": "[lint]\nselect = [\"E\", \"F\"]\n",
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\", \"F\", \"B\"]\n"
+      },
+      "head": {
+        "pyproject.toml": "[project]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.coverage.report]\nfail_under = 90\n\n[tool.ruff.lint]\nselect = [\"E\"]\n"
+      }
+    },
+    {
+      "name": "nv: the stop hook replaced by one that only names fscale",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }] }]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"echo fscale\" }] }]\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: every Claude Code hook turned off in local settings",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        ".claude/settings.json": "{\n  \"hooks\": {\n    \"Stop\": [{ \"hooks\": [{ \"type\": \"command\", \"command\": \"pnpm --silent fscale hooks run --agent claude\" }] }]\n  }\n}\n"
+      },
+      "head": {
+        ".claude/settings.local.json": "{\n  \"disableAllHooks\": true\n}\n"
+      }
+    },
+    {
+      "name": "nv: -n after the commit message",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip -n\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: a shortened --no-verify",
+      "expect": ["no-verify"],
+      "note": "git takes an unambiguous start of a long option. Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit --no-verif -m wip\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: hooks pointed elsewhere for one commit",
+      "expect": ["no-verify"],
+      "note": "Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git -c core.hooksPath=.none commit -m wip\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "nv: --no-verify inside a commit message",
+      "expect": [],
+      "note": "Found in review.",
+      "base": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m wip\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"demo\",\n  \"scripts\": {\n    \"save\": \"git commit -m 'docs: explain --no-verify'\"\n  }\n}\n"
+      }
     }
   ]
 }

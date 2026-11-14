@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Counts what the tamper guard (ADR 0042, ADR 0044) catches and gets wrong
-// on the labelled corpus in bench/tamper-corpus.json.
+// on the labelled corpus in bench/tamper-corpus.json (ADR 0042, 0044, 0045).
 //
 // The corpus was written together with the guard, so these counts show that
 // the guard does what its ADRs say. They are not a measured false-positive
@@ -62,9 +62,22 @@ const kinds = [
   'test-skipped',
   'assertion-removed',
   'suppression-added',
+  'coverage-lowered',
+  'ci-weakened',
+  'no-verify',
+  'rule-disabled',
   'not-checked',
 ];
-const languages = { ts: 'TypeScript', js: 'JavaScript', py: 'Python', rs: 'Rust' };
+const languages = {
+  ts: 'TypeScript',
+  js: 'JavaScript',
+  py: 'Python',
+  rs: 'Rust',
+  cov: 'Coverage config',
+  ci: 'CI workflows',
+  nv: 'Hook skips',
+  lint: 'Lint config',
+};
 const tally = Object.fromEntries(kinds.map((kind) => [kind, { cases: 0, caught: 0, missed: 0 }]));
 const byLanguage = Object.fromEntries(
   Object.keys(languages).map((key) => [

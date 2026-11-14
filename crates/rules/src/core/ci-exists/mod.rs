@@ -75,6 +75,15 @@ fn workflow_folder_names(root: &Path) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// firescale's own tamper guard workflow, unedited (ADR 0045): it runs no
+/// build or tests, so it is not the CI this rule asks for, and it does not
+/// stand in the starter's way.
+fn is_our_guard(root: &Path, file: &str) -> bool {
+    file == workflow::TAMPER_PATH
+        && std::fs::read_to_string(on_disk(root, file))
+            .is_ok_and(|text| workflow::firescale_wrote(&text))
+}
+
 /// CI configs that are on disk, tracked or not: workflow files first, then
 /// the configs of other CI systems. Sorted within each group.
 fn ci_files_on_disk(root: &Path) -> Vec<String> {
@@ -83,6 +92,7 @@ fn ci_files_on_disk(root: &Path) -> Vec<String> {
         .into_iter()
         .map(|name| format!("{WORKFLOWS}/{name}"))
         .filter(|file| is_workflow(file) && on_disk(root, file).is_file())
+        .filter(|file| !is_our_guard(root, file))
         .collect();
     let mut others: Vec<String> = OTHER_CI
         .iter()
@@ -105,6 +115,7 @@ fn starter_can_be_created(root: &Path) -> bool {
     let no_workflow = names.iter().all(|name| {
         let lower = name.to_lowercase();
         !(lower.ends_with(".yml") || lower.ends_with(".yaml"))
+            || is_our_guard(root, &format!("{WORKFLOWS}/{name}"))
     });
     // Each folder on the way is a real folder or absent: not a file, and not
     // a link, which would lead the write out of the repo.
@@ -175,17 +186,21 @@ pub(crate) fn starter_blocker(ctx: &RuleContext) -> Result<Option<(String, Fixab
 /// (a tracked file deleted from the working tree is absent). Otherwise a
 /// plain listing of the places that matter.
 pub(crate) fn candidate_files(ctx: &RuleContext) -> Result<Vec<String>> {
-    if ctx.git().is_repo()? {
-        return Ok(ctx
-            .git()
+    let mut files = if ctx.git().is_repo()? {
+        ctx.git()
             .tracked_files()?
             .into_iter()
             .filter(|file| is_workflow(file) || OTHER_CI.contains(&file.as_str()))
             .filter(|file| on_disk(ctx.root(), file).is_file())
-            .collect());
-    }
-    let mut files = ci_files_on_disk(ctx.root());
-    files.sort();
+            .collect()
+    } else {
+        let mut files = ci_files_on_disk(ctx.root());
+        files.sort();
+        files
+    };
+    // firescale's tamper guard (ADR 0045) runs no build or tests: it is not
+    // the CI this rule asks for.
+    files.retain(|file| !is_our_guard(ctx.root(), file));
     Ok(files)
 }
 
@@ -281,14 +296,52 @@ pub(crate) fn mentions_pull_request(text: &str) -> bool {
 pub(crate) fn create_starter(ctx: &RuleContext) -> Result<FixResult> {
     let setup = current_setup(ctx)?;
     ctx.create_tracked(STARTER, &workflow::workflow(&setup))?;
+    let mut changed_files = vec![STARTER.to_owned()];
     let mut notes = vec![format!(
         "Review {STARTER}: it runs `npx firescale verify` (only what a pull request changes, against its base) and keeps a shared step cache written from the default branch only. Add anything your project needs before that step (services, secrets, other toolchains)."
     )];
+    if !occupied(&on_disk(ctx.root(), workflow::TAMPER_PATH)) {
+        ctx.create_tracked(workflow::TAMPER_PATH, &workflow::tamper_workflow())?;
+        changed_files.push(workflow::TAMPER_PATH.to_owned());
+        notes.push(TAMPER_NOTE.to_owned());
+    }
     notes.extend(setup.notes());
     Ok(FixResult {
-        changed_files: vec![STARTER.to_owned()],
+        changed_files,
         notes,
     })
+}
+
+const TAMPER_NOTE: &str = "Review .github/workflows/tamper-guard.yml: on pull_request_target it runs `fscale tamper --pr-base` as the default branch defines it, reading the pull request's commits without running them (ADR 0045). Require its tamper-guard check in branch protection, and set verify.tamper to \"enforced\", to make it block.";
+
+/// The tamper guard's workflow to write now: when the CI workflow is one
+/// firescale wrote and nobody has edited, and the tamper guard's file is
+/// missing or is firescale's, unedited and older. `(content, create)`.
+fn newer_tamper(ctx: &RuleContext) -> Result<Option<(String, bool)>> {
+    let tracked = ctx.git().is_repo()? && ctx.git().tracked_files()?.iter().any(|f| f == STARTER);
+    if !tracked
+        || !ctx
+            .read(STARTER)?
+            .is_some_and(|text| workflow::firescale_wrote(&text))
+    {
+        return Ok(None);
+    }
+    let path = on_disk(ctx.root(), workflow::TAMPER_PATH);
+    let newer = workflow::tamper_workflow();
+    if !occupied(&path) {
+        let ignored = ctx.git().is_ignored(workflow::TAMPER_PATH)?;
+        return Ok((!ignored).then_some((newer, true)));
+    }
+    if path.symlink_metadata().is_ok_and(|meta| !meta.is_file()) {
+        return Ok(None);
+    }
+    let Some(text) = ctx.read(workflow::TAMPER_PATH)? else {
+        return Ok(None);
+    };
+    Ok(
+        (workflow::firescale_wrote(&text) && text.replace("\r\n", "\n") != newer)
+            .then_some((newer, false)),
+    )
 }
 
 /// What the workflow sets up for this repo now.
@@ -406,7 +459,7 @@ impl BuiltinRule for CiExists {
             });
             return Ok(vec![finding(message, fixable)]);
         }
-        if newer_starter(ctx)?.is_some() {
+        if newer_starter(ctx)?.is_some() || newer_tamper(ctx)?.is_some() {
             return Ok(vec![Finding {
                 message: format!(
                     "{STARTER} is a workflow firescale wrote and nobody has edited, and a newer one exists: it runs only the projects a pull request changes, judged against its base, and keeps a shared step cache written from the default branch only. `fscale sync` replaces it; a workflow you edited is never rewritten."
@@ -441,14 +494,30 @@ impl BuiltinRule for CiExists {
     fn fix(&self, ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         // Never trust the diagnostics alone: look at the disk again, and only
         // create a file where there is none.
-        if let Some(newer) = newer_starter(ctx)? {
-            ctx.write(STARTER, &newer)?;
-            return Ok(FixResult {
-                changed_files: vec![STARTER.to_owned()],
-                notes: vec![format!(
+        let newer_ci = newer_starter(ctx)?;
+        let newer_guard = newer_tamper(ctx)?;
+        if newer_ci.is_some() || newer_guard.is_some() {
+            let mut result = FixResult::default();
+            if let Some(newer) = newer_ci {
+                ctx.write(STARTER, &newer)?;
+                result.changed_files.push(STARTER.to_owned());
+                result.notes.push(format!(
                     "{STARTER} was a workflow firescale wrote, unedited; it is now the newer one (only what a pull request changes, and a shared step cache). Review it."
-                )],
-            });
+                ));
+            }
+            match newer_guard {
+                Some((text, true)) => {
+                    ctx.create_tracked(workflow::TAMPER_PATH, &text)?;
+                    result.changed_files.push(workflow::TAMPER_PATH.to_owned());
+                    result.notes.push(TAMPER_NOTE.to_owned());
+                }
+                Some((text, false)) => {
+                    ctx.write(workflow::TAMPER_PATH, &text)?;
+                    result.changed_files.push(workflow::TAMPER_PATH.to_owned());
+                }
+                None => {}
+            }
+            return Ok(result);
         }
         if !candidate_files(ctx)?.is_empty() || starter_blocker(ctx)?.is_some() {
             return Ok(FixResult::default());

@@ -602,7 +602,9 @@ Decisions in ADR 0044: pytest and unittest, then Rust (`tree-sitter-rust` 0.24.2
 
 ---
 
-## M25 — Tamper guard: config and CI ☐
+## M25 — Tamper guard: config and CI ☑
+
+Decisions in ADR 0045: one measure model for every config detector (compared per setting over the whole change), small readers for JSON, YAML, TOML, INI and JS object literals, `fscale tamper`, the base from GitHub's pull request event (`--pr-base`), and a `tamper-guard` job on `pull_request_target` that the pull request cannot change and that runs none of its code (changing ADR 0041 on that point).
 
 **Build**
 
@@ -611,11 +613,13 @@ Decisions in ADR 0044: pytest and unittest, then Rust (`tree-sitter-rust` 0.24.2
   - lowered coverage thresholds in the common config files,
   - CI steps removed or made unable to fail (`continue-on-error`, `|| true`, a deleted verify step),
   - `--no-verify` in scripts, hooks or CI.
+- Added by the owner for this milestone: in CI the base comes from the pull request's base as GitHub gives it, not from local git state, and the generated workflow runs the guard that way; the ADR says what is and is not protected locally. A deleted or weakened verify step in the workflow itself is a finding, read from the base's copy of the workflow.
 
 **Done when**
 
-- ☐ Each of the remaining three detectors (and rules turned off in linter config) has a caught case and a not-a-finding case in fixture repos.
-- ☐ Every finding names the file, the line, and what changed against the base.
+- ☑ Each of the remaining three detectors (and rules turned off in linter config) has a caught case and a not-a-finding case in fixture repos (`bench/tamper-corpus.json`, prefixes `cov:`, `ci:`, `nv:`, `lint:`; `tamper.test.ts` checks each prefix has both).
+- ☑ Every finding names the file, the line, and what changed against the base ("… (on the base: …, file:line)", or "… is gone" at its line on the base commit).
+- ☑ Owner's additions: `--pr-base` takes the base from GitHub's event, proven after moving the base ref and `git replace`-ing the base commit (`tamper-ci.test.ts`); the generated workflow's `pull-request` job uses it and its `tamper-guard` job runs `fscale tamper --pr-base` from the default branch's copy of the file (`shared-cache.test.ts`, `core::ci_exists::tests`); deleting the verify step from the workflow is `ci-weakened` against the base's copy (`ci: the verify step deleted from the workflow`).
 
 ---
 

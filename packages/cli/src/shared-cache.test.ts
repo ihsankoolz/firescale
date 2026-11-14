@@ -34,17 +34,41 @@ function jobs(workflow: string): Map<string, string> {
   return found;
 }
 
-async function initWorkflow(files: Record<string, string> = {}): Promise<string> {
+async function initWorkflow(
+  files: Record<string, string> = {},
+  file = '.github/workflows/ci.yml',
+): Promise<string> {
   const repo = await fixtures.create({ files, track: 'no-git' });
   expect((await runGit(repo.root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
   const result = await runCli(['init', '--force', '--packs', 'core'], repo.root);
   expect(result.code, result.stdout + result.stderr).toBe(EXIT_OK);
-  const text = await repo.read('.github/workflows/ci.yml');
-  if (text === null) throw new Error('init wrote no workflow');
+  const text = await repo.read(file);
+  if (text === null) throw new Error(`init wrote no ${file}`);
   return text;
 }
 
 describe('the generated workflow', () => {
+  it('has a tamper guard of its own, started only by pull_request_target, that runs nothing of the pull request', async () => {
+    const guard = await initWorkflow({}, '.github/workflows/tamper-guard.yml');
+    // Only pull_request_target starts it: no run of another event holds a
+    // skipped job of the same name, which would pass a required check.
+    expect(guard).toMatch(/^on:\n {2}pull_request_target:\n\n/m);
+    expect(guard).not.toMatch(/^ {2}(pull_request|push|workflow_dispatch):/m);
+    const all = jobs(guard);
+    expect([...all.keys()]).toEqual(['tamper-guard']);
+    const body = all.get('tamper-guard') ?? '';
+    expect(body).toMatch(/^ {4}cache-mode: none$/m);
+    expect(guard).toMatch(/^permissions:\n {2}contents: read$/m);
+    expect(body).not.toContain('actions/cache');
+    expect(body).not.toMatch(/^\s+ref: /m);
+    expect(body).not.toMatch(/^\s+if: /m);
+    const runs = [...body.matchAll(/- run: (.*)$/gm)].map((m) => m[1]);
+    expect(runs).toEqual([
+      'git fetch --no-tags origin "$HEAD_SHA"',
+      expect.stringMatching(/^npx --yes firescale@\d+\.\d+\.\d+\S* tamper --pr-base$/),
+    ]);
+  });
+
   it('has a pull request job that can restore caches and never save one', async () => {
     const workflow = await initWorkflow({
       'package.json': '{"name":"demo","scripts":{"test":"node -e 0"}}\n',
@@ -53,10 +77,10 @@ describe('the generated workflow', () => {
       'svc/main.py': 'x = 1\n',
       'svc/pytest.ini': '',
     });
-    expect(workflow).not.toContain('pull_request_target');
     const all = jobs(workflow);
     const pullRequest = [...all].filter(([, body]) => body.includes('pull_request'));
     expect(pullRequest.map(([name]) => name)).toEqual(['pull-request']);
+    expect(workflow).not.toContain('pull_request_target');
     for (const [, body] of pullRequest) {
       // The token itself cannot save.
       expect(body).toMatch(/^ {4}cache-mode: read$/m);
@@ -71,7 +95,7 @@ describe('the generated workflow', () => {
       // It reads the shared step records, and verifies only what changed.
       expect(body).toContain(`path: ${SHARED}`);
       expect(body).toContain(
-        `npx firescale verify --affected --base "origin/$BASE_REF" --jobs 2 --shared-cache ${SHARED}`,
+        `npx firescale verify --affected --pr-base --jobs 2 --shared-cache ${SHARED}`,
       );
       // The whole history, for the merge base.
       expect(body).toContain('fetch-depth: 0');

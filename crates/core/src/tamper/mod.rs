@@ -22,7 +22,14 @@
 //!   cannot loosen the guard for itself.
 //! - Findings are report-only unless the base's policy is `enforced`.
 
+mod ci;
+mod config;
+mod coverage;
+mod formats;
+pub mod github;
 mod js;
+mod lintconfig;
+mod noverify;
 mod policy;
 mod python;
 mod reach;
@@ -241,6 +248,15 @@ pub enum Kind {
     AssertionRemoved,
     /// More lint suppressions of a rule than on the base.
     SuppressionAdded,
+    /// A coverage threshold lower than on the base, or gone (M25).
+    CoverageLowered,
+    /// A CI check step removed, or made unable to fail (M25).
+    CiWeakened,
+    /// More ways to skip git hooks (`--no-verify`) than on the base (M25).
+    NoVerify,
+    /// A lint or type-check rule turned off or made weaker in a config file
+    /// (M25).
+    RuleDisabled,
     /// A changed test file tree-sitter cannot read, on the base or now: its
     /// tests and assertions could not be compared.
     NotChecked,
@@ -254,6 +270,10 @@ impl Kind {
             Self::TestSkipped => "test skipped",
             Self::AssertionRemoved => "assertion removed",
             Self::SuppressionAdded => "suppression added",
+            Self::CoverageLowered => "coverage lowered",
+            Self::CiWeakened => "CI weakened",
+            Self::NoVerify => "hooks skipped",
+            Self::RuleDisabled => "rule turned off",
             Self::NotChecked => "not checked",
         }
     }
@@ -389,6 +409,159 @@ fn skipped_weight(test: &TestCase) -> usize {
 /// suppressions of all its source files.
 #[must_use]
 pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> TamperReport {
+    guard_at(root, base, &Head::WorkingTree, changed)
+}
+
+/// What the base is compared with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Head {
+    /// The files on disk: what verify and the stop hook judge.
+    WorkingTree,
+    /// A commit, read from git's objects only: nothing is checked out, so
+    /// a commit can be judged without running or writing any of its files
+    /// (`fscale tamper --head`, the CI job of ADR 0045).
+    Commit(String),
+}
+
+/// The files that differ between the base commit and a head commit,
+/// repo-relative (paths under the folder `root` is in).
+///
+/// # Errors
+///
+/// When git cannot compare the two commits.
+pub fn changed_between(
+    root: &Path,
+    base: &BaseCommit,
+    head: &str,
+) -> crate::Result<BTreeSet<String>> {
+    let out = run_git(
+        root,
+        &[
+            "-c",
+            "core.quotepath=off",
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "--relative",
+            "-z",
+            &base.commit,
+            head,
+            "--",
+        ],
+    )?;
+    if out.code != 0 {
+        return Err(crate::Error::user(format!(
+            "git could not compare {} with {head}: {}",
+            base.short(),
+            out.stderr.trim()
+        )));
+    }
+    Ok(out
+        .stdout
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(|path| path.replace('\\', "/"))
+        .collect())
+}
+
+/// The renames git sees between the base commit and a head commit.
+fn renames_between(root: &Path, base: &BaseCommit, head: &str) -> BTreeSet<String> {
+    let Ok(out) = run_git(
+        root,
+        &[
+            "-c",
+            "core.quotepath=off",
+            "diff",
+            "-M",
+            "--name-status",
+            "--relative",
+            "-z",
+            &base.commit,
+            head,
+            "--",
+        ],
+    ) else {
+        return BTreeSet::new();
+    };
+    let parts: Vec<&str> = out.stdout.split('\0').collect();
+    let mut renamed = BTreeSet::new();
+    let mut index = 0;
+    while index < parts.len() {
+        let status = parts[index];
+        if (status.starts_with('R') || status.starts_with('C')) && index + 2 < parts.len() {
+            if status.starts_with('R') {
+                renamed.insert(parts[index + 1].replace('\\', "/"));
+            }
+            index += 3;
+        } else {
+            index += 2;
+        }
+    }
+    renamed
+}
+
+/// Every file a commit holds, under the folder `root` is in.
+fn files_in(root: &Path, commit: &str) -> BTreeSet<String> {
+    run_git(
+        root,
+        &[
+            "-c",
+            "core.quotepath=off",
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            commit,
+        ],
+    )
+    .ok()
+    .filter(|out| out.code == 0)
+    .map(|out| {
+        out.stdout
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(|path| path.replace('\\', "/"))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Tracked files whose changes git does not show: `assume-unchanged`, and
+/// `skip-worktree` outside a sparse checkout (where it marks the folders
+/// left out, which are not on disk on purpose).
+pub(crate) fn hidden_from_git(root: &Path) -> BTreeSet<String> {
+    let sparse = run_git(root, &["config", "--bool", "core.sparseCheckout"])
+        .is_ok_and(|out| out.stdout.trim() == "true");
+    let Ok(out) = run_git(root, &["-c", "core.quotepath=off", "ls-files", "-v", "-z"]) else {
+        return BTreeSet::new();
+    };
+    out.stdout
+        .split('\0')
+        .filter_map(|line| {
+            let (tag, path) = line.split_once(' ')?;
+            let tag = tag.chars().next()?;
+            let hidden = tag.is_ascii_lowercase() || (tag == 'S' && !sparse);
+            hidden.then(|| path.replace('\\', "/"))
+        })
+        .collect()
+}
+
+/// [`guard`] against a chosen head: the working tree, or a commit.
+#[must_use]
+pub fn guard_at(
+    root: &Path,
+    base: &BaseCommit,
+    head: &Head,
+    changed: &BTreeSet<String>,
+) -> TamperReport {
+    // Files git is told not to look at are compared all the same: an agent
+    // can hide a deleted test from `git diff` with `git update-index
+    // --skip-worktree` or `--assume-unchanged` (ADR 0045).
+    let mut changed = changed.clone();
+    if *head == Head::WorkingTree {
+        changed.extend(hidden_from_git(root));
+    }
+    let changed = &changed;
     let policy = base_policy(root, base);
     let mut report = TamperReport {
         policy: policy.mode,
@@ -415,8 +588,63 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
         .iter()
         .filter_map(|path| Language::of(path).map(|language| (path, language)))
         .collect();
-    let wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
+    // Config and CI files the detectors of M25 read (ADR 0045).
+    // With every config file of the same tool in its folder: adding one can
+    // hide another that did not change.
+    let mut configs: BTreeSet<String> = changed
+        .iter()
+        .filter(|path| config::is_config(path))
+        .cloned()
+        .collect();
+    let related: Vec<String> = configs
+        .iter()
+        .flat_map(|path| config::siblings(path))
+        .collect();
+    configs.extend(related);
+    let mut wanted: Vec<&str> = sources.iter().map(|(path, _)| path.as_str()).collect();
+    wanted.extend(configs.iter().map(|path| path.as_str()));
+    wanted.sort_unstable();
+    wanted.dedup();
     let mut on_base = crate::git::files_at(root, &base.commit, &wanted);
+    // The head side: from disk, or from the head commit's objects.
+    // The head commit's files that are wanted, and every path it holds.
+    type InHead = (BTreeMap<String, Vec<u8>>, BTreeSet<String>);
+    let in_head: Option<InHead> = match head {
+        Head::WorkingTree => None,
+        Head::Commit(commit) => Some((
+            crate::git::files_at(root, commit, &wanted),
+            files_in(root, commit),
+        )),
+    };
+    let read_head = |path: &str| -> Result<Option<String>, ()> {
+        match &in_head {
+            Some((files, _)) => Ok(files
+                .get(path)
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())),
+            None => match fs::read(on_disk(path)) {
+                Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(_) => Err(()),
+            },
+        }
+    };
+    let exists_now = |path: &str| -> bool {
+        match &in_head {
+            Some((_, all)) => all.contains(path),
+            None => on_disk(path).is_file(),
+        }
+    };
+    let config_files: Vec<Changed> = configs
+        .iter()
+        .map(|path| Changed {
+            path: (*path).clone(),
+            language: Language::Python,
+            base: on_base
+                .get(path.as_str())
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned()),
+            head: read_head(path),
+        })
+        .collect();
     let files: Vec<Changed> = sources
         .into_iter()
         .map(|(path, language)| Changed {
@@ -425,22 +653,25 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
             base: on_base
                 .remove(path)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
-            head: match fs::read(on_disk(path)) {
-                Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(_) => Err(()),
-            },
+            head: read_head(path),
         })
         .collect();
 
     // What the change deleted: on the base, gone from the working tree, and
     // not the old side of a rename git sees.
-    let renamed: BTreeSet<String> = crate::blame::renames_since(root, base)
-        .into_keys()
-        .collect();
+    let renamed: BTreeSet<String> = match head {
+        Head::WorkingTree => crate::blame::renames_since(root, base)
+            .into_keys()
+            .collect(),
+        Head::Commit(commit) => renames_between(root, base, commit),
+    };
     let deleted: BTreeSet<&String> = changed
         .iter()
-        .filter(|path| !on_disk(path).exists() && !renamed.contains(*path))
+        .filter(|path| match head {
+            Head::WorkingTree => !on_disk(path).exists(),
+            Head::Commit(_) => !exists_now(path),
+        })
+        .filter(|path| !renamed.contains(*path))
         .collect();
     // Every identifier in the files of the change that still exist: a name
     // a deleted test used is "deleted with it" only if it is in none of
@@ -458,14 +689,22 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     }
 
     // Files the base's `allow` leaves out, for the kinds it names.
-    const KINDS: [Kind; 5] = [
+    const KINDS: [Kind; 9] = [
         Kind::TestDeleted,
         Kind::TestSkipped,
         Kind::AssertionRemoved,
         Kind::SuppressionAdded,
+        Kind::CoverageLowered,
+        Kind::CiWeakened,
+        Kind::NoVerify,
+        Kind::RuleDisabled,
         Kind::NotChecked,
     ];
-    for file in &files {
+    for file in files.iter().chain(
+        config_files
+            .iter()
+            .filter(|file| Language::of(&file.path).is_none()),
+    ) {
         let kinds: Vec<Kind> = KINDS
             .into_iter()
             .filter(|kind| policy.allows(&file.path, *kind))
@@ -502,6 +741,84 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
                 head_suppressions.push((file.path.clone(), found));
             }
         }
+    }
+
+    // Coverage thresholds, CI steps, hook skips and rules in config files,
+    // compared per key over the whole change.
+    let mut config_findings: Vec<Finding> = Vec::new();
+    {
+        let mut base_measures: Vec<config::Located> = Vec::new();
+        let mut head_measures: Vec<config::Located> = Vec::new();
+        for file in &config_files {
+            let sides = [
+                (file.base.as_ref().map(|text| Ok(Some(text.as_str()))), true),
+                (Some(file.head.as_ref().map(|text| text.as_deref())), false),
+            ];
+            for (side, is_base) in sides {
+                let Some(side) = side else { continue };
+                let measures = match side {
+                    Ok(Some(text)) => config::measures_of(&file.path, text),
+                    Ok(None) => Ok(Vec::new()),
+                    Err(()) => Err(1),
+                };
+                match measures {
+                    Ok(measures) => {
+                        let target = if is_base {
+                            &mut base_measures
+                        } else {
+                            &mut head_measures
+                        };
+                        target.extend(
+                            measures
+                                .into_iter()
+                                .filter(|measure| !allows(&file.path, measure.kind))
+                                .map(|measure| config::Located {
+                                    file: file.path.clone(),
+                                    measure,
+                                }),
+                        );
+                    }
+                    Err(line) => {
+                        if !allows(&file.path, Kind::NotChecked)
+                            && !report.not_checked.contains(&file.path)
+                        {
+                            report.not_checked.push(file.path.clone());
+                            config_findings.push(Finding {
+                                kind: Kind::NotChecked,
+                                file: file.path.clone(),
+                                line,
+                                on_base: is_base,
+                                what: "this config file cannot be read, so its settings were not compared".to_owned(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // A file that cannot be read on one side is compared on neither.
+        base_measures.retain(|located| !report.not_checked.contains(&located.file));
+        head_measures.retain(|located| !report.not_checked.contains(&located.file));
+        // Settings in a file its tool does not read, because another of its
+        // files in the folder comes first, do not count.
+        let side_texts = |base_side: bool| -> BTreeMap<String, String> {
+            config_files
+                .iter()
+                .filter_map(|file| {
+                    let text = if base_side {
+                        file.base.clone()
+                    } else {
+                        file.head.clone().ok().flatten()
+                    };
+                    text.map(|text| (file.path.clone(), text))
+                })
+                .collect()
+        };
+        config::drop_shadowed(&mut base_measures, &side_texts(true));
+        config::drop_shadowed(&mut head_measures, &side_texts(false));
+        // Checks the working tree still turns on by implication (M25).
+        let implied = lintconfig::implied(&base_measures, &head_measures);
+        head_measures.extend(implied);
+        config_findings.extend(config::compare(&base_measures, &head_measures));
     }
 
     // The test files: by name or folder, by the base's `testPaths`, or (Rust)
@@ -565,8 +882,7 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     // A test whose subject the change deleted: it uses names imported from
     // modules of the repo, every such module is deleted, and none of those
     // names is left in the change.
-    let existed_on_base =
-        |path: &str| deleted.contains(&path.to_owned()) || on_disk(path).is_file();
+    let existed_on_base = |path: &str| deleted.contains(&path.to_owned()) || exists_now(path);
     let excused = |file: &Changed, read: &TestFile, test: &TestCase| -> bool {
         let mut modules: BTreeSet<String> = BTreeSet::new();
         let mut names: Vec<&String> = Vec::new();
@@ -704,6 +1020,7 @@ pub fn guard(root: &Path, base: &BaseCommit, changed: &BTreeSet<String>) -> Tamp
     }
 
     let mut findings = not_checked;
+    findings.extend(config_findings);
     // Fewer tests: name those whose id is gone, up to the shortfall.
     if counts.head_tests < counts.base_tests {
         let mut left = head_ids.clone();

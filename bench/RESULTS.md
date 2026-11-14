@@ -2,6 +2,39 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## M25: the tamper guard's config and CI detectors
+
+Measured on 2026-11-14 on the build machine (Linux x64, 4 cores).
+
+**These are counts on fixtures, not a measured rate.** The new cases (prefixes `cov:`, `ci:`, `nv:`, `lint:`) were written together with the detectors, partly by the subagents that wrote them, and partly from the review's reproductions (ADR 0045). M26 measures the false-positive rate on real history and the miss rate on a corpus written for that purpose.
+
+`node bench/tamper-rates.mjs --bin target/debug/fscale` runs the 226 cases of `bench/tamper-corpus.json` through `fscale verify --json`, each in its own git repo:
+
+| Kind              | Cases that must give it | Caught | Missed |
+| ----------------- | ----------------------- | ------ | ------ |
+| test-deleted      | 11                      | 11     | 0      |
+| test-skipped      | 30                      | 30     | 0      |
+| assertion-removed | 41                      | 41     | 0      |
+| suppression-added | 12                      | 12     | 0      |
+| coverage-lowered  | 8                       | 8      | 0      |
+| ci-weakened       | 11                      | 11     | 0      |
+| no-verify         | 9                       | 9      | 0      |
+| rule-disabled     | 17                      | 17     | 0      |
+| not-checked       | 4                       | 4      | 0      |
+
+| Group           | Cases | Not-a-finding cases | Findings caught | Missed | False positives |
+| --------------- | ----- | ------------------- | --------------- | ------ | --------------- |
+| TypeScript      | 46    | 23                  | 30              | 0      | 0               |
+| JavaScript      | 16    | 6                   | 12              | 0      | 0               |
+| Python          | 53    | 23                  | 36              | 0      | 0               |
+| Rust            | 32    | 15                  | 20              | 0      | 0               |
+| Coverage config | 15    | 7                   | 8               | 0      | 0               |
+| CI workflows    | 20    | 9                   | 11              | 0      | 0               |
+| Hook skips      | 14    | 5                   | 9               | 0      | 0               |
+| Lint config     | 30    | 13                  | 17              | 0      | 0               |
+
+- 125 cases must give at least one finding; 101 must give none. 0 missed, 0 false positives, 0 of 101 not-a-finding cases with any finding. Fixture counts, not a rate.
+
 ## M24: the tamper guard for Python and Rust, suppressions and policy
 
 Measured on 2026-11-13 on the build machine (Linux x64, 4 cores).

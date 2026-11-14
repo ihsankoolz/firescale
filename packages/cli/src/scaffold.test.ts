@@ -135,6 +135,7 @@ describe('fscale init', () => {
     expect(await repo.read('firescale.config.json')).toBe('{\n  "packs": ["core"]\n}\n');
     expect([...(await snapshot(repo.root)).keys()].sort()).toEqual([
       '.github/workflows/ci.yml',
+      '.github/workflows/tamper-guard.yml',
       '.gitignore',
       'README.md',
       'firescale.config.json',
@@ -600,7 +601,12 @@ describe('fscale sync', () => {
     expect(clean.code).toBe(EXIT_OK);
     expect(clean.stdout).toContain('In sync: `fscale sync` would change nothing.');
 
-    for (const file of ['.github/workflows/ci.yml', 'README.md', '.gitignore']) {
+    for (const file of [
+      '.github/workflows/ci.yml',
+      '.github/workflows/tamper-guard.yml',
+      'README.md',
+      '.gitignore',
+    ]) {
       const generated = await repo.read(file);
       // Deleted for good: from disk and from the git index.
       await rm(path.join(repo.root, ...file.split('/')));

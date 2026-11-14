@@ -281,7 +281,9 @@ pub fn choose_base(root: &Path, given: Option<&str>) -> Result<BaseChoice> {
         ],
     )
     .map(|out| out.code != 0 || !out.stdout.trim().is_empty())
-    .unwrap_or(true);
+    .unwrap_or(true)
+        // A file git is told not to look at may hide a change (ADR 0045).
+        || !crate::tamper::hidden_from_git(root).is_empty();
     if commit == head && !dirty {
         return Ok(BaseChoice::Nothing(format!(
             "the working tree is the base commit {} ({reference}) with no change, so there is nothing to compare",

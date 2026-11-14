@@ -4,10 +4,12 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Nothing is half-finished. This session built M24 (ADR 0044): the tamper guard for Python and Rust, the misses ADR 0042 admitted, lint suppressions and the policy keys. The version is still 0.4.0. **No tag has been pushed.**
+Long run started 2026-11-14 00:59 UTC: M25, M26, then M27, M28, M29, M30 in order, one pull request each, merged on green, restarting from main between them. **Stop after M30 is merged or at 2026-11-15 21:46 UTC, whichever comes first.** The version stays 0.4.0; never push a tag.
 
-- **Branch:** `claude/confident-darwin-tylz8n`, merged through its pull request.
-- **Next:** M25 (the tamper guard's config and CI detectors: coverage thresholds, CI steps, `--no-verify`, rules turned off in linter config). Not started.
+- **Now:** M25 (ADR 0045) is built and committed; an independent review of its diff is running; then the pull request.
+- **Branch:** milestones are pushed to `claude/beautiful-bardeen-gpgxyw` (the session's branch); after each merge the next milestone starts from `main` on a new local branch and is pushed to that same remote branch only once it holds just merged history (a force push is not allowed here, so if the remote branch has unmerged commits, use a new `m<N>-<name>` branch instead).
+- **Check-ins:** a scheduled check-in ("Read HANDOFF.md, 'In progress', and continue. Schedule the next check-in first.") is kept about 60 minutes ahead; renew it at the start of each milestone and hourly. Cancel it when the run ends.
+- **M26 prep (not committed):** real repos cloned shallow, read-only, into the scratch folder; the history runner and labelling-packet scripts are in the scratch folder too; a fresh subagent is writing the cheating-change corpus there.
 - **0.4.0 is still ready to tag** (`RELEASING.md`). Check whether `v0.3.0` was ever tagged first.
 - Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
 
@@ -33,6 +35,14 @@ Nothing is half-finished. This session built M24 (ADR 0044): the tamper guard fo
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
 3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Start the next milestone in PLAN.md on a branch named `m<N>-<short-name>`. Do one milestone per session and stop.
+
+Notes on M25, for whoever builds M26 or touches the tamper guard's config detectors (ADR 0045):
+
+- Config detectors are `crates/core/src/tamper/{coverage,ci,noverify,lintconfig}.rs`, each `reads(path)` and `measures(path, text) -> Result<Vec<Measure>, line>`, listed in `config::DETECTORS`. `config::compare` does the rest (max or sum per key over the whole change). A new detector needs a `Kind` (keep `NotChecked` last), a corpus prefix with a caught and a not-a-finding case, and the prefix in `DETECTORS` in `tamper.test.ts` and the kind in `bench/tamper-rates.mjs`.
+- `tamper/formats.rs` flattens JSON(C), YAML, TOML, INI and JS literals to `Entry { path, value, line }`; `read_roots` keeps each outermost JS literal apart (lintconfig uses it).
+- `guard_at(root, base, &Head::Commit(sha), changed)` reads the head from git objects (`changed_between` lists the files); `fscale tamper --head <c> --base <c>^` is how to run the guard over history without a checkout.
+- `tamper::github::pull_request` reads GitHub's event; `--pr-base` errors rather than judging nothing. Every git command has `GIT_NO_REPLACE_OBJECTS=1` (`git.rs`).
+- The generated workflow's `tamper-guard` job must never check out, install or run the pull request's files; tests pin its exact steps.
 
 Notes on M24, for whoever builds M25 or touches the tamper guard (ADR 0044):
 
