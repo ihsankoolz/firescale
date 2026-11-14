@@ -18,7 +18,11 @@ When `go.mod` requires other modules, `go.sum` is committed beside it (a require
 
 Fix only the diagnostics reported for this rule. Do not change anything else.
 
-### MANUAL
+### DETERMINISTIC
+
+None.
+
+### REPORT
 
 1. Run `go mod tidy`. If it cannot reach the network, report that and stop: never write `go.sum` by hand.
 2. Check that `go build ./...` and `go test ./...` pass.

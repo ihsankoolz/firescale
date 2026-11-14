@@ -18,7 +18,11 @@ A module with Go code has at least one `_test.go` file. Without one, `go test ./
 
 Fix only the diagnostics reported for this rule. Do not change anything else.
 
-### AGENT
+### DETERMINISTIC
+
+None.
+
+### REPORT
 
 1. Pick the package with the most important exported function.
 2. Write one table-driven test for it in a `_test.go` file beside it, in the same package, using only the standard library's `testing` package.

@@ -25,7 +25,7 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 1. Run `fscale sync`. It creates `go.mod` (with `go 1.26.0`), or adds `go 1.16` after the module line of an existing one.
 2. To move an existing module to newer Go, run `go mod tidy -go=1.26.0` on purpose, then `go build ./...` and `go test ./...`: that is a change to review, not a fix.
 
-### MANUAL
+### REPORT
 
 - No module line: add `module <path>` as the first line. Ask the user for the path if the repo's remote does not show it.
 - A byte order mark: save `go.mod` as UTF-8 without one.

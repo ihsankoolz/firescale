@@ -23,6 +23,10 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 1. Run `fscale sync`. It writes `main.go` and `main_test.go` when the module has no Go file, and never replaces one.
 
+### REPORT
+
+- Tell the user the starter is a placeholder program: replace `Greeting` and its test with the module's real code.
+
 ## Verify
 
 Run this command. It must report no violations for this rule.
