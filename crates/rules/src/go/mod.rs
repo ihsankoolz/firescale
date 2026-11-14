@@ -13,7 +13,7 @@
 use firescale_core::rule::{BuiltinPack, RuleContext};
 use firescale_core::Result;
 
-pub(crate) use crate::stackkit::{any_exists, create, finding};
+pub(crate) use crate::stackkit::{any_exists, create, finding, other_stack, other_stack_inputs};
 
 pub mod entry;
 pub mod gitignore;
@@ -42,67 +42,6 @@ pub const GO_VERSION: &str = "1.26.0";
 /// change it to where the code will live.
 pub const MODULE: &str = "example.com/app";
 
-/// Root files that mean the repo is another stack's: the pack applies to
-/// them only when they also have a `go.mod`.
-const OTHER_MANIFESTS: [&str; 20] = [
-    "package.json",
-    "deno.json",
-    "deno.jsonc",
-    "pyproject.toml",
-    "requirements.txt",
-    "setup.py",
-    "setup.cfg",
-    "Pipfile",
-    "Cargo.toml",
-    "pom.xml",
-    "build.gradle",
-    "build.gradle.kts",
-    "build.sbt",
-    "CMakeLists.txt",
-    "meson.build",
-    "Package.swift",
-    "pubspec.yaml",
-    "Gemfile",
-    "composer.json",
-    "mix.exs",
-];
-
-/// Source files of other languages: a repo with any is not a new Go module
-/// (found in review: a Python project with only `setup.py` and code in a
-/// folder would have been given a `go.mod`).
-const OTHER_CODE: [&str; 24] = [
-    "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "rs", "java", "kt", "kts", "scala", "c", "h",
-    "cc", "cpp", "hpp", "cs", "fs", "swift", "rb", "php", "dart", "ex",
-];
-
-/// The same, as globs for the cache.
-const OTHER_CODE_GLOBS: [&str; 24] = [
-    "**/*.py",
-    "**/*.js",
-    "**/*.jsx",
-    "**/*.mjs",
-    "**/*.cjs",
-    "**/*.ts",
-    "**/*.tsx",
-    "**/*.rs",
-    "**/*.java",
-    "**/*.kt",
-    "**/*.kts",
-    "**/*.scala",
-    "**/*.c",
-    "**/*.h",
-    "**/*.cc",
-    "**/*.cpp",
-    "**/*.hpp",
-    "**/*.cs",
-    "**/*.fs",
-    "**/*.swift",
-    "**/*.rb",
-    "**/*.php",
-    "**/*.dart",
-    "**/*.ex",
-];
-
 /// True for a path the go tool looks at: not in a folder whose name starts
 /// with `.` or `_`, nor in `testdata` or `vendor`.
 fn go_sees(path: &str) -> bool {
@@ -121,17 +60,7 @@ pub(crate) fn applies(ctx: &RuleContext) -> Result<bool> {
     if any_exists(ctx, &["go.mod"]) {
         return Ok(true);
     }
-    if any_exists(ctx, &OTHER_MANIFESTS) {
-        return Ok(false);
-    }
-    let files = firescale_core::walk::walk_files(ctx.root())?;
-    let other_code = files.iter().any(|path| {
-        go_sees(path)
-            && path
-                .rsplit_once('.')
-                .is_some_and(|(_, extension)| OTHER_CODE.contains(&extension))
-    });
-    Ok(!other_code && modules_below(ctx)?.is_empty())
+    Ok(!other_stack(ctx, &["go.mod"], &["go"])? && modules_below(ctx)?.is_empty())
 }
 
 /// The folders below the root that hold a `go.mod`, as the go tool sees
@@ -200,13 +129,12 @@ pub fn package_name(source: &str) -> Option<&str> {
 /// What every rule of the pack reads besides its own files, for the cache.
 pub(crate) fn inputs(own: &[&str]) -> Vec<String> {
     let mut all: Vec<String> = own.iter().map(|s| (*s).to_owned()).collect();
-    for shared in ["go.mod", "**/go.mod"]
+    for shared in ["go.mod".to_owned(), "**/go.mod".to_owned()]
         .into_iter()
-        .chain(OTHER_MANIFESTS)
-        .chain(OTHER_CODE_GLOBS)
+        .chain(other_stack_inputs())
     {
-        if !all.iter().any(|a| a == shared) {
-            all.push(shared.to_owned());
+        if !all.contains(&shared) {
+            all.push(shared);
         }
     }
     all
