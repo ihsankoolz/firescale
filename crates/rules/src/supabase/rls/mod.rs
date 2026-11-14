@@ -13,6 +13,9 @@ use firescale_core::Result;
 
 use super::{applies, config_value, finding, migrations, sql, string_list, CONFIG, MIGRATIONS};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/rls";
 
 pub struct Rls;

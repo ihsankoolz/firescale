@@ -14,6 +14,9 @@ use firescale_core::Result;
 
 use super::{applies, finding, migration_entries, MIGRATIONS};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/migration-names";
 
 pub struct MigrationNames;
@@ -77,19 +80,5 @@ impl BuiltinRule for MigrationNames {
 
     fn fix(&self, _ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         Ok(FixResult::default())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::version;
-
-    #[test]
-    fn reads_versions_as_the_cli_does() {
-        assert_eq!(version("20241001120000_init.sql"), Some("20241001120000"));
-        assert_eq!(version("1_x.sql"), Some("1"));
-        assert_eq!(version("init.sql"), None);
-        assert_eq!(version("2024-10-01_init.sql"), None);
-        assert_eq!(version("20241001_init.SQL"), None);
     }
 }

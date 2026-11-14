@@ -12,6 +12,9 @@ use firescale_core::Result;
 
 use super::{applies, declared_version, finding, package_json, table_header, CONFIG};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/local-smtp";
 
 pub struct LocalSmtp;
@@ -121,22 +124,5 @@ impl BuiltinRule for LocalSmtp {
         ctx.write(CONFIG, &renamed(&text))?;
         result.changed_files.push(CONFIG.to_owned());
         Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{inbucket_lines, renamed};
-
-    #[test]
-    fn renames_only_the_headers() {
-        let text = "project_id = \"x\"\r\n[inbucket]\r\nenabled = true # inbucket\r\n[ inbucket.extra ]\r\n[api]\r\n";
-        assert_eq!(inbucket_lines(text), vec![2, 4]);
-        let out = renamed(text);
-        assert_eq!(
-            out,
-            "project_id = \"x\"\r\n[local_smtp]\r\nenabled = true # inbucket\r\n[ local_smtp.extra ]\r\n[api]\r\n"
-        );
-        assert!(inbucket_lines(&out).is_empty());
     }
 }

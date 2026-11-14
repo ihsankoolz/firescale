@@ -13,6 +13,9 @@ use firescale_core::Result;
 
 use super::{applies, finding};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/public-secret-key";
 
 pub struct PublicSecretKey;
@@ -124,24 +127,5 @@ impl BuiltinRule for PublicSecretKey {
 
     fn fix(&self, _ctx: &RuleContext, _diagnostics: &[Diagnostic]) -> Result<FixResult> {
         Ok(FixResult::default())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{first_public_secret, is_public_secret};
-
-    #[test]
-    fn names_a_secret_under_a_public_prefix_only() {
-        assert!(is_public_secret("NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY"));
-        assert!(is_public_secret("VITE_SUPABASE_SECRET_KEY"));
-        assert!(is_public_secret("EXPO_PUBLIC_SUPABASE_SECRET_KEY"));
-        assert!(!is_public_secret("SUPABASE_SECRET_KEY"));
-        assert!(!is_public_secret("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY"));
-        assert!(!is_public_secret("NEXT_PUBLIC_STRIPE_SECRET"));
-        assert_eq!(
-            first_public_secret("a\nconst k = process.env.VITE_SUPABASE_SERVICE_ROLE_KEY;\n"),
-            Some((2, "VITE_SUPABASE_SERVICE_ROLE_KEY".to_owned()))
-        );
     }
 }

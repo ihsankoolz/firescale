@@ -22,7 +22,7 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 1. Run `fscale sync`. With no package.json it creates one; with a package.json and no lockfile it adds `supabase` to `devDependencies`.
 
-### AGENT
+For an agent:
 
 1. The repo has a lockfile: run the package manager the lockfile belongs to, to add `supabase` as a dev dependency. Do not edit the lockfile by hand.
 

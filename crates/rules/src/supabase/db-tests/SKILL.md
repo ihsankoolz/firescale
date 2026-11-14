@@ -22,6 +22,10 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 1. Run `fscale sync`. It adds `supabase/tests/database/rls_test.sql`, a pgTAP test that every table in `public` has row level security on.
 
+### REPORT
+
+None.
+
 ## Verify
 
 Run this command. It must report no violations for this rule.

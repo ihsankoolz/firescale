@@ -22,6 +22,10 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 1. Run `fscale sync`. It creates the file with `project_id` only (every other setting takes the CLI's default), or adds `project_id` before the first table. The id is package.json's name, cleaned as the CLI cleans names, or `supabase-app`.
 
+### REPORT
+
+None.
+
 ## Verify
 
 Run this command. It must report no violations for this rule.

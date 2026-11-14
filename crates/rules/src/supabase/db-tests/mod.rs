@@ -12,6 +12,9 @@ use firescale_core::Result;
 
 use super::{applies, create, finding};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/db-tests";
 
 pub struct DbTests;

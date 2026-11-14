@@ -19,7 +19,7 @@ Every SQL file in `supabase/migrations` is named `<timestamp>_<name>.sql` (digit
 
 Fix only the diagnostics reported for this rule. Do not change anything else.
 
-### AGENT
+### DETERMINISTIC
 
 1. Read the migrations around the file to see where it belongs in the order.
 2. Rename it (`git mv`) to a 14-digit UTC timestamp between its neighbours, keeping its name part. Do not change the file's contents.

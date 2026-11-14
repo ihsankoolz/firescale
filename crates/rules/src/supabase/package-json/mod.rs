@@ -13,6 +13,9 @@ use super::{
     package_json_with, VERSIONS,
 };
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/package-json";
 
 pub struct PackageJson;

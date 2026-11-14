@@ -22,7 +22,7 @@ The rule reads the migrations: `create table`, `alter table … enable/disable r
 
 Fix only the diagnostics reported for this rule. Do not change anything else.
 
-### AGENT
+### DETERMINISTIC
 
 1. Read the migration that creates the table, and the app code that queries it, to see who should read and write it.
 2. Add one new migration file `supabase/migrations/<YYYYMMDDHHMMSS>_enable_rls_<table>.sql` with a UTC timestamp later than every existing migration.

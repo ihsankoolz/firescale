@@ -21,7 +21,11 @@ The rule reads tracked source files (JavaScript, TypeScript, Vue, Svelte, Astro)
 
 Fix only the diagnostics reported for this rule. Do not change anything else.
 
-### MANUAL
+### DETERMINISTIC
+
+None.
+
+### REPORT
 
 - Report the file and line, and that the key must be rotated if it was ever shipped. Moving code from client to server changes the app's design: do it only if asked, and never print or copy the key's value.
 

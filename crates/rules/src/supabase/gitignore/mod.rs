@@ -11,6 +11,9 @@ use firescale_core::Result;
 use super::{applies, create, finding, DIR};
 use crate::core::gitignore_basics::is_covered;
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/gitignore";
 
 pub struct SupabaseGitignore;

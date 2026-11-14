@@ -8,6 +8,9 @@ use firescale_core::Result;
 
 use super::{applies, config_value, create, finding, package_json, table_header, CONFIG};
 
+#[cfg(test)]
+mod tests;
+
 pub const ID: &str = "supabase/config";
 
 pub struct Config;
@@ -126,22 +129,5 @@ impl BuiltinRule for Config {
             Some(_) => {}
         }
         Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::with_project_id;
-
-    #[test]
-    fn project_id_goes_before_the_first_table_in_the_files_line_endings() {
-        assert_eq!(
-            with_project_id("# c\r\n[api]\r\nport = 1\r\n", "x"),
-            "# c\r\nproject_id = \"x\"\r\n\r\n[api]\r\nport = 1\r\n"
-        );
-        assert_eq!(
-            with_project_id("# only", "x"),
-            "# only\nproject_id = \"x\"\n"
-        );
     }
 }

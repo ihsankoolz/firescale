@@ -22,7 +22,7 @@ Fix only the diagnostics reported for this rule. Do not change anything else.
 
 1. Run `fscale sync`. It renames the table headers and leaves every key and comment as it was.
 
-### MANUAL
+### REPORT
 
 - package.json pins a CLI older than 2.108: report that the CLI must be updated first; do not change the version yourself.
 
