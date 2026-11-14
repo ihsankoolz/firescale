@@ -117,3 +117,17 @@ Opt-in: add `"supabase"` to `packs`, or `fscale init --packs core,supabase`. It 
 | `supabase/rls`               | Every table the migrations create in a schema the API exposes has row level security enabled.                 | high     | agent |
 | `supabase/db-tests`          | `supabase/tests` has a pgTAP test for `supabase test db`; a new project gets one that checks RLS.             | low      | yes   |
 | `supabase/public-secret-key` | No Supabase secret or service-role key is named with a client prefix (`NEXT_PUBLIC_`, `VITE_`, …).            | high     | no    |
+
+## The `expo` pack
+
+Opt-in: add `"expo"` to `packs`, or `fscale init --packs core,expo`. It works on an Expo app at the repo root; its fixes build a starter from Expo's SDK 58 blank TypeScript template (without image files) and repair what is missing, never replacing a file a person wrote (ADR 0050).
+
+| Rule                     | What it checks                                                                                                                                     | Severity | Fix |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --- |
+| `expo/package-json`      | `expo`, `react`, `react-native` are dependencies; `start`, `android`, `ios` scripts (`web` with react-native-web, `lint` with eslint-config-expo). | high     | yes |
+| `expo/app-config`        | An app config exists; a static one sets `expo.name` and `expo.slug`, and not `expo.sdkVersion`.                                                    | high     | yes |
+| `expo/entry`             | The entry exists: package.json `main`, a route for Expo Router, or `index` or `App` at the root.                                                   | high     | yes |
+| `expo/tsconfig`          | A TypeScript app has `tsconfig.json` (the template's, extending `expo/tsconfig.base`).                                                             | medium   | yes |
+| `expo/eslint`            | ESLint is set up with `eslint-config-expo`, so `expo lint` runs as it is (an app linting with Biome or another linter passes).                     | medium   | yes |
+| `expo/gitignore`         | `.gitignore` ignores `.expo/`, `dist/`, `.env*.local` and app-signing keys.                                                                        | medium   | yes |
+| `expo/public-env-secret` | No `EXPO_PUBLIC_` variable is named like a secret (`SECRET`, `PRIVATE_KEY`, `SERVICE_ROLE`, a final `PASSWORD`).                                   | high     | no  |

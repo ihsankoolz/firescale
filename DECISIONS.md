@@ -2,6 +2,46 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## Review of the long run
+
+M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
+
+**M25, tamper guard: config and CI** ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045)
+
+- Built: config and CI detectors (coverage, lint config, CI steps, `--no-verify`); `fscale tamper --pr-base` reads the base from GitHub's event; a separate `tamper-guard.yml` on `pull_request_target`.
+- Decide: whether `pull_request_target` in generated repos is acceptable (against ADR 0041); making `tamper-guard` a required check and `verify.tamper` "enforced".
+- Test by hand: the workflow on a real pull request once a release with `fscale tamper` is published (0.4.0 on npm has none).
+
+**M26, tamper guard: approvals and measured rates** ([#38](https://github.com/ihsankoolz/firescale/pull/38), ADR 0046)
+
+- Built: snapshot and expected-value changes need an approving GitHub review of the head commit; rates measured on 1,200 public commits (false findings 36.3% → 20.5%) and a held-out cheat corpus (42 of 98 missed).
+- Decide: a solo owner cannot approve their own pull request; `COLLABORATOR` counts as write access; which missed cheat kinds deserve detectors.
+- Test by hand: an approval on a real pull request with a changed snapshot, in the `Tamper guard` run.
+
+**M27, guarded agent runner** ([#39](https://github.com/ihsankoolz/firescale/pull/39), ADR 0047)
+
+- Built: `fscale fix --agent` with the ten guardrails of SPEC §7, a worktree per run, never a push, tag or publish, a ledger with codes and counts only; tested with a stand-in agent.
+- Decide: nothing new beyond the limits listed in ADR 0047 (detached processes outlive a run; `info/exclude` and reflogs are not compared).
+- Test by hand: nothing separately; it is exercised by M28's manual check.
+
+**M28, agent adapters and `fscale ledger`** ([#40](https://github.com/ihsankoolz/firescale/pull/40), ADR 0048)
+
+- Built: Claude Code and Codex adapters (flags from docs, source and `claude --help`; unverified items printed in every run), shipped in the npm package; `fscale ledger [--json]`.
+- Decide: Codex runs cannot be told what not to read or run (refused where the repo denies anything, warned otherwise); Claude Code's `--restricted` ignores your user-level rules; Windows needs the agents as `.exe`. One real `claude -p` ran by accident through a test, now fixed.
+- Test by hand: ADR 0048 "Manual checks": a real `fscale fix --agent claude` and `--agent codex` on a scratch repo, the JSON result fields, Codex's sandbox flags, Windows.
+
+**M29, Supabase pack** ([#41](https://github.com/ihsankoolz/firescale/pull/41), ADR 0049)
+
+- Built: eight rules from the CLI 3.1.0 source and docs, checked against the CLI itself; the starter installs, and the CLI loads its config and makes migrations.
+- Decide: RLS left to an agent rather than fixed; exact pins; Edge Functions and `seed.sql` left out.
+- Test by hand: `npx supabase start && npx supabase test db` in a folder made by `fscale init --packs core,supabase` (needs Docker; the pgTAP test has never run).
+
+**M30, Expo pack** ([#42](https://github.com/ihsankoolz/firescale/pull/42), ADR 0050)
+
+- Built: seven rules from Expo's SDK 58 template and CLI; the starter installs, typechecks, lints and bundles for Android offline.
+- Decide: blank template rather than Expo Router; no images in the starter; not to be combined with the nextjs pack.
+- Test by hand: the starter on a device or simulator (`npx expo start`), and `npx expo-doctor` with the network.
+
 ## CI owed
 
 Nothing is owed. The last open item, M6's npm install test on Windows, passed on 2026-11-11 in the CI run you started by hand on `main` (run 42, commit `9190058`): all ten jobs were green, the checks on Linux, macOS and Windows, the three benchmark jobs and the three npm install jobs.
@@ -22,6 +62,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 ## Needs your decision (all milestones, most important first)
 
+- **(M30) The Expo starter is the blank TypeScript template, not Expo Router, and has no images** (ADR 0050): app.json names no icon, adaptive icon or favicon, so store builds need them added. Say if you want the Router template (about 20 packages and 30 images) instead.
+- **(M30) The expo pack is not meant to be combined with the nextjs pack** (two React versions in one package.json). Nothing stops it; say if `init` should refuse the pair.
 - **(M29) `supabase test db` has not run on the starter** (ADR 0049): it needs `supabase start`, so Docker images, which could not be pulled in the build session. Run `npx supabase start && npx supabase test db` in a folder made by `fscale init --packs core,supabase`; the pgTAP test it adds has never run against a database.
 - **(M29) `supabase/rls` is left to an agent, not fixed**: a migration that only enables RLS would cut the app off its own data until policies exist. Say if you would rather have the deterministic `enable` and accept that.
 - **(M29) Exact pins** (`supabase` 3.1.0, `@supabase/supabase-js` 2.119.0) as for Next.js; Edge Functions and `seed.sql` are left out of the pack (ADR 0049 says why). With `core,nextjs,supabase`, package.json keeps Next.js's `engines` (`>=20.9.0`) though supabase-js wants Node 22.
@@ -139,6 +181,18 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 8. **Custom TypeScript rules are never cached.** (M3, ADR 0010) They run on every `check`. Caching them needs a way to hash their source.
 9. **`.envrc` is not flagged** by `core/no-committed-env`; `.ENV`-style names are. (M1/M2, ADR 0007 point 10)
 10. **TypeScript is pinned to 6.0.3**, not 7, until `typescript-eslint` supports 7. (M0, ADR 0002)
+
+## M30 — Stack pack: Expo
+
+**Built** (ADR 0050, `docs/rules.md`): seven rules — `expo/package-json`, `app-config`, `entry`, `tsconfig`, `eslint`, `gitignore`, `public-env-secret` — from Expo's SDK 58 blank TypeScript template, CLI and docs source (docs.expo.dev was unreachable; its source in `expo/expo` was read). `init --packs core,expo` builds a starter the pack passes, and in it `npm install`, `tsc --noEmit`, `expo lint`, `expo install --check` (offline) and an offline Android `expo export` succeed.
+
+**Decided on your behalf** (ADR 0050):
+
+- **SDK 58 versions from the SDK's own lists**, not npm's latest (TypeScript 7, ESLint 10, React 19.3.1 do not match it).
+- **ESLint is shipped** with the exact file `expo lint` would write, so a lint run changes nothing and needs no network.
+- **`web` and `lint` scripts only when the app has react-native-web and eslint-config-expo**, and an app that lints with Biome or another linter passes `expo/eslint` (both from a false positive on a real app).
+
+**Real repo:** `streamyfin/streamyfin` (read-only copy): one true finding left (`.env*.local` not ignored), after two false ones were fixed.
 
 ## M29 — Stack pack: Supabase
 

@@ -5,6 +5,7 @@ use firescale_core::rule::BuiltinPack;
 #[path = "agent-ready/mod.rs"]
 pub mod agent_ready;
 pub mod core;
+pub mod expo;
 #[path = "group-project/mod.rs"]
 pub mod group_project;
 pub mod nextjs;
@@ -20,6 +21,7 @@ pub fn builtin_packs() -> Vec<BuiltinPack> {
         group_project::pack(),
         nextjs::pack(),
         python::pack(),
+        expo::pack(),
         supabase::pack(),
     ]
 }
