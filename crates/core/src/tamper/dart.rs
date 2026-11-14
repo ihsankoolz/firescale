@@ -559,6 +559,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     .join(" "),
                 weight: 1,
                 test,
+                conditional: false,
             });
             return true;
         }

@@ -325,6 +325,11 @@ pub struct Assertion {
     pub weight: usize,
     /// The index of the test it is in, if any.
     pub test: Option<usize>,
+    /// It runs only sometimes inside its test: under an `#if` (C, C++, C#,
+    /// Swift) that does not also hold the test, or after a `return` under
+    /// one. Counted, and also counted apart: an assertion made conditional
+    /// is a removal (ADR 0052, found in review).
+    pub conditional: bool,
 }
 
 /// What a test file holds.
@@ -1150,8 +1155,13 @@ pub fn guard_at(
     let mut base_focus: BTreeSet<String> = BTreeSet::new();
     let mut head_focus: Vec<(String, usize, String)> = Vec::new();
     // Each assertion of the base: its shape, text, file, line and test.
-    let mut base_shapes: Vec<(String, String, String, usize, String)> = Vec::new();
+    let mut base_shapes: Vec<BaseAssertion> = Vec::new();
     let mut head_shapes: BTreeMap<String, usize> = BTreeMap::new();
+    // Assertions that run whenever their test does (not `conditional`), on
+    // each side, and those of the head by shape and by test.
+    let (mut base_always, mut head_always) = (0usize, 0usize);
+    let mut head_always_shapes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut head_always_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     // The same, by file and test: which one went is named by its test first.
     let mut head_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     let counts = &mut report.counts;
@@ -1207,15 +1217,19 @@ pub fn guard_at(
                     continue;
                 }
                 counts.base_assertions += assertion.weight;
+                if !assertion.conditional {
+                    base_always += assertion.weight;
+                }
                 let test = test_id(read, assertion);
                 for _ in 0..assertion.weight {
-                    base_shapes.push((
-                        assertion.shape.clone(),
-                        assertion.text.clone(),
-                        path.clone(),
-                        assertion.line,
-                        test.clone(),
-                    ));
+                    base_shapes.push(BaseAssertion {
+                        shape: assertion.shape.clone(),
+                        text: assertion.text.clone(),
+                        file: path.clone(),
+                        line: assertion.line,
+                        test: test.clone(),
+                        conditional: assertion.conditional,
+                    });
                 }
             }
         }
@@ -1244,14 +1258,20 @@ pub fn guard_at(
             if count_assertions {
                 for assertion in &read.assertions {
                     counts.head_assertions += assertion.weight;
+                    let key = (
+                        assertion.shape.clone(),
+                        path.clone(),
+                        test_id(read, assertion),
+                    );
                     *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
-                    *head_in_test
-                        .entry((
-                            assertion.shape.clone(),
-                            path.clone(),
-                            test_id(read, assertion),
-                        ))
-                        .or_default() += assertion.weight;
+                    *head_in_test.entry(key.clone()).or_default() += assertion.weight;
+                    if !assertion.conditional {
+                        head_always += assertion.weight;
+                        *head_always_shapes
+                            .entry(assertion.shape.clone())
+                            .or_default() += assertion.weight;
+                        *head_always_in_test.entry(key).or_default() += assertion.weight;
+                    }
                 }
             }
         }
@@ -1388,41 +1408,37 @@ pub fn guard_at(
     // The same text kept in the same test pairs first, then anywhere: a
     // copy the change kept in another test is not taken for the one it
     // removed (found on real history: Alamofire commented out the first of
-    // several identical assertions, and the last was named).
-    if counts.head_assertions < counts.base_assertions {
-        let mut left = head_shapes;
-        let mut in_test = head_in_test;
-        let mut kept = vec![false; base_shapes.len()];
-        for (index, (shape, _, file, _, test)) in base_shapes.iter().enumerate() {
-            let key = (shape.clone(), file.clone(), test.clone());
-            if let Some(count) = in_test.get_mut(&key).filter(|count| **count > 0) {
-                *count -= 1;
-                if let Some(total) = left.get_mut(shape) {
-                    *total = total.saturating_sub(1);
-                }
-                kept[index] = true;
-            }
-        }
-        let mut missing: Vec<&(String, String, String, usize, String)> = Vec::new();
-        for (entry, kept) in base_shapes.iter().zip(kept) {
-            if kept {
-                continue;
-            }
-            match left.get_mut(&entry.0) {
-                Some(count) if *count > 0 => *count -= 1,
-                _ => missing.push(entry),
-            }
-        }
-        let shortfall = counts.base_assertions - counts.head_assertions;
+    // several identical assertions, and the last was named). Fewer
+    // assertions that run whenever their test does is a removal too: an
+    // assertion moved under an `#if` inside its test (ADR 0052, found in
+    // review); the larger shortfall is named.
+    let total_short = counts
+        .base_assertions
+        .saturating_sub(counts.head_assertions);
+    let always_short = base_always.saturating_sub(head_always);
+    if total_short > 0 || always_short > 0 {
+        let (missing, shortfall) = if always_short > total_short {
+            let always: Vec<&BaseAssertion> = base_shapes
+                .iter()
+                .filter(|entry| !entry.conditional)
+                .collect();
+            (
+                unpaired(&always, head_always_shapes, head_always_in_test),
+                always_short,
+            )
+        } else {
+            let all: Vec<&BaseAssertion> = base_shapes.iter().collect();
+            (unpaired(&all, head_shapes, head_in_test), total_short)
+        };
         let mut named: BTreeSet<(&String, usize)> = BTreeSet::new();
-        for (_, shown, file, line, _) in missing.into_iter().take(shortfall) {
-            if named.insert((file, *line)) {
+        for entry in missing.into_iter().take(shortfall) {
+            if named.insert((&entry.file, entry.line)) {
                 findings.push(Finding {
                     kind: Kind::AssertionRemoved,
-                    file: file.clone(),
-                    line: *line,
+                    file: entry.file.clone(),
+                    line: entry.line,
                     on_base: true,
-                    what: shown.clone(),
+                    what: entry.text.clone(),
                 });
             }
         }
@@ -1636,6 +1652,48 @@ pub fn approvals_from_reviews(reviews: &str, pr: &github::PullRequest) -> crate:
         head: pr.head.clone(),
         by,
     })
+}
+
+/// One run of an assertion of the base.
+struct BaseAssertion {
+    shape: String,
+    text: String,
+    file: String,
+    line: usize,
+    test: String,
+    conditional: bool,
+}
+
+/// The assertions of the base that no assertion of the head pairs with:
+/// one with the same shape in the same file and test first, then one with
+/// the same shape anywhere.
+fn unpaired<'a>(
+    base: &[&'a BaseAssertion],
+    mut left: BTreeMap<String, usize>,
+    mut in_test: BTreeMap<(String, String, String), usize>,
+) -> Vec<&'a BaseAssertion> {
+    let mut kept = vec![false; base.len()];
+    for (index, entry) in base.iter().enumerate() {
+        let key = (entry.shape.clone(), entry.file.clone(), entry.test.clone());
+        if let Some(count) = in_test.get_mut(&key).filter(|count| **count > 0) {
+            *count -= 1;
+            if let Some(total) = left.get_mut(&entry.shape) {
+                *total = total.saturating_sub(1);
+            }
+            kept[index] = true;
+        }
+    }
+    let mut missing = Vec::new();
+    for (entry, kept) in base.iter().zip(kept) {
+        if kept {
+            continue;
+        }
+        match left.get_mut(&entry.shape) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => missing.push(*entry),
+        }
+    }
+    missing
 }
 
 /// The id of the test an assertion is in, or "" outside any test.

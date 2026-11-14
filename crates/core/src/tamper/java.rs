@@ -163,6 +163,7 @@ pub(super) fn assertion(node: Node<'_>, src: &[u8]) -> Assertion {
         text: whole.split_whitespace().collect::<Vec<_>>().join(" "),
         weight: 1,
         test: None,
+        conditional: false,
     }
 }
 

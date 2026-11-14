@@ -399,6 +399,7 @@ fn mask(source: &str) -> Masked {
     let bytes = source.as_bytes();
     let mut out = bytes.to_vec();
     let mut rows = HashMap::new();
+    let defined = defined_macros(source);
     let mut state = Lex::Code;
     let mut depth = 0usize;
     let mut at = 0;
@@ -414,7 +415,7 @@ fn mask(source: &str) -> Masked {
             if word == "END_TEST" {
                 out[at..end].fill(b' ');
             } else if let Some(macro_end) = Some(depth)
-                .filter(|d| *d == 0)
+                .filter(|d| *d == 0 && !defined.contains(word))
                 .and_then(|_| bare_macro_line(bytes, at, end))
             {
                 out[at..macro_end].fill(b' ');
@@ -464,6 +465,23 @@ fn mask(source: &str) -> Masked {
     }
     let text = String::from_utf8(out).unwrap_or_else(|_| source.to_owned());
     Masked { text, rows }
+}
+
+/// The names the file `#define`s. One of them alone on a line is the file's
+/// own code (`#define ONLY_IF_SLOW if (0)`), never blanked (found in review).
+fn defined_macros(source: &str) -> BTreeSet<&str> {
+    source
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix('#'))
+        .filter_map(|rest| rest.trim_start().strip_prefix("define"))
+        .filter_map(|rest| {
+            let rest = rest.trim_start();
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            (end > 0).then(|| &rest[..end])
+        })
+        .collect()
 }
 
 /// Where a macro alone on its line ends, when the word at `at..end` starts
@@ -569,9 +587,11 @@ impl Regions {
                                 found.never.push((alt.start_byte(), alt.end_byte()));
                             }
                         }
+                        None if names_cplusplus(node, src) => {}
                         None => found.sometimes.push((node.start_byte(), node.end_byte())),
                     }
                 }
+                "preproc_ifdef" if names_cplusplus(node, src) => {}
                 "preproc_ifdef" if !is_include_guard(node, src) => {
                     found.sometimes.push((node.start_byte(), node.end_byte()));
                 }
@@ -587,6 +607,14 @@ impl Regions {
     fn never(&self, node: Node<'_>) -> bool {
         let at = node.start_byte();
         self.never.iter().any(|&(from, to)| from <= at && at < to)
+    }
+
+    /// True when the byte `at` is compiled only sometimes, under an `#if`
+    /// that does not also hold `start` (the test it is in).
+    fn sometimes_within(&self, at: usize, start: Option<usize>) -> bool {
+        self.sometimes.iter().any(|&(from, to)| {
+            from <= at && at < to && start.is_none_or(|start| !(from <= start && start < to))
+        })
     }
 
     /// True when `node` is compiled only sometimes.
@@ -618,6 +646,22 @@ fn literal_condition(condition: Node<'_>, src: &[u8]) -> Option<bool> {
         }
     }
     None
+}
+
+/// True for `#ifdef __cplusplus` and `#if defined(__cplusplus)`: the
+/// `extern "C" {` wrapper of a header or a C test, whose two halves
+/// tree-sitter reads as one region around the whole file. Not a condition on
+/// the tests (found in review).
+fn names_cplusplus(node: Node<'_>, src: &[u8]) -> bool {
+    let condition = node
+        .child_by_field_name("condition")
+        .or_else(|| node.child_by_field_name("name"));
+    condition.is_some_and(|condition| {
+        matches!(
+            squeezed(text(condition, src)).as_str(),
+            "__cplusplus" | "defined(__cplusplus)" | "defined__cplusplus"
+        )
+    })
 }
 
 /// True for `#ifndef X` followed by `#define X`: a header's include guard.
@@ -655,6 +699,9 @@ struct Facts {
     /// CMocka: each function `cmocka_unit_test(…)` lists, how many times
     /// and the line of the first entry.
     cmocka_tests: BTreeMap<String, (usize, usize)>,
+    /// Assertion macros the file defines or undefines itself (`#define
+    /// EXPECT_EQ(a, b) (void)0`): calls of them check nothing it can see.
+    redefined: BTreeSet<String>,
     /// Unity: the functions `RUN_TEST(…)` names.
     run_tests: BTreeSet<String>,
     /// GoogleTest: the rows of each value-parameterized suite, `None` when
@@ -700,6 +747,27 @@ impl Facts {
     fn of(root: Node<'_>, src: &[u8]) -> Self {
         let mut found = Self::default();
         walk(root, |node| match node.kind() {
+            "preproc_def" | "preproc_function_def" => {
+                if let Some(name) = node.child_by_field_name("name") {
+                    let name = text(name, src);
+                    if is_assertion(name) {
+                        found.redefined.insert(name.to_owned());
+                    }
+                }
+                false
+            }
+            "preproc_call" => {
+                let line = text(node, src).trim_start();
+                if let Some(rest) = line.strip_prefix('#') {
+                    let mut words = rest.split_whitespace();
+                    if words.next() == Some("undef") {
+                        if let Some(name) = words.next().filter(|name| is_assertion(name)) {
+                            found.redefined.insert(name.to_owned());
+                        }
+                    }
+                }
+                false
+            }
             "preproc_include" => {
                 if let Some(path) = node.child_by_field_name("path") {
                     let raw = text(path, src);
@@ -1002,6 +1070,8 @@ struct Reader<'a> {
     pending: HashMap<usize, Scope>,
     /// CMocka tests whose function the file defines.
     defined: BTreeSet<String>,
+    /// Where each test (by index) starts.
+    test_starts: HashMap<usize, usize>,
 }
 
 impl Reader<'_> {
@@ -1046,7 +1116,9 @@ impl Reader<'_> {
             uses,
             weight: weight.max(1),
         });
-        self.file.tests.len() - 1
+        let index = self.file.tests.len() - 1;
+        self.test_starts.insert(index, at.start_byte());
+        index
     }
 
     /// The test a suite-style head (`TEST(Suite, Name)`) makes.
@@ -1175,6 +1247,7 @@ impl Reader<'_> {
     fn assertion(&mut self, node: Node<'_>, name: &str) {
         if self.dead.why(node).is_some()
             || self.regions.never(node)
+            || self.facts.redefined.contains(name)
             || cannot_fail(node, name, self.src)
         {
             return;
@@ -1185,6 +1258,11 @@ impl Reader<'_> {
             .rev()
             .find(|scope| scope.function)
             .and_then(|scope| scope.test);
+        // Under an `#if` inside its test, it runs only sometimes (found in
+        // review). A test wholly under an `#if` is a skipped test, and its
+        // assertions are as the base's are.
+        let start = test.and_then(|index| self.test_starts.get(&index).copied());
+        let conditional = self.regions.sometimes_within(node.start_byte(), start);
         let whole = text(node, self.src);
         self.file.assertions.push(Assertion {
             line: node.start_position().row + 1,
@@ -1194,6 +1272,7 @@ impl Reader<'_> {
                 .and_then(|index| self.file.tests.get(index))
                 .map_or(1, |test| test.weight),
             test,
+            conditional,
         });
     }
 }
@@ -1378,6 +1457,7 @@ pub(super) fn read(source: &str, cpp: bool) -> TestFile {
         }],
         pending: HashMap::new(),
         defined: BTreeSet::new(),
+        test_starts: HashMap::new(),
     };
     walk(root, |node| {
         while reader.open.len() > 1
@@ -1655,6 +1735,12 @@ fn comment_keys(raw: &str) -> Vec<String> {
 fn pragma_keys(argument: &str) -> Vec<String> {
     let code = argument.split("//").next().unwrap_or_default();
     let words: Vec<&str> = code.split_whitespace().collect();
+    // `#pragma GCC system_header`: no warning in the rest of the file.
+    if let [compiler, "system_header", ..] = words.as_slice() {
+        if matches!(*compiler, "GCC" | "clang") {
+            return vec!["pragma-ignored-file:*".to_owned()];
+        }
+    }
     if let [compiler, "diagnostic", "ignored", flag, ..] = words.as_slice() {
         if matches!(*compiler, "GCC" | "clang") {
             let flag = flag.trim_matches('"');
@@ -1675,6 +1761,14 @@ fn pragma_keys(argument: &str) -> Vec<String> {
     let list = list.split(')').next().unwrap_or_default();
     let mut keys = Vec::new();
     for specifier in list.split(';') {
+        // `#pragma warning(push, 0)`: warning level 0, every warning off.
+        if let Some(("push", level)) = specifier.split_once(',').map(|(a, b)| (a.trim(), b.trim()))
+        {
+            if level == "0" {
+                keys.push("msvc-disable-range:*".to_owned());
+            }
+            continue;
+        }
         let Some((name, numbers)) = specifier.split_once(':') else {
             continue;
         };
@@ -1687,6 +1781,24 @@ fn pragma_keys(argument: &str) -> Vec<String> {
         }
     }
     keys
+}
+
+/// The text of the string after `_Pragma` at byte `at`: `("clang
+/// diagnostic ignored \"-Wall\"")` gives `clang diagnostic ignored "-Wall"`.
+fn pragma_operand(src: &[u8], at: usize) -> Option<String> {
+    let rest = std::str::from_utf8(src.get(at..)?).ok()?.trim_start();
+    let rest = rest.strip_prefix('(')?.trim_start().strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(out),
+            '\\' => out.push(chars.next()?),
+            '\n' => return None,
+            _ => out.push(c),
+        }
+    }
+    None
 }
 
 /// The lint suppressions in a C or C++ source file.
@@ -1718,6 +1830,13 @@ pub(super) fn suppressions(source: &str, cpp: bool) -> Vec<Suppression> {
                     keys.extend(comment_keys(&format!("//{comment}")));
                 }
                 (keys, text(node, src))
+            }
+            // The `_Pragma("…")` operator says what a `#pragma` says.
+            "identifier" if text(node, src) == "_Pragma" => {
+                match pragma_operand(src, node.end_byte()) {
+                    Some(argument) => (pragma_keys(&argument), text(node, src)),
+                    None => return false,
+                }
             }
             "string_literal"
             | "raw_string_literal"
@@ -2655,5 +2774,68 @@ const char* b = R"(// NOLINT(x) #pragma GCC diagnostic ignored "-Wall")";
 "#;
         assert!(keys(source, true).is_empty(), "{:?}", keys(source, true));
         assert!(keys("const char *s = \"// NOLINT\";\n", false).is_empty());
+    }
+
+    // Found in review (M32): each of these hid a weakened test.
+    #[test]
+    fn an_assertion_under_an_if_inside_its_test_is_conditional() {
+        let file = cpp("TEST(Calc, Adds) {\n#ifdef CALC_STRICT\n  EXPECT_EQ(add(1, 2), 3);\n#endif\n  EXPECT_EQ(add(0, 0), 0);\n}\n");
+        let conditional: Vec<bool> = file.assertions.iter().map(|a| a.conditional).collect();
+        assert_eq!(conditional, [true, false]);
+        assert_eq!(ids(&file), [("Calc::Adds", false, None, 1)]);
+        // A test wholly under an `#if` is skipped; its assertions are not
+        // conditional within it.
+        let file =
+            cpp("#ifdef CALC_STRICT\nTEST(Calc, Adds) {\n  EXPECT_EQ(add(1, 2), 3);\n}\n#endif\n");
+        assert_eq!(ids(&file), [("Calc::Adds", true, None, 1)]);
+        assert!(!file.assertions[0].conditional);
+    }
+
+    #[test]
+    fn an_extern_c_wrapper_is_not_a_condition() {
+        let source = "#include \"unity.h\"\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\nvoid test_adds(void) {\n    TEST_ASSERT_EQUAL_INT(3, add(1, 2));\n}\n\n#ifdef __cplusplus\n}\n#endif\n";
+        let file = c(source);
+        assert_eq!(ids(&file), [("test_adds", false, None, 1)]);
+        assert_eq!(file.assertions.len(), 1);
+    }
+
+    #[test]
+    fn an_assertion_macro_the_file_redefines_does_not_count() {
+        let base = "TEST(Calc, Adds) {\n  EXPECT_EQ(add(1, 2), 3);\n}\n";
+        assert_eq!(cpp(base).assertions.len(), 1);
+        let defined = format!("#undef EXPECT_EQ\n#define EXPECT_EQ(a, b) (void)0\n{base}");
+        assert_eq!(cpp(&defined).assertions.len(), 0);
+        let undefined = format!("#undef EXPECT_EQ\n{base}");
+        assert_eq!(cpp(&undefined).assertions.len(), 0);
+    }
+
+    #[test]
+    fn a_macro_the_file_defines_is_never_blanked() {
+        let source = "#define ONLY_IF_SLOW if (0)\nTEST(Calc, Adds) {\n  ONLY_IF_SLOW\n  EXPECT_EQ(add(1, 2), 3);\n}\n";
+        assert!(mask(source).text.contains("  ONLY_IF_SLOW\n"));
+        // Read as written, the file either has the assertion under the
+        // `if (0)` or cannot be read: never one assertion that runs.
+        let file = cpp(source);
+        assert!(file.has_errors || file.assertions.is_empty(), "{file:?}");
+    }
+
+    #[test]
+    fn pragma_operators_system_headers_and_warning_level_zero_are_suppressions() {
+        assert_eq!(
+            keys(
+                "_Pragma(\"clang diagnostic ignored \\\"-Wall\\\"\")\nint x;\n",
+                true
+            ),
+            ["pragma-ignored:-Wall"]
+        );
+        assert_eq!(
+            keys("#pragma GCC system_header\n", false),
+            ["pragma-ignored-file:*"]
+        );
+        assert_eq!(
+            keys("#pragma warning(push, 0)\n", true),
+            ["msvc-disable-range:*"]
+        );
+        assert!(keys("#pragma warning(push)\n#pragma once\n", true).is_empty());
     }
 }

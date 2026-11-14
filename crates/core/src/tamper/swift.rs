@@ -674,6 +674,118 @@ fn subject_modules(root: Node<'_>, src: &[u8]) -> Vec<String> {
     }
 }
 
+/// Why `why` says a test does not run under `#if false`.
+const NEVER_COMPILED: &str = "under #if false, which is never true";
+
+/// The byte ranges of a Swift file under compiler directives: never
+/// compiled (`#if false`, a branch after a literal `true` one) or compiled
+/// only sometimes (`#if os(Linux)`, `#if canImport(…)`, `#if DEBUG`, and the
+/// branches after one). Read from the lines, as the compiler does (found in
+/// review: an `#if` around a test was not seen).
+#[derive(Default)]
+struct Directives {
+    never: Vec<(usize, usize)>,
+    sometimes: Vec<(usize, usize)>,
+}
+
+impl Directives {
+    fn of(source: &str) -> Self {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Branch {
+            Always,
+            Sometimes,
+            Never,
+        }
+        struct Frame {
+            branch: Branch,
+            start: usize,
+            /// A branch so far had a literal `true` condition.
+            taken: bool,
+            /// Every branch so far had a literal `false` condition.
+            all_false: bool,
+        }
+        let literal = |condition: &str| match condition.trim() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
+        let mut found = Self::default();
+        let mut open: Vec<Frame> = Vec::new();
+        let mut at = 0;
+        for line in source.split_inclusive('\n') {
+            let line_start = at;
+            at += line.len();
+            let Some(rest) = line.trim_start().strip_prefix('#') else {
+                continue;
+            };
+            let word_end = rest
+                .find(|c: char| !c.is_ascii_alphabetic())
+                .unwrap_or(rest.len());
+            let (word, condition) = rest.split_at(word_end);
+            let condition = condition.split("//").next().unwrap_or_default();
+            let close = |found: &mut Self, frame: &Frame| match frame.branch {
+                Branch::Never => found.never.push((frame.start, line_start)),
+                Branch::Sometimes => found.sometimes.push((frame.start, line_start)),
+                Branch::Always => {}
+            };
+            match word {
+                "if" => {
+                    let own = literal(condition);
+                    open.push(Frame {
+                        branch: match own {
+                            Some(true) => Branch::Always,
+                            Some(false) => Branch::Never,
+                            None => Branch::Sometimes,
+                        },
+                        start: at,
+                        taken: own == Some(true),
+                        all_false: own == Some(false),
+                    });
+                }
+                "elseif" | "else" => {
+                    let Some(frame) = open.last_mut() else {
+                        continue;
+                    };
+                    close(&mut found, frame);
+                    let own = if word == "else" {
+                        Some(true)
+                    } else {
+                        literal(condition)
+                    };
+                    frame.branch = if frame.taken || own == Some(false) {
+                        Branch::Never
+                    } else if frame.all_false && own == Some(true) {
+                        Branch::Always
+                    } else {
+                        Branch::Sometimes
+                    };
+                    frame.start = at;
+                    frame.taken |= own == Some(true) && frame.all_false;
+                    frame.all_false &= own == Some(false);
+                }
+                "endif" => {
+                    if let Some(frame) = open.pop() {
+                        close(&mut found, &frame);
+                    }
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    fn never(&self, at: usize) -> bool {
+        self.never.iter().any(|&(from, to)| from <= at && at < to)
+    }
+
+    /// Under a sometimes-compiled branch that does not also hold `start`.
+    fn sometimes_within(&self, at: usize, start: Option<usize>) -> bool {
+        self.sometimes.iter().any(|&(from, to)| {
+            from <= at && at < to && start.is_none_or(|start| !(from <= start && start < to))
+        })
+    }
+}
+
 /// Reads the tests, skips and assertions of a Swift test file.
 pub(super) fn read(source: &str) -> TestFile {
     let language: Language = tree_sitter_swift::LANGUAGE.into();
@@ -700,6 +812,8 @@ pub(super) fn read(source: &str) -> TestFile {
     };
     let classes = test_classes(root, src);
     let skipped_classes = skipped_classes(root, src);
+    let directives = Directives::of(source);
+    let mut test_starts: Vec<usize> = Vec::new();
 
     // The types and functions around the node being visited.
     struct Scope {
@@ -763,11 +877,14 @@ pub(super) fn read(source: &str) -> TestFile {
                         || skips_first(node, src);
                     let why = if marked {
                         None
+                    } else if directives.never(node.start_byte()) {
+                        Some(NEVER_COMPILED)
                     } else if does_nothing(node, src) {
                         Some("its body does nothing")
                     } else {
                         None
                     };
+                    let gated = directives.sometimes_within(node.start_byte(), None);
                     let mut uses = BTreeSet::new();
                     walk(node, |inner| {
                         if matches!(inner.kind(), "simple_identifier" | "type_identifier") {
@@ -781,10 +898,11 @@ pub(super) fn read(source: &str) -> TestFile {
                             .cloned(),
                     );
                     test = Some(file.tests.len());
+                    test_starts.push(node.start_byte());
                     file.tests.push(TestCase {
                         id,
                         line: node.start_position().row + 1,
-                        skipped: marked || why.is_some(),
+                        skipped: marked || gated || why.is_some(),
                         skipped_rows: 0,
                         why,
                         marker: false,
@@ -806,7 +924,11 @@ pub(super) fn read(source: &str) -> TestFile {
                 let Some(name) = assertion_name(node, src) else {
                     return true;
                 };
-                if dead.why(node).is_some() || in_never(node) || cannot_fail(node, name, src) {
+                if dead.why(node).is_some()
+                    || in_never(node)
+                    || directives.never(node.start_byte())
+                    || cannot_fail(node, name, src)
+                {
                     return true;
                 }
                 let test = open
@@ -814,6 +936,8 @@ pub(super) fn read(source: &str) -> TestFile {
                     .rev()
                     .find(|scope| scope.name.is_none())
                     .and_then(|scope| scope.test);
+                let start = test.and_then(|index| test_starts.get(index).copied());
+                let conditional = directives.sometimes_within(node.start_byte(), start);
                 let whole = text(node, src);
                 file.assertions.push(Assertion {
                     line: node.start_position().row + 1,
@@ -823,6 +947,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .and_then(|index| file.tests.get(index))
                         .map_or(1, |test| test.weight),
                     test,
+                    conditional,
                 });
                 true
             }
@@ -1489,5 +1614,42 @@ let t = """
 // swift-format-ignored
 "#;
         assert!(keys(source).is_empty(), "{:?}", keys(source));
+    }
+
+    // Found in review (M32): an `#if` around a test was not seen.
+    #[test]
+    fn compiler_directives_gate_tests_and_assertions() {
+        let class = |body: &str| {
+            format!("import XCTest\n\nfinal class CalcTests: XCTestCase {{\n{body}}}\n")
+        };
+        let test = "    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n";
+        let file = read(&class(&format!("#if false\n{test}#endif\n")));
+        assert!(file.tests[0].skipped);
+        assert_eq!(file.tests[0].why, Some(NEVER_COMPILED));
+        assert!(file.assertions.is_empty());
+        let file = read(&class(&format!(
+            "#if os(Linux)\n{test}#else\n{}#endif\n",
+            test.replace("testAdds", "testAddsElsewhere")
+        )));
+        assert!(file.tests.iter().all(|t| t.skipped && t.why.is_none()));
+        assert!(file.assertions.iter().all(|a| !a.conditional));
+        let file = read(&class(&format!(
+            "#if true\n{test}#else\n{}#endif\n",
+            test.replace("testAdds", "testOther")
+        )));
+        assert_eq!(
+            file.tests.iter().map(|t| t.skipped).collect::<Vec<_>>(),
+            [false, true]
+        );
+        // Inside a test: the assertion runs only sometimes.
+        let file = read(&class("    func testAdds() {\n        #if !canImport(FoundationNetworking)\n        XCTAssertEqual(add(1, 2), 3)\n        #endif\n        XCTAssertEqual(add(0, 0), 0)\n    }\n"));
+        assert!(!file.tests[0].skipped);
+        assert_eq!(
+            file.assertions
+                .iter()
+                .map(|a| a.conditional)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
     }
 }

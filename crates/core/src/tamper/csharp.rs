@@ -681,8 +681,12 @@ pub(super) fn read(source: &str) -> TestFile {
         /// A method: the index of the test it is, if it is one.
         method: bool,
         test: Option<usize>,
+        /// A method: a `return` under an `#if` its body opened came before
+        /// the node being visited, so the rest runs only sometimes.
+        returned: bool,
     }
     let mut open: Vec<Scope> = vec![Scope {
+        returned: false,
         end: usize::MAX,
         class: None,
         class_skipped: false,
@@ -712,6 +716,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     .child_by_field_name("condition")
                     .map_or(Cond::Other, |condition| condition_of(condition, src));
                 open.push(Scope {
+                    returned: false,
                     end: node.end_byte(),
                     class: None,
                     class_skipped: false,
@@ -744,6 +749,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     ),
                 };
                 open.push(Scope {
+                    returned: false,
                     end: node.end_byte(),
                     class: None,
                     class_skipped: false,
@@ -759,6 +765,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     .child_by_field_name("name")
                     .map(|name| text(name, src).to_owned());
                 open.push(Scope {
+                    returned: false,
                     end: node.end_byte(),
                     class: name,
                     class_skipped: class_skipped(node, src),
@@ -834,6 +841,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     });
                 }
                 open.push(Scope {
+                    returned: false,
                     end: node.end_byte(),
                     class: None,
                     class_skipped: false,
@@ -844,6 +852,16 @@ pub(super) fn read(source: &str) -> TestFile {
                 });
                 true
             }
+            "return_statement" => {
+                // Under an `#if` inside a method: what follows in it runs
+                // only sometimes (found in review).
+                if let Some(method) = open.iter_mut().rev().find(|scope| scope.method) {
+                    if compiled != method.compiled {
+                        method.returned = true;
+                    }
+                }
+                true
+            }
             "invocation_expression" => {
                 if !is_assertion(node, src) {
                     return true;
@@ -852,6 +870,15 @@ pub(super) fn read(source: &str) -> TestFile {
                 {
                     return false;
                 }
+                // Under an `#if` inside its method, or after a `return`
+                // under one: it runs only sometimes (found in review). A
+                // test wholly under an `#if` is a skipped test, and its
+                // assertions are as the base's are.
+                let conditional = open
+                    .iter()
+                    .rev()
+                    .find(|scope| scope.method)
+                    .is_some_and(|method| method.returned || compiled != method.compiled);
                 let test = open
                     .iter()
                     .rev()
@@ -866,6 +893,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .and_then(|index| file.tests.get(index))
                         .map_or(1, |test| test.weight),
                     test,
+                    conditional,
                 });
                 false
             }
@@ -1706,5 +1734,22 @@ public class A
 }
 "##;
         assert!(keys(source).is_empty());
+    }
+
+    // Found in review (M32): each of these hid a weakened test.
+    #[test]
+    fn an_assertion_under_an_if_inside_its_test_is_conditional() {
+        let conditional = |file: &TestFile| -> Vec<bool> {
+            file.assertions.iter().map(|a| a.conditional).collect()
+        };
+        let file = read("public class CalcTests\n{\n    [Fact]\n    public void Adds()\n    {\n#if CALC_STRICT\n        Assert.Equal(3, Calc.Add(1, 2));\n#endif\n        Assert.Equal(0, Calc.Add(0, 0));\n    }\n}\n");
+        assert_eq!(conditional(&file), [true, false]);
+        let file = read("public class CalcTests\n{\n    [Fact]\n    public void Adds()\n    {\n#if !DEBUG\n        return;\n#endif\n        Assert.Equal(3, Calc.Add(1, 2));\n    }\n}\n");
+        assert_eq!(conditional(&file), [true]);
+        // A test wholly under an `#if` is skipped; its assertions are not
+        // conditional within it.
+        let file = read("public class CalcTests\n{\n#if CALC_STRICT\n    [Fact]\n    public void Adds()\n    {\n        Assert.Equal(3, Calc.Add(1, 2));\n    }\n#endif\n}\n");
+        assert!(file.tests[0].skipped);
+        assert_eq!(conditional(&file), [false]);
     }
 }

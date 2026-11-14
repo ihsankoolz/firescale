@@ -5454,6 +5454,90 @@
       "head": {
         "tests/App.Tests/ClockTests.cs": "using Xunit;\n\npublic class ClockTests\n{\n    [Fact]\n    public void Noon() => Assert.Equal(\"Noon\", Clock.Say(\"Noon\"));\n\n    [Fact(Skip = \"flaky\")]\n    public void MidnightExactly() => Assert.Equal(\"Midnight\", Clock.Say(\"Midnight\"));\n\n#if NET6_0_OR_GREATER\n    [Fact]\n    public void QuarterPast() => Assert.Equal(\"QuarterPast\", Clock.Say(\"QuarterPast\"));\n#endif\n}\n"
       }
+    },
+    {
+      "name": "cpp: an assertion moved under an #ifdef inside its test",
+      "expect": ["assertion-removed"],
+      "note": "It runs only when CALC_STRICT is defined: an assertion that ran whenever its test did is gone (ADR 0052, found in review).",
+      "base": {
+        "src/calc.h": "int add(int a, int b);\n",
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n\nTEST(Calc, Adds) {\n  EXPECT_EQ(add(1, 2), 3);\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      },
+      "head": {
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n\nTEST(Calc, Adds) {\n#ifdef CALC_STRICT\n  EXPECT_EQ(add(1, 2), 3);\n#endif\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      }
+    },
+    {
+      "name": "cpp: an assertion under an #ifdef deleted",
+      "expect": ["assertion-removed"],
+      "note": "A conditional assertion still counts: deleting it is a removal (ADR 0052).",
+      "base": {
+        "src/calc.h": "int add(int a, int b);\n",
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n\nTEST(Calc, Adds) {\n#ifdef CALC_STRICT\n  EXPECT_EQ(add(1, 2), 3);\n#endif\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      },
+      "head": {
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n\nTEST(Calc, Adds) {\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      }
+    },
+    {
+      "name": "cpp: an assertion taken out of an #ifdef",
+      "expect": [],
+      "note": "It now runs whenever its test does: stronger, not a finding (ADR 0052).",
+      "base": {
+        "src/calc.h": "int add(int a, int b);\n",
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n\nTEST(Calc, Adds) {\n#ifdef CALC_STRICT\n  EXPECT_EQ(add(1, 2), 3);\n#endif\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      },
+      "head": {
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n\nTEST(Calc, Adds) {\n  EXPECT_EQ(add(1, 2), 3);\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      }
+    },
+    {
+      "name": "cpp: an assertion macro redefined to do nothing",
+      "expect": ["assertion-removed"],
+      "note": "`#define EXPECT_EQ(a, b) (void)0` in the file: its calls check nothing (ADR 0052, found in review).",
+      "base": {
+        "src/calc.h": "int add(int a, int b);\n",
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n\nTEST(Calc, Adds) {\n  EXPECT_EQ(add(1, 2), 3);\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      },
+      "head": {
+        "tests/calc_test.cc": "#include <gtest/gtest.h>\n#include \"../src/calc.h\"\n#undef EXPECT_EQ\n#define EXPECT_EQ(a, b) (void)0\n\nTEST(Calc, Adds) {\n  EXPECT_EQ(add(1, 2), 3);\n  EXPECT_EQ(add(0, 0), 0);\n}\n"
+      }
+    },
+    {
+      "name": "c: an extern \"C\" wrapper added",
+      "expect": [],
+      "note": "`#ifdef __cplusplus` / `extern \"C\" {` is not a condition on the tests (ADR 0052, found in review).",
+      "base": {
+        "src/calc.h": "int add(int a, int b);\n",
+        "tests/test_calc.c": "#include \"unity.h\"\n#include \"../src/calc.h\"\n\nvoid test_adds(void) {\n    TEST_ASSERT_EQUAL_INT(3, add(1, 2));\n}\n"
+      },
+      "head": {
+        "tests/test_calc.c": "#include \"unity.h\"\n#include \"../src/calc.h\"\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\nvoid test_adds(void) {\n    TEST_ASSERT_EQUAL_INT(3, add(1, 2));\n}\n\n#ifdef __cplusplus\n}\n#endif\n"
+      }
+    },
+    {
+      "name": "c: a _Pragma that silences warnings",
+      "expect": ["suppression-added"],
+      "note": "The `_Pragma(\"…\")` operator says what `#pragma` says (ADR 0052, found in review).",
+      "base": {
+        "src/calc.h": "int add(int a, int b);\n",
+        "tests/test_calc.c": "#include \"unity.h\"\n#include \"../src/calc.h\"\n\nvoid test_adds(void) {\n    TEST_ASSERT_EQUAL_INT(3, add(1, 2));\n}\n"
+      },
+      "head": {
+        "tests/test_calc.c": "#include \"unity.h\"\n#include \"../src/calc.h\"\n_Pragma(\"GCC diagnostic ignored \\\"-Wall\\\"\")\n\nvoid test_adds(void) {\n    TEST_ASSERT_EQUAL_INT(3, add(1, 2));\n}\n"
+      }
+    },
+    {
+      "name": "swift: a test wrapped in #if os(Linux)",
+      "expect": ["test-skipped"],
+      "note": "It is compiled only on Linux now (ADR 0052, found in review).",
+      "base": {
+        "Sources/Calc/Calc.swift": "func add(_ a: Int, _ b: Int) -> Int { a + b }\n",
+        "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n}\n"
+      },
+      "head": {
+        "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\nfinal class CalcTests: XCTestCase {\n#if os(Linux)\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n#endif\n}\n"
+      }
     }
   ]
 }
