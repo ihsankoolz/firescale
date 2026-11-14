@@ -201,9 +201,9 @@ fn resolve(
         Language::Swift => swift::resolve(from, spec, exists),
         Language::Dart => dart::resolve(from, spec, exists),
         Language::C | Language::Cpp => cfamily::resolve(from, spec, exists),
-        Language::Rust | Language::Java | Language::Kotlin | Language::CSharp | Language::Go => {
-            None
-        }
+        // Kotlin reads Java classes and Java reads Kotlin ones.
+        Language::Java | Language::Kotlin => java::resolve(from, spec, exists),
+        Language::Rust | Language::CSharp | Language::Go => None,
     }
 }
 

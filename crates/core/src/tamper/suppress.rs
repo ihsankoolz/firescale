@@ -129,7 +129,7 @@ pub(super) fn shown(raw: &str) -> String {
 }
 
 /// `rest` when `body` starts with `word` and the word ends there.
-fn directive<'a>(body: &'a str, word: &str) -> Option<&'a str> {
+pub(super) fn directive<'a>(body: &'a str, word: &str) -> Option<&'a str> {
     let rest = body.strip_prefix(word)?;
     match rest.chars().next() {
         None => Some(rest),
