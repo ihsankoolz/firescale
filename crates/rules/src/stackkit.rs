@@ -129,9 +129,10 @@ pub(crate) const MANIFESTS: [&str; 28] = [
 
 /// Source file extensions of every language a pack knows, for
 /// [`other_stack`].
-pub(crate) const CODE: [&str; 26] = [
+pub(crate) const CODE: [&str; 29] = [
     "py", "js", "jsx", "mjs", "cjs", "ts", "tsx", "rs", "go", "java", "kt", "kts", "scala", "c",
-    "h", "cc", "cpp", "hpp", "cs", "fs", "swift", "rb", "php", "dart", "ex", "exs",
+    "h", "cc", "cpp", "hpp", "cxx", "hh", "hxx", "cs", "fs", "swift", "rb", "php", "dart", "ex",
+    "exs",
 ];
 
 /// True for a path no tool builds from: in a folder whose name starts with

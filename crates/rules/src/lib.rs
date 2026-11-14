@@ -4,6 +4,7 @@ use firescale_core::rule::BuiltinPack;
 
 #[path = "agent-ready/mod.rs"]
 pub mod agent_ready;
+pub mod cmake;
 pub mod core;
 pub mod expo;
 pub mod go;
@@ -27,6 +28,7 @@ pub fn builtin_packs() -> Vec<BuiltinPack> {
         expo::pack(),
         go::pack(),
         maven::pack(),
+        cmake::pack(),
         supabase::pack(),
     ]
 }
