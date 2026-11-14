@@ -460,6 +460,21 @@
       }
     },
     {
+      "name": "go: a test of a kept file deleted along with another subject",
+      "expect": ["test-deleted", "assertion-removed"],
+      "note": "pricing.go and pricing_test.go deleted together, but TestDiscount tests Discount in discount.go, which stays.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n",
+        "pricing/discount.go": "package pricing\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n"
+      },
+      "head": {
+        "pricing/pricing.go": null,
+        "pricing/pricing_test.go": null
+      }
+    },
+    {
       "name": "go: a test file that does not parse",
       "expect": ["not-checked"],
       "note": "Its tests could not be compared.",
@@ -533,6 +548,21 @@
         "go.mod": "module example.com/shop\n\ngo 1.22\n",
         "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
         "pricing/pricing_test.go": "package pricing\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif got := Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n\nfunc TestDiscount(t *testing.T) {\n\tif got := Discount(99); got != 0 {\n\t\tt.Errorf(\"Discount(99) = %d, want 0\", got)\n\t}\n}\n",
+        "main.go": "package main\n\nfunc main() {}\n"
+      },
+      "head": {
+        "pricing/pricing.go": null,
+        "pricing/pricing_test.go": null
+      }
+    },
+    {
+      "name": "go: an external test package deleted with its subject",
+      "expect": [],
+      "note": "package pricing_test uses pricing.Total; pricing.go and its test go together.",
+      "base": {
+        "go.mod": "module example.com/shop\n\ngo 1.22\n",
+        "pricing/pricing.go": "package pricing\n\n// Total adds two prices.\nfunc Total(a, b int) int { return a + b }\n\n// Discount is a tenth of a total over a hundred.\nfunc Discount(total int) int {\n\tif total > 100 {\n\t\treturn total / 10\n\t}\n\treturn 0\n}\n",
+        "pricing/pricing_test.go": "package pricing_test\n\nimport (\n\t\"testing\"\n\n\t\"example.com/shop/pricing\"\n)\n\nfunc TestTotal(t *testing.T) {\n\tif got := pricing.Total(1, 2); got != 3 {\n\t\tt.Errorf(\"Total(1, 2) = %d, want 3\", got)\n\t}\n}\n",
         "main.go": "package main\n\nfunc main() {}\n"
       },
       "head": {
