@@ -143,6 +143,8 @@ With a base commit, verify also compares the **files the change touches** with t
   - `no-verify`: `--no-verify` on a git command, `git commit -n`, `core.hooksPath` pointed nowhere, in scripts, hooks and CI; or the agent stop hook that runs fscale removed from `.claude`, `.codex` or `.cursor` settings;
   - `rule-disabled`: a lint or type-check rule turned off or lowered in ESLint, Biome, Ruff, Flake8, Pylint, mypy, Pyright, Cargo `[lints]` or `tsconfig.json`.
 
+- **changes that need a person's approval** (ADR 0046): `snapshot-changed`, a stored snapshot rewritten (Jest and Vitest `.snap` entries, insta `.snap` files, syrupy `.ambr` entries), and `expected-changed`, an assertion of the same test that changed only in its literal values (`toBe(30)` → `toBe(31)`, an inline snapshot's text). They are not cheats by themselves, so they never block locally or in the pull request's own CI job: they block only in the `Tamper guard` workflow, until someone other than the author with write access approves the pull request's last commit on GitHub. Nothing in the repo counts as an approval.
+
 Files git is told not to look at (`git update-index --skip-worktree` or `--assume-unchanged`) are compared all the same.
 
 Because the counts are net over the whole change and come from the syntax tree, a renamed test, a test moved to another file, a test split in two, a reformatted file, an assertion replaced by a stricter one, a suppression moved with its code and `@ts-ignore` turned into `@ts-expect-error` are not findings. A test deleted together with every module of the repo it uses is not counted. A changed test file tree-sitter cannot read is a `not-checked` finding of its own, never taken as clean.
@@ -159,7 +161,7 @@ Findings are **report-only** by default: they are listed with file and line (a d
 }
 ```
 
-`testPaths` are globs of more files to read as test files. `allow` leaves files out of the counts, for every kind of finding or only the `kinds` listed (`test-deleted`, `test-skipped`, `assertion-removed`, `suppression-added`, `coverage-lowered`, `ci-weakened`, `no-verify`, `rule-disabled`, `not-checked`); the summary and `--json` (`tamper.allowed`) name the files it left out. **All of it is read from the base commit**, never from the working tree, so a change cannot turn the guard off, widen `allow` or drop a test path for itself: a change to it takes effect once merged.
+`testPaths` are globs of more files to read as test files. `allow` leaves files out of the counts, for every kind of finding or only the `kinds` listed (`test-deleted`, `test-skipped`, `assertion-removed`, `suppression-added`, `coverage-lowered`, `ci-weakened`, `no-verify`, `rule-disabled`, `snapshot-changed`, `expected-changed`, `not-checked`); the summary and `--json` (`tamper.allowed`) name the files it left out. **All of it is read from the base commit**, never from the working tree, so a change cannot turn the guard off, widen `allow` or drop a test path for itself: a change to it takes effect once merged.
 
 ### `fscale tamper`, and the base in CI
 
@@ -167,7 +169,7 @@ Findings are **report-only** by default: they are listed with file and line (a d
 
 In GitHub Actions, `--pr-base` (for `verify` and `tamper`) takes the base from the pull request event GitHub gives the run, never from a ref in the clone: the first parent of the merge commit GitHub made, or for `pull_request_target` the base branch and the pull request's head commit. If it cannot find them it fails rather than judging nothing. Locally the base comes from your refs, which an agent can move: there the guard is a tripwire, and CI's `tamper-guard` job ([ci.md](ci.md)) is where it is enforced (ADR 0045 lists what is and is not protected).
 
-The counts in `bench/RESULTS.md` come from a labelled corpus written together with the guard. They show it does what ADR 0042 and ADR 0044 say; they are not a measured false-positive or miss rate (M26).
+How often it is wrong is measured in `bench/RESULTS.md` (ADR 0046): on 1,200 commits of eight public repos, 19.1% of findings were labelled false after the fixes that measurement led to (1.8% of commits had a false finding), and it missed 42 of 98 cheating changes written to test it. Read the limits there before the numbers.
 
 ## The step cache
 

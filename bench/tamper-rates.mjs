@@ -174,6 +174,6 @@ console.log(`Not-a-finding cases with any finding: ${cleanWithFinding} of ${clea
 for (const line of wrong) console.log(`  ${line}`);
 console.log('');
 console.log(
-  'These are counts on fixtures written with the guard, not a measured false-positive or miss rate (M26).',
+  'These are counts on fixtures written with the guard, not a measured rate: bench/RESULTS.md has the rates measured on real history and on the held-out cheating corpus (ADR 0046).',
 );
 process.exitCode = wrong.length === 0 ? 0 : 1;
