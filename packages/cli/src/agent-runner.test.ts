@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
@@ -558,6 +558,23 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
       const guarded = await fix(closed, edit);
       expect(guarded.code).toBe(EXIT_VIOLATIONS);
       expect(guarded.stdout).toContain('protected path src/app.js');
+    });
+
+    // A junction on Windows, which needs no privilege; a symbolic link elsewhere.
+    it('a .firescale that is a link stops the run before the agent starts: the ledger is never written through it', async () => {
+      const root = await repo();
+      const outside = await mkdtemp(path.join(os.tmpdir(), 'fscale-outside-'));
+      scratch.push(outside);
+      await symlink(outside, path.join(root, '.firescale'), 'junction');
+      const result = await fix(root, GOOD);
+      expect(result.code, result.stdout).toBe(EXIT_USAGE);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(
+        'fscale: .firescale is a symbolic link, and firescale reads and writes nothing through one. Remove the link: a real folder or file is made in its place.\n',
+      );
+      expect(result.requests).toEqual([]);
+      expect(await readdir(outside)).toEqual([]);
+      expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
     });
 
     it('a protected glob that can match no path stops the run: it would protect nothing', async () => {

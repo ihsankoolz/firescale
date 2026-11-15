@@ -391,6 +391,10 @@ fn store_dir(root: &Path) -> PathBuf {
 }
 
 fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<TestResults>)> {
+    // Never through a symbolic link (ADR 0060).
+    if crate::ownfolder::linked(root, &["base"]).is_some() {
+        return None;
+    }
     let text = fs::read_to_string(store_dir(root).join(format!("{key}.json"))).ok()?;
     let stored: StoredBase = serde_json::from_str(&text).ok()?;
     let fresh = now_secs().saturating_sub(stored.ran_at) <= crate::stepcache::MAX_AGE.as_secs();
@@ -417,6 +421,11 @@ fn keep(
     tests: Option<&TestResults>,
 ) {
     if !matches!(status, BaseStatus::Passed | BaseStatus::Failed) {
+        return;
+    }
+    // Never through a symbolic link: the result is then not kept, and the
+    // base runs again next time (ADR 0060).
+    if crate::ownfolder::linked(root, &["base"]).is_some() {
         return;
     }
     let dir = store_dir(root);
