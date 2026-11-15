@@ -993,9 +993,23 @@ fn ci_run(read: &dyn Fn(&str) -> Option<String>) -> Option<&'static str> {
 /// whole one (ADR 0057). The stop hook refuses it in `hooks`.
 fn refuse_budget_in_ci(args: &Args, read: &dyn Fn(&str) -> Option<String>) -> Result<()> {
     match ci_run(read).filter(|_| args.budget.is_some()) {
-        Some(why) => Err(Error::usage(format!(
-            "--budget cannot be used in CI ({why}): it leaves slow steps out, so the run would pass without them. Run fscale verify without --budget there; to bound a slow step in CI, set its time limit in the firescale config (verify.<step>.timeout)."
-        ))),
+        Some(why) => {
+            // `CI=false` and `CI=0` are how people say "not CI" on their
+            // own machine, and they count as CI here: say how to get out.
+            let own_machine = read("CI")
+                .filter(|value| {
+                    read("GITHUB_ACTIONS").as_deref() != Some("true")
+                        && (value.eq_ignore_ascii_case("false") || value == "0")
+                })
+                .map_or_else(String::new, |value| {
+                    format!(
+                        " CI is \"{value}\" here, and any value that is not empty counts as CI: on your own machine, unset CI."
+                    )
+                });
+            Err(Error::usage(format!(
+                "--budget cannot be used in CI ({why}): it leaves slow steps out, so the run would pass without them. Run fscale verify without --budget there; to bound a slow step in CI, set its time limit in the firescale config (verify.<step>.timeout).{own_machine}"
+            )))
+        }
         None => Ok(()),
     }
 }
