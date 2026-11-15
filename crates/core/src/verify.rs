@@ -1976,9 +1976,16 @@ fn run_step(
     // long is stopped (ADR 0043).
     let idle = options.config.idle_for(project, name);
     // A step that was slow the last time is announced (ADR 0057).
-    let known = options
-        .times
-        .and_then(|times| times.last(project, name, command));
+    let known = options.times.and_then(|times| {
+        times.last(project, name, command).unwrap_or_else(|error| {
+            // Said, not hidden: with --budget this step would have been
+            // left out if its kept time were over the budget.
+            options.say(&format!(
+                "{place}: {error}, so how long this step took the last time is not known: it runs"
+            ));
+            None
+        })
+    });
     // A step known to take longer than the budget is not started. Nothing
     // is kept about it: no pass, no time (ADR 0057).
     if let (Some(budget), Some(known)) = (options.budget, known) {
@@ -4654,8 +4661,8 @@ mod tests {
         assert_eq!(
             StepTimes::new(fixture.root())
                 .last(None, "lint", "echo slow")
-                .map(|known| (known.duration.as_secs(), known.finished)),
-            Some((6000, true))
+                .map(|known| known.map(|known| (known.duration.as_secs(), known.finished))),
+            Ok(Some((6000, true)))
         );
 
         // With verify.failOnSkipped, leaving a step out fails the run.

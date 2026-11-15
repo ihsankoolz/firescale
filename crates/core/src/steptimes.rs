@@ -14,7 +14,9 @@
 //! Nothing is read or written through a symbolic link, as for the step
 //! cache (ADR 0056, bug 17).
 
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -119,6 +121,48 @@ pub struct StepTimes {
     lock: Mutex<()>,
 }
 
+/// The file is there, but could not be read just now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreadable {
+    reason: String,
+}
+
+impl fmt::Display for Unreadable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "could not read .firescale/{STEP_TIMES_FILE} ({})",
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for Unreadable {}
+
+/// A read is tried this many times, this far apart, before the file counts
+/// as unreadable.
+const READ_TRIES: u32 = 5;
+const READ_PAUSE: Duration = Duration::from_millis(20);
+
+/// Runs `once` until it succeeds, at most `tries` times, `pause` apart, and
+/// returns the last error when none did.
+fn retrying<T>(
+    tries: u32,
+    pause: Duration,
+    mut once: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    let mut attempt = 1;
+    loop {
+        match once() {
+            Err(_) if attempt < tries => {
+                attempt += 1;
+                std::thread::sleep(pause);
+            }
+            result => return result,
+        }
+    }
+}
+
 fn is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
@@ -158,21 +202,50 @@ impl StepTimes {
         is_symlink(&self.folder()) || is_symlink(&self.path())
     }
 
-    fn read(&self) -> File {
+    /// The file as it is now. Three cases are told apart (ADR 0057):
+    ///
+    /// - there is no file: nothing is kept yet;
+    /// - the file is there but is not a step times file of this format
+    ///   (broken, or written by another version): it holds nothing that can
+    ///   be used, and the next write replaces it, since nothing else would
+    ///   repair it;
+    /// - the file is there and cannot be read right now: an error. On
+    ///   Windows a reader gets "Access is denied" for a moment while another
+    ///   verify renames a new file over this one, so the read is tried a few
+    ///   times first. An empty file must never stand for this case: a write
+    ///   that started from it would drop every other step.
+    fn read(&self) -> Result<File, Unreadable> {
         if self.linked() {
-            return File::default();
+            return Ok(File::default());
         }
-        fs::read_to_string(self.path())
-            .ok()
-            .and_then(|text| serde_json::from_str::<File>(&text).ok())
-            .filter(|file| file.format == FORMAT)
-            .unwrap_or_default()
+        let path = self.path();
+        retrying(READ_TRIES, READ_PAUSE, || match fs::read(&path) {
+            Ok(bytes) => Ok(serde_json::from_slice::<File>(&bytes)
+                .ok()
+                .filter(|file| file.format == FORMAT)
+                .unwrap_or_default()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(File::default()),
+            Err(error) => Err(error),
+        })
+        .map_err(|error| Unreadable {
+            reason: error.to_string(),
+        })
     }
 
     /// What is known about the time of this step, if anything.
-    #[must_use]
-    pub fn last(&self, project: Option<&str>, step: &str, command: &str) -> Option<Known> {
-        self.read()
+    ///
+    /// # Errors
+    ///
+    /// When the file is there but could not be read, after a few tries: the
+    /// step may have a kept time that this run cannot see.
+    pub fn last(
+        &self,
+        project: Option<&str>,
+        step: &str,
+        command: &str,
+    ) -> Result<Option<Known>, Unreadable> {
+        Ok(self
+            .read()?
             .steps
             .iter()
             .find(|record| {
@@ -183,13 +256,15 @@ impl StepTimes {
             .map(|record| Known {
                 duration: Duration::from_millis(record.duration_ms),
                 finished: record.finished,
-            })
+            }))
     }
 
     /// Keeps how long a run of this step took, or has taken so far. The
     /// file is read again first, so another verify's records are kept, and
     /// written beside and renamed, so a reader never sees half a file.
-    /// A file that cannot be written is not worth failing the run for.
+    /// A file that cannot be written is not worth failing the run for, and
+    /// one that cannot be read right now is left as it is: this record is
+    /// dropped, not the other steps'.
     pub fn record(
         &self,
         project: Option<&str>,
@@ -211,7 +286,9 @@ impl StepTimes {
             finished: outcome != Outcome::Unfinished,
             ran_at: now_secs().saturating_sub(duration.as_secs()),
         };
-        let mut file = self.read();
+        let Ok(mut file) = self.read() else {
+            return;
+        };
         file.format = FORMAT;
         let at = file.steps.iter().position(|record| {
             record.project.as_deref() == project && record.step == step && record.command == command
@@ -279,21 +356,21 @@ mod tests {
         times.record(Some("api"), "test", "pytest", HOUR, Outcome::Passed);
         assert_eq!(
             times.last(Some("api"), "test", "pytest"),
-            Some(Known {
+            Ok(Some(Known {
                 duration: HOUR,
                 finished: true
-            })
+            }))
         );
-        assert_eq!(times.last(Some("web"), "test", "pytest"), None);
-        assert_eq!(times.last(None, "test", "pytest"), None);
-        assert_eq!(times.last(Some("api"), "lint", "pytest"), None);
-        assert_eq!(times.last(Some("api"), "test", "pytest -x"), None);
+        assert_eq!(times.last(Some("web"), "test", "pytest"), Ok(None));
+        assert_eq!(times.last(None, "test", "pytest"), Ok(None));
+        assert_eq!(times.last(Some("api"), "lint", "pytest"), Ok(None));
+        assert_eq!(times.last(Some("api"), "test", "pytest -x"), Ok(None));
     }
 
     #[test]
     fn a_pass_sets_the_time_and_anything_else_only_raises_it() {
         let (_temp, times) = times();
-        let last = |times: &StepTimes| times.last(None, "test", "t").unwrap();
+        let last = |times: &StepTimes| times.last(None, "test", "t").unwrap().unwrap();
         times.record(None, "test", "t", HOUR, Outcome::Passed);
         // A quick failure, or a run stopped early, says nothing new.
         times.record(None, "test", "t", Duration::from_secs(3), Outcome::Failed);
@@ -403,9 +480,9 @@ mod tests {
         fs::create_dir_all(&folder).unwrap();
         for text in ["not json", r#"{"format": 99, "steps": []}"#] {
             fs::write(folder.join(STEP_TIMES_FILE), text).unwrap();
-            assert_eq!(times.last(None, "test", "t"), None);
+            assert_eq!(times.last(None, "test", "t"), Ok(None));
             times.record(None, "test", "t", HOUR, Outcome::Passed);
-            assert!(times.last(None, "test", "t").is_some());
+            assert!(times.last(None, "test", "t").unwrap().is_some());
         }
     }
 
@@ -436,6 +513,17 @@ mod tests {
             Outcome::Passed,
         );
         let held = held_without_sharing_read(&temp.path().join(".firescale").join(STEP_TIMES_FILE));
+        // A reader is told so; it does not take the step for one with no
+        // kept time.
+        let unreadable = times
+            .last(Some("backend/slow"), "test", "pytest")
+            .unwrap_err();
+        assert!(
+            unreadable
+                .to_string()
+                .starts_with("could not read .firescale/step-times.json ("),
+            "{unreadable}"
+        );
         times.record(
             None,
             "lint",
@@ -446,11 +534,55 @@ mod tests {
         drop(held);
         assert_eq!(
             times.last(Some("backend/slow"), "test", "pytest"),
-            Some(Known {
+            Ok(Some(Known {
                 duration: HOUR,
                 finished: true
-            }),
+            })),
             "the kept time of backend/slow is gone"
+        );
+        // The record that could not be merged was dropped, not written alone.
+        assert_eq!(times.last(None, "lint", "eslint ."), Ok(None));
+    }
+
+    /// The same rule on every platform: a folder where the file should be
+    /// cannot be read as a file, and is not "no file".
+    #[test]
+    fn something_unreadable_in_the_files_place_is_an_error_and_is_left_alone() {
+        let (temp, times) = times();
+        let path = temp.path().join(".firescale").join(STEP_TIMES_FILE);
+        fs::create_dir_all(&path).unwrap();
+        assert!(times.last(None, "test", "t").is_err());
+        times.record(None, "test", "t", HOUR, Outcome::Passed);
+        assert!(path.is_dir());
+        assert!(fs::read_dir(temp.path().join(".firescale"))
+            .unwrap()
+            .flatten()
+            .all(|entry| entry.file_name() == STEP_TIMES_FILE));
+    }
+
+    #[test]
+    fn a_read_is_tried_again_and_gives_up_with_the_last_error() {
+        let denied = || io::Error::new(io::ErrorKind::PermissionDenied, "Access is denied");
+        // It fails twice, as while another verify renames the file.
+        let mut calls = 0;
+        let read = retrying(5, Duration::ZERO, || {
+            calls += 1;
+            if calls < 3 {
+                Err(denied())
+            } else {
+                Ok("read")
+            }
+        });
+        assert_eq!((read.ok(), calls), (Some("read"), 3));
+        // It never works: five tries, then the error.
+        let mut calls = 0;
+        let read: io::Result<()> = retrying(5, Duration::ZERO, || {
+            calls += 1;
+            Err(denied())
+        });
+        assert_eq!(
+            (read.map_err(|error| error.kind()), calls),
+            (Err(io::ErrorKind::PermissionDenied), 5)
         );
     }
 
@@ -474,7 +606,7 @@ mod tests {
             r#"{"format":1,"steps":[{"step":"test","command":"t","durationMs":3600000,"finished":true,"ranAt":1}]}"#,
         )
         .unwrap();
-        assert_eq!(times.last(None, "test", "t"), None);
+        assert_eq!(times.last(None, "test", "t"), Ok(None));
 
         // `.firescale` is a link to a folder outside the repo.
         let (temp, times) = self::times();
@@ -482,6 +614,6 @@ mod tests {
         fs::remove_file(&target).unwrap();
         times.record(None, "test", "t", HOUR, Outcome::Passed);
         assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
-        assert_eq!(times.last(None, "test", "t"), None);
+        assert_eq!(times.last(None, "test", "t"), Ok(None));
     }
 }
