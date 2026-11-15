@@ -379,6 +379,81 @@ describe('fscale doctor', () => {
   });
 });
 
+// A service's `.env.example` whose variables are set in an env file of a
+// folder above it, as on a repo with one `.env` at the root (ADR 0059).
+describe('doctor and env files in the folders above a project', () => {
+  const ABOVE_SECRETS = ['root-env-secret-789', 'mid-secret-321', 'own-secret-654'];
+
+  async function servicesRepo() {
+    const service = { 'requirements.txt': '', 'main.py': '' };
+    const files: Record<string, string> = {
+      '.env': 'SVC_API_KEY=root-env-secret-789\nUNRELATED=1\n',
+      'backend/.env.local': 'export SVC_REGION="mid-secret-321"\n',
+      'backend/svc/.env.example': 'SVC_API_KEY=\nSVC_REGION=\n',
+      'backend/other/.env.example': 'OTHER_TOKEN=\n',
+      'backend/own/.env.example': 'OWN_A=\nOWN_B=\n',
+      'backend/own/.env': 'OWN_A=own-secret-654\n',
+      'lonely/.env.example': 'LONELY=\n',
+    };
+    for (const folder of ['backend/svc', 'backend/other', 'backend/own', 'lonely']) {
+      for (const [name, text] of Object.entries(service)) files[`${folder}/${name}`] = text;
+    }
+    const repo = await fixtures.create({ files });
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await writeVersionTools(tools, {});
+    return { repo, env: toolPath(tools) };
+  }
+
+  it('finds a variable in the .env of a folder above, names the file, and never prints a value', async () => {
+    const { repo, env } = await servicesRepo();
+    const json = await runCli(['doctor', '--json'], repo.root, env);
+    const report = await validate(json.stdout);
+    const checks = report.checks
+      .filter((check) => check.section === 'env')
+      .map(({ subject, status, detail, fix }) => ({ subject, status, detail, fix }))
+      .sort((a, b) => (a.subject < b.subject ? -1 : 1));
+    expect(checks).toEqual([
+      {
+        subject: 'backend/other/.env.example',
+        status: 'problem',
+        detail:
+          '1 of 1 variables are not set in the environment or backend/.env.local, .env, and there is no backend/other/.env: OTHER_TOKEN.',
+        fix: 'add OTHER_TOKEN to the env file that backend/other reads: backend/.env.local, .env, or a new backend/other/.env (see backend/other/.env.example for what each one is)',
+      },
+      {
+        subject: 'backend/own/.env.example',
+        status: 'problem',
+        detail:
+          '1 of 2 variables are not set in the environment or backend/own/.env, backend/.env.local, .env: OWN_B.',
+        fix: 'add OWN_B to backend/own/.env (see backend/own/.env.example for what each one is)',
+      },
+      {
+        subject: 'backend/svc/.env.example',
+        status: 'ok',
+        detail:
+          'all 2 variables are set in the environment, or in an env file of a folder above (SVC_REGION in backend/.env.local; SVC_API_KEY in .env)',
+        fix: undefined,
+      },
+      {
+        subject: 'lonely/.env.example',
+        status: 'problem',
+        detail:
+          '1 of 1 variables are not set in the environment, and there is no lonely/.env, nor a .env in a folder above it: LONELY.',
+        fix: 'copy lonely/.env.example to lonely/.env and fill in the values (or set the variables in your shell)',
+      },
+    ]);
+    const human = await runCli(['doctor'], repo.root, env);
+    expect(human.stdout).toContain(
+      '  ok       backend/svc/.env.example: all 2 variables are set in the environment, or in an env file of a folder above (SVC_REGION in backend/.env.local; SVC_API_KEY in .env)\n',
+    );
+    for (const out of [json, human]) {
+      for (const secret of ABOVE_SECRETS) {
+        expect(out.stdout + out.stderr, secret).not.toContain(secret);
+      }
+    }
+  });
+});
+
 describe('verify points at doctor', () => {
   it('prints a one-line hint to run fscale doctor when a step needs setup', async () => {
     const repo = await fixtures.create({
