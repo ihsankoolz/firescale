@@ -115,10 +115,13 @@ jobs:
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
+      # No cache, here or in any other job: what is published is built from
+      # the tagged commit and the lockfiles only, never from files an earlier
+      # run saved. So no `cache:` input and no rust-cache step; the build is
+      # cold every time.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: pnpm
 
       - name: Install Rust
         run: rustup toolchain install
@@ -126,8 +129,6 @@ jobs:
       - name: Add cross-compile target
         if: ${{ matrix.cross }}
         run: rustup target add ${{ matrix.triple }}
-
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Install
         run: pnpm install --frozen-lockfile
