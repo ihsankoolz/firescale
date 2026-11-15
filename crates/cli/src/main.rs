@@ -1095,7 +1095,9 @@ fn verify_plan(
         // As a file, the config reaches only the units whose key holds the
         // repo root, where a step can read it (`prettier --check .`).
         let read_as_a_file = configkey::mark_file_readers(&mut plan, &graph);
-        if effect.is_empty() && !read_as_a_file {
+        // Not when another changed file runs every project (the config
+        // renamed to `firescale.config.ts`, say): then something runs.
+        if effect.is_empty() && !read_as_a_file && set.everything.is_none() {
             notes.push(configkey::NOTHING_TO_RUN_NOTE.to_owned());
         }
     }
