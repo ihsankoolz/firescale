@@ -1775,7 +1775,6 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             let bin = args.bin.as_deref().unwrap_or("fscale");
             let mut out = String::new();
             let mut notes = Vec::new();
-            let mut cursor_note = None;
             let mut ready = Vec::new();
             let mut refused = Vec::new();
             for agent in agents {
@@ -1796,14 +1795,7 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                 if state != "refused" {
                     ready.push(agent.config_file());
                 }
-                if agent == Agent::Cursor && state == "installed" {
-                    cursor_note = Some(
-                        "note: the Cursor hook format could not be checked against Cursor's docs when this was written. Confirm that .cursor/hooks.json matches your Cursor version."
-                            .to_owned(),
-                    );
-                }
             }
-            notes.extend(cursor_note);
             if refused.is_empty() {
                 out.push_str(&format!(
                     "\nEach agent now runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n"

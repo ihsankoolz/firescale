@@ -5,11 +5,12 @@
 //! command runs verify and, if it fails, tells the agent to keep working. A
 //! counter caps how many times in a row one session can be sent back.
 //!
-//! Formats (checked on 2026-11-11, see ADR 0014):
+//! Formats (checked on 2026-11-11 and 2026-11-12, see ADR 0014 and 0027):
 //! - Claude Code: `.claude/settings.json`, a `Stop` hook. Confirmed from docs.
 //! - Codex CLI: `.codex/hooks.json`, same shape. Confirmed from its source.
-//! - Cursor: `.cursor/hooks.json`, a `stop` hook. NOT confirmed: its docs
-//!   could not be reached when this was written.
+//! - Cursor: `.cursor/hooks.json`, a `stop` hook. Confirmed from Cursor's
+//!   own example repositories (`cursor/cookbook`, `cursor/plugins`); its
+//!   docs page could not be reached.
 
 use std::fs;
 use std::path::{Path, PathBuf};
