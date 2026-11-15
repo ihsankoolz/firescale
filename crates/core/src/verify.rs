@@ -1964,6 +1964,12 @@ fn run_step(
     }
     let spawned = Mutex::new(None);
     let heartbeat = |elapsed: Duration, last: Option<&str>, percent: Option<u8>| {
+        // Kept while it runs, so a run that is killed outright, with no
+        // chance to write anything, still leaves about how long the step
+        // ran (ADR 0057).
+        if let Some(times) = options.times {
+            times.record(project, name, command, elapsed, Outcome::Unfinished);
+        }
         // `last output: ...`, or a running count of tests (ADR 0025), and
         // how much is left when the runner prints a percent (ADR 0043).
         let last = last.map_or_else(String::new, |doing| format!("; {doing}"));
@@ -2069,14 +2075,14 @@ fn run_step(
     let took = format_duration(finished.duration);
     // How long it took is kept for the next run (ADR 0057).
     if let Some(times) = options.times {
+        // A step that was stopped (Ctrl+C, a time limit, or early for a
+        // service that is down) ran at least this long.
         let outcome = match finished.ending {
-            Ending::Exited(Some(0)) => Some(Outcome::Passed),
-            Ending::Exited(_) => Some(Outcome::Failed),
-            Ending::TimedOut | Ending::Stopped | Ending::GaveUp => None,
+            Ending::Exited(Some(0)) => Outcome::Passed,
+            Ending::Exited(_) => Outcome::Failed,
+            Ending::TimedOut | Ending::Stopped | Ending::GaveUp => Outcome::Unfinished,
         };
-        if let Some(outcome) = outcome {
-            times.record(project, name, command, finished.duration, outcome);
-        }
+        times.record(project, name, command, finished.duration, outcome);
     }
     let mut report = StepReport {
         name: name.to_owned(),
