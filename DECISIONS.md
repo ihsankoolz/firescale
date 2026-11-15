@@ -72,10 +72,10 @@ The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. 
 
 - Bug 6: **a minified settings file, and `"hooks": null`, are now refused** with the item to add by hand, where both were rewritten. The hook goes first in the stop list, not last. Four existing tests that fed one-line files had their inputs given line breaks; the two order assertions were swapped.
 - Bug 11 uses `stackkit::MANIFESTS` (audit item 57) rather than 21 more names typed into the pack's own list: it is the smaller change and builds nothing.
-- Bug 14 also turns off setup-node's automatic cache, which needs no `cache:` input (ADR 0041), and pins all four jobs, not only `build`. A new job fails the test until someone reads it. **Releases now build cold on six targets and take longer.**
+- Bug 14 also sets `package-manager-cache: false` on setup-node and pins all four jobs, not only `build`. setup-node's automatic cache works for npm only (read in its `action.yml` at the pinned commit), so in this pnpm repo the line changes nothing today; it keeps the rule true if the package manager changes. A new job fails the test until someone reads it. **Releases now build cold on six targets and take longer.**
 - Bug 20 also adds the file to the pack script's filter, because `tsc` leaves an old `dist/course-fixture.js` in place.
 
-**Found while fixing, not fixed:** `supabase/package-json`'s SKILL.md does not mention the other-stack case; a repo of another language with no manifest (only `.py` files) still gets a `package.json`; `hooks install` still prints "the Cursor hook format could not be checked" though ADR 0027 confirmed it.
+**Found while fixing, not fixed:** **`fscale hooks install --all` stops at the first file it refuses**, after writing the ones before it and without saying so; the files after it are not tried (this was already so for a file that is not valid JSON, and a minified file now reaches it); a settings file that holds only blank space or a byte order mark is still replaced; `supabase/package-json`'s SKILL.md does not mention the other-stack case; a repo of another language with no manifest (only `.py` files) still gets a `package.json`; `hooks install` still prints "the Cursor hook format could not be checked" though ADR 0027 confirmed it.
 
 ## Review of the long run
 

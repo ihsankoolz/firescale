@@ -495,7 +495,7 @@ describe('.github/workflows/release.yml', () => {
       const steps = job(text, name).split(/\r?\n(?= {6}- )/);
       const setups = steps.filter((step) => step.includes('uses: actions/setup-node@'));
       expect(setups, name).toHaveLength(1);
-      for (const step of setups) expect(step, name).toContain('package-manager-cache: false');
+      for (const step of setups) expect(step, name).toMatch(/^ {10}package-manager-cache: false$/m);
     }
   });
 

@@ -153,7 +153,7 @@ impl BuiltinRule for VerifyHook {
                     let (fixable, how) = if with_hook(ctx, agent, &bin)?.is_some() {
                         (Fixable::Deterministic, "`fscale sync` adds it".to_owned())
                     } else {
-                        (Fixable::Manual, format!("The file is not valid JSON or is written on one line, so add it by hand: `fscale hooks install --agent {}` says what to add", agent.name()))
+                        (Fixable::Manual, format!("The file is not valid JSON or is written on one line, so add it by hand: `fscale hooks install --agent {}` says what to do", agent.name()))
                     };
                     findings.push(finding(
                         agent.config_file(),
@@ -188,7 +188,7 @@ impl BuiltinRule for VerifyHook {
             let file = agent.config_file();
             let Some(content) = with_hook(ctx, agent, &bin)? else {
                 result.notes.push(format!(
-                    "{file} was left as it is: it is not valid JSON or the hook cannot go in without changing one of its lines. `fscale hooks install --agent {}` says what to add by hand.",
+                    "{file} was left as it is: it is not valid JSON or the hook cannot go in without changing one of its lines. `fscale hooks install --agent {}` says what to do.",
                     agent.name()
                 ));
                 continue;

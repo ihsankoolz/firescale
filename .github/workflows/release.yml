@@ -45,7 +45,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # setup-node can cache a package manager's store by itself; a release restores nothing.
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
           package-manager-cache: false
 
       # Only what is merged gets published: a tag on a commit that is not on
@@ -124,7 +124,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # setup-node can cache a package manager's store by itself; a release restores nothing.
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
           package-manager-cache: false
 
       - name: Install Rust
@@ -181,7 +181,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # setup-node can cache a package manager's store by itself; a release restores nothing.
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
           package-manager-cache: false
           registry-url: https://registry.npmjs.org
 
@@ -214,7 +214,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          # setup-node can cache a package manager's store by itself; a release restores nothing.
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
           package-manager-cache: false
 
       # A new version can take a few minutes to become installable: up to

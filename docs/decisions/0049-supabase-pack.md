@@ -53,7 +53,7 @@ A fresh subagent reviewed the pack on fixtures and on three real repos (supabase
 - **`force row level security` counted as RLS on**, and so did `no force`: only `enable` does.
 - **The `[inbucket]` rename could make a second `[local_smtp]`** or rename text inside a multi-line string: a config with both is a manual finding, and multi-line strings are skipped. The update command names the repo's package manager.
 - **One migration in another encoding stopped the whole check**: migrations are read lossily.
-- **A Supabase project in a Flutter, Python, Go, Rust or Deno repo** was given a package.json (basejump would have been): with another stack's manifest and no package.json, the finding is manual and nothing is created.
+- **A Supabase project in a Flutter, Python, Go, Rust or Deno repo** was given a package.json (basejump would have been): with another stack's manifest and no package.json, the finding is manual and nothing is created. (Since ADR 0056, bug 11, that holds for every manifest in `stackkit::MANIFESTS`, not only these stacks.)
 - Smaller: a mixed-case table is quoted in the suggested SQL; `…_SUPABASE_SERVICE_KEY` under a client prefix is found too.
 
 Left as limits (in the rls SKILL.md): tables made or RLS switched on in a `DO` block or a function, and unqualified names after `set search_path`, are not followed. The gitignore check reads patterns by name, not as git does (`/.temp` at the root counts; `supabase/*` does not).

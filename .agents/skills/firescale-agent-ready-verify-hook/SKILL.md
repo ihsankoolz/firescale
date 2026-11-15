@@ -33,7 +33,7 @@ Codex runs a project's hooks only in a trusted project, and only after you appro
 
 ### REPORT
 
-- If the finding is a manual one (a settings file firescale could not add to), report the file and the command `fscale hooks install --agent <name>`, which changes nothing in such a file and prints what to add by hand. A hook changes how every agent session in this repo ends, so let the user add it.
+- If the finding is a manual one (a settings file firescale could not add to), report the file and the command `fscale hooks install --agent <name>`, which changes nothing in such a file and prints what to do (for a file it can read, the item to add by hand). A hook changes how every agent session in this repo ends, so let the user add it.
 
 ## Verify
 

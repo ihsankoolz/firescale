@@ -183,7 +183,7 @@ pub fn merge_hook(existing: Option<&str>, agent: Agent, bin: &str) -> Result<Opt
     };
     crate::jsonedit::insert_merge(text, &root).map(Some).ok_or_else(|| {
         Error::user(format!(
-            "{file} was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Add {also}this item to the list \"{list}\" by hand:\n\n{}\n\nThen run this again to check it.",
+            "{file} was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add {also}this item to the list \"{list}\" by hand:\n\n{}\n\nThen run this again to check it.",
             serde_json::to_string_pretty(&entry).unwrap_or_default()
         ))
     })

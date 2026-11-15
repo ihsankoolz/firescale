@@ -117,7 +117,7 @@ Where the hook cannot go in as new lines, the file is left alone and the command
 
 Seen changes:
 
-- **A minified settings file is refused**, where it was rewritten. The audit named this cost.
+- **A minified settings file is refused**, where it was rewritten. The audit named this cost. With `--all`, the command stops at the first refused file, as it already did for a file that is not valid JSON; the files before it are written and the ones after it are not tried.
 - **`"hooks": null` is refused**, where it was treated as missing and replaced. Replacing it would change a line the person wrote.
 - **The hook goes first in the stop list**, where it went last. Appending would need a comma on the person's last line.
 - Four existing tests fed one-line files and so had to change: their inputs got line breaks, the two assertions on the list's order were swapped, and `a_null_hooks_key_is_treated_as_missing` became `a_null_hooks_key_is_left_for_a_person`. No assertion on a kept value was dropped.
@@ -133,7 +133,7 @@ A repo that has a `package.json` is not affected. A repo of another language wit
 
 `cache: pnpm` and `Swatinem/rust-cache` are gone from the `build` job of `release.yml`. A test (`restores no cache in any job`) fails on any line of the four jobs that names a cache, other than a key that turns one off, and fails when a job is added, until someone reads it.
 
-setup-node can also cache a package manager's store with no `cache:` input (ADR 0041), so each of the four jobs now sets `package-manager-cache: false`, pinned by a second test. `ci.yml` keeps its caches.
+setup-node can also cache with no `cache:` input (ADR 0041). At the pinned commit its `action.yml` does that only when npm is the package manager, so nothing was cached that way here; each of the four jobs still sets `package-manager-cache: false`, pinned by a second test, so the rule holds whatever the package manager. pnpm/action-setup's own `cache` input is off by default. `ci.yml` keeps its caches.
 
 Release builds are now cold on all six targets, so a release takes longer.
 
