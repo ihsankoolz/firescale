@@ -224,7 +224,7 @@ describe('what a config change affects (ADR 0058)', () => {
     );
     expect(on.calls).toEqual([]);
     expect(on.stdout).toContain(
-      '  backend/ledger_service: firescale.config.json changes what its test step runs',
+      '  backend/ledger_service: firescale.config.json changes what its lint, typecheck and test steps run',
     );
     expect(on.stdout).toContain(
       '  frontend: firescale.config.json changes what its lint step runs',

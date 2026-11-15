@@ -244,6 +244,38 @@ describe('the shared cache of CI', () => {
     );
   });
 
+  // ADR 0058: the record's key holds the config's settings by value.
+  it('serves a record to a pull request that changes a time limit, and not to one that changes a setting every step shares', async () => {
+    const { root, runs, freshRunner } = await sharedRepo();
+    const push = await github(root, 'push', 'refs/heads/main');
+    await verifyJson(root, push);
+    expect(await runs()).toBe(1);
+    const pull = await github(root, 'pull_request', 'refs/pull/7/merge');
+    const config = (verify: Record<string, unknown>) =>
+      writeFile(
+        path.join(root, 'firescale.config.json'),
+        JSON.stringify({ packs: ['core'], verify: { lint: false, typecheck: false, ...verify } }),
+      );
+    await freshRunner();
+    await config({ test: { command: 'node test.js', timeout: '3h' }, timeout: '2h' });
+    const hit = await verifyJson(root, pull);
+    expect(await runs()).toBe(1);
+    expect(testStep(hit)?.cache?.sharedFrom).toBe(push.GITHUB_SHA);
+    for (const verify of [
+      { test: 'node test.js', stopAfterErrors: 25 },
+      { test: 'node test.js', ci: false },
+      { test: 'node test.js', stopWhenServiceDown: false },
+      { test: 'node test.js', failOnSkipped: true },
+    ]) {
+      await freshRunner();
+      await config(verify);
+      const before = await runs();
+      const miss = await verifyJson(root, pull);
+      expect(await runs(), JSON.stringify(verify)).toBe(before + 1);
+      expect(testStep(miss)?.cache).toBeUndefined();
+    }
+  });
+
   it('uses a record only when the whole key matches', async () => {
     const { root, runs, freshRunner } = await sharedRepo();
     await verifyJson(root, await github(root, 'push', 'refs/heads/main'));
