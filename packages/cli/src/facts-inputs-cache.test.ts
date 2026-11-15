@@ -16,7 +16,9 @@ const CONFIG = `${JSON.stringify(
   {
     packs: ['agent-ready'],
     rules: {
+      'agent-ready/agent-permissions': 'enforced',
       'agent-ready/agent-skills': 'off',
+      'agent-ready/agents-md': 'enforced',
       'agent-ready/commands-documented': 'off',
       'agent-ready/single-test-command': 'off',
       'agent-ready/verify-hook': 'off',
