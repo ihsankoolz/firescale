@@ -463,4 +463,25 @@ describe('the step cache stays inside the repo', () => {
       expect(await readdir(outside.root)).toEqual([]);
     },
   );
+  // A junction on Windows, which needs no privilege; a symbolic link elsewhere.
+  it('writes nothing through a .firescale that is a link to a folder outside the repo', async () => {
+    const { repo, ran } = await loggingRepo();
+    const outside = await fixtures.create({ files: {}, track: 'no-git' });
+    await symlink(outside.root, path.join(repo.root, '.firescale'), 'junction');
+    const refused =
+      '.firescale is a symbolic link, and firescale reads and writes nothing through one. Remove the link: a real folder or file is made in its place.';
+
+    const check = await runCli(['check'], repo.root, {});
+    expect(await readdir(outside.root)).toEqual([]);
+    expect(check.stderr).toBe(`warning: ${refused}\n`);
+
+    for (const run of [1, 2]) {
+      const verify = await runCli(['verify'], repo.root, { FSCALE_LOG: 'cache' });
+      expect(verify.code, `run ${run}`).toBe(EXIT_OK);
+      expect(await readdir(outside.root)).toEqual([]);
+      expect(verify.stderr).toContain(refused);
+    }
+    // Nothing was served from a cache: every step ran both times.
+    expect(await ran()).toEqual(['lint', 'typecheck', 'test', 'lint', 'typecheck', 'test']);
+  });
 });

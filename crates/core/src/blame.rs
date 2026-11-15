@@ -2102,6 +2102,37 @@ mod tests {
     use super::*;
     use crate::testing::{Fixture, Track};
 
+    #[cfg(unix)]
+    #[test]
+    fn a_base_result_is_never_kept_or_read_through_a_symlinked_folder() {
+        for linked in [".firescale", ".firescale/base"] {
+            let fixture = Fixture::new(&[("a.txt", "one\n")], Track::NoGit).unwrap();
+            let root = fixture.root();
+            // A real store elsewhere, with a result in it.
+            let other = Fixture::new(&[("a.txt", "one\n")], Track::NoGit).unwrap();
+            keep(other.root(), "k", BaseStatus::Passed, 1, &[], None);
+            assert!(lookup(other.root(), "k").is_some());
+            let target = if linked == ".firescale" {
+                other.root().join(".firescale")
+            } else {
+                store_dir(other.root())
+            };
+            let link = linked
+                .split('/')
+                .fold(root.to_path_buf(), |path, part| path.join(part));
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            keep(root, "k2", BaseStatus::Passed, 1, &[], None);
+            let mut names: Vec<String> = fs::read_dir(store_dir(other.root()))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            assert_eq!(names, ["k.json"], "{linked}");
+            assert!(lookup(root, "k").is_none(), "{linked}");
+        }
+    }
+
     fn git(root: &Path, args: &[&str]) {
         let mut full = vec![
             "-c",
