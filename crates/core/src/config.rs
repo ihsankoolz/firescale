@@ -313,6 +313,16 @@ pub fn resolve_config<'a>(
                 "{name}: \"protectedPaths\" holds \"{glob}\", which is not a valid glob ({why}) and would protect nothing. Fix the glob, for example \"infra/**\"."
             )));
         }
+        // Nor does one that compiles and can match no path (ADR 0060).
+        if let Some(works) = crate::agentrun::unmatchable_glob(glob) {
+            let write = works.map_or_else(
+                || "Write it that way, for example \"infra/**\".".to_owned(),
+                |works| format!("Write \"{works}\"."),
+            );
+            return Err(Error::user(format!(
+                "{name}: \"protectedPaths\" holds \"{glob}\", which can match no path and would protect nothing: a path is compared as git prints it, from the repo root, with no \"./\" or \"/\" in front, no \"..\" and no \"/\" at the end. {write}"
+            )));
+        }
     }
 
     let verify = parse_verify(name, object.get("verify"))?;
@@ -679,7 +689,52 @@ pub fn load_config<'a>(
     } else {
         (Value::Object(Map::new()), None)
     };
-    resolve_config(&raw, file, builtin, &mut |specs| host.describe_packs(specs))
+    let config = resolve_config(&raw, file, builtin, &mut |specs| host.describe_packs(specs))?;
+    // A name with no wildcard names one file. Where it is a folder, no file
+    // in the folder would be protected (ADR 0060).
+    for glob in &config.protected_paths {
+        if crate::agentrun::is_plain_path(glob) && names_a_folder(root, glob) {
+            return Err(Error::user(format!(
+                "{}: \"protectedPaths\" holds \"{glob}\", which is a folder. A name with no wildcard names one file, so no file in the folder would be protected. Write \"{}/**\".",
+                file.unwrap_or("config"),
+                glob.replace('\\', "/")
+            )));
+        }
+    }
+    Ok(config)
+}
+
+/// True when the plain path `name` is a folder below `root` and no file.
+/// Names are compared without regard to case, as the guards compare paths
+/// (`agentrun::normalise`), so the answer is the same on every system. A
+/// symbolic link is not a folder here: it is one path in a diff.
+fn names_a_folder(root: &Path, name: &str) -> bool {
+    let parts: Vec<String> = name.split(['/', '\\']).map(str::to_lowercase).collect();
+    let mut folders = vec![root.to_path_buf()];
+    for (index, part) in parts.iter().enumerate() {
+        let mut next = Vec::new();
+        let mut file = false;
+        for folder in &folders {
+            let Ok(entries) = std::fs::read_dir(folder) else {
+                continue;
+            };
+            for entry in entries.filter_map(std::result::Result::ok) {
+                if entry.file_name().to_string_lossy().to_lowercase() != *part {
+                    continue;
+                }
+                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    next.push(entry.path());
+                } else {
+                    file = true;
+                }
+            }
+        }
+        if index + 1 == parts.len() {
+            return !next.is_empty() && !file;
+        }
+        folders = next;
+    }
+    false
 }
 
 /// Reads only the `verify` settings, never starting Node: for
@@ -973,6 +1028,26 @@ mod tests {
                 "a protectedPaths glob with a brace left open, written with a backslash",
                 json!({ "protectedPaths": ["src\\{app,lib.js"] }),
                 "\"protectedPaths\" holds \"src\\{app,lib.js\", which is not a valid glob".into(),
+            ),
+            (
+                "a protectedPaths glob that starts with ./",
+                json!({ "protectedPaths": ["./infra/**"] }),
+                "\"protectedPaths\" holds \"./infra/**\", which can match no path and would protect nothing: a path is compared as git prints it, from the repo root, with no \"./\" or \"/\" in front, no \"..\" and no \"/\" at the end. Write \"infra/**\".".into(),
+            ),
+            (
+                "a protectedPaths glob that starts with /",
+                json!({ "protectedPaths": ["infra/**", "/infra/**"] }),
+                "\"protectedPaths\" holds \"/infra/**\", which can match no path and would protect nothing".into(),
+            ),
+            (
+                "a protectedPaths folder written with a slash at the end",
+                json!({ "protectedPaths": ["infra/"] }),
+                "Write \"infra/**\".".into(),
+            ),
+            (
+                "a protectedPaths glob that leaves the repo",
+                json!({ "protectedPaths": ["../infra/**"] }),
+                "\"protectedPaths\" holds \"../infra/**\", which can match no path and would protect nothing: a path is compared as git prints it, from the repo root, with no \"./\" or \"/\" in front, no \"..\" and no \"/\" at the end. Write it that way, for example \"infra/**\".".into(),
             ),
         ];
         for (name, raw, message) in cases {

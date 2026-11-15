@@ -171,7 +171,19 @@ pub fn repo_limits(root: &Path) -> RepoLimits {
                             .trim_end_matches(')')
                             .trim_start_matches("./")
                             .trim_start_matches('/');
-                        if !glob.is_empty() {
+                        // A rule about paths outside the repo (`Read(../**)`)
+                        // says nothing about a path in it: the diff guard
+                        // sees only the repo, so there is nothing to protect.
+                        // The agent still gets the rule, in `denied`.
+                        let outside = glob.split(['/', '\\']).any(|part| part == "..");
+                        if glob.is_empty() || outside {
+                            continue;
+                        }
+                        // Claude Code reads a rule that ends with `/` as the
+                        // folder and all in it (ADR 0060).
+                        if glob.ends_with(['/', '\\']) {
+                            limits.denied_paths.push(format!("{glob}**"));
+                        } else {
                             limits.denied_paths.push(glob.to_owned());
                         }
                     }
@@ -566,6 +578,42 @@ pub fn glob_error(glob: &str) -> Option<String> {
         .map(|error| error.kind().to_string())
 }
 
+/// For a glob that compiles and still can name no path: `Some`, holding
+/// the form that works when one can be worked out. `None` for a glob that
+/// can match. The guards compare repo-relative paths as git prints them
+/// (`infra/main.tf`), so a glob with an empty, `.` or `..` part (`./infra/**`,
+/// `/infra/**`, `infra/`, `../x`) names nothing: as a protected path it
+/// would protect nothing (ADR 0060).
+#[must_use]
+pub fn unmatchable_glob(glob: &str) -> Option<Option<String>> {
+    let glob = glob.replace('\\', "/");
+    let parts: Vec<&str> = glob.split('/').collect();
+    if !parts.iter().any(|part| matches!(*part, "" | "." | "..")) {
+        return None;
+    }
+    let mut kept: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|part| !matches!(*part, "" | "."))
+        .collect();
+    if kept.is_empty() || kept.contains(&"..") {
+        return Some(None);
+    }
+    // Written as a folder: what is meant is everything in it.
+    if matches!(parts.last(), Some(&("" | "."))) && kept.last() != Some(&"**") {
+        kept.push("**");
+    }
+    Some(Some(kept.join("/")))
+}
+
+/// True for a glob with no wildcard, class or group: it names one path.
+/// As a protected path it names one file, and nothing in a folder of that
+/// name.
+#[must_use]
+pub fn is_plain_path(glob: &str) -> bool {
+    !glob.contains(['*', '?', '[', '{'])
+}
+
 /// The glob that names exactly `path` and nothing else. A file a violation
 /// names is a path, not a glob: read as one, `app/[id]/page.tsx` names
 /// `app/i/page.tsx` and not the file itself.
@@ -690,8 +738,13 @@ pub const LEDGER: &str = ".firescale/ledger.jsonl";
 ///
 /// # Errors
 ///
-/// When the file cannot be written.
+/// When the file cannot be written, or when `.firescale` or the ledger in
+/// it is a symbolic link: a line is never appended to a file outside the
+/// repo (ADR 0060).
 pub fn append_ledger(root: &Path, entry: &LedgerEntry) -> Result<()> {
+    if let Some(link) = crate::ownfolder::linked(root, &["ledger.jsonl"]) {
+        return Err(Error::user(crate::ownfolder::refusal(&link)));
+    }
     let path = root.join(".firescale").join("ledger.jsonl");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -1044,6 +1097,58 @@ mod tests {
         for glob in SECRET_PATHS.iter().chain(&PROTECTED_PATHS) {
             assert_eq!(glob_error(glob), None, "{glob}");
         }
+    }
+
+    #[test]
+    fn a_glob_that_can_match_no_path_is_named_with_the_form_that_works() {
+        // Each compiles, and names no path git can print.
+        for (glob, works) in [
+            ("./infra/**", Some("infra/**")),
+            ("/infra/**", Some("infra/**")),
+            (".\\Infra\\**", Some("Infra/**")),
+            ("infra/", Some("infra/**")),
+            ("infra//main.tf", Some("infra/main.tf")),
+            ("infra/./main.tf", Some("infra/main.tf")),
+            ("../infra/**", None),
+            ("infra/../secrets/**", None),
+            ("", None),
+            ("/", None),
+            (".", None),
+        ] {
+            assert_eq!(glob_error(glob), None, "{glob}");
+            // What the guards do with it: nothing.
+            for path in ["infra/main.tf", "infra", "main.tf", "secrets/a", "Infra/x"] {
+                assert!(!matches_any(path, &[glob.to_owned()]), "{glob} {path}");
+            }
+            assert_eq!(
+                unmatchable_glob(glob),
+                Some(works.map(str::to_owned)),
+                "{glob}"
+            );
+        }
+        // These can match a path.
+        for glob in [
+            "infra/**",
+            "infra\\**",
+            "infra",
+            "Makefile",
+            ".env",
+            ".github/**",
+            "..data/x",
+            "a/.../b",
+            "**/x",
+            "*",
+        ] {
+            assert_eq!(unmatchable_glob(glob), None, "{glob}");
+        }
+        for glob in SECRET_PATHS.iter().chain(&PROTECTED_PATHS) {
+            assert_eq!(unmatchable_glob(glob), None, "{glob}");
+        }
+        // A name with no wildcard is one file: it names nothing in a folder.
+        assert!(matches_any("infra", &["infra".to_owned()]));
+        assert!(!matches_any("infra/main.tf", &["infra".to_owned()]));
+        assert!(is_plain_path("infra") && is_plain_path("src/app"));
+        assert!(!is_plain_path("infra/**") && !is_plain_path("a/[[]id]") && !is_plain_path("a?"));
     }
 
     #[test]

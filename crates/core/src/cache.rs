@@ -156,6 +156,9 @@ impl RepoSnapshot {
 /// Reads and writes cache entries for one repo.
 pub struct Cache {
     dir: PathBuf,
+    /// `.firescale` or `.firescale/cache` when that is a symbolic link: the
+    /// cache is then somewhere else, and is neither read nor written.
+    linked: Option<String>,
 }
 
 impl Cache {
@@ -165,6 +168,7 @@ impl Cache {
             dir: CACHE_DIR
                 .iter()
                 .fold(root.to_path_buf(), |path, part| path.join(part)),
+            linked: crate::ownfolder::linked(root, &CACHE_DIR[1..]),
         }
     }
 
@@ -177,6 +181,9 @@ impl Cache {
     /// unreadable or outdated entry is a miss, never an error.
     #[must_use]
     pub fn get(&self, rule_id: &str, key: &str) -> Option<Vec<Diagnostic>> {
+        if self.linked.is_some() {
+            return None;
+        }
         let text = fs::read_to_string(self.entry_path(rule_id)).ok()?;
         let entry: Entry = serde_json::from_str(&text).ok()?;
         (entry.key == key).then_some(entry.diagnostics)
@@ -190,6 +197,9 @@ impl Cache {
                 self.dir.display()
             ))
         };
+        if let Some(link) = &self.linked {
+            return Err(Error::user(crate::ownfolder::refusal(link)));
+        }
         fs::create_dir_all(&self.dir).map_err(failed)?;
         if let Some(parent) = self.dir.parent() {
             let ignore = parent.join(".gitignore");

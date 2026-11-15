@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, symlink } from 'node:fs/promises';
+import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -100,5 +101,19 @@ describe('fscale ledger', () => {
     const result = await runCli(['ledger', 'extra'], root);
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toContain('ledger takes no arguments');
+  });
+  // A junction on Windows, which needs no privilege; a symbolic link elsewhere.
+  it('reads no ledger through a .firescale that is a link', async () => {
+    const outside = await repo(LEDGER);
+    const root = await repo(undefined);
+    await symlink(path.join(outside, '.firescale'), path.join(root, '.firescale'), 'junction');
+    for (const args of [['ledger'], ['ledger', '--json']]) {
+      const result = await runCli(args, root);
+      expect(result.code).toBe(EXIT_USAGE);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(
+        'fscale: .firescale is a symbolic link, and firescale reads and writes nothing through one. Remove the link: a real folder or file is made in its place.\n',
+      );
+    }
   });
 });

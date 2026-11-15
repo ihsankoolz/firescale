@@ -1313,6 +1313,10 @@ fn ledger_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> 
             extra.join(" ")
         )));
     }
+    // Never read through a symbolic link (ADR 0060).
+    if let Some(link) = firescale_core::ownfolder::linked(root, &["ledger.jsonl"]) {
+        return Err(Error::user(firescale_core::ownfolder::refusal(&link)));
+    }
     let path = root.join(".firescale").join("ledger.jsonl");
     let text = match std::fs::read(&path) {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
@@ -1540,24 +1544,52 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             let bin = args.bin.as_deref().unwrap_or("fscale");
             let mut out = String::new();
             let mut notes = Vec::new();
+            let mut cursor_note = None;
+            let mut ready = Vec::new();
+            let mut refused = Vec::new();
             for agent in agents {
-                let changed = install_hook(root, agent, bin)?;
-                out.push_str(&format!(
-                    "{:<17} {}\n",
-                    if changed { "installed" } else { "already installed" },
-                    agent.config_file()
-                ));
-                if agent == Agent::Cursor && changed {
-                    notes.push(
+                let state = match install_hook(root, agent, bin) {
+                    Ok(true) => "installed",
+                    Ok(false) => "already installed",
+                    // With --all, a file that is refused does not stop the
+                    // others: each is tried, and the output says which were
+                    // written and which were not (ADR 0060).
+                    Err(Error::User(message)) if args.all => {
+                        notes.push(format!("fscale: {message}"));
+                        refused.push(agent.config_file());
+                        "refused"
+                    }
+                    Err(error) => return Err(error),
+                };
+                out.push_str(&format!("{state:<17} {}\n", agent.config_file()));
+                if state != "refused" {
+                    ready.push(agent.config_file());
+                }
+                if agent == Agent::Cursor && state == "installed" {
+                    cursor_note = Some(
                         "note: the Cursor hook format could not be checked against Cursor's docs when this was written. Confirm that .cursor/hooks.json matches your Cursor version."
                             .to_owned(),
                     );
                 }
             }
+            notes.extend(cursor_note);
+            if refused.is_empty() {
+                out.push_str(&format!(
+                    "\nEach agent now runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n"
+                ));
+                return Ok(Output { stdout: out, notes, code: EXIT_OK });
+            }
             out.push_str(&format!(
-                "\nEach agent now runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n"
+                "\nNot every hook is installed. Refused and left as it was: {}. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.\n",
+                refused.join(", ")
             ));
-            Ok(Output { stdout: out, notes, code: EXIT_OK })
+            if !ready.is_empty() {
+                out.push_str(&format!(
+                    "The hook is in {}: there the agent runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n",
+                    ready.join(", ")
+                ));
+            }
+            Ok(Output { stdout: out, notes, code: EXIT_USAGE })
         }
         [action] if action == "run" => {
             let Some(name) = &args.agent else {

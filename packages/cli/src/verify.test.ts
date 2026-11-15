@@ -1,4 +1,4 @@
-import { chmod, readFile, writeFile } from 'node:fs/promises';
+import { chmod, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
@@ -585,11 +585,22 @@ describe('fscale verify in a repo with projects in subfolders', () => {
   });
 
   it('rejects a project folder that does not exist, and a malformed projects section', async () => {
-    const missing = await courseProject({ verify: { projects: { 'backend/nope': false } } });
-    const result = await runCli(['verify'], missing.repo.root, missing.env());
+    // One fixture for the seven cases: each writes its own config into it.
+    // Building seven repos, and seven folders of stand-in tools, took this
+    // test to its 30 s limit on a Windows runner once. No case gets as far as
+    // a step, so none leaves anything behind for the next (asserted below).
+    const project = await courseProject();
+    const verifyWith = async (projects: object) => {
+      await writeFile(
+        path.join(project.repo.root, 'firescale.config.json'),
+        JSON.stringify({ verify: { projects } }),
+      );
+      return runCli(['verify'], project.repo.root, project.env());
+    };
+    const result = await verifyWith({ 'backend/nope': false });
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toContain('verify.projects names "backend/nope"');
-    expect(await missing.calls()).toEqual([]);
+    expect(await project.calls()).toEqual([]);
 
     for (const [projects, message] of [
       [{ '../other': false }, 'must be a folder inside the repo'],
@@ -599,11 +610,14 @@ describe('fscale verify in a repo with projects in subfolders', () => {
       [{ frontend: { tests: 'x' } }, 'unknown verify step "tests"'],
       [{ frontend: { test: 5 } }, 'verify.projects["frontend"].test must be a command'],
     ] as const) {
-      const bad = await courseProject({ verify: { projects } });
-      const wrong = await runCli(['verify'], bad.repo.root, bad.env());
-      expect(wrong.code).toBe(EXIT_USAGE);
+      const wrong = await verifyWith(projects);
+      expect(wrong.code, message).toBe(EXIT_USAGE);
       expect(wrong.stderr).toContain(message);
+      expect(wrong.stdout, message).toBe('');
     }
+    // Nothing ran in any case, and no case left a cache for the next.
+    expect(await project.calls()).toEqual([]);
+    expect(await readdir(project.repo.root)).not.toContain('.firescale');
   });
 
   it('does not say OK when a project is missing from the plan', async () => {

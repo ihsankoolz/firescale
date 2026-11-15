@@ -4,15 +4,15 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**A run is in progress (2026-11-15, started 09:50 UTC): 0.5.1, fixes after running 0.5.0 on the course project.** Five pull requests, in order, each pushed to the session's one branch and merged on green:
+**A run is in progress (2026-11-15, started 09:50 UTC, paused 11:25 UTC, taken up again the same day): 0.5.1, fixes after running 0.5.0 on the course project.** Five pull requests, each merged on green:
 
-1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Being built.**
-2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Being built.**
-3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). **In its pull request, the first to be ready.**
-4. Leftovers from "Found while fixing" (ADR 0060). **Being built.**
+1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Built on branch `pr1-slow-steps`, in review. Not merged.**
+2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Built on branch `pr2-config-affects`; two review findings are being fixed. Not merged.**
+3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). **Merged, [#54](https://github.com/ihsankoolz/firescale/pull/54).**
+4. Leftovers from "Found while fixing" (ADR 0060). **Merged with this pull request.**
 5. Version 0.5.1 and docs. **Not started.**
 
-If this run stopped early: `git log main` shows which pull requests merged; unmerged work is on `claude/quirky-cannon-20uxi6`. Do not start M36 or the project-type table.
+If this run stopped early: `git log main` shows which pull requests merged; unmerged work is on the branches `pr1-slow-steps` and `pr2-config-affects`. Do not start M36 or the project-type table.
 
 Before this run: the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
 

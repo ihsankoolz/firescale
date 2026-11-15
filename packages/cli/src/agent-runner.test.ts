@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
@@ -558,6 +558,77 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
       const guarded = await fix(closed, edit);
       expect(guarded.code).toBe(EXIT_VIOLATIONS);
       expect(guarded.stdout).toContain('protected path src/app.js');
+    });
+
+    // A junction on Windows, which needs no privilege; a symbolic link elsewhere.
+    it('a .firescale that is a link stops the run before the agent starts: the ledger is never written through it', async () => {
+      const root = await repo();
+      const outside = await mkdtemp(path.join(os.tmpdir(), 'fscale-outside-'));
+      scratch.push(outside);
+      await symlink(outside, path.join(root, '.firescale'), 'junction');
+      const result = await fix(root, GOOD);
+      expect(result.code, result.stdout).toBe(EXIT_USAGE);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(
+        'fscale: .firescale is a symbolic link, and firescale reads and writes nothing through one. Remove the link: a real folder or file is made in its place.\n',
+      );
+      expect(result.requests).toEqual([]);
+      expect(await readdir(outside)).toEqual([]);
+      expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
+    });
+
+    it('a protected glob that can match no path stops the run: it would protect nothing', async () => {
+      const edit: Scenario = { ...GOOD, write: { ...GOOD.write, 'src/app.js': APP + '// x\n' } };
+      const withProtected = (globs: string[]) => ({
+        'firescale.config.json': `${JSON.stringify({ ...(JSON.parse(config()) as object), protectedPaths: globs })}\n`,
+      });
+      const settings = (rule: string) => ({
+        '.claude/settings.json': JSON.stringify({ permissions: { deny: [rule] } }),
+      });
+      // Eleven cases, each a fresh repo and a run of the real binary. They share
+      // nothing, so they run side by side: one after the other they passed the
+      // 30 s limit on Windows.
+      const refused = (
+        [
+          [withProtected(['./src/**']), 'firescale.config.json', './src/**'],
+          [withProtected(['/src/**']), 'firescale.config.json', '/src/**'],
+          [withProtected(['src']), 'firescale.config.json', 'src'],
+          [settings('Edit(src/./**)'), '.claude/settings.json', 'src/./**'],
+        ] as const
+      ).map(async ([files, where, glob]) => {
+        const root = await repo(files);
+        const result = await fix(root, edit);
+        expect(result.code, glob + result.stdout).toBe(EXIT_USAGE);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(where);
+        expect(result.stderr).toContain(`"${glob}"`);
+        expect(result.stderr).toContain('protect');
+        expect(result.stderr).toContain('"src/**"');
+        // The agent never ran, and nothing is left of a run.
+        expect(result.requests).toEqual([]);
+        expect(await ledger(root)).toEqual([]);
+        expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
+      });
+      // A settings rule that starts with ./ or / is read from the repo root, and
+      // one that ends with / is a folder, as Claude Code reads it: each protects.
+      const protects = ['Edit(./src/**)', 'Edit(/src/**)', 'Edit(src/)', 'Read(./src/)'].map(
+        async (rule) => {
+          const guarded = await fix(await repo(settings(rule)), edit);
+          expect(guarded.code, rule).toBe(EXIT_VIOLATIONS);
+          expect(guarded.stdout).toContain('protected path src/app.js');
+        },
+      );
+      // A settings rule about paths outside the repo is valid for Claude Code and
+      // says nothing about a path in the repo: the run goes on, and the agent
+      // still gets the rule as it is written.
+      const goesOn = ['Read(../**)', 'Edit(../shared/**)', 'Read(~/.ssh/**)'].map(async (rule) => {
+        const outside = await fix(await repo(settings(rule)), GOOD);
+        expect(outside.stderr, rule).toBe('');
+        expect(outside.code, rule).toBe(EXIT_OK);
+        expect(outside.requests[0]?.request.policy.deniedCommands).toContain(rule);
+        expect(outside.requests[0]?.request.policy.deniedPaths.join(' ')).not.toContain('..');
+      });
+      await Promise.all([...refused, ...protects, ...goesOn]);
     });
 
     // A file a violation names is a path, not a glob: `app/[id]/page.tsx`

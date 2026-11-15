@@ -205,6 +205,25 @@ impl SharedCache {
         self.run.writes()
     }
 
+    /// `.firescale`, or any folder from it down to this one, when that is
+    /// a symbolic link: the records are then somewhere else, and are not
+    /// read, written or pruned (ADR 0060). A folder that is not in
+    /// `.firescale` is the caller's own choice and is used as given.
+    fn linked(&self) -> Option<String> {
+        let mut below = Vec::new();
+        let mut at = self.dir.as_path();
+        loop {
+            let name = at.file_name()?.to_str()?;
+            let parent = at.parent()?;
+            if name == crate::ownfolder::DIR {
+                below.reverse();
+                return crate::ownfolder::linked(parent, &below);
+            }
+            below.push(name);
+            at = parent;
+        }
+    }
+
     fn path(&self, key: &str) -> PathBuf {
         self.dir.join(format!("{key}.json"))
     }
@@ -252,6 +271,9 @@ impl SharedCache {
         if !is_key(key) {
             return Err("the key is not a digest".to_owned());
         }
+        if let Some(link) = self.linked() {
+            return Err(crate::ownfolder::refusal(&link));
+        }
         let text = fs::read_to_string(self.path(key)).map_err(|_| "no record".to_owned())?;
         let record: Record =
             serde_json::from_str(&text).map_err(|_| "the record cannot be read".to_owned())?;
@@ -288,6 +310,9 @@ impl SharedCache {
             output_digest: output_digest.to_owned(),
             writer: self.run.writer.clone(),
         };
+        if let Some(link) = self.linked() {
+            return Err(crate::ownfolder::refusal(&link));
+        }
         fs::create_dir_all(&self.dir).map_err(|error| error.to_string())?;
         let text = serde_json::to_string(&record).map_err(|error| error.to_string())?;
         let temp = self.dir.join(format!(".{key}.{}.tmp", std::process::id()));
@@ -306,7 +331,7 @@ impl SharedCache {
     /// given by mistake loses nothing that is not a record. Returns how
     /// many files were removed.
     pub fn prune(&self) -> usize {
-        if !self.writes() {
+        if !self.writes() || self.linked().is_some() {
             return 0;
         }
         let Ok(entries) = fs::read_dir(&self.dir) else {
@@ -504,6 +529,51 @@ mod tests {
         record.result = "passed".to_owned();
         put(&record);
         assert!(pull.lookup(KEY).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_is_read_written_or_pruned_through_a_symlinked_firescale_folder() {
+        // The folder may be nested: `--shared-cache .firescale/shared/linux`.
+        for (linked, folder) in [
+            (".firescale", "shared"),
+            (".firescale/shared", "shared"),
+            (".firescale", "shared/linux"),
+            (".firescale/shared", "shared/linux"),
+            (".firescale/shared/linux", "shared/linux"),
+        ] {
+            let below = |base: &Path, rel: &str| {
+                rel.split('/')
+                    .fold(base.to_path_buf(), |path, part| path.join(part))
+            };
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().join("repo");
+            // A real shared cache elsewhere, with a record and a file to prune.
+            let other = temp.path().join("other");
+            let records = below(&other.join(".firescale"), folder);
+            let run = ci(temp.path(), "push", "refs/heads/main");
+            SharedCache::new(records.clone(), run.clone())
+                .write(KEY, now_secs(), 1, "d")
+                .unwrap();
+            fs::write(records.join("cd34.json"), "not json").unwrap();
+            let link = below(&root, linked);
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(below(&other, linked), &link).unwrap();
+            let shared = SharedCache::new(below(&root.join(".firescale"), folder), run);
+            assert_eq!(
+                shared.write("ef56", now_secs(), 1, "d").unwrap_err(),
+                format!("{linked} is a symbolic link, and firescale reads and writes nothing through one. Remove the link: a real folder or file is made in its place."),
+                "{folder}"
+            );
+            assert!(shared.lookup(KEY).is_err(), "{linked} {folder}");
+            assert_eq!(shared.prune(), 0, "{linked} {folder}");
+            let mut left: Vec<String> = fs::read_dir(&records)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            left.sort();
+            assert_eq!(left, ["ab12.json", "cd34.json"], "{linked} {folder}");
+        }
     }
 
     #[test]

@@ -9,7 +9,8 @@ use std::time::Instant;
 
 use firescale_core::agentrun::{
     append_ledger, diff_guard, glob_error, literal_glob, now_utc, repo_limits, staged_changes,
-    Adapter, AgentResult, LedgerEntry, Policy, ProgramAdapter, RepoState, Request, RunWorktree,
+    unmatchable_glob, Adapter, AgentResult, LedgerEntry, Policy, ProgramAdapter, RepoState,
+    Request, RunWorktree,
 };
 use firescale_core::blame::BaseCommit;
 use firescale_core::check::run_check;
@@ -173,6 +174,11 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     let adapter = adapter(agent_name)?;
     // 1. Pre-flight: the agent, the tree, the secrets.
     let version_line = adapter.preflight().map_err(Error::user)?;
+    // The run ends with a line in the ledger, which is never written
+    // through a symbolic link (ADR 0060): say so before any work is done.
+    if let Some(link) = firescale_core::ownfolder::linked(root, &["ledger.jsonl"]) {
+        return Err(Error::user(firescale_core::ownfolder::refusal(&link)));
+    }
     preflight_repo(root).map_err(Error::user)?;
     let limits_of_repo = repo_limits(root);
     if let Some(why) = &limits_of_repo.read_only {
@@ -185,6 +191,16 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         if let Some(why) = glob_error(glob) {
             return Err(Error::user(format!(
                 "the repo's own agent settings deny the path \"{glob}\" (permissions.deny or permissions.ask in .claude/settings.json or .claude/settings.local.json), which is not a valid glob ({why}): the run could not protect it. Fix the glob in that rule, then run again."
+            )));
+        }
+        // Nor does one that compiles and can match no path (ADR 0060).
+        if let Some(works) = unmatchable_glob(glob) {
+            return Err(Error::user(format!(
+                "the repo's own agent settings deny the path \"{glob}\" (permissions.deny or permissions.ask in .claude/settings.json or .claude/settings.local.json), which can match no path here: the run compares paths as git prints them, from the repo root, with no \"..\" and no \"/\" at the end, so it could not protect it. {} in that rule, then run again.",
+                works.map_or_else(
+                    || "Write the path that way, for example \"infra/**\",".to_owned(),
+                    |works| format!("Write \"{works}\""),
+                )
             )));
         }
     }

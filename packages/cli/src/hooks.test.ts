@@ -143,6 +143,49 @@ describe('fscale hooks install', () => {
     expect(await read(repo.root, HOOK_FILES.claude)).toBe(minified);
   });
 
+  it('--all tries every file: it writes the ones it can, and says which it refused', async () => {
+    const cases = [
+      // The first file is refused: the two after it must still be written.
+      { refused: ['claude'], content: '{ nope' },
+      // The middle file is refused, for the other reason.
+      { refused: ['codex'], content: '{"hooks":{}}\n' },
+      // Two refusals: each gets its own reason.
+      { refused: ['claude', 'cursor'], content: '{"a":1}\n' },
+    ] as const;
+    for (const { refused, content } of cases) {
+      const label = refused.join(' and ');
+      const files = Object.fromEntries(refused.map((agent) => [HOOK_FILES[agent], content]));
+      const repo = await fixtures.create({ files });
+      const result = await runCli(['hooks', 'install', '--all'], repo.root);
+      expect(result.code, label).toBe(EXIT_USAGE);
+      expect(result.stdout).toMatchSnapshot(`${label}: stdout`);
+      expect(result.stderr).toMatchSnapshot(`${label}: stderr`);
+      for (const [agent, file] of Object.entries(HOOK_FILES)) {
+        const text = await read(repo.root, file);
+        if ((refused as readonly string[]).includes(agent)) {
+          expect(text, `${label}: ${file}`).toBe(content);
+        } else {
+          expect(text, `${label}: ${file}`).toContain(`fscale hooks run --agent ${agent}`);
+        }
+      }
+    }
+  });
+
+  it('--all with every file refused says so, and claims no hook', async () => {
+    const files = Object.fromEntries(Object.values(HOOK_FILES).map((file) => [file, '{"a":1}\n']));
+    const repo = await fixtures.create({ files });
+    const result = await runCli(['hooks', 'install', '--all'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stdout).toBe(
+      'refused           .claude/settings.json\nrefused           .codex/hooks.json\nrefused           .cursor/hooks.json\n\nNot every hook is installed. Refused and left as it was: .claude/settings.json, .codex/hooks.json, .cursor/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.\n',
+    );
+    expect(result.stdout).not.toContain('The hook is in');
+    expect(result.stderr.match(/^fscale: /gm)).toHaveLength(3);
+    for (const file of Object.values(HOOK_FILES)) {
+      expect(await read(repo.root, file)).toBe('{"a":1}\n');
+    }
+  });
+
   it('explains bad usage', async () => {
     const repo = await fixtures.create();
     const none = await runCli(['hooks', 'install'], repo.root);
