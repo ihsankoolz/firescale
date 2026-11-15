@@ -205,6 +205,19 @@ impl SharedCache {
         self.run.writes()
     }
 
+    /// `.firescale`, or this folder in it, when that is a symbolic link:
+    /// the records are then somewhere else, and are not read, written or
+    /// pruned (ADR 0060). A folder that is not in `.firescale` is the
+    /// caller's own choice and is used as given.
+    fn linked(&self) -> Option<String> {
+        let parent = self.dir.parent()?;
+        if parent.file_name()? != crate::ownfolder::DIR {
+            return None;
+        }
+        let name = self.dir.file_name()?.to_str()?;
+        crate::ownfolder::linked(parent.parent()?, &[name])
+    }
+
     fn path(&self, key: &str) -> PathBuf {
         self.dir.join(format!("{key}.json"))
     }
@@ -252,6 +265,9 @@ impl SharedCache {
         if !is_key(key) {
             return Err("the key is not a digest".to_owned());
         }
+        if let Some(link) = self.linked() {
+            return Err(crate::ownfolder::refusal(&link));
+        }
         let text = fs::read_to_string(self.path(key)).map_err(|_| "no record".to_owned())?;
         let record: Record =
             serde_json::from_str(&text).map_err(|_| "the record cannot be read".to_owned())?;
@@ -288,6 +304,9 @@ impl SharedCache {
             output_digest: output_digest.to_owned(),
             writer: self.run.writer.clone(),
         };
+        if let Some(link) = self.linked() {
+            return Err(crate::ownfolder::refusal(&link));
+        }
         fs::create_dir_all(&self.dir).map_err(|error| error.to_string())?;
         let text = serde_json::to_string(&record).map_err(|error| error.to_string())?;
         let temp = self.dir.join(format!(".{key}.{}.tmp", std::process::id()));
@@ -306,7 +325,7 @@ impl SharedCache {
     /// given by mistake loses nothing that is not a record. Returns how
     /// many files were removed.
     pub fn prune(&self) -> usize {
-        if !self.writes() {
+        if !self.writes() || self.linked().is_some() {
             return 0;
         }
         let Ok(entries) = fs::read_dir(&self.dir) else {

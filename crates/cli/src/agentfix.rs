@@ -174,6 +174,11 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     let adapter = adapter(agent_name)?;
     // 1. Pre-flight: the agent, the tree, the secrets.
     let version_line = adapter.preflight().map_err(Error::user)?;
+    // The run ends with a line in the ledger, which is never written
+    // through a symbolic link (ADR 0060): say so before any work is done.
+    if let Some(link) = firescale_core::ownfolder::linked(root, &["ledger.jsonl"]) {
+        return Err(Error::user(firescale_core::ownfolder::refusal(&link)));
+    }
     preflight_repo(root).map_err(Error::user)?;
     let limits_of_repo = repo_limits(root);
     if let Some(why) = &limits_of_repo.read_only {

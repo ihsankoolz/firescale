@@ -726,8 +726,13 @@ pub const LEDGER: &str = ".firescale/ledger.jsonl";
 ///
 /// # Errors
 ///
-/// When the file cannot be written.
+/// When the file cannot be written, or when `.firescale` or the ledger in
+/// it is a symbolic link: a line is never appended to a file outside the
+/// repo (ADR 0060).
 pub fn append_ledger(root: &Path, entry: &LedgerEntry) -> Result<()> {
+    if let Some(link) = crate::ownfolder::linked(root, &["ledger.jsonl"]) {
+        return Err(Error::user(crate::ownfolder::refusal(&link)));
+    }
     let path = root.join(".firescale").join("ledger.jsonl");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
