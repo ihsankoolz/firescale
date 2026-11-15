@@ -5715,6 +5715,18 @@
       "head": {
         "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertThat(add(1, 2))\n            .isEqualTo(3)\n    }\n}\n"
       }
+    },
+    {
+      "name": "kotlin: an AssertJ check moved into with(assertThat(x)) { }",
+      "expect": [],
+      "note": "The check is in the block: assertThat(x) is not alone, its value goes to with.",
+      "base": {
+        "src/main/kotlin/calc/Calc.kt": "package calc\n\nfun add(a: Int, b: Int) = a + b\n",
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertThat(add(1, 2)).isEqualTo(3)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        with(assertThat(add(1, 2))) { isEqualTo(3) }\n    }\n}\n"
+      }
     }
   ]
 }

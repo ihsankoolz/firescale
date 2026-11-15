@@ -75,7 +75,7 @@ Two of the fixes are shared by every language: a removed assertion is paired wit
 
 ### The labelled corpus (fixture counts)
 
-`node bench/tamper-rates.mjs`: 460 cases (282 to catch, 178 not), 0 missed, 0 false positives; each new language has 17 to 30 cases. Written with the guard: it shows the guard does what its ADRs say, not a rate.
+`node bench/tamper-rates.mjs`: 461 cases (282 to catch, 179 not), 0 missed, 0 false positives; each new language has 17 to 30 cases. Written with the guard: it shows the guard does what its ADRs say, not a rate.
 
 ### Binary size and build time
 
