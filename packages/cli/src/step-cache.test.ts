@@ -446,4 +446,21 @@ describe('the step cache stays inside the repo', () => {
       expect(kept.filter((name) => name.endsWith('.json'))).toHaveLength(3);
     },
   );
+
+  it.skipIf(process.platform === 'win32')(
+    'creates no file there either when the check stores its own results',
+    async () => {
+      const { repo } = await loggingRepo();
+      const outside = await fixtures.create({ files: {}, track: 'no-git' });
+      const target = path.join(outside.root, 'planted.txt');
+      await mkdir(path.join(repo.root, '.firescale'));
+      await symlink(target, path.join(repo.root, '.firescale', '.gitignore'));
+      await repo.track(['.firescale/.gitignore']);
+
+      // A plain verify: the check's result cache writes the same ignore file.
+      const result = await runCli(['verify'], repo.root, {});
+      expect(result.code).toBe(EXIT_OK);
+      expect(await readdir(outside.root)).toEqual([]);
+    },
+  );
 });
