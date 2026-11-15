@@ -77,6 +77,33 @@ The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. 
 
 **Found while fixing, not fixed:** **`fscale hooks install --all` stops at the first file it refuses**, after writing the ones before it and without saying so; the files after it are not tried (this was already so for a file that is not valid JSON, and a minified file now reaches it); a settings file that holds only blank space or a byte order mark is still replaced; `supabase/package-json`'s SKILL.md does not mention the other-stack case; a repo of another language with no manifest (only `.py` files) still gets a `package.json`; `hooks install` still prints "the Cursor hook format could not be checked" though ADR 0027 confirmed it.
 
+**Pull request 5: version 0.5.0**
+
+The version is 0.5.0 in `Cargo.toml`, `Cargo.lock` and every `package.json` (`node scripts/bump-version.mjs 0.5.0`). No tag was pushed. One snapshot changed with it: the generated `tamper-guard.yml` pins `firescale@0.5.0`.
+
+**Found while writing this, not fixed:** `packages/cli/schemas/verify-output.schema.json` lists five tamper kinds; the code can emit six more (`coverage-lowered`, `ci-weakened`, `no-verify`, `rule-disabled`, `snapshot-changed`, `expected-changed`), so `verify --json` output holding one of those does not validate against the shipped schema.
+
+## 0.5.0 on the course project: what you should see change
+
+Compared with 0.4.0, which is npm's latest and was tagged before M24. So 0.5.0 brings M24 to M35 and the audit bug fixes at once. Each line was checked against the code at 0.5.0 and against tag `v0.4.0`; nothing here was run on the course project. Most likely to be noticed first.
+
+1. **The first `fscale verify` runs every step again**, and the base run for the four failing Vitest tests happens once more. The version is part of every cache key. No line says so; the second run is cached as before.
+2. **`npx firescale` downloads a larger binary.** The sizes are in the next section.
+3. **The tamper guard reads Python.** With a base, a change that deletes or skips a pytest test, or removes an `assert`, gives `test deleted`, `test skipped` or `assertion removed`. It is still report-only: `verify: OK - tamper guard: N report-only findings`, same exit code (M24).
+4. **A new kind, `suppression added`**, for a new `# noqa`, `# type: ignore`, `eslint-disable` or `@ts-ignore` in any changed source file, with the line `Lint suppressions in the changed files: X on the base, Y now.` (M24).
+5. **More tamper kinds and a longer intro line**: `coverage lowered`, `CI weakened`, `hooks skipped` (also when the fscale stop hook leaves `.claude` settings), `rule turned off`. `snapshot changed` and `expected value changed` end with `[needs a person's approval, given in the pull request; it does not block here]` (M25, M26).
+6. **Frontend tamper counts can differ.** An assertion that cannot fail (`expect(true).toBe(true)`) or never runs no longer counts, and a test with an empty body counts as skipped (M24).
+7. **The stop hook can block where 0.4.0 let the agent stop.** A finding on a repo-level file (`AGENTS.md`, `.env.example`, `.github/`) is kept when the change touches a file its rule reads. Example: a new script in `frontend/package.json` leaves `AGENTS.md` out of date, and the hook exits 2. An old repo-level finding shows too, marked `[pre-existing]` when the base has it (bug 1).
+8. **If `agent-ready` is on: one skill is out of date.** `fscale check` reports `firescale-agent-ready-verify-hook` in each agent's skills folder, and `fscale sync --check` exits 1 until `fscale sync` rewrites it (bug 6 changed its text).
+9. **If `.github/workflows/ci.yml` is firescale's unedited starter**, `core/ci-exists` reports that a newer one exists, and `fscale sync` would also add `tamper-guard.yml`. A workflow you wrote or edited gives no finding (M25, M26).
+10. **`fscale hooks install` on your hand-made `.claude/settings.json`** adds the hook as new lines, first in the Stop list, and changes no line of yours. A file written on one line is refused, with the item to add by hand; 0.4.0 rewrote it (bug 6).
+11. **Heartbeat lines hide more.** A failed login reads `password authentication failed for user "***"`, and a `password=` value shows as `***` (bug 3).
+12. **New in `fscale --help`:** `fscale tamper`, `fscale ledger`, `fscale fix --agent <name>`, `--pr-base`, `--head`, `--approvals` (M25, M27, M28).
+13. **`verify --json`** keeps schema version 6. `tamper.counts` gains `baseSuppressions` and `headSuppressions`, and `findings[].kind` has eleven possible values.
+14. **Config:** a `protectedPaths` glob that does not compile stops every command with a message that names it (bug 8). `agent` and `verify.tamper` as an object are accepted.
+
+Probably not seen in this run: the five new opt-in packs (off unless in `packs`); the new project kinds, unless a folder holds a Java, Swift, C, .NET, Dart or Go project, or a lone `Makefile` with a `test` target, which now counts as a `make` project; the tamper guard's eight new languages; bugs 2, 4, 5, 7, 9, 11, 12, 13, 14, 17 and 20; and fewer stale cached passes of `agents-md` and `agent-permissions` (bug 10).
+
 ## Review of the long run
 
 M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
