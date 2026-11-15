@@ -586,6 +586,88 @@ mod tests {
         );
     }
 
+    /// The repo and the step of a writer process of the test below. Set
+    /// only for the processes that test starts.
+    const WRITER_ROOT: &str = "FSCALE_TEST_STEP_TIMES_ROOT";
+    const WRITER_STEP: &str = "FSCALE_TEST_STEP_TIMES_STEP";
+    const WRITERS: usize = 4;
+    const WRITES: u64 = 100;
+
+    /// One verify among several: it keeps the time of its own step, over
+    /// and over. Does nothing in a normal test run.
+    #[test]
+    fn writer_process() {
+        let (Ok(root), Ok(step)) = (std::env::var(WRITER_ROOT), std::env::var(WRITER_STEP)) else {
+            return;
+        };
+        let times = StepTimes::new(Path::new(&root));
+        for millis in 1..=WRITES {
+            times.record(
+                None,
+                &step,
+                "cmd",
+                Duration::from_millis(millis),
+                Outcome::Passed,
+            );
+        }
+    }
+
+    #[test]
+    fn verify_runs_at_the_same_time_keep_each_others_records() {
+        if std::env::var(WRITER_ROOT).is_ok() {
+            return;
+        }
+        let (temp, times) = times();
+        // A step none of them runs: its time must still be there at the end.
+        times.record(
+            Some("backend/slow"),
+            "test",
+            "pytest",
+            HOUR,
+            Outcome::Passed,
+        );
+        let writers: Vec<std::process::Child> = (0..WRITERS)
+            .map(|n| {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "steptimes::tests::writer_process"])
+                    .env(WRITER_ROOT, temp.path())
+                    .env(WRITER_STEP, format!("step{n}"))
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for mut writer in writers {
+            assert!(writer.wait().unwrap().success());
+        }
+        // Every process's last write is in the file.
+        let kept: Vec<Option<u128>> = (0..WRITERS)
+            .map(|n| {
+                times
+                    .last(None, &format!("step{n}"), "cmd")
+                    .unwrap()
+                    .map(|known| known.duration.as_millis())
+            })
+            .collect();
+        assert_eq!(kept, vec![Some(u128::from(WRITES)); WRITERS]);
+        assert_eq!(
+            times.last(Some("backend/slow"), "test", "pytest"),
+            Ok(Some(Known {
+                duration: HOUR,
+                finished: true
+            }))
+        );
+        // Nothing is left beside the file: no lock, no half-written file.
+        let mut left: Vec<String> = fs::read_dir(temp.path().join(".firescale"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, [".gitignore", STEP_TIMES_FILE]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn nothing_is_read_or_written_through_a_symbolic_link() {
