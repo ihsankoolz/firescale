@@ -456,6 +456,35 @@ describe('time limits follow progress (ADR 0043)', () => {
     );
   });
 
+  it('gives only the percent, never a time left, for a step the idle limit stopped, whenever the percent was printed', async () => {
+    const repo = await repoWith(
+      {
+        idleTimeout: '2s',
+        timeout: '60s',
+        lint: false,
+        typecheck: false,
+        test: nodeScript('late.js'),
+      },
+      {
+        // The percent comes 900 ms in, then nothing. Worked out from then,
+        // the whole run would take 3.6 s, and the step is stopped 2.9 s in:
+        // "about 0.7s left" for a step that went silent means nothing.
+        'late.js':
+          "console.log('==== test session starts ====');\nsetTimeout(() => console.log('tests/test_a.py .. [ 25%]'), 900);\nsetTimeout(() => {}, 60000);\n",
+      },
+    );
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as Report & { steps: (Step & { detail: string })[] };
+    const test = report.steps.find((step) => step.name === 'test');
+    expect(test?.timeoutKey).toBe('verify.idleTimeout');
+    expect(test?.detail).toMatch(/\(no new output for 2s, stopped after \S+; 25% done\)$/);
+    const human = await runCli(['verify'], repo.root);
+    expect(human.stdout).toMatch(
+      /Timed out: test printed nothing new for 2s, so it was stopped with every process it started\. It was 25% done\.\r?\n/,
+    );
+  });
+
   it('still stops a step that keeps printing at the overall limit', async () => {
     const repo = await repoWith(
       {
