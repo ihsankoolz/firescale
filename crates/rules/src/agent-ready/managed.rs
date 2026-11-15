@@ -374,4 +374,71 @@ mod tests {
         assert!(!imports_agents_md("```\n@AGENTS.md\n```\n"));
         assert!(!imports_agents_md("email me@AGENTS.md.example\n"));
     }
+
+    // Every file `fscale facts` reads to decide a command, at the root and
+    // in a project below it. A file missing here leaves a cached pass in
+    // place when the commands changed.
+    #[test]
+    fn the_rules_that_list_commands_read_every_file_that_decides_one() {
+        use firescale_core::cache::input_matcher;
+        use firescale_core::rule::BuiltinRule;
+
+        let rules = [
+            crate::agent_ready::agents_md::AgentsMdExists.meta(),
+            crate::agent_ready::agent_permissions::AgentPermissions.meta(),
+        ];
+        for meta in rules {
+            let matcher = input_matcher(&meta.id, &meta.inputs).unwrap();
+            for name in [
+                // The Maven and Gradle wrappers.
+                "mvnw",
+                "mvnw.cmd",
+                "gradlew",
+                "gradlew.bat",
+                // Tool config files of a Node project.
+                ".oxlintrc.json",
+                "oxlintrc.json",
+                "oxlint.config.ts",
+                "biome.json",
+                "biome.jsonc",
+                ".eslintrc",
+                ".eslintrc.json",
+                ".eslintrc.cjs",
+                "eslint.config.mjs",
+                "vitest.workspace.ts",
+                "vitest.config.ts",
+                "jest.config.js",
+                // Lockfiles name a project's package manager.
+                "pnpm-lock.yaml",
+                "package-lock.json",
+                "yarn.lock",
+                "bun.lock",
+                "bun.lockb",
+                "uv.lock",
+                "poetry.lock",
+                // .gitignore decides which folders are searched.
+                ".gitignore",
+                // Python.
+                "conftest.py",
+                "manage.py",
+                "alembic.ini",
+                "ruff.toml",
+                ".ruff.toml",
+                "mypy.ini",
+                ".mypy.ini",
+                "requirements.txt",
+                "requirements-dev.txt",
+                "dev-requirements.txt",
+                "test-requirements.txt",
+            ] {
+                for file in [name.to_owned(), format!("services/api/{name}")] {
+                    assert!(matcher.is_match(&file), "{}: {file}", meta.id);
+                }
+            }
+            // Not every file is an input.
+            for file in ["src/main.py", "web/src/index.ts", "docs/notes.txt"] {
+                assert!(!matcher.is_match(file), "{}: {file}", meta.id);
+            }
+        }
+    }
 }
