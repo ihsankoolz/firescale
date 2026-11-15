@@ -487,6 +487,18 @@ describe('.github/workflows/release.yml', () => {
     expect(found).toEqual([]);
   });
 
+  it("turns off setup-node's own cache in every job", async () => {
+    // setup-node can cache a package manager's store without a `cache:`
+    // input (ADR 0041), and it saves in a post step. A release turns it off.
+    const text = await read();
+    for (const name of ['version', 'build', 'publish', 'verify']) {
+      const steps = job(text, name).split(/\r?\n(?= {6}- )/);
+      const setups = steps.filter((step) => step.includes('uses: actions/setup-node@'));
+      expect(setups, name).toHaveLength(1);
+      for (const step of setups) expect(step, name).toContain('package-manager-cache: false');
+    }
+  });
+
   it('builds all six platforms', async () => {
     const build = job(await read(), 'build');
     for (const platform of PLATFORMS) expect(build).toContain(`key: ${platform}`);
