@@ -77,14 +77,17 @@ impl Known {
     }
 
     /// The line verify prints before it starts a slow step, or `None` for a
-    /// step that is not slow.
+    /// step that is not slow. A run that already has a `--budget` is not
+    /// told to use one.
     #[must_use]
-    pub fn warning(&self) -> Option<String> {
+    pub fn warning(&self, budget_in_use: bool) -> Option<String> {
         (self.duration > SLOW_STEP).then(|| {
-            format!(
-                "slow step: {}. To leave out steps this slow, run fscale verify --budget <time>",
-                self.describe()
-            )
+            let said = format!("slow step: {}", self.describe());
+            if budget_in_use {
+                said
+            } else {
+                format!("{said}. To leave out steps this slow, run fscale verify --budget <time>")
+            }
         })
     }
 
@@ -560,14 +563,20 @@ mod tests {
             duration: Duration::from_secs(seconds),
             finished,
         };
-        assert_eq!(known(300, true).warning(), None);
+        assert_eq!(known(300, true).warning(false), None);
+        assert_eq!(known(300, true).warning(true), None);
         assert_eq!(
-            known(100 * 60, true).warning().as_deref(),
+            known(100 * 60, true).warning(false).as_deref(),
             Some("slow step: it took 1h 40m when it last ran. To leave out steps this slow, run fscale verify --budget <time>")
         );
         assert_eq!(
-            known(93 * 60, false).warning().as_deref(),
+            known(93 * 60, false).warning(false).as_deref(),
             Some("slow step: it ran at least 1h 33m when it last ran and did not finish. To leave out steps this slow, run fscale verify --budget <time>")
+        );
+        // A run that has a budget is not told to use one.
+        assert_eq!(
+            known(100 * 60, true).warning(true).as_deref(),
+            Some("slow step: it took 1h 40m when it last ran")
         );
     }
 

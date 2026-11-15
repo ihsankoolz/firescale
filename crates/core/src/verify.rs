@@ -2024,7 +2024,7 @@ fn run_step(
             });
         }
     }
-    if let Some(warning) = known.and_then(|known| known.warning()) {
+    if let Some(warning) = known.and_then(|known| known.warning(options.budget.is_some())) {
         options.say(&format!("{place}: {warning}"));
     }
     options.say(&format!("{place}: started: {command}"));
