@@ -62,11 +62,20 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-/** A repo on `main` whose code reads API_URL, which .env.example lacks. */
-async function repo(files: Record<string, string> = {}, agent: Record<string, number> = {}) {
+/**
+ * A repo on `main` whose code reads API_URL, which .env.example lacks. Its
+ * config is `firescale.config.json`, or the same settings as the default
+ * export of a `firescale.config.ts`.
+ */
+async function repo(
+  files: Record<string, string> = {},
+  agent: Record<string, number> = {},
+  configFile: 'firescale.config.json' | 'firescale.config.ts' = 'firescale.config.json',
+) {
   const fixture = await fixtures.create({
     files: {
-      'firescale.config.json': config(agent),
+      [configFile]:
+        configFile === 'firescale.config.ts' ? `export default ${config(agent)}` : config(agent),
       '.gitignore': '.firescale/\n',
       'package.json': '{ "name": "demo", "type": "module" }\n',
       '.env.example': 'NODE_ENV=\n',
@@ -244,6 +253,33 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
     }
     const reasons = (await ledger(root)).map((entry) => entry.reason ?? entry.result);
     expect(reasons).toEqual(['pass', 'over-budget', 'over-budget', 'timeout']);
+  });
+
+  it('guardrail 5, budget limits: a firescale.config.ts sets them as a firescale.config.json does, not the defaults', async () => {
+    const root = await repo(
+      {},
+      { maxTurns: 5, maxCostUsd: 0.5, timeoutSeconds: 7 },
+      'firescale.config.ts',
+    );
+    const within = await fix(root, GOOD);
+    expect(within.code, within.stdout + within.stderr).toBe(EXIT_OK);
+    // Not the defaults: 30 turns, $2 and 900 seconds.
+    expect(within.requests[0]?.request.policy).toMatchObject({
+      maxTurns: 5,
+      maxCostUsd: 0.5,
+      timeoutSecs: 7,
+    });
+    // Under the defaults, but over what the config allows.
+    for (const [scenario, text] of [
+      [{ ...GOOD, result: { ok: true, costUsd: 0.75, turns: 2 } }, 'over the limit of $0.50'],
+      [{ ...GOOD, result: { ok: true, costUsd: 0.1, turns: 9 } }, 'over the limit of 5'],
+    ] as const) {
+      const result = await fix(root, scenario);
+      expect(result.code, text).toBe(EXIT_VIOLATIONS);
+      expect(result.stdout).toContain(text);
+    }
+    const reasons = (await ledger(root)).map((entry) => entry.reason ?? entry.result);
+    expect(reasons).toEqual(['pass', 'over-budget', 'over-budget']);
   });
 
   it("guardrail 6, controlled config: the run says not to load the repo's own hooks, settings or MCP servers", async () => {
