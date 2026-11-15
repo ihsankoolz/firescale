@@ -184,6 +184,35 @@ describe('the time each step took is kept, and a slow step is announced', () => 
     expect(full.stdout).not.toContain('could not read');
   });
 
+  it('shows in a dry run which steps --budget would leave out, and says so when it is none', async () => {
+    const repo = await repoWith(
+      {
+        lint: false,
+        typecheck: false,
+        test: false,
+        projects: { 'backend/api': { test: nodeScript('test.js') } },
+      },
+      { 'backend/api/test.js': "console.log('one');\n" },
+    );
+    expect((await runCli(['verify'], repo.root, NOT_CI)).code).toBe(EXIT_OK);
+    await setTime(repo.root, 'test', { durationMs: 100 * MINUTE }, 'backend/api');
+    const plan = await runCli(['verify', '--dry-run'], repo.root, NOT_CI);
+    expect(plan.code).toBe(EXIT_OK);
+    expect(plan.stdout).not.toContain('--budget');
+    const dry = await runCli(['verify', '--dry-run', '--budget', '30m'], repo.root, NOT_CI);
+    expect(dry.code).toBe(EXIT_OK);
+    expect(dry.stdout).toBe(
+      `${plan.stdout}\nWith --budget 30m, 1 step would not be run:\n  test in backend/api: it took 1h 40m when it last ran\nA step whose pass is in the step cache is taken from it and not left out; a dry run does not look there.\n`,
+    );
+    await setTime(repo.root, 'test', { durationMs: 10 * MINUTE }, 'backend/api');
+    const none = await runCli(['verify', '--dry-run', '--budget', '30m'], repo.root, NOT_CI);
+    expect(none.stdout).toBe(
+      `${plan.stdout}\nWith --budget 30m, no step would be left out: none is known to take longer.\n`,
+    );
+    // Nothing ran, and the kept times are as they were.
+    expect((await readTimes(repo.root)).steps.map((r) => r.durationMs)).toEqual([10 * MINUTE]);
+  });
+
   it('keeps the time of a project step under its folder, and warns for it by name', async () => {
     const repo = await repoWith(
       {
