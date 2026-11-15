@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::activity::{Activity, Runner, Tally};
+use crate::activity::{Activity, Pace, Runner, Tally};
 use crate::services::{listening, services_for_folder, Service, PROBE_TIMEOUT};
 
 use crate::error::{Error, Result};
@@ -2040,7 +2040,7 @@ fn run_step(
         shell.env("PYTEST_ADDOPTS", crate::pertest::addopts(&own, junit));
     }
     let spawned = Mutex::new(None);
-    let heartbeat = |elapsed: Duration, last: Option<&str>, percent: Option<u8>| {
+    let heartbeat = |elapsed: Duration, last: Option<&str>, pace: Option<Pace>| {
         // Kept while it runs, so a run that is killed outright, with no
         // chance to write anything, still leaves about how long the step
         // ran (ADR 0057).
@@ -2050,8 +2050,8 @@ fn run_step(
         // `last output: ...`, or a running count of tests (ADR 0025), and
         // how much is left when the runner prints a percent (ADR 0043).
         let last = last.map_or_else(String::new, |doing| format!("; {doing}"));
-        let left = percent
-            .map(|percent| format!("; {}", progress_estimate(elapsed, percent)))
+        let left = pace
+            .map(|pace| format!("; {}", progress_estimate(elapsed, pace)))
             .unwrap_or_default();
         options.say(&format!(
             "{place}: still running after {}{left}{last}",
@@ -2284,7 +2284,7 @@ fn run_step(
         let mut again = self::shell(&probe);
         again.current_dir(&dir);
         environment(&mut again, options.config, options.base_run);
-        let quiet = |_: Duration, _: Option<&str>, _: Option<u8>| {};
+        let quiet = |_: Duration, _: Option<&str>, _: Option<Pace>| {};
         let watch = Watch {
             timeout: Some(FIRST_ERROR_LIMIT),
             idle: None,
@@ -2423,8 +2423,8 @@ fn run_step(
             };
             report.status = StepStatus::TimedOut;
             report.estimate = finished
-                .percent
-                .map(|percent| progress_estimate(finished.duration, percent));
+                .pace
+                .map(|pace| progress_estimate(finished.duration, pace));
             let estimate = report
                 .estimate
                 .as_ref()
@@ -2497,9 +2497,13 @@ fn run_step(
 }
 
 /// How far a step got, from the percent its runner printed: `46% done,
-/// about 10m 34s left at this pace` (ADR 0043).
-fn progress_estimate(elapsed: Duration, percent: u8) -> String {
-    match crate::activity::time_left(elapsed, percent) {
+/// about 10m 34s left at this pace` (ADR 0043). The pace is the one the
+/// step had when it printed that percent, so the time left does not climb
+/// while the percent stands still (ADR 0057); once the percent has stood
+/// still past that estimate, only the percent is given.
+fn progress_estimate(elapsed: Duration, pace: Pace) -> String {
+    let percent = pace.percent;
+    match crate::activity::time_left_since(elapsed, percent, pace.since) {
         Some(left) => format!(
             "{percent}% done, about {} left at this pace",
             format_duration(left)

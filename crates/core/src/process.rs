@@ -30,7 +30,7 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use crate::activity::Activity;
+use crate::activity::{Activity, Pace};
 
 /// Set once Ctrl+C or a termination signal arrives, after
 /// [`install_stop_handler`] ran.
@@ -82,13 +82,14 @@ pub struct Finished {
     /// For [`Ending::TimedOut`]: true when it was stopped because it printed
     /// nothing new for the idle limit, false for the overall limit.
     pub silent: bool,
-    /// The last percent done the command printed (pytest's `[ 46%]`).
-    pub percent: Option<u8>,
+    /// The last percent done the command printed (pytest's `[ 46%]`), and
+    /// how long the command had run when it first showed.
+    pub pace: Option<Pace>,
 }
 
 /// Called with the time so far, what the command is doing and the percent
-/// done it printed.
-pub type Heartbeat<'a> = dyn Fn(Duration, Option<&str>, Option<u8>) + Sync + 'a;
+/// done it printed, with when it printed it.
+pub type Heartbeat<'a> = dyn Fn(Duration, Option<&str>, Option<Pace>) + Sync + 'a;
 
 /// What to watch for while a command runs.
 pub struct Watch<'a> {
@@ -104,7 +105,8 @@ pub struct Watch<'a> {
     pub heartbeat: Duration,
     /// Called every `heartbeat` with the time so far, what the command is
     /// doing, read from its output ([`Activity::heartbeat`]), if anything,
-    /// and the last percent done it printed ([`Activity::percent`]).
+    /// and the last percent done it printed ([`Activity::percent`]) with
+    /// the time at which it first showed.
     pub on_heartbeat: &'a Heartbeat<'a>,
     /// The command line, to know its test runner ([`Activity::new`]).
     pub command: &'a str,
@@ -196,6 +198,18 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
     let mut seen_generation = 0;
     let mut quiet_since = Duration::ZERO;
     let mut silent = false;
+    // The percent done the command printed, and when it first showed, for
+    // a steady estimate of the time left (ADR 0057).
+    let mut pace: Option<Pace> = None;
+    let mut note_pace = |percent: Option<u8>, elapsed: Duration| {
+        if percent != pace.map(|pace| pace.percent) {
+            pace = percent.map(|percent| Pace {
+                percent,
+                since: elapsed,
+            });
+        }
+        pace
+    };
     // The time is taken when the ending is known, before any stopping.
     let (ending, duration) = loop {
         let elapsed = started.elapsed();
@@ -231,8 +245,15 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
             tree.stop();
             break (Ending::TimedOut, elapsed);
         }
+        let (generation, percent) = {
+            let collected = lock(&collected);
+            (
+                collected.activity.generation(),
+                collected.activity.percent(),
+            )
+        };
+        let pace_now = note_pace(percent, elapsed);
         if let Some(idle) = watch.idle {
-            let generation = lock(&collected).activity.generation();
             if generation != seen_generation {
                 seen_generation = generation;
                 quiet_since = elapsed;
@@ -254,11 +275,8 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
             }
         }
         if !watch.heartbeat.is_zero() && elapsed >= next_heartbeat {
-            let (line, percent) = {
-                let collected = lock(&collected);
-                (collected.activity.heartbeat(), collected.activity.percent())
-            };
-            (watch.on_heartbeat)(elapsed, line.as_deref(), percent);
+            let line = lock(&collected).activity.heartbeat();
+            (watch.on_heartbeat)(elapsed, line.as_deref(), pace_now);
             while next_heartbeat <= elapsed {
                 next_heartbeat = crate::progress::next_heartbeat(next_heartbeat, watch.heartbeat);
             }
@@ -275,13 +293,15 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
         }
     }
     let collected = lock(&collected);
+    // A percent printed in the command's last moments counts from its end.
+    let pace = note_pace(collected.activity.percent(), duration);
     Ok(Finished {
         ending,
         stdout: collected.stdout.clone(),
         stderr: collected.stderr.clone(),
         duration,
         silent,
-        percent: collected.activity.percent(),
+        pace,
     })
 }
 

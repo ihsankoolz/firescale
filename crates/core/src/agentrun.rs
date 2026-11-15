@@ -465,7 +465,7 @@ impl Adapter for ProgramAdapter {
             .arg(&file)
             .current_dir(&request.cwd)
             .envs(agent_env());
-        let quiet = |_: Duration, _: Option<&str>, _: Option<u8>| {};
+        let quiet = |_: Duration, _: Option<&str>, _: Option<crate::activity::Pace>| {};
         let watch = Watch {
             timeout: Some(Duration::from_secs(request.policy.timeout_secs.max(1))),
             idle: None,
