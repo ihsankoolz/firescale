@@ -143,6 +143,34 @@ describe('fscale hooks install', () => {
     expect(await read(repo.root, HOOK_FILES.claude)).toBe(minified);
   });
 
+  it('--all tries every file: it writes the ones it can, and says which it refused', async () => {
+    const cases = [
+      // The first file is refused: the two after it must still be written.
+      { refused: ['claude'], content: '{ nope' },
+      // The middle file is refused, for the other reason.
+      { refused: ['codex'], content: '{"hooks":{}}\n' },
+      // Two refusals: each gets its own reason.
+      { refused: ['claude', 'cursor'], content: '{"a":1}\n' },
+    ] as const;
+    for (const { refused, content } of cases) {
+      const label = refused.join(' and ');
+      const files = Object.fromEntries(refused.map((agent) => [HOOK_FILES[agent], content]));
+      const repo = await fixtures.create({ files });
+      const result = await runCli(['hooks', 'install', '--all'], repo.root);
+      expect(result.code, label).toBe(EXIT_USAGE);
+      expect(result.stdout).toMatchSnapshot(`${label}: stdout`);
+      expect(result.stderr).toMatchSnapshot(`${label}: stderr`);
+      for (const [agent, file] of Object.entries(HOOK_FILES)) {
+        const text = await read(repo.root, file);
+        if ((refused as readonly string[]).includes(agent)) {
+          expect(text, `${label}: ${file}`).toBe(content);
+        } else {
+          expect(text, `${label}: ${file}`).toContain(`fscale hooks run --agent ${agent}`);
+        }
+      }
+    }
+  });
+
   it('explains bad usage', async () => {
     const repo = await fixtures.create();
     const none = await runCli(['hooks', 'install'], repo.root);
