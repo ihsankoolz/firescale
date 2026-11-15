@@ -662,7 +662,8 @@ describe('a step that can read the config as a file', () => {
       const affected = await verify('--affected');
       expect(affected.headline).toMatch(/^verify: FAILED at lint \(new\)/);
       expect(affected.stdout).toContain(IGNORED_CONFIG_CHANGED);
-    });
+      // Three whole runs, the last with a run of the base commit.
+    }, 90_000);
 
     /** Two projects below the root; `web` has a check that fails when the root has a config. */
     const twoProjects = () => {

@@ -1405,8 +1405,12 @@ fn verify_report(
     }
     // Nothing failed: every step that can read an ignored config passed
     // with these bytes, or was left out because they were seen before.
+    // Not after a run in which --budget left a step out: that step has not
+    // run with these bytes, and the record would say that it had.
     if let Some(digest) = &ignored_config {
-        if matches!(verify.result, VerifyResult::Ok | VerifyResult::Partial) {
+        if matches!(verify.result, VerifyResult::Ok | VerifyResult::Partial)
+            && verify.not_run.is_empty()
+        {
             stepcache::remember_ignored_config(root, digest);
         }
     }
