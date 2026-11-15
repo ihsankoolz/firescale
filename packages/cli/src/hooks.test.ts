@@ -340,6 +340,17 @@ describe('fscale hooks run (the stop hook)', () => {
     const flag = await runCli(['--agent', 'claude', 'hooks', 'run', '--nope'], repo.root);
     expect(flag.stderr).toContain('unknown option "--nope"');
     expect(flag.code).toBe(1);
+    // --budget is refused in the stop hook with 1, wherever it is written:
+    // its value is not taken for one of the command's words.
+    for (const args of [
+      ['hooks', 'run', '--agent', 'claude', '--budget', '30m'],
+      ['hooks', '--budget', '30m', 'run', '--agent', 'claude'],
+      ['--budget', '30m', 'hooks', 'run', '--agent', 'claude'],
+    ]) {
+      const budget = await runCli(args, repo.root, { CI: undefined, GITHUB_ACTIONS: undefined });
+      expect(budget.stderr, args.join(' ')).toContain('--budget cannot be used in the stop hook');
+      expect(budget.code, args.join(' ')).toBe(1);
+    }
     const noValue = await runCli(['--cwd', repo.root, 'hooks', 'run', '--agent'], repo.root);
     expect(noValue.stderr).toContain('option --agent needs a value');
     expect(noValue.code).toBe(1);
