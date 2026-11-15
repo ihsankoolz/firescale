@@ -88,7 +88,7 @@ The version is 0.5.0 in `Cargo.toml`, `Cargo.lock` and every `package.json` (`no
 Compared with 0.4.0, which is npm's latest and was tagged before M24. So 0.5.0 brings M24 to M35 and the audit bug fixes at once. Each line was checked against the code at 0.5.0 and against tag `v0.4.0`; nothing here was run on the course project. Most likely to be noticed first.
 
 1. **The first `fscale verify` runs every step again**, and the base run for the four failing Vitest tests happens once more. The version is part of every cache key. No line says so; the second run is cached as before.
-2. **`npx firescale` downloads a larger binary.** The sizes are in the next section.
+2. **`npx firescale` downloads a larger binary.** For Windows x64 the download goes from 3.0 MB to 5.7 MB, and the binary on disk from 9.8 MB to 32.4 MB (next section).
 3. **The tamper guard reads Python.** With a base, a change that deletes or skips a pytest test, or removes an `assert`, gives `test deleted`, `test skipped` or `assertion removed`. It is still report-only: `verify: OK - tamper guard: N report-only findings`, same exit code (M24).
 4. **A new kind, `suppression added`**, for a new `# noqa`, `# type: ignore`, `eslint-disable` or `@ts-ignore` in any changed source file, with the line `Lint suppressions in the changed files: X on the base, Y now.` (M24).
 5. **More tamper kinds and a longer intro line**: `coverage lowered`, `CI weakened`, `hooks skipped` (also when the fscale stop hook leaves `.claude` settings), `rule turned off`. `snapshot changed` and `expected value changed` end with `[needs a person's approval, given in the pull request; it does not block here]` (M25, M26).
@@ -103,6 +103,52 @@ Compared with 0.4.0, which is npm's latest and was tagged before M24. So 0.5.0 b
 14. **Config:** a `protectedPaths` glob that does not compile stops every command with a message that names it (bug 8). `agent` and `verify.tamper` as an object are accepted.
 
 Probably not seen in this run: the five new opt-in packs (off unless in `packs`); the new project kinds, unless a folder holds a Java, Swift, C, .NET, Dart or Go project, or a lone `Makefile` with a `test` target, which now counts as a `make` project; the tamper guard's eight new languages; bugs 2, 4, 5, 7, 9, 11, 12, 13, 14, 17 and 20; and fewer stale cached passes of `agents-md` and `agent-permissions` (bug 10).
+
+## 0.5.0: the release binary's size, and what each M32 grammar adds
+
+Facts only, measured on 2026-11-15.
+
+**On each platform.** From the Release workflow started by hand on the 0.5.0 commit (`d3e8090`, run 43679327033; it builds the six tarballs and publishes nothing), next to the 0.4.0 release run (43478017955). The numbers are npm's own "unpacked size" and "package size" lines in each build job's log, so they are rounded to 0.1 MB (1 MB = 1,000,000 bytes). The unpacked size is the binary plus a `package.json` of a few hundred bytes. The artifacts themselves could not be downloaded from the build session.
+
+| Platform     | 0.5.0 unpacked | 0.5.0 download (.tgz) | 0.4.0 unpacked | 0.4.0 download (.tgz) |
+| ------------ | -------------: | --------------------: | -------------: | --------------------: |
+| linux-x64    |        31.2 MB |                5.6 MB |         9.0 MB |                2.9 MB |
+| linux-arm64  |        30.1 MB |                5.3 MB |         8.2 MB |                2.7 MB |
+| darwin-arm64 |        30.0 MB |                5.4 MB |         7.9 MB |                2.7 MB |
+| darwin-x64   |        30.6 MB |                5.5 MB |         8.5 MB |                2.8 MB |
+| win32-x64    |        32.4 MB |                5.7 MB |         9.8 MB |                3.0 MB |
+| win32-arm64  |        30.8 MB |                5.4 MB |         8.6 MB |                2.8 MB |
+
+The same run is the first release build with no cache (bug 14): the six build jobs took between 1.5 and 5 minutes each, against 1.7 to 3.4 minutes in the 0.4.0 run, which had caches and a smaller binary.
+
+**What each of the eight M32 grammars adds.** Measured on Linux x64 only, at commit `11cf6e4` (0.5.0's code before the version change): `cargo build --release -p firescale-cli`, rustc 1.97.0, gcc 13.3.0 for the grammars' C code, the release profile of `Cargo.toml` (`lto = true`, `strip = "symbols"`). The binary is **31,238,768 bytes** (29.79 MiB), and 5,420,787 bytes after `gzip -9`. A second build gave the same bytes.
+
+Three ways, which agree within 0.6% on the total:
+
+- **Objects:** the sections of each grammar's static library (`size -A` on `libtree-sitter-<x>.a`).
+- **Link map:** the bytes the linker's map gives to that grammar's `parser.o` and `scanner.o`.
+- **Removal:** the binary rebuilt with that one grammar's `LANGUAGE` replaced by Python's, subtracted from the full binary. This removes the grammar only; its reader in `crates/core/src/tamper/` stays.
+
+| Grammar (crate, version)     |    Objects |   Link map |    Removal | Share of the binary | Removal, gzipped |
+| ---------------------------- | ---------: | ---------: | ---------: | ------------------: | ---------------: |
+| C# (`c-sharp` 0.23.5)        |  5,301,709 |  5,301,632 |  5,316,704 |              17.02% |          315,687 |
+| Swift (`swift` 0.7.4)        |  4,087,902 |  4,087,565 |  4,107,104 |              13.15% |          371,829 |
+| C++ (`cpp` 0.23.4)           |  3,403,582 |  3,403,450 |  3,420,128 |              10.95% |          273,257 |
+| Kotlin (`kotlin-ng` 1.1.0)   |  3,408,782 |  3,408,663 |  3,417,536 |              10.94% |          302,327 |
+| Dart (`dart` 0.3.0)          |  1,460,556 |  1,452,027 |  1,473,472 |               4.72% |          128,184 |
+| C (`c` 0.24.2)               |    605,044 |    605,020 |    615,840 |               1.97% |           75,018 |
+| Java (`java` 0.23.5)         |    414,117 |    409,219 |    421,824 |               1.35% |           47,093 |
+| Go (`go` 0.25.0)             |    216,873 |    213,907 |    222,784 |               0.71% |           40,553 |
+| **The eight, summed**        | 18,898,565 | 18,881,483 | 18,995,392 |              60.81% |        1,553,948 |
+| The eight, removed in one go |            |            | 18,995,968 |              60.81% |        1,541,659 |
+
+All numbers are bytes. With all eight removed the binary is 12,242,800 bytes (11.68 MiB), and 3,879,128 bytes gzipped: 28.4% less than the gzipped full binary, since parse tables compress well.
+
+For comparison, the three older grammars by removal: TypeScript with TSX 2,874,016 bytes (9.20%), Rust 1,124,320 (3.60%), Python 472,672 (1.51%). The tree-sitter runtime is 90,663 bytes in the map, and everything that is neither a grammar nor the runtime is 7,788,138.
+
+Almost all of a grammar is read-only parse tables: C# is 5,244,069 bytes of `.rodata` and 49,738 of code.
+
+Limits of the measurement: one platform, one compiler; the release workflow builds with `--target`, which was not compared with this build; the binaries of the removal builds were measured, not run; gzip of the binary stands in for the npm tarball.
 
 ## Review of the long run
 
