@@ -314,6 +314,44 @@ describe('fscale hooks run (the stop hook)', () => {
     expect(flag.code).toBe(1);
   });
 
+  it('is the stop hook wherever its options are written, so its own errors never exit 2', async () => {
+    const repo = await fixtures.create({ files: FAILING });
+    const orders = [
+      ['--agent', 'claud', 'hooks', 'run'],
+      ['hooks', '--agent', 'claud', 'run'],
+      ['--cwd', repo.root, 'hooks', 'run', '--agent', 'claud'],
+      ['--agent=claud', '--cwd', repo.root, 'hooks', '--bin', 'x', 'run'],
+    ];
+    for (const args of orders) {
+      const typo = await runCli(args, repo.root);
+      expect(typo.stderr, args.join(' ')).toContain('unknown agent "claud"');
+      expect(typo.code, args.join(' ')).toBe(1);
+    }
+    const flag = await runCli(['--agent', 'claude', 'hooks', 'run', '--nope'], repo.root);
+    expect(flag.stderr).toContain('unknown option "--nope"');
+    expect(flag.code).toBe(1);
+    const noValue = await runCli(['--cwd', repo.root, 'hooks', 'run', '--agent'], repo.root);
+    expect(noValue.stderr).toContain('option --agent needs a value');
+    expect(noValue.code).toBe(1);
+  });
+
+  it("does not take an option's value for the command: other commands keep exit code 2", async () => {
+    const repo = await fixtures.create({ files: FAILING });
+    // "hooks" and "run" here are values of options, not the command.
+    const cases: { args: string[]; says: string }[] = [
+      { args: ['--rules', 'hooks', 'run'], says: 'unknown command "run"' },
+      { args: ['--agent', 'hooks', 'run', '--nope'], says: 'unknown option "--nope"' },
+      { args: ['hooks', '--bin', 'run'], says: 'hooks needs an action' },
+      { args: ['check', '--rules', 'hooks', 'run'], says: 'check takes no arguments, got "run"' },
+      { args: ['--bin', 'hooks', '--agent', 'run', 'verify', 'extra'], says: 'verify takes no' },
+    ];
+    for (const { args, says } of cases) {
+      const result = await runCli(args, repo.root);
+      expect(result.stderr, args.join(' ')).toContain(says);
+      expect(result.code, args.join(' ')).toBe(EXIT_USAGE);
+    }
+  });
+
   it('lets the agent stop on a partial run, and says that it was not a clean pass', async () => {
     // No command for lint or typecheck. The default (ADR 0020): do not block.
     const files = {
