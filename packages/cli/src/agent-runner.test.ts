@@ -560,6 +560,42 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
       expect(guarded.stdout).toContain('protected path src/app.js');
     });
 
+    it('a protected glob that can match no path stops the run: it would protect nothing', async () => {
+      const edit: Scenario = { ...GOOD, write: { ...GOOD.write, 'src/app.js': APP + '// x\n' } };
+      const withProtected = (globs: string[]) => ({
+        'firescale.config.json': `${JSON.stringify({ ...(JSON.parse(config()) as object), protectedPaths: globs })}\n`,
+      });
+      const settings = (rule: string) => ({
+        '.claude/settings.json': JSON.stringify({ permissions: { deny: [rule] } }),
+      });
+      for (const [files, where, glob] of [
+        [withProtected(['./src/**']), 'firescale.config.json', './src/**'],
+        [withProtected(['/src/**']), 'firescale.config.json', '/src/**'],
+        [withProtected(['src']), 'firescale.config.json', 'src'],
+        [settings('Edit(src/)'), '.claude/settings.json', 'src/'],
+        [settings('Edit(src/./**)'), '.claude/settings.json', 'src/./**'],
+      ] as const) {
+        const root = await repo(files);
+        const result = await fix(root, edit);
+        expect(result.code, glob + result.stdout).toBe(EXIT_USAGE);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(where);
+        expect(result.stderr).toContain(`"${glob}"`);
+        expect(result.stderr).toContain('protect');
+        expect(result.stderr).toContain('"src/**"');
+        // The agent never ran, and nothing is left of a run.
+        expect(result.requests).toEqual([]);
+        expect(await ledger(root)).toEqual([]);
+        expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
+      }
+      // A settings rule that starts with ./ or / is read from the repo root, and protects.
+      for (const rule of ['Edit(./src/**)', 'Edit(/src/**)']) {
+        const guarded = await fix(await repo(settings(rule)), edit);
+        expect(guarded.code, rule).toBe(EXIT_VIOLATIONS);
+        expect(guarded.stdout).toContain('protected path src/app.js');
+      }
+    });
+
     // A file a violation names is a path, not a glob: `app/[id]/page.tsx`
     // read as a glob names `app/i/page.tsx` and not the file itself.
     describe.each([

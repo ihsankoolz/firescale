@@ -974,6 +974,26 @@ mod tests {
                 json!({ "protectedPaths": ["src\\{app,lib.js"] }),
                 "\"protectedPaths\" holds \"src\\{app,lib.js\", which is not a valid glob".into(),
             ),
+            (
+                "a protectedPaths glob that starts with ./",
+                json!({ "protectedPaths": ["./infra/**"] }),
+                "\"protectedPaths\" holds \"./infra/**\", which can match no path and would protect nothing: a path is compared as git prints it, from the repo root, with no \"./\" or \"/\" in front, no \"..\" and no \"/\" at the end. Write \"infra/**\".".into(),
+            ),
+            (
+                "a protectedPaths glob that starts with /",
+                json!({ "protectedPaths": ["infra/**", "/infra/**"] }),
+                "\"protectedPaths\" holds \"/infra/**\", which can match no path and would protect nothing".into(),
+            ),
+            (
+                "a protectedPaths folder written with a slash at the end",
+                json!({ "protectedPaths": ["infra/"] }),
+                "Write \"infra/**\".".into(),
+            ),
+            (
+                "a protectedPaths glob that leaves the repo",
+                json!({ "protectedPaths": ["../infra/**"] }),
+                "\"protectedPaths\" holds \"../infra/**\", which can match no path and would protect nothing: a path is compared as git prints it, from the repo root, with no \"./\" or \"/\" in front, no \"..\" and no \"/\" at the end. Write it that way, for example \"infra/**\".".into(),
+            ),
         ];
         for (name, raw, message) in cases {
             let error = rejection(&raw);
