@@ -99,7 +99,8 @@ pub struct Watch<'a> {
     pub idle: Option<Duration>,
     /// Stop the tree once this is set.
     pub stop: &'a AtomicBool,
-    /// How often to call `on_heartbeat` while the command runs.
+    /// How often to call `on_heartbeat` while the command runs; less often
+    /// once it has run for ten minutes ([`crate::progress::next_heartbeat`]).
     pub heartbeat: Duration,
     /// Called every `heartbeat` with the time so far, what the command is
     /// doing, read from its output ([`Activity::heartbeat`]), if anything,
