@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { rm, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -632,6 +632,36 @@ describe('a step that can read the config as a file', () => {
       const hook = await stopHook(root);
       expect(hook.code).toBe(EXIT_BLOCK);
       expect(hook.stderr).toContain('lint');
+    });
+
+    // After the third review: a run in which --budget left the lint out is
+    // PARTIAL, and it wrote the config's new bytes down though no step had
+    // run with them. --affected and the stop hook then let the failure by.
+    it('keeps no record of an ignored config from a run in which --budget left a step out', async () => {
+      const { repo, root, verify } = await rootProject();
+      expect((await verify()).code).toBe(EXIT_OK);
+      // As if every step had taken 1h 40m when it last ran.
+      const times = path.join(root, '.firescale', 'step-times.json');
+      const kept = JSON.parse(await readFile(times, 'utf8')) as {
+        steps: { durationMs: number }[];
+      };
+      expect(kept.steps.length).toBeGreaterThan(0);
+      for (const step of kept.steps) step.durationMs = 100 * 60 * 1000;
+      await writeFile(times, JSON.stringify(kept, null, 2));
+      await repo.write('firescale.config.json', LIMIT_ON_ONE_LINE);
+      // On a person's machine: --budget is refused in CI.
+      const budget = await runCli(['verify', '--budget', '30m'], root, {
+        CI: undefined,
+        GITHUB_ACTIONS: undefined,
+      });
+      expect(budget.stdout.split('\n')[0]).toMatch(
+        /^verify: PARTIAL - .*1 not run \(over the --budget of 30m\)$/,
+      );
+      // The lint has not run with these bytes: it still has to. (The stop
+      // hook asks the same question; its test is the one above.)
+      const affected = await verify('--affected');
+      expect(affected.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+      expect(affected.stdout).toContain(IGNORED_CONFIG_CHANGED);
     });
 
     /** Two projects below the root; `web` has a check that fails when the root has a config. */
