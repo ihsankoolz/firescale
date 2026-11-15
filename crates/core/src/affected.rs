@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::cache::input_matcher;
+use crate::config::{JSON_CONFIG, TS_CONFIG};
 use crate::error::{Error, Result};
 use crate::facts::{Project, RepoFacts};
 use crate::git::run_git;
@@ -149,9 +150,11 @@ pub struct RanRule<'a> {
 /// Keeps only the diagnostics a change can have caused and recomputes the
 /// counts. A diagnostic is kept when its file changed, when its file belongs
 /// to an affected project, or when its file belongs to no project below the
-/// repo root and a changed file is an input of its rule. The last case is
+/// repo root and a changed file is an input of its rule. That last case is
 /// for findings on repo-level files: a new script in `web/package.json`
 /// makes `AGENTS.md` stale, and neither `AGENTS.md` nor its owner changed.
+/// For it, a custom rule reads every change, and so does every rule when
+/// the firescale config changed.
 pub fn narrow_report(
     report: &mut CheckReport,
     facts: &RepoFacts,
@@ -166,10 +169,15 @@ pub fn narrow_report(
     // inputs that cannot be read as globs count as matching, and a custom
     // rule reads every change, because nothing else uses its `inputs` (its
     // result is never cached), so an empty or short list proves nothing.
+    // Every rule's result depends on the firescale config (it turns rules
+    // and packs on and sets options), whatever the rule's inputs say.
+    let config_changed = [JSON_CONFIG, TS_CONFIG]
+        .iter()
+        .any(|config| changed.contains(*config));
     let reads_a_change: BTreeSet<&str> = rules
         .iter()
         .filter(|rule| {
-            if rule.custom {
+            if config_changed || rule.custom {
                 return !changed.is_empty();
             }
             input_matcher(&rule.meta.id, &rule.meta.inputs).map_or(true, |matcher| {
@@ -408,6 +416,38 @@ mod tests {
         );
         // Nothing changed, so nothing is kept.
         assert_eq!(kept(graph(), &[], &custom, &findings), [] as [&str; 0]);
+    }
+
+    // Turning a rule or a pack on changes results without touching any of
+    // the rule's inputs.
+    #[test]
+    fn every_rule_reads_a_change_of_the_firescale_config() {
+        let findings = [
+            ("agent-ready/agents-md", "AGENTS.md"),
+            ("core/no-committed-env", ".env"),
+            ("core/no-committed-env", "packages/other/.env"),
+        ];
+        let services = || vec![project("other", "packages/other", &[])];
+        for config in ["firescale.config.json", "firescale.config.ts"] {
+            assert_eq!(
+                kept(services(), &[config], &rules(), &findings),
+                [
+                    "agent-ready/agents-md AGENTS.md",
+                    "core/no-committed-env .env"
+                ],
+                "{config}"
+            );
+        }
+        // Only the config at the firescale root counts.
+        assert_eq!(
+            kept(
+                services(),
+                &["packages/other/firescale.config.json"],
+                &rules(),
+                &findings
+            ),
+            ["core/no-committed-env packages/other/.env"]
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ import {
   EXIT_USAGE,
   EXIT_VIOLATIONS,
   FAKE_ENV,
+  onlyEnvRule,
   runCli,
 } from './test-helpers.js';
 
@@ -178,6 +179,26 @@ describe('fscale check --affected', () => {
     const verify = await runCli(['verify', '--affected'], repo.root);
     expect(verify.code).toBe(EXIT_VIOLATIONS);
     expect(verify.stdout).toContain('agent-ready/agents-md');
+  });
+
+  // Every rule's result depends on the config: turning a rule on reports
+  // findings on files that did not change.
+  it('keeps the repo-level findings of every rule when the firescale config changed', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': onlyEnvRule('off'),
+        '.gitignore': '.firescale/\n',
+        '.env': FAKE_ENV,
+        'web/package.json': service('web', {}),
+        'web/.env': FAKE_ENV,
+      },
+    });
+    await commit(repo, 'initial');
+    expect(await files(repo, ['--affected'])).toEqual([]);
+    await repo.write('firescale.config.json', ENFORCED_CONFIG);
+    expect(await files(repo, [])).toEqual(['.env', 'web/.env']);
+    // web is a project and did not change, so its finding is still left out.
+    expect(await files(repo, ['--affected'])).toEqual(['.env']);
   });
 
   it('drops a finding on a repo-level file when the change is not one its rule reads', async () => {
