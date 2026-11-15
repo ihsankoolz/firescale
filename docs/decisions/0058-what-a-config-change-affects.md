@@ -92,7 +92,7 @@ The function that makes the shared digest takes `VerifyConfig` apart field by fi
 
 ### `verify --affected` and the stop hook
 
-`--affected` compares the commit it measures from (the merge base with `--base`, or `HEAD` when there is none) with the working tree. When `firescale.config.json` is among the changed files, firescale reads the config **at that commit** (`git show <commit>:./firescale.config.json`) and compares it with the loaded one:
+`--affected` compares the commit it measures from (the merge base with `--base`, or `HEAD` when there is none) with the working tree. Firescale reads the config **at that commit** (`git show <commit>:./firescale.config.json`) and compares it with the loaded one. It does so whether or not git lists the file as changed: git lists a config it ignores nowhere (see "A config that git ignores").
 
 - The shared settings differ: every project is affected, as before. The reason names the config.
 - Otherwise the two plans are made from the same facts, once with each config (`configkey::effect_between`). A project (or the root) is affected when one of its steps has a command now that it did not have, with that exact text, at the base. It is also affected when a step that was off at the base is now **skipped** because no command was found for it: nothing runs for that step, but the run must count it, since a skipped step makes the run partial, or failed with `verify.failOnSkipped`. The reason names the steps: `firescale.config.json changes what its test step runs`.
@@ -106,13 +106,25 @@ The stop hook is `verify --affected` from the base commit, so the same holds the
 
 | The config is...                                                       | What happens                                                                                                                                                                                                                         |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **added**, tracked or **untracked**                                    | The base has none, so the base's settings are the defaults (the same as an empty `{}`). The new config is compared with the defaults, setting by setting. A new config that only sets time limits affects no project below the root. |
+| **added**, tracked, **untracked** or **ignored by git**                | The base has none, so the base's settings are the defaults (the same as an empty `{}`). The new config is compared with the defaults, setting by setting. A new config that only sets time limits affects no project below the root. |
 | **removed**                                                            | The working tree's settings are the defaults; the base's are read from the commit.                                                                                                                                                   |
 | **changed**                                                            | Compared setting by setting.                                                                                                                                                                                                         |
 | **renamed between `.json` and `.ts`**                                  | A `.ts` file is among the changed files, so every project is affected (below).                                                                                                                                                       |
 | **not valid JSON, or not a valid config, in the working tree**         | Unchanged: every command that loads the config stops with exit 2 before any step.                                                                                                                                                    |
 | **not valid JSON, or not a config this version can read, at the base** | Every project is affected. The reason says the base's config could not be read.                                                                                                                                                      |
 | **of a newer shape**                                                   | See below.                                                                                                                                                                                                                           |
+
+### A config that git ignores
+
+Git lists an ignored file nowhere: not among the changed files, not among the untracked ones, and in no commit. So nothing above may depend on git listing the config.
+
+- **Its settings.** The config is compared with the comparison commit's whether or not it is among the changed files (`configkey::effect_for_affected`). An ignored config has no copy in that commit, so it is compared with the defaults, as an untracked one is. A command or a shared setting that an ignored config sets therefore counts as changed in every `--affected` run and every run of the stop hook: the projects it reaches are affected each time, and their kept passes are served when their files did not change. An ignored config that only sets time limits affects nothing.
+- **Its bytes in the key.** For a unit whose scope contains the repo root, the bytes are read from disk when git does not list the file (`stepcache::list_files`), so they are in the key like those of a tracked config. It is the only ignored file in a key.
+- **Its bytes under `--affected`.** No commit has a copy to compare the bytes with. Counting an ignored config as changed in every run is the safe side, but a bad trade: a root project's key covers the whole repo, so it would run for real in every `--affected` run of a repo that has one, whatever changed. So the bytes are compared with what the last verify run that passed saw. `.firescale/ignored-config.digest` holds their digest; it is written at the end of a verify run whose result is `ok` or `partial`, from the bytes read before any step ran. When the digest differs, or there is none, the units whose scope contains the repo root run, with the reason `firescale.config.json, which git ignores, changed since the last run that passed, and these steps can read every file of the repo, the config among them`. A run in which something failed writes nothing, so the next run runs them again.
+- **Why that lets no change through.** The record changes only at the end of a run in which nothing failed. In such a run each of these units either ran with the new bytes (or was served under a key that holds them), or was left out because the record already held the same digest. With no record (a new clone, `.firescale` deleted) the units run once.
+- **The base.** A step whose key holds the ignored config as a file is never "the same on the base": the base commit has no copy of it. For a step below the root, what the config's difference reaches is asked whether or not the changed files name the config (`StepCache::same_on_base`).
+
+Not covered: a `firescale.config.ts` that git ignores. Its commands and shared settings are in the keys by value, but its bytes are not, and `--affected` does not compare it. `check --affected` also still takes "the config changed" from git's list (ADR 0056), so it does not see a change to an ignored config.
 
 ### A config this version cannot read
 
@@ -136,7 +148,7 @@ The shared settings digest is also made from the value the `.ts` config resolved
 
 The base run executes the **working tree's plan and settings** in a worktree of the base commit (ADR 0037); the base's config file is only a file there.
 
-- **Same inputs** (`StepCache::same_on_base`): a step's head result is its base result when no file its key holds differs. For a step whose scope does not contain the repo root, the config is no longer such a file. So when `firescale.config.json` is among the files changed since the base, the step counts as the same only if the config comparison above (against the blame base, the same merge base) says no setting of that step changed. If the comparison was not made, the step does not count as the same. This keeps what 0.5.0 did for every change that matters, and adds the shortcut only for the "out" settings. For a step whose scope contains the repo root the config is a file of the key, so any byte change of it reaches the step and the base run is made, as in 0.5.0.
+- **Same inputs** (`StepCache::same_on_base`): a step's head result is its base result when no file its key holds differs. For a step whose scope does not contain the repo root, the config is no longer such a file. So the step counts as the same only if the config comparison above (against the blame base, the same merge base) says no setting of that step changed, whether or not the config is among the files changed since the base. If the comparison was not made (a `firescale.config.ts`), a config among those files means the step does not count as the same. This keeps what 0.5.0 did for every change that matters, and adds the shortcut only for the "out" settings. For a step whose scope contains the repo root the config is a file of the key, so any byte change of it reaches the step and the base run is made, as in 0.5.0.
 - **The base store's key** (`StepCache::base_key`) is the step's key (with the shared settings line, since the base step runs under the working tree's settings), the base commit, `environment` (links or `baseInstall`, env files) and the base's files. The base's config blob is among those files only for a step whose scope contains the repo root; the commit id, which fixes it, is there for every step.
 - **The `fixed` pairing** (`blame::fixed_key`) is made from the base key and the head key, so it follows both.
 
@@ -214,7 +226,9 @@ For each setting moved out of the key, a change of it was looked for that alters
 **Known limits**
 
 - A command of a project in a folder below the root that reads `firescale.config.json` itself, by a path that leaves its folder (a test that asserts the file's text, or a step that runs `fscale verify --dry-run` on the repo and compares the output), is not run again when only an "out" setting or the file's layout changes. A step whose scope contains the repo root is run again. No rule of firescale can see that a test opens a file by its path; ADR 0034 accepts the same for a root `README.md`.
+- The same holds for a tool that a step of a project below the root runs and that finds its settings file at the repo root, when those settings make it read `firescale.config.json`: cspell started in a project's folder with a root `cspell.json` whose `files` reach the root, say. The settings file is in that step's key (it is a root file); the firescale config it points at is not.
 - A rule that reads every file (`core/no-secrets-in-source`) reads the config's text too. A step of a project below the root that runs `fscale check` inside is not run again for a secret typed into an "out" setting; verify's own `check` step runs fresh in every run and reports it.
+- A `firescale.config.ts` that git ignores, and `check --affected` with an ignored config: see "A config that git ignores".
 - After only `verify.baseInstall` changes, a failing step of a project below the root whose files are the same on the base is `pre-existing` with no base run (see "What was tried against it").
 - A custom pack's files and the modules a `.ts` config imports are files of the repo, keyed by ADR 0036's rules like any other. Nothing changes for them.
 
@@ -234,3 +248,21 @@ A review of the first version proved two holes. Both have a test that failed fir
 - Test: `an_unknown_key_named_like_a_setting_cannot_hide_that_setting`.
 - Decision: a top-level key this version does not know is listed as `<key> (an unknown key)`. No setting's name ends that way. `packs` and `rules` keep their names. The reason of an affected run shows the new name: `... changed (future (an unknown key))`.
 - The working tree's config cannot have an unknown key, so no key of a working tree changes with this.
+
+## After the second review
+
+A second review confirmed both fixes above for a tracked config and for a plainly untracked one, and proved a gap for a config that git ignores (untracked, and matched by `.gitignore`). Each part has a test that failed first.
+
+**1. `--affected` and the stop hook missed the settings of an ignored config.** `configkey::effect_for_affected` compared the configs only when git listed `firescale.config.json` among the changed files, and git lists an ignored file nowhere. With two projects and an ignored config that gave `web` a failing test command, `verify --affected` said `in web: not affected` where a full run fails. `StepCache::same_on_base` had the same gate.
+
+- Tests: in Rust `a_config_that_git_ignores_is_compared_though_no_list_names_it` and `a_config_change_that_no_list_names_still_reaches_the_base_comparison`; in `config-affects.test.ts`, under "when git ignores the config", the tests for a project's command, `verify.ci`, `verify.failOnSkipped`, a time limit and the stop hook.
+- Decision: the comparison is always made. A config with no copy in the comparison commit is compared with the defaults.
+
+**2. The bytes of an ignored config were in no key.** The step cache lists files with `git ls-files --exclude-standard`, so an ignored config was never offered to `stepcache::covers`. A root lint that fails on a config with no final line end kept its pass after the config was rewritten that way. Read from the code of the commit this branch started from: the same list was used there, so this was so before this ADR.
+
+- Tests: in Rust `a_config_that_git_ignores_is_a_file_of_a_key_that_holds_the_repo_root` and `only_a_config_that_git_ignores_has_a_digest_and_a_record`; in `config-affects.test.ts`, the three root-lint tests under "when git ignores the config".
+- Decision: see "A config that git ignores": the bytes are read from disk for the keys that hold them; under `--affected` they are compared with what the last run that passed saw; such a step is never the same on the base.
+
+**3. A wrong note after a rename.** After `git mv firescale.config.json firescale.config.ts`, `--affected` ran every project and still said that the change "runs no project". The note is now said only when nothing runs every project. Test: "does not say that the change runs no project after a rename from .json to .ts".
+
+The owner's case holds with the config ignored too: "runs no project for a git-ignored config that only sets two test timeouts" (six projects below the root, nothing at the root) runs 0 of 6.

@@ -491,9 +491,20 @@ A change to `firescale.config.json` runs a step of a project in a folder below t
 | Time limits (`verify.timeout`, `verify.idleTimeout`, every `timeout` of a step or a project) and `verify.baseBudget` | Nothing.                                                                                                  |
 | `verify.labelFixed`, `verify.baseInstall`, `verify.tamper`, `protectedPaths`, `agent`, `$schema`                     | Nothing. (`baseInstall` is part of the key of a kept base result, as before.)                             |
 
-Turning a step or a project off runs nothing. With `--affected`, the config is compared with the one at the commit the run measures from (the merge base with `--base`, or the last commit); a config that is new or untracked is compared with the defaults, and a removed one the other way round. Every project still runs when that commit's config cannot be read by this version (not valid JSON, or a setting it does not know), and for any change to a `firescale.config.ts`: it is code, so its bytes stay in every step's key. When a config change runs nothing, a note says so. When it runs only the steps at the repo root, their line under "Why each ran" says so: `changed: firescale.config.json` for a root project, and `firescale.config.json changed, and these steps can read every file of the repo, the config among them` otherwise.
+Turning a step or a project off runs nothing. With `--affected`, the config is compared with the one at the commit the run measures from (the merge base with `--base`, or the last commit); a config that is new, untracked or ignored by git is compared with the defaults, and a removed one the other way round. Every project still runs when that commit's config cannot be read by this version (not valid JSON, or a setting it does not know), and for any change to a `firescale.config.ts`: it is code, so its bytes stay in every step's key. When a config change runs nothing, a note says so. When it runs only the steps at the repo root, their line under "Why each ran" says so: `changed: firescale.config.json` for a root project, and `firescale.config.json changed, and these steps can read every file of the repo, the config among them` otherwise.
 
 After a time limit is lowered, a step of a project below the root that passed under the old one is still served from the cache. A step at the repo root runs again, like after any other edit of the config.
+
+**A config that git ignores** (in `.gitignore`) is treated the same, though git lists it nowhere:
+
+- Its settings are compared with the defaults in every `--affected` run and every run of the stop hook, since no commit has a copy of it. A command or a setting every step shares that it sets affects those projects each time (their kept passes are served when their files did not change); time limits affect nothing.
+- Its bytes are in the key of every step at the repo root, read from disk.
+- Under `--affected` and in the stop hook, the steps at the repo root run when the file is not as the last verify run that passed saw it, or when no run has seen it. The line under "Why each ran" says `firescale.config.json, which git ignores, changed since the last run that passed, ...`. The digest of the file as that run saw it is kept in `.firescale/ignored-config.digest`; deleting it is safe (those steps run once more).
+- Blame-aware verify never counts a step at the repo root as the same on the base while an ignored config is there: the base commit has no copy of it.
+
+Not covered: a `firescale.config.ts` that git ignores (its bytes are in no key), and `fscale check --affected`, which does not see a change to an ignored config.
+
+A step of a project below the root that reads `firescale.config.json` itself is not run again when only its layout or a setting that runs nothing changes: a test that opens the file by a path that leaves its folder, or a tool whose settings file at the repo root makes it read root files (cspell with a root `cspell.json`, started from a project's lint).
 
 ### Affected only
 
