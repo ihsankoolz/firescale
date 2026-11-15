@@ -141,6 +141,9 @@ describe('fscale check --affected', () => {
         'README.md': '# outer\n',
         'service/firescale.config.json': ENFORCED_CONFIG,
         'service/.env': FAKE_ENV,
+        'service/app/package.json': `${JSON.stringify({ name: 'app', version: '1.0.0' })}\n`,
+        'service/app/.env': FAKE_ENV,
+        'service/app/index.js': 'export const a = 1;\n',
       },
     });
     await commit(repo, 'initial');
@@ -153,6 +156,12 @@ describe('fscale check --affected', () => {
     // Paths are relative to the firescale root. `.env` belongs to no project
     // and the rule reads the new file, so its finding is kept too.
     expect(report.diagnostics.map((d) => d.file)).toEqual(['.env', 'sub/.env.local']);
+    // A change inside a project of the service reaches that project only
+    // when changed paths are relative to the firescale root, as project
+    // roots are. The rule does not read index.js, so `.env` is left out.
+    await commit(repo, 'second');
+    await repo.write('service/app/index.js', 'export const a = 2;\n');
+    expect(await files(repo, ['--affected', '--cwd', service])).toEqual(['app/.env']);
   });
 
   // A finding can sit on a file that did not change and that no affected
