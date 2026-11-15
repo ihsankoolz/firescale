@@ -13,7 +13,7 @@ use firescale_core::agentrun::{
 };
 use firescale_core::blame::BaseCommit;
 use firescale_core::check::run_check;
-use firescale_core::config::load_config;
+use firescale_core::config::{load_config, AgentLimits};
 use firescale_core::explain::rule_skill;
 use firescale_core::git::run_git;
 use firescale_core::model::Fixable;
@@ -85,26 +85,19 @@ fn adapter(name: &str) -> Result<Box<dyn Adapter>> {
     }
 }
 
-/// The limits of a run, from `agent` in `firescale.config.json`:
-/// `maxTurns` (30), `maxCostUsd` (2) and `timeoutSeconds` (900).
-fn limits(root: &Path) -> (u32, f64, u64) {
-    let config = std::fs::read_to_string(root.join("firescale.config.json"))
-        .ok()
-        .and_then(|text| {
-            serde_json::from_str::<serde_json::Value>(text.trim_start_matches('\u{feff}')).ok()
-        });
-    let agent = config.as_ref().and_then(|c| c.get("agent"));
-    let get = |key: &str| {
-        agent
-            .and_then(|a| a.get(key))
-            .and_then(serde_json::Value::as_f64)
-    };
+/// The limits of a run, from `agent` in the config that was loaded
+/// (`firescale.config.json` or `firescale.config.ts`): `maxTurns` (30, at
+/// most 1000), `maxCostUsd` (2) and `timeoutSeconds` (900, at most a day).
+fn limits(agent: &AgentLimits) -> (u32, f64, u64) {
     (
-        get("maxTurns").map_or(30, |v| v.clamp(1.0, 1000.0) as u32),
-        get("maxCostUsd")
+        agent
+            .max_turns
+            .map_or(30, |v| u32::try_from(v.clamp(1, 1000)).unwrap_or(1000)),
+        agent
+            .max_cost_usd
             .filter(|v| *v > 0.0 && v.is_finite())
-            .map_or(2.0, |v| v),
-        get("timeoutSeconds").map_or(900, |v| v.clamp(1.0, 86_400.0) as u64),
+            .unwrap_or(2.0),
+        agent.timeout_seconds.map_or(900, |v| v.clamp(1, 86_400)),
     )
 }
 
@@ -212,6 +205,7 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     let mut host = NodeHost::new(root);
     let config = load_config(root, &packs, &mut host)?;
     let protected = config.protected_paths.clone();
+    let (max_turns, max_cost, timeout) = limits(&config.agent);
     let selection = select_rules(config.rules, None)?;
     let outcome = run_check(root, &selection.rules, version(), &mut host, false)?;
     let wanted = args.rule.as_deref();
@@ -282,7 +276,6 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     let before = RepoState::capture(root);
 
     // 3 to 6. A scoped request under the policy.
-    let (max_turns, max_cost, timeout) = limits(root);
     let policy = Policy::strict(&limits_of_repo, &protected, max_turns, max_cost, timeout);
     if !policy
         .allowed_tools

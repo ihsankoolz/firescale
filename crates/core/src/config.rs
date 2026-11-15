@@ -62,6 +62,17 @@ pub struct ResolvedConfig<'a> {
     /// The `verify` section: per-step settings, per-project settings and
     /// whether a skipped step fails the run.
     pub verify: VerifyConfig,
+    /// The `agent` section: the limits of `fscale fix --agent`.
+    pub agent: AgentLimits,
+}
+
+/// The limits of an agent run as the config sets them (`agent`). `None`
+/// for one the config leaves out: the runner has the defaults.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AgentLimits {
+    pub max_turns: Option<u64>,
+    pub max_cost_usd: Option<f64>,
+    pub timeout_seconds: Option<u64>,
 }
 
 /// One custom rule, as described by the Node host.
@@ -297,7 +308,7 @@ pub fn resolve_config<'a>(
     };
 
     let verify = parse_verify(name, object.get("verify"))?;
-    check_agent(name, object.get("agent"))?;
+    let agent = check_agent(name, object.get("agent"))?;
 
     rules.sort_by(|a, b| a.meta.id.cmp(&b.meta.id));
     Ok(ResolvedConfig {
@@ -306,6 +317,7 @@ pub fn resolve_config<'a>(
         rules,
         protected_paths,
         verify,
+        agent,
     })
 }
 
@@ -680,10 +692,11 @@ pub fn load_verify_config(root: &Path) -> Result<VerifyConfig> {
 
 /// Checks the shape of `agent` (the limits of `fscale fix --agent`, M27):
 /// `maxTurns` and `timeoutSeconds` whole numbers of at least 1,
-/// `maxCostUsd` a number of at least 0.
-fn check_agent(name: &str, value: Option<&Value>) -> Result<()> {
+/// `maxCostUsd` a number above 0. Returns the ones that are set.
+fn check_agent(name: &str, value: Option<&Value>) -> Result<AgentLimits> {
+    let mut limits = AgentLimits::default();
     let Some(value) = value.filter(|v| !v.is_null()) else {
-        return Ok(());
+        return Ok(limits);
     };
     let Some(object) = value.as_object() else {
         return Err(Error::user(format!(
@@ -710,8 +723,13 @@ fn check_agent(name: &str, value: Option<&Value>) -> Result<()> {
                 }
             )));
         }
+        match key.as_str() {
+            "maxTurns" => limits.max_turns = value.as_u64(),
+            "timeoutSeconds" => limits.timeout_seconds = value.as_u64(),
+            _ => limits.max_cost_usd = value.as_f64(),
+        }
     }
-    Ok(())
+    Ok(limits)
 }
 
 #[cfg(test)]
@@ -833,11 +851,19 @@ mod tests {
 
     #[test]
     fn checks_the_agent_limits() {
-        assert!(check_agent(
-            "c",
-            Some(&json!({ "maxTurns": 5, "maxCostUsd": 0.5, "timeoutSeconds": 60 }))
-        )
-        .is_ok());
+        assert_eq!(
+            check_agent(
+                "c",
+                Some(&json!({ "maxTurns": 5, "maxCostUsd": 0.5, "timeoutSeconds": 60 }))
+            )
+            .unwrap(),
+            AgentLimits {
+                max_turns: Some(5),
+                max_cost_usd: Some(0.5),
+                timeout_seconds: Some(60),
+            }
+        );
+        assert_eq!(check_agent("c", None).unwrap(), AgentLimits::default());
         for (value, text) in [
             (json!([]), "\"agent\" must be an object"),
             (
