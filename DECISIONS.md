@@ -57,6 +57,7 @@ The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. 
 - Bug 7 keeps both clamps as they were (the config accepts any value of 1 or more; the run caps turns at 1,000 and time at 86,400 s).
 - Bug 8: a path rule in `.claude/settings.json` that does not compile also stops `fix --agent`, because the runner uses those rules as protected paths and dropped them the same way. It is a refusal of that command, not a `fscale check` error.
 - One existing test changed, to a stricter one: `checks_the_agent_limits` now asserts the values returned.
+- **After the review:** the Kotlin rule counted `with(assertThat(x)) { isEqualTo(3) }` and three like it as no assertion, which would report a false `assertion-removed` on a harmless refactor. Test first (`an_assert_that_checked_some_other_way_still_counts`, and a corpus case that showed the false finding), then one condition: the rule applies only where the call is a statement. The cost is a missed cheat in `@Test fun t() = assertThat(x)` and in a brace-less `if`. Java's rule may have the same false finding for `foo(assertThat(x))`; not tested, not touched.
 
 **Found while fixing, not fixed:** **a `protectedPaths` glob that compiles but can match no path (`./infra/**`, `/infra/**`, a bare `infra`) is accepted and protects nothing**; a rule's `inputs` glob that does not compile is still dropped from what the agent may change (fails safe); Claude Code's rule syntax is not globset's, so a rule Claude Code accepts but globset cannot compile now stops `fix --agent`.
 

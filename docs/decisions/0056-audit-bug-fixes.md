@@ -89,7 +89,9 @@ The rule-result cache wrote the same ignore file with the same mistake (`Cache::
 
 ### Bug 5: a lone `assertThat(x)` in Kotlin cannot fail
 
-The Kotlin reader of the tamper guard now has the rule the Java reader has: an `assertThat` with one argument and nothing chained, or whose last argument is Hamcrest's `anything()`, is not counted as an assertion. So `assertThat(total()).isEqualTo(3)` cut down to `assertThat(total())` is reported as `assertion-removed`. The rule was written into `kotlin.rs`; Kotlin was not merged into Java's pieces (audit item 9), and bug 18 was left alone. The labelled corpus gained two Kotlin cases (460 cases, none missed, no false finding).
+The Kotlin reader of the tamper guard now has the rule the Java reader has: an `assertThat` with one argument and nothing chained, or whose last argument is Hamcrest's `anything()`, is not counted as an assertion. So `assertThat(total()).isEqualTo(3)` cut down to `assertThat(total())` is reported as `assertion-removed`. The rule was written into `kotlin.rs`; Kotlin was not merged into Java's pieces (audit item 9), and bug 18 was left alone. The labelled corpus gained three Kotlin cases (461 cases, none missed, no false finding).
+
+The rule applies only where the call stands as a statement (its parent is a block or a lambda body). Elsewhere the check can be real though nothing is chained: `with(assertThat(x)) { isEqualTo(3) }`, `assertThat(x)!!.isEqualTo(3)`, the infix `assertThat(x) isEqualTo 3`, and an expression body `fun sum() = assertThat(x)` whose caller checks. Those still count, so a refactor into them is not reported. The cost is a missed cheat in the rarer forms: `@Test fun t() = assertThat(x)`, and a brace-less `if (r) assertThat(x)`. Java's rule has no such condition and was not touched.
 
 ### Bug 7: the agent limits come from the loaded config
 
