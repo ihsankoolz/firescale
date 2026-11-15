@@ -882,6 +882,39 @@ mod tests {
         );
     }
 
+    /// On Windows a folder link that needs no admin rights is a junction.
+    #[cfg(windows)]
+    #[test]
+    fn nothing_is_read_or_written_through_a_junction() {
+        let (temp, times) = times();
+        let outside = tempfile::tempdir().unwrap();
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(temp.path().join(".firescale"))
+            .arg(outside.path())
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "{}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        times.record(None, "test", "t", HOUR, Outcome::Passed);
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        fs::write(
+            outside.path().join(STEP_TIMES_FILE),
+            r#"{"format":1,"steps":[{"step":"test","command":"t","durationMs":3600000,"finished":true,"ranAt":1}]}"#,
+        )
+        .unwrap();
+        // The link works (the file is there through it), and is not followed.
+        assert!(temp
+            .path()
+            .join(".firescale")
+            .join(STEP_TIMES_FILE)
+            .exists());
+        assert_eq!(times.last(None, "test", "t"), Ok(None));
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_lock_is_not_written_through_a_symbolic_link() {
