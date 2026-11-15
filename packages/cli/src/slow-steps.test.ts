@@ -3,7 +3,7 @@
 // stopped or timed out, and `--budget` leaves out steps slower than a time.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
@@ -291,7 +291,6 @@ describe('a step that did not finish leaves how long it ran', () => {
     await writeFile(path.join(repo.root, 'quick.flag'), '');
     expect((await runCli(['verify'], repo.root, NOT_CI)).code).toBe(EXIT_OK);
     await setTime(repo.root, 'test', { durationMs: 100 * MINUTE });
-    const { rm } = await import('node:fs/promises');
     await rm(path.join(repo.root, 'quick.flag'));
     // Timed out after 2 s: that says nothing new about a step of 1h 40m.
     // (--no-cache: the pass above is in the step cache.)
@@ -369,6 +368,10 @@ function headline(stdout: string): string {
   return stdout.split(/\r?\n/)[0] ?? '';
 }
 
+/** How the Not run paragraph ends: what changes a kept time, and what forgets it. */
+const KEPT_TIME_HINT =
+  'Its kept time comes down only when it passes in a run of fscale verify without --budget; running the command by hand changes nothing. To forget every kept time, delete .firescale/step-times.json.';
+
 describe('verify --budget leaves out the steps that are known to take longer', () => {
   const verify = { lint: nodeScript('lint.js'), typecheck: false, test: nodeScript('test.js') };
   const files = {
@@ -393,7 +396,7 @@ describe('verify --budget leaves out the steps that are known to take longer', (
       '  test       NOT RUN  over the budget of 30m: it took 1h 40m when it last ran\n',
     );
     expect(result.stdout).toContain(
-      `\nNot run: test was not started, because it took 1h 40m when it last ran and the budget is 30m (--budget). This run says nothing about it. To run it: ${nodeScript('test.js')}, or run fscale verify without --budget.\n`,
+      `\nNot run: test was not started, because it took 1h 40m when it last ran and the budget is 30m (--budget). This run says nothing about it. To run it: ${nodeScript('test.js')}. ${KEPT_TIME_HINT}\n`,
     );
     expect(result.stdout).not.toMatch(/verify: OK/);
     // Lint is under the budget and ran; the test command was never started.
@@ -414,6 +417,33 @@ describe('verify --budget leaves out the steps that are known to take longer', (
       'verify: OK (1 of 3 steps passed from the cache, not run now)',
     );
     expect(await ran(repo.root)).toEqual(['lint', 'test']);
+  });
+
+  const BUDGET_RUN = ['verify', '--budget', '30m', '--no-cache'];
+
+  it('brings a step back once the file of kept times is deleted, as the summary says', async () => {
+    const repo = await repoWith(verify, files);
+    await seedTimes(repo.root, slowTest(true, 100));
+    const left = await runCli(BUDGET_RUN, repo.root, NOT_CI);
+    expect(left.stdout).toContain(KEPT_TIME_HINT);
+    expect(await ran(repo.root)).toEqual(['lint']);
+    // Deleting the file forgets every kept time: the step runs again, and
+    // its pass sets a new, short time.
+    await rm(timesPath(repo.root));
+    const back = await runCli(BUDGET_RUN, repo.root, NOT_CI);
+    expect(headline(back.stdout)).toBe('verify: OK');
+    expect(await ran(repo.root)).toEqual(['lint', 'lint', 'test']);
+    const kept = (await readTimes(repo.root)).steps.find((r) => r.step === 'test');
+    expect(kept?.durationMs).toBeLessThan(MINUTE);
+  });
+
+  it('brings a step back once it passes in a run without --budget', async () => {
+    const repo = await repoWith(verify, files);
+    await seedTimes(repo.root, slowTest(true, 100));
+    expect((await runCli(['verify', '--no-cache'], repo.root, NOT_CI)).code).toBe(EXIT_OK);
+    const back = await runCli(BUDGET_RUN, repo.root, NOT_CI);
+    expect(headline(back.stdout)).toBe('verify: OK');
+    expect(await ran(repo.root)).toEqual(['lint', 'test', 'lint', 'test']);
   });
 
   it('says the same in JSON: the status, the reason, the last known time and the count', async () => {
@@ -497,7 +527,7 @@ describe('verify --budget leaves out the steps that are known to take longer', (
       '    test       NOT RUN  over the budget of 45m: it took 1h 40m when it last ran\n',
     );
     expect(result.stdout).toContain(
-      `\nNot run: test in backend/api was not started, because it took 1h 40m when it last ran and the budget is 45m (--budget). This run says nothing about it. To run it in backend/api: ${nodeScript('test.js')}, or run fscale verify without --budget.\n`,
+      `\nNot run: test in backend/api was not started, because it took 1h 40m when it last ran and the budget is 45m (--budget). This run says nothing about it. To run it in backend/api: ${nodeScript('test.js')}. ${KEPT_TIME_HINT}\n`,
     );
     expect(await ran(repo.root)).toEqual(['lint']);
   });

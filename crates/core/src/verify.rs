@@ -4653,7 +4653,7 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("\nNot run: lint was not started, because it took 1h 40m when it last ran and the budget is 30m (--budget). This run says nothing about it. To run it: echo slow, or run fscale verify without --budget.\n"), "{text}");
+        assert!(text.contains("\nNot run: lint was not started, because it took 1h 40m when it last ran and the budget is 30m (--budget). This run says nothing about it. To run it: echo slow. Its kept time comes down only when it passes in a run of fscale verify without --budget; running the command by hand changes nothing. To forget every kept time, delete .firescale/step-times.json.\n"), "{text}");
         let json = format_verify_json(&report);
         assert!(json.contains("\"status\": \"over-budget\""), "{json}");
         assert!(json.contains("\"budgetMs\": 1800000"), "{json}");
