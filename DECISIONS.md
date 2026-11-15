@@ -158,6 +158,13 @@ From your run of 0.5.0 on the course project on Windows: a full verify ran over 
   - `--budget` given to another command: not changed. The other options that only verify reads are accepted without a word on other commands too (I tried `check --jobs 4`, `check --progress`, `check --shared-cache x`, `check --head abc`, `check --rule x`, `facts --jobs 3`, `doctor --approvals f`: all exit 0). See below.
   - The junction: `nothing_is_read_or_written_through_a_junction` (steptimes.rs, Windows only, made with `mklink /J`). It passed at once: Rust already takes a junction for a link.
 
+**After a second review** (a fresh reader of the review fixes; nothing high, two medium, four low):
+
+- **With `--budget`, kept times that could not be read were said only in a progress line.** A piped run, as an agent or a script makes it, said nothing and read `OK`. Test: `says in the summary and in --json, with no progress shown, that --budget could not read the kept times` (slow-steps.test.ts: "expected [] to have a length of 1"). Now the run also has one warning in the summary and in the JSON.
+- **A lock that could not be removed cost 7 seconds for every step.** Tests: `a_lock_that_is_never_given_up_is_waited_for_once_in_a_run` ("the second record waited 7.002292s for the same lock") and `a_folder_in_the_locks_place_is_not_waited_for` ("two records waited 2.0045846s for a lock that is a folder"), both in steptimes.rs. Now the long wait is paid once in a run, and a folder in the lock's place is not waited for.
+- **A step that a time limit stopped got the short wait for its record**, though the docs said a step that ended waits. No heartbeat follows such a step, so a lock held for a moment left its time out. Test: `the_record_of_a_step_that_a_limit_stopped_waits_for_the_lock` (it came with the fix: it needs the new `record_ended`). Only a step stopped for you (Ctrl+C) keeps the short wait.
+- **Not fixed, now written down in ADR 0057 under "Not done":** a lock is called stale by the file's time against this machine's clock, so on a file system whose clock is more than 5 seconds apart the lock keeps nobody out; an owner held past 5 seconds can remove the lock of the writer that took over; a killed verify can leave `.step-times.json.<pid>.tmp` behind. Each can lose one record; none corrupts the file.
+
 **Found while fixing, not fixed:**
 
 - `fscale hooks --budget 30m run --agent claude` exits with 2: `is_stop_hook` counts an option's value as a word. You said you fix this in a later pull request, with the other options.
