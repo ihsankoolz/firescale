@@ -3592,6 +3592,56 @@ fn affected_report(plan: &VerifyPlan) -> Option<AffectedReport> {
     })
 }
 
+/// What a dry run adds to its plan for `--budget`: the planned steps whose
+/// kept time is over the budget, which a run would not start (ADR 0057). A
+/// dry run does not read the step cache, so it says that a kept pass there
+/// would be taken first.
+#[must_use]
+pub fn format_budget_plan(plan: &VerifyPlan, times: &StepTimes, budget: Duration) -> String {
+    let limit = format_limit(budget);
+    let runs =
+        |project: Option<&ProjectPlan>| plan.affected.as_ref().is_none_or(|a| a.runs(project));
+    let root = runs(None).then_some((None, plan.steps.as_slice()));
+    let projects = plan
+        .projects
+        .iter()
+        .filter(|project| runs(Some(project)))
+        .map(|project| (Some(project.root.as_str()), project.steps.as_slice()));
+    let mut left_out = Vec::new();
+    for (project, steps) in root.into_iter().chain(projects) {
+        for (name, planned) in steps {
+            let Planned::Command(command) = planned else {
+                continue;
+            };
+            let known = match times.last(project, name, command) {
+                Ok(known) => known,
+                Err(error) => {
+                    return format!(
+                        "\nWith --budget {limit}: {error}, so which steps would be left out is not known.\n"
+                    );
+                }
+            };
+            if let Some(known) = known.filter(|known| known.duration > budget) {
+                let place = match project {
+                    Some(project) => format!("{name} in {}", place_name(project)),
+                    None => name.clone(),
+                };
+                left_out.push(format!("  {place}: {}\n", known.describe()));
+            }
+        }
+    }
+    if left_out.is_empty() {
+        return format!(
+            "\nWith --budget {limit}, no step would be left out: none is known to take longer.\n"
+        );
+    }
+    format!(
+        "\nWith --budget {limit}, {} would not be run:\n{}A step whose pass is in the step cache is taken from it and not left out; a dry run does not look there.\n",
+        plural_steps(left_out.len()),
+        left_out.concat()
+    )
+}
+
 /// `fscale verify --dry-run`: what would run, and for `--affected` why,
 /// without running anything (not even the check).
 #[must_use]

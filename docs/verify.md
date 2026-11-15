@@ -536,7 +536,7 @@ Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
 
 ### Dry run
 
-`fscale verify --dry-run` prints the plan and runs nothing: not the check, not a script, not an install, not Node. It reads only the `verify` settings of `firescale.config.json`; a `firescale.config.ts` is code, so a dry run refuses it (exit 2). With `--affected` it says which projects would run and why. It has no `--json` form.
+`fscale verify --dry-run` prints the plan and runs nothing: not the check, not a script, not an install, not Node. It reads only the `verify` settings of `firescale.config.json`; a `firescale.config.ts` is code, so a dry run refuses it (exit 2). With `--affected` it says which projects would run and why. With `--budget <time>` it names the steps a run would leave out for their kept time. It has no `--json` form.
 
 On Windows the command line is handed to `cmd` exactly as written, so `cmd` quoting works (`node -e "..."`, `"C:\Program Files\tool\tool.exe" arg`).
 
@@ -627,7 +627,7 @@ When a step needs setup, the message the agent gets starts with `SETUP NEEDED:`,
 - A Node, Rust or Go project's commands run with the tools found on the PATH. A Python project's run with its interpreter (see above).
 - Setup detection only knows the messages in the table. A setup problem with another message is a normal failure.
 - Projects run one after another unless `--jobs` is given.
-- A step's kept time is known by its project, name and command: a step whose command changes starts with no kept time, so it is not announced and `--budget` runs it. A step that has never run on this machine has no kept time either. `--budget` adds nothing to `--dry-run`, which lists what would run without it.
+- A step's kept time is known by its project, name and command: a step whose command changes starts with no kept time, so it is not announced and `--budget` runs it. A step that has never run on this machine has no kept time either. With `--dry-run`, `--budget` adds a paragraph to the plan that names each planned step a run would not start (`With --budget 30m, 1 step would not be run:` and `test in backend/api: it took 1h 40m when it last ran`), or says that no step would be left out. A dry run does not read the step cache, so it also says that a kept pass there would be taken first.
 - The time left assumes the tests still to run take as long, each, as the ones done. A command that runs several test sessions one after another prints a percent that starts again for each; the time left then follows the session it is in.
 - A step that is skipped in every run stays in the summary until it gets a command or is set to `false`.
 - `verify` is as fast as the repo's own commands. firescale's share is a few milliseconds (see `bench/RESULTS.md`).

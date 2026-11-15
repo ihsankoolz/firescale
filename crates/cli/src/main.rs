@@ -49,9 +49,9 @@ use firescale_core::steptimes::StepTimes;
 use firescale_core::tamper;
 use firescale_core::verify::add_tamper;
 use firescale_core::verify::{
-    check_project_folders, format_verify_human, format_verify_json, format_verify_plan,
-    limit_to_affected, plan_verify, run_verify_with, stopped_in_check, CheckStep, RunOptions,
-    VerifyPlan, VerifyReport, VerifyResult, STOPPED_IN_CHECK, TAIL_LINES,
+    check_project_folders, format_budget_plan, format_verify_human, format_verify_json,
+    format_verify_plan, limit_to_affected, plan_verify, run_verify_with, stopped_in_check,
+    CheckStep, RunOptions, VerifyPlan, VerifyReport, VerifyResult, STOPPED_IN_CHECK, TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -1197,7 +1197,12 @@ fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
     } else {
         "fscale check"
     };
-    Ok(Output::ok(format_verify_plan(&plan, check_command)))
+    let mut text = format_verify_plan(&plan, check_command);
+    // With a budget the plan also names the steps a run would not start.
+    if let Some(budget) = budget(args)? {
+        text.push_str(&format_budget_plan(&plan, &StepTimes::new(root), budget));
+    }
+    Ok(Output::ok(text))
 }
 
 /// Runs check and then the planned lint, typecheck and test commands.
