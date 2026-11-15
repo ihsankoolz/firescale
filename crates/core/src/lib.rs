@@ -27,6 +27,7 @@ pub mod jsonedit;
 pub mod ledger;
 pub mod model;
 pub mod node;
+pub mod ownfolder;
 pub mod pertest;
 pub mod process;
 pub mod progress;
