@@ -2065,19 +2065,12 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         fs::write(
             outside.path().join("planted.env"),
-            "LINKED_NAME=made-up-value-135
-LINKED_DB_URL=postgresql://u:made-up-pw@localhost:5999/x
-",
+            "LINKED_NAME=made-up-value-135\nLINKED_DB_URL=postgresql://u:made-up-pw@localhost:5999/x\n",
         )
         .unwrap();
         let repo = tempfile::tempdir().unwrap();
         let root = repo.path();
-        fs::write(
-            root.join(".env.example"),
-            "LINKED_NAME=
-",
-        )
-        .unwrap();
+        fs::write(root.join(".env.example"), "LINKED_NAME=\n").unwrap();
         std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env")).unwrap();
         let report = run_doctor(root, &RepoFacts::default(), &Bare);
         let found: Vec<(&str, &str, Status, &str, Option<&str>)> = report
@@ -2115,17 +2108,10 @@ LINKED_DB_URL=postgresql://u:made-up-pw@localhost:5999/x
         fs::create_dir_all(root.join("svc")).unwrap();
         fs::write(
             root.join("svc").join(".env.example"),
-            "LINKED_NAME=
-SVC_OWN=
-",
+            "LINKED_NAME=\nSVC_OWN=\n",
         )
         .unwrap();
-        fs::write(
-            root.join("svc").join(".env"),
-            "SVC_OWN=made-up-own-246
-",
-        )
-        .unwrap();
+        fs::write(root.join("svc").join(".env"), "SVC_OWN=made-up-own-246\n").unwrap();
         let facts = RepoFacts {
             projects: vec![crate::facts::Project {
                 root: "svc".to_owned(),

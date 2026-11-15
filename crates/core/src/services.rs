@@ -814,16 +814,14 @@ REDIS_PORT=6390
         let outside = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             outside.path().join("planted.env"),
-            "LINKED_DB_URL=postgresql://u:p@localhost:5999/x
-",
+            "LINKED_DB_URL=postgresql://u:p@localhost:5999/x\n",
         )
         .expect("write");
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         std::fs::write(
             root.join(".env.local"),
-            "OWN_DB_URL=postgresql://u:p@localhost:5433/test
-",
+            "OWN_DB_URL=postgresql://u:p@localhost:5433/test\n",
         )
         .expect("write");
         std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env"))
