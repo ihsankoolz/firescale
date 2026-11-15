@@ -2220,6 +2220,25 @@ mod tests {
         assert!(set.everything.is_some());
     }
 
+    /// The owner's report (ADR 0058): an untracked `image.png` was not named
+    /// as inert, because an untracked `firescale.config.json`, which sorts
+    /// before it, had already widened the run and ended the walk.
+    #[test]
+    fn inert_files_are_listed_whatever_else_changed() {
+        let fixture = course_project().unwrap();
+        let graph = graph_of(&fixture);
+        for other in [
+            "firescale.config.ts",
+            "docker-compose.yml",
+            "deploy.sh",
+            ".github/workflows/ci.yml",
+        ] {
+            let set = affected(&graph, &changed(&[other, "image.png", "README.md"]));
+            assert!(set.everything.is_some(), "{other}");
+            assert_eq!(set.inert_files, ["README.md", "image.png"], "{other}");
+        }
+    }
+
     #[test]
     fn an_image_a_project_imports_or_a_root_project_holds_is_not_inert() {
         // An image outside every project that a project imports is a shared
