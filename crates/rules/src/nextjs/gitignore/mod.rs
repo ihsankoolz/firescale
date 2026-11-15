@@ -34,7 +34,8 @@ impl BuiltinRule for NextGitignore {
             severity: Severity::Medium,
             category: Category::Consistency,
             description: ".gitignore ignores .next/ and next-env.d.ts.".to_owned(),
-            inputs: vec![".gitignore".to_owned()],
+            // package.json decides whether the pack applies.
+            inputs: vec![".gitignore".to_owned(), "package.json".to_owned()],
             has_fix: true,
             after: vec!["core/gitignore-basics".to_owned()],
         }
