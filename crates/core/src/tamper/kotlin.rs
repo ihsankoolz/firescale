@@ -282,6 +282,31 @@ fn cannot_fail(links: &[Node<'_>], src: &[u8]) -> bool {
     let all = |call: Node<'_>| -> Option<Vec<Literal>> {
         literal_arguments(call, src).into_iter().collect()
     };
+    // As in Java: AssertJ's `assertThat(x)` with nothing chained checks
+    // nothing; Hamcrest's `assertThat(x, anything())` matches every value.
+    if let [call] = links {
+        if call_name(*call, src) == "assertThat" {
+            match value_arguments(*call).as_slice() {
+                [_] => return true,
+                [.., matcher] => {
+                    let matcher = argument(*matcher, src)
+                        .1
+                        .map(|matcher| squeezed(matcher, src))
+                        .unwrap_or_default();
+                    if matches!(
+                        matcher.as_str(),
+                        "anything()"
+                            | "Matchers.anything()"
+                            | "CoreMatchers.anything()"
+                            | "`is`(anything())"
+                    ) {
+                        return true;
+                    }
+                }
+                [] => {}
+            }
+        }
+    }
     match links {
         [call] => {
             let name = call_name(*call, src);
@@ -1914,5 +1939,23 @@ val t = """
         };
         assert_eq!(why(&inner("@Nested ")), [None]);
         assert_eq!(why(&inner("")), [Some(NOT_FOUND_CLASS)]);
+    }
+
+    #[test]
+    fn assert_that_with_nothing_to_check_cannot_fail() {
+        let count = |line: &str| {
+            read(&format!(
+                "class CalcTest {{\n    @Test fun adds() {{\n        {line}\n    }}\n}}\n"
+            ))
+            .assertions
+            .len()
+        };
+        assert_eq!(count("assertThat(add(1, 2)).isEqualTo(3)"), 1);
+        assert_eq!(count("assertThat(add(1, 2)).isNotNull()"), 1);
+        assert_eq!(count("assertThat(add(1, 2), equalTo(3))"), 1);
+        assert_eq!(count("assertThat(add(1, 2))"), 0);
+        assert_eq!(count("Assertions.assertThat(add(1, 2))"), 0);
+        assert_eq!(count("assertThat(add(1, 2), anything())"), 0);
+        assert_eq!(count("assertThat(\"sum\", add(1, 2), `is`(anything()))"), 0);
     }
 }

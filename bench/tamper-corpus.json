@@ -5691,6 +5691,30 @@
       "head": {
         "Tests/CalcTests/CalcTests.swift": "import XCTest\n@testable import Calc\n\n#if canImport(_Concurrency)\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3)\n    }\n    func testPositive() {\n        XCTAssertGreaterThan(add(1, 1), 0)\n    }\n}\n#endif\n"
       }
+    },
+    {
+      "name": "kotlin: an AssertJ assertion with nothing chained",
+      "expect": ["assertion-removed"],
+      "note": "`assertThat(x)` alone checks nothing, as in Java (ADR 0052).",
+      "base": {
+        "src/main/kotlin/calc/Calc.kt": "package calc\n\nfun add(a: Int, b: Int) = a + b\n",
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertThat(add(1, 2)).isEqualTo(3)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertThat(add(1, 2))\n    }\n}\n"
+      }
+    },
+    {
+      "name": "kotlin: an AssertJ chain broken over two lines",
+      "expect": [],
+      "note": "The check is on the next line: still one assertion that can fail.",
+      "base": {
+        "src/main/kotlin/calc/Calc.kt": "package calc\n\nfun add(a: Int, b: Int) = a + b\n",
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertThat(add(1, 2)).isEqualTo(3)\n    }\n}\n"
+      },
+      "head": {
+        "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertThat(add(1, 2))\n            .isEqualTo(3)\n    }\n}\n"
+      }
     }
   ]
 }
