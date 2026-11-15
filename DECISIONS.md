@@ -2,6 +2,48 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## 0.5.1 — fixes after running 0.5.0 on the course project (run of 2026-11-15, second)
+
+You ran 0.5.0 on the course project on Windows: a full verify took over 1h 33m and was stopped. This run is five pull requests from that. For each item: a test that failed first, then the fix; an item that could not be reproduced was left alone and says what was tried. The pull requests were built side by side and merged as each was ready, so they are in the order they merged, under the numbers you gave them.
+
+**Pull request 3: stopped runs and doctor**
+
+- **Item 1 (a stopped run and its labels), reproduced and fixed.** Failing tests first, both in the new `packages/cli/src/stopped-labels.test.ts`: `says that failures were not labelled and the tamper guard did not run` (the summary had `lint FAILED` and `test STOPPED` and no word on the base) and `carries the same fact in --json` ("expected undefined to be false": the report had no `base` at all). The fixture is on a `feature` branch with a base on `main`; lint fails at once, the test step hangs, and the run gets SIGINT (on Windows, Ctrl+Break through `fscale-ctrl-break`). Fix: a stopped run with a base now reports the base with `compared: false`, its `reference`, its `commit` and a `reason`, and the summary prints `Not compared with the base commit 1a2b3c4 (main): the run was stopped first, so no failure is labelled `new` or `pre-existing`, and the tamper guard did not run. Run fscale verify again and let it finish to get both.`
+- **Item 2 (doctor and a root `.env`), reproduced and fixed.** Failing test first: `finds a variable in the .env of a folder above, names the file, and never prints a value` (doctor.test.ts: doctor said `2 of 2 variables are not set in the environment, and there is no backend/svc/.env` with both names set in `.env` and `backend/.env.local` above). Fix: the env check reads `.env` and `.env.local` in the example's folder and in every folder above it, up to the firescale root, and says in which file it found a name. A second test, `says so when no folder at or above the project has an env file`, pins the text for that case. After the review: `never reads a .env above the firescale root` pins that too (it passed at once; the code already stopped at the root).
+
+- **After the review** (no must-fix): the wording "after a stop verify starts nothing more" was too wide and is narrowed in `docs/verify.md` and ADR 0059 to a stop before the head's steps finished. A unit test, `a_stopped_run_with_a_base_says_that_nothing_was_compared` (verify.rs), pins when the paragraph is printed (stopped with a base, with or without a failure) and when it is not (stopped with no base; finished and compared). The stopped-run test waits 30 s for its step inside a 60 s limit and puts fscale's output in the failure message, also on Windows.
+
+**What the code says about env files** (the facts you asked for; also in ADR 0059):
+
+- verify loads no env file into a step. A step gets the environment verify was started in, plus `CI`, `NO_COLOR`, `FORCE_COLOR` and `PYTHONUNBUFFERED` (`environment` in `verify.rs`).
+- The project's own tools read the files. python-dotenv's `load_dotenv()` looks in the folders above. pydantic-settings reads the `env_file` it is given (relative to the working folder, or a path the code builds). Vite reads its `envDir`. Docker Compose reads the `.env` beside the Compose file. firescale cannot tell which one a project uses.
+- Doctor's services check already read `.env` and `.env.local` in the folders above a project. The rule `core/env-example` accepts a `.env.example` at or above the reading file. The base run copies the root's and each project's `.env` into its worktree. Only doctor's env check read the example's own folder alone.
+
+**Decided on your behalf** (ADR 0059):
+
+- Item 1 is the plain statement, not labels. When the stop arrives before the head's own steps have finished, verify starts nothing more: no base run, no kept base result, no tamper guard, no git. A base run can take as long as the run that was just stopped, and on Windows the whole console gets the event. Labels from kept results alone would label some failures and not others.
+- The statement is printed for every stopped run that has a base, also when nothing failed, because the tamper guard did not run either.
+- No JSON field was added. `base.compared` is false and `base.commit` is set only for a stopped run; the schema's text for `base.reason` says so. `schemaVersion` stays 6. Before, `base` was absent from the JSON of a stopped run.
+- Item 2 follows your simplest reading. A name in a `.env` or `.env.local` at or above the project counts as set. A name found nowhere stays a PROBLEM; the line names every env file that was read and says when there is none beside the example. The fix line names the files that exist and a new file beside the example, because doctor cannot know which one the service reads.
+- When every name is found in the environment or beside the example, the text is as before, so no existing snapshot changed. Doctor's JSON format and schema are unchanged: the new text is in `detail` and `fix`.
+- In my own new test I first expected the "no env file anywhere" text for a folder whose root had a `.env`. That expectation was wrong, not the code; I corrected it before the fix commit and gave that text its own test.
+
+**Known limits:**
+
+- Doctor can say `ok` for a variable that the service never reads from the file above (pydantic-settings pointed at the service's own folder, for example). `docs/doctor.md` says what the check can and cannot know.
+- A stop that arrives while the base run itself is running is unchanged, so "starts nothing more" does not hold there: the head's steps have finished, `compare` is already running, the base's steps end as stopped, the report says `compared: true`, a failure the base could not judge blocks with a note (ADR 0037), and the tamper guard still runs git afterwards. No code was changed for it: skipping the guard there would leave a report that says it compared and has no tamper line. Read from the code, not tested.
+- An empty value in an env file (`SVC_API_KEY=`) counts as set, as before, and now for the files above too. Doctor reads names only.
+- A name found in a folder between the root and the project (`backend/.env`) is `ok` in doctor, but the base run's worktree gets env files only from the root and from each project's folder (`blame::env_files`). A test that needs that middle file can pass on the head and fail on the base.
+- Doctor follows an env file that is a symbolic link, as before; `blame::env_files` does not.
+- The Windows path of the new stopped-run test (Ctrl+Break through the helper, `group` mode) was written from the existing Windows tests and has not run here. CI will run it.
+
+**Found while fixing, not fixed:**
+
+- Ctrl+C during the `check` step prints `verify: STOPPED - interrupted before the check finished` and, with `--json`, prints nothing on stdout. A script that reads the JSON gets an empty document.
+- The local `main` branch of the checkout was at 6ce6420, 198 commits behind `origin/main` (b43a548). The branch was made from `origin/main`. Local `main` was not touched.
+
+**Not reproduced:** nothing; both items reproduced.
+
 ## Audit bug fixes (run of 2026-11-15)
 
 The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. For each: a test that failed because of the bug, then the smallest fix. None of the audit's shared pieces was built. Choices are in ADR 0056.

@@ -8,7 +8,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Being built.**
 2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Being built.**
-3. Stopped runs and doctor: labels for failures that finished before an interrupt; doctor and env files above a project (ADR 0059). **Not started.**
+3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). **In its pull request, the first to be ready.**
 4. Leftovers from "Found while fixing" (ADR 0060). **Being built.**
 5. Version 0.5.1 and docs. **Not started.**
 
