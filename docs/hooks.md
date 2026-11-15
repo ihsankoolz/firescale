@@ -45,7 +45,7 @@ An agent that cannot fix a failure must not be held forever. The hook counts how
 - If the count cannot be stored (a read-only folder, or `.firescale/hooks` is a symlink), the agent is allowed to stop.
 - `FSCALE_HOOK_MAX_BLOCKS=<n>` changes the cap. `0` never blocks.
 
-`fscale hooks run` never exits with code 2 for its own errors, such as a mistyped agent name or a broken config. It exits 1 with the reason, which agents show but do not treat as "keep working".
+`fscale hooks run` never exits with code 2 for its own errors, such as a mistyped agent name or a broken config. It exits 1 with the reason, which agents show but do not treat as "keep working". That holds wherever the options are written: `fscale --agent claude hooks run` and `fscale --cwd <dir> hooks run --agent claude` are the hook too. The value of an option is never read as the command, so `fscale --rules hooks run` is not the hook and keeps exit code 2.
 
 ## Limits
 
