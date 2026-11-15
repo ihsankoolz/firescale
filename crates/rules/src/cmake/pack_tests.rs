@@ -131,6 +131,10 @@ fn every_rule_reads_what_decides_where_the_pack_applies() {
             "**/*.h",
             "go.mod",
             "**/*.py",
+            // What makes a root CMakeLists.txt another ecosystem's build:
+            // a node-gyp addon, a SwiftPM package.
+            "binding.gyp",
+            "Sources/**",
         ] {
             assert!(
                 inputs.iter().any(|i| i == shared),
