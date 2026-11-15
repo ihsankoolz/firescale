@@ -46,6 +46,16 @@ describe('fscale hooks install', () => {
     }
   });
 
+  it('prints no note that the Cursor format is unchecked: ADR 0027 confirmed it', async () => {
+    const repo = await fixtures.create();
+    const result = await runCli(['hooks', 'install', '--agent', 'cursor'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toBe(
+      'installed         .cursor/hooks.json\n\nEach agent now runs `fscale hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n',
+    );
+    expect(result.stderr).toBe('');
+  });
+
   it('changes nothing when run again', async () => {
     const repo = await fixtures.create();
     await runCli(['hooks', 'install', '--all'], repo.root);
