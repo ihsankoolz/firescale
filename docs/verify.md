@@ -251,7 +251,7 @@ What the heartbeat says (ADR 0025):
 
 - **pytest and unittest** print one character per test (`.` passed, `F` failed, `E` error, `s` skipped), often with no line end until a file is done. When those markers are the latest output, the heartbeat gives a running count, `tests so far: 12 passed, 0 failed, 40 errors`, with the file pytest is in. pytest is known by `pytest` in the command or its `test session starts` header; unittest by `unittest` or `manage.py test` in the command.
 - `pytest -v` result lines (`tests/test_a.py::test_x ERROR`) are counted the same way.
-- **Anything else** gets `last output:` and the last line that contains words (two letters in a row), so a line of dots or a lone `E` is never shown. A URL's user name and password are shown as `***`.
+- **Anything else** gets `last output:` and the last line that contains words (two letters in a row), so a line of dots or a lone `E` is never shown. What the report hides is hidden here too: a URL's user name and password, a `password=`, `pwd=` or `passwd=` value, and the quoted name after `user` or `role` are shown as `***`.
 
 Progress is on when stderr is a terminal, and off when stderr goes to a file or a pipe (CI logs, agent hooks), so logs and hook messages stay as they were. `--progress` turns it on anyway, `--no-progress` turns it off. It never touches stdout: the summary and `--json` are the same with or without it. `fscale hooks run` prints no progress unless `--progress` is given, because an agent reads the hook's stderr. The variable `FSCALE_HEARTBEAT_MS` sets the heartbeat interval in milliseconds (`0` turns heartbeats off); it is meant for tests.
 
@@ -384,7 +384,7 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 | 5     | A Rust-only repo (`Cargo.toml`, no `package.json`) | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`.                |
 | 6     | A Python or Go project at the root                 | The commands `fscale facts` shows for it, for example `python -m pytest`.                            |
 
-`<exec>` is `pnpm exec`, `yarn`, `bunx` or `npx`, by package manager. `fscale facts` shows the package manager, scripts and tools that were detected, and [facts.md](facts.md) lists which config files give which command.
+`<exec>` is `pnpm exec`, `yarn`, `bunx` or `npx --no`, by package manager. `npx --no` never downloads nx or turbo when it is not installed: the step is `SETUP NEEDED` instead (`bunx` can still fetch a missing tool). `fscale facts` shows the package manager, scripts and tools that were detected, and [facts.md](facts.md) lists which config files give which command.
 
 ### In projects below the root
 

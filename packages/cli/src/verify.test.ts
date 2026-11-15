@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { chmod, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
@@ -407,6 +407,83 @@ describe('lint and typecheck on a package that is not installed', () => {
     expect(result.stdout.split('\n')[0]).toBe('verify: FAILED at lint');
     expect(result.stdout).toContain('Fix the failure, then run again: node lint.cjs');
   });
+});
+
+describe('fscale verify in a fresh clone of an Nx or Turborepo repo that uses npm', () => {
+  const REFUSAL =
+    'npm error npx canceled due to missing packages and no YES option: ["tool@1.0.0"]';
+
+  /**
+   * A stand-in for `npx` in a folder with nothing installed. Like the real
+   * one, it refuses to fetch the tool after `--no`. Without `--no`, with
+   * `CI=1` and stdin closed, the real one downloads the tool and runs it:
+   * the stand-in writes "downloaded <arguments>" to the log and exits 0.
+   */
+  async function npxWithNothingInstalled() {
+    const tools = await fixtures.create({ files: {}, track: 'no-git' });
+    const log = path.join(tools.root, 'calls.log');
+    if (process.platform === 'win32') {
+      const script = [
+        '@echo off',
+        'if "%~1"=="--no" goto refuse',
+        'echo downloaded %*>> "%SHIM_LOG%"',
+        'exit /b 0',
+        ':refuse',
+        `1>&2 echo ${REFUSAL}`,
+        'exit /b 1',
+        '',
+      ].join('\r\n');
+      await writeFile(path.join(tools.root, 'npx.cmd'), script);
+    } else {
+      const script = [
+        '#!/bin/sh',
+        `if [ "$1" = "--no" ]; then echo '${REFUSAL}' >&2; exit 1; fi`,
+        'echo "downloaded $*" >> "$SHIM_LOG"',
+        'exit 0',
+        '',
+      ].join('\n');
+      const file = path.join(tools.root, 'npx');
+      await writeFile(file, script);
+      await chmod(file, 0o755);
+    }
+    return { env: shimEnv(tools.root, log), downloads: (): Promise<string[]> => stepCalls(log) };
+  }
+
+  it.each([
+    ['nx', { 'nx.json': '{}\n' }],
+    ['turbo', { 'turbo.json': '{"tasks":{"lint":{},"test":{}}}\n' }],
+  ])(
+    'says SETUP NEEDED when %s is not installed, and never lets npx download it',
+    async (tool, config) => {
+      // An npm lockfile and no node_modules: nothing has been installed yet.
+      const repo = await fixtures.create({
+        files: {
+          'package.json': JSON.stringify({
+            name: 'web',
+            private: true,
+            devDependencies: { [tool]: '1.0.0' },
+          }),
+          'package-lock.json': JSON.stringify({
+            lockfileVersion: 3,
+            packages: { [`node_modules/${tool}`]: { version: '1.0.0' } },
+          }),
+          ...config,
+        },
+      });
+      const { env, downloads } = await npxWithNothingInstalled();
+      const result = await runCli(['verify'], repo.root, env);
+      expect(await downloads()).toEqual([]);
+      expect(result.code).toBe(EXIT_VIOLATIONS);
+      expect(result.stdout.split('\n')[0]).toBe('verify: SETUP NEEDED for lint');
+      expect(result.stdout).toContain('Do not change code for it.');
+      expect(result.stdout).toContain(`Then run again: npx --no ${tool} `);
+      expect(result.stdout).not.toContain('Fix the failure');
+
+      const json = await validate((await runCli(['verify', '--json'], repo.root, env)).stdout);
+      expect(json.result).toBe('setup-needed');
+      expect(await downloads()).toEqual([]);
+    },
+  );
 });
 
 describe('fscale verify in a repo with projects in subfolders', () => {

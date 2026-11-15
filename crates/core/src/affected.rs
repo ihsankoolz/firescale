@@ -2,14 +2,18 @@
 //!
 //! A file is affected when it changed, or when it belongs to a project that
 //! changed or that depends, directly or not, on a project that changed.
+//! A finding on a file that belongs to no project below the repo root is also
+//! kept when a changed file is an input of its rule.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::cache::input_matcher;
+use crate::config::{JSON_CONFIG, TS_CONFIG};
 use crate::error::{Error, Result};
 use crate::facts::{Project, RepoFacts};
 use crate::git::run_git;
-use crate::model::Status;
+use crate::model::{RuleMeta, Status};
 use crate::report::CheckReport;
 
 /// The files that differ from the comparison point.
@@ -135,16 +139,61 @@ fn affected_projects(facts: &RepoFacts, changed: &BTreeSet<String>) -> BTreeSet<
     }
 }
 
-/// Keeps only the diagnostics on affected files and recomputes the counts.
-pub fn narrow_report(report: &mut CheckReport, facts: &RepoFacts, changed: &Changed) {
+/// A rule that ran, as `narrow_report` needs it.
+pub struct RanRule<'a> {
+    /// Its id and its `inputs`.
+    pub meta: &'a RuleMeta,
+    /// Not compiled into the binary: a rule of a pack named in the config.
+    pub custom: bool,
+}
+
+/// Keeps only the diagnostics a change can have caused and recomputes the
+/// counts. A diagnostic is kept when its file changed, when its file belongs
+/// to an affected project, or when its file belongs to no project below the
+/// repo root and a changed file is an input of its rule. That last case is
+/// for findings on repo-level files: a new script in `web/package.json`
+/// makes `AGENTS.md` stale, and neither `AGENTS.md` nor its owner changed.
+/// For it, a custom rule reads every change, and so does every rule when
+/// the firescale config changed.
+pub fn narrow_report(
+    report: &mut CheckReport,
+    facts: &RepoFacts,
+    changed: &Changed,
+    rules: &[RanRule<'_>],
+) {
     let Changed::Files(changed) = changed else {
         return;
     };
     let projects = affected_projects(facts, changed);
+    // The rules that read a changed file. Keeping too much is the safe side:
+    // inputs that cannot be read as globs count as matching, and a custom
+    // rule reads every change, because nothing else uses its `inputs` (its
+    // result is never cached), so an empty or short list proves nothing.
+    // Every rule's result depends on the firescale config (it turns rules
+    // and packs on and sets options), whatever the rule's inputs say.
+    let config_changed = [JSON_CONFIG, TS_CONFIG]
+        .iter()
+        .any(|config| changed.contains(*config));
+    let reads_a_change: BTreeSet<&str> = rules
+        .iter()
+        .filter(|rule| {
+            if config_changed || rule.custom {
+                return !changed.is_empty();
+            }
+            input_matcher(&rule.meta.id, &rule.meta.inputs).map_or(true, |matcher| {
+                changed.iter().any(|file| matcher.is_match(file.as_str()))
+            })
+        })
+        .map(|rule| rule.meta.id.as_str())
+        .collect();
     report.diagnostics.retain(|diagnostic| {
-        changed.contains(&diagnostic.file)
-            || owner(&facts.projects, &diagnostic.file)
-                .is_some_and(|project| projects.contains(&project.name))
+        if changed.contains(&diagnostic.file) {
+            return true;
+        }
+        let owner = owner(&facts.projects, &diagnostic.file);
+        owner.is_some_and(|project| projects.contains(&project.name))
+            || (owner.is_none_or(|project| project.root == ".")
+                && reads_a_change.contains(diagnostic.rule_id.as_str()))
     });
     for rule in &mut report.rules {
         rule.violations = report
@@ -166,6 +215,8 @@ pub fn narrow_report(report: &mut CheckReport, facts: &RepoFacts, changed: &Chan
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{Category, Fixable, Severity};
+    use crate::report::{ReportedDiagnostic, Summary};
 
     fn project(name: &str, root: &str, depends_on: &[&str]) -> Project {
         Project {
@@ -219,5 +270,211 @@ mod tests {
         assert_eq!(affected, set(&["app", "lib", "site"]));
         let affected = affected_projects(&facts, &set(&["packages/site/x.ts"]));
         assert_eq!(affected, set(&["site"]));
+    }
+
+    fn rule(id: &str, inputs: &[&str]) -> RuleMeta {
+        RuleMeta {
+            id: id.to_owned(),
+            severity: Severity::Medium,
+            category: Category::Consistency,
+            description: String::new(),
+            inputs: inputs.iter().map(|input| (*input).to_owned()).collect(),
+            has_fix: false,
+            after: Vec::new(),
+        }
+    }
+
+    fn report(findings: &[(&str, &str)]) -> CheckReport {
+        CheckReport {
+            schema_version: 1,
+            version: "0.0.0".to_owned(),
+            ok: false,
+            summary: Summary {
+                rules: 0,
+                violations: findings.len(),
+                enforced_violations: findings.len(),
+            },
+            rules: Vec::new(),
+            diagnostics: findings
+                .iter()
+                .map(|(rule_id, file)| ReportedDiagnostic {
+                    rule_id: (*rule_id).to_owned(),
+                    message: String::new(),
+                    file: (*file).to_owned(),
+                    fixable: Fixable::Manual,
+                    range: None,
+                    project: None,
+                    status: Status::Enforced,
+                    severity: Severity::Medium,
+                })
+                .collect(),
+        }
+    }
+
+    fn kept(
+        projects: Vec<Project>,
+        changed: &[&str],
+        rules: &[RuleMeta],
+        findings: &[(&str, &str)],
+    ) -> Vec<String> {
+        let facts = RepoFacts {
+            projects,
+            ..RepoFacts::default()
+        };
+        let mut report = report(findings);
+        let rules: Vec<RanRule<'_>> = rules
+            .iter()
+            .map(|meta| RanRule {
+                meta,
+                custom: meta.id.starts_with("custom/"),
+            })
+            .collect();
+        narrow_report(&mut report, &facts, &Changed::Files(set(changed)), &rules);
+        assert_eq!(report.summary.violations, report.diagnostics.len());
+        assert_eq!(report.ok, report.diagnostics.is_empty());
+        report
+            .diagnostics
+            .iter()
+            .map(|d| format!("{} {}", d.rule_id, d.file))
+            .collect()
+    }
+
+    /// The rules of the tests below: one reads every package.json and reports
+    /// a repo-level file, one reads only env files.
+    fn rules() -> Vec<RuleMeta> {
+        vec![
+            rule("agent-ready/agents-md", &["AGENTS.md", "**/package.json"]),
+            rule("core/no-committed-env", &["**/.env"]),
+        ]
+    }
+
+    // The stop hook let an agent stop with a stale AGENTS.md: a new `lint`
+    // script in web/package.json makes agents-md report AGENTS.md, which did
+    // not change and which no affected project owns.
+    #[test]
+    fn a_repo_level_finding_is_kept_when_a_changed_file_is_an_input_of_its_rule() {
+        let findings = [("agent-ready/agents-md", "AGENTS.md")];
+        // No project at the repo root.
+        let services = vec![project("web", "web", &[]), project("api", "api", &[])];
+        assert_eq!(
+            kept(services, &["web/package.json"], &rules(), &findings),
+            ["agent-ready/agents-md AGENTS.md"]
+        );
+        // A root project that did not change owns AGENTS.md.
+        assert_eq!(
+            kept(graph(), &["packages/lib/package.json"], &rules(), &findings),
+            ["agent-ready/agents-md AGENTS.md"]
+        );
+    }
+
+    #[test]
+    fn a_repo_level_finding_is_dropped_when_no_changed_file_is_an_input_of_its_rule() {
+        let findings = [
+            ("agent-ready/agents-md", "AGENTS.md"),
+            ("core/no-committed-env", ".env"),
+        ];
+        assert_eq!(
+            kept(graph(), &["packages/lib/src/a.ts"], &rules(), &findings),
+            [] as [&str; 0]
+        );
+        // Only the rule that reads the changed file keeps its finding.
+        assert_eq!(
+            kept(graph(), &["packages/lib/package.json"], &rules(), &findings),
+            ["agent-ready/agents-md AGENTS.md"]
+        );
+    }
+
+    #[test]
+    fn a_finding_inside_a_project_that_is_not_affected_is_still_dropped() {
+        let findings = [
+            ("core/no-committed-env", "packages/lib/.env"),
+            ("core/no-committed-env", "packages/other/.env"),
+        ];
+        // The new file is an input of the rule, and other is still left out.
+        assert_eq!(
+            kept(graph(), &["packages/lib/sub/.env"], &rules(), &findings),
+            ["core/no-committed-env packages/lib/.env"]
+        );
+    }
+
+    // Nothing ever read a custom rule's `inputs` (its result is not cached),
+    // so the list says nothing about what the rule reads.
+    #[test]
+    fn a_custom_rule_counts_as_reading_every_change() {
+        let custom = [
+            rule("custom/no-inputs", &[]),
+            rule("custom/other-inputs", &["**/TODO.md"]),
+        ];
+        let findings = [
+            ("custom/no-inputs", "AGENTS.md"),
+            ("custom/other-inputs", "TODO.md"),
+            ("custom/no-inputs", "packages/other/notes.md"),
+        ];
+        assert_eq!(
+            kept(graph(), &["packages/lib/src/a.ts"], &custom, &findings),
+            ["custom/no-inputs AGENTS.md", "custom/other-inputs TODO.md"]
+        );
+        // Nothing changed, so nothing is kept.
+        assert_eq!(kept(graph(), &[], &custom, &findings), [] as [&str; 0]);
+    }
+
+    // Turning a rule or a pack on changes results without touching any of
+    // the rule's inputs.
+    #[test]
+    fn every_rule_reads_a_change_of_the_firescale_config() {
+        let findings = [
+            ("agent-ready/agents-md", "AGENTS.md"),
+            ("core/no-committed-env", ".env"),
+            ("core/no-committed-env", "packages/other/.env"),
+        ];
+        let services = || vec![project("other", "packages/other", &[])];
+        for config in ["firescale.config.json", "firescale.config.ts"] {
+            assert_eq!(
+                kept(services(), &[config], &rules(), &findings),
+                [
+                    "agent-ready/agents-md AGENTS.md",
+                    "core/no-committed-env .env"
+                ],
+                "{config}"
+            );
+        }
+        // Only the config at the firescale root counts.
+        assert_eq!(
+            kept(
+                services(),
+                &["packages/other/firescale.config.json"],
+                &rules(),
+                &findings
+            ),
+            ["core/no-committed-env packages/other/.env"]
+        );
+    }
+
+    #[test]
+    fn a_built_in_rule_with_no_inputs_reads_no_change() {
+        let branch = [rule("group-project/branch-name", &[])];
+        assert_eq!(
+            kept(
+                graph(),
+                &["packages/lib/src/a.ts"],
+                &branch,
+                &[("group-project/branch-name", ".git/HEAD")]
+            ),
+            [] as [&str; 0]
+        );
+    }
+
+    #[test]
+    fn a_rule_whose_inputs_cannot_be_read_keeps_its_repo_level_findings() {
+        let broken = [rule("core/broken", &["["])];
+        assert_eq!(
+            kept(
+                graph(),
+                &["packages/lib/src/a.ts"],
+                &broken,
+                &[("core/broken", "AGENTS.md")]
+            ),
+            ["core/broken AGENTS.md"]
+        );
     }
 }

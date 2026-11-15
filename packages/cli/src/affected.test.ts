@@ -4,11 +4,14 @@ import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CheckReport } from './report.js';
 import {
+  ALL_AGENT_READY_RULES,
+  commitAll,
   ENFORCED_CONFIG,
   EXIT_OK,
   EXIT_USAGE,
   EXIT_VIOLATIONS,
   FAKE_ENV,
+  onlyEnvRule,
   runCli,
 } from './test-helpers.js';
 
@@ -61,6 +64,34 @@ async function workspace(): Promise<FixtureRepo> {
   return repo;
 }
 
+const service = (name: string, scripts: Record<string, string>) =>
+  `${JSON.stringify({ name, version: '1.0.0', scripts }, null, 2)}\n`;
+
+/**
+ * Two services and no project at the repo root. Only agent-ready/agents-md
+ * runs, and the committed AGENTS.md lists the commands of both services.
+ */
+async function services(): Promise<FixtureRepo> {
+  const rules = Object.fromEntries(
+    ALL_AGENT_READY_RULES.map((id) => [id, id === 'agent-ready/agents-md' ? 'enforced' : 'off']),
+  );
+  const repo = await fixtures.create({
+    files: {
+      'firescale.config.json': `${JSON.stringify({ packs: ['agent-ready'], rules, verify: { lint: false, typecheck: false, test: false } })}\n`,
+      '.gitignore': '.firescale/\n',
+      'web/package.json': service('web', { test: 'node test.js' }),
+      'web/index.js': 'export const a = 1;\n',
+      'api/package.json': service('api', { test: 'node test.js' }),
+    },
+  });
+  expect((await runCli(['fix'], repo.root)).code).toBe(EXIT_OK);
+  await commitAll(repo.root, 'initial');
+  expect((await runCli(['check'], repo.root)).code).toBe(EXIT_OK);
+  return repo;
+}
+
+const WEB_WITH_LINT = service('web', { test: 'node test.js', lint: 'node lint.js' });
+
 describe('fscale check --affected', () => {
   it('reports nothing when the working tree matches the last commit', async () => {
     const repo = await workspace();
@@ -111,6 +142,9 @@ describe('fscale check --affected', () => {
         'README.md': '# outer\n',
         'service/firescale.config.json': ENFORCED_CONFIG,
         'service/.env': FAKE_ENV,
+        'service/app/package.json': `${JSON.stringify({ name: 'app', version: '1.0.0' })}\n`,
+        'service/app/.env': FAKE_ENV,
+        'service/app/index.js': 'export const a = 1;\n',
       },
     });
     await commit(repo, 'initial');
@@ -120,7 +154,60 @@ describe('fscale check --affected', () => {
     await repo.track(['service/sub/.env.local']);
     const result = await runCli(['check', '--json', '--affected', '--cwd', service]);
     const report = JSON.parse(result.stdout) as CheckReport;
-    expect(report.diagnostics.map((d) => d.file)).toEqual(['sub/.env.local']);
+    // Paths are relative to the firescale root. `.env` belongs to no project
+    // and the rule reads the new file, so its finding is kept too.
+    expect(report.diagnostics.map((d) => d.file)).toEqual(['.env', 'sub/.env.local']);
+    // A change inside a project of the service reaches that project only
+    // when changed paths are relative to the firescale root, as project
+    // roots are. The rule does not read index.js, so `.env` is left out.
+    await commit(repo, 'second');
+    await repo.write('service/app/index.js', 'export const a = 2;\n');
+    expect(await files(repo, ['--affected', '--cwd', service])).toEqual(['app/.env']);
+  });
+
+  // A finding can sit on a file that did not change and that no affected
+  // project owns: a new script in web/package.json makes AGENTS.md stale.
+  it('keeps a finding on a repo-level file when the change is one its rule reads', async () => {
+    const repo = await services();
+    await repo.write('web/package.json', WEB_WITH_LINT);
+    const result = await runCli(['check', '--json', '--affected'], repo.root);
+    const report = JSON.parse(result.stdout) as CheckReport;
+    expect(report.diagnostics.map((d) => `${d.ruleId} ${d.file}`)).toEqual([
+      'agent-ready/agents-md AGENTS.md',
+    ]);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const verify = await runCli(['verify', '--affected'], repo.root);
+    expect(verify.code).toBe(EXIT_VIOLATIONS);
+    expect(verify.stdout).toContain('agent-ready/agents-md');
+  });
+
+  // Every rule's result depends on the config: turning a rule on reports
+  // findings on files that did not change.
+  it('keeps the repo-level findings of every rule when the firescale config changed', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': onlyEnvRule('off'),
+        '.gitignore': '.firescale/\n',
+        '.env': FAKE_ENV,
+        'web/package.json': service('web', {}),
+        'web/.env': FAKE_ENV,
+      },
+    });
+    await commit(repo, 'initial');
+    expect(await files(repo, ['--affected'])).toEqual([]);
+    await repo.write('firescale.config.json', ENFORCED_CONFIG);
+    expect(await files(repo, [])).toEqual(['.env', 'web/.env']);
+    // web is a project and did not change, so its finding is still left out.
+    expect(await files(repo, ['--affected'])).toEqual(['.env']);
+  });
+
+  it('drops a finding on a repo-level file when the change is not one its rule reads', async () => {
+    const repo = await services();
+    await repo.write('web/package.json', WEB_WITH_LINT);
+    await commitAll(repo.root, 'a stale AGENTS.md');
+    expect((await runCli(['check'], repo.root)).code).toBe(EXIT_VIOLATIONS);
+    await repo.write('web/index.js', 'export const a = 2;\n');
+    expect(await files(repo, ['--affected'])).toEqual([]);
   });
 
   it('keeps the summary and exit code consistent with the narrowed report', async () => {

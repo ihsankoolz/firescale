@@ -4,20 +4,18 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-Long run of 2026-11-14 (started 00:59 UTC): M25, M26, M27, M28, M29 and M30, one pull request each, merged on green on Linux, macOS and Windows. **Finished: M30 is the last; nothing of the run is in progress once its pull request is merged.** The version stays 0.4.0; no tag was pushed. What was built, what needs your decision and what to test by hand is at the top of DECISIONS.md ("Review of the long run").
+Run of 2026-11-15 (started 01:30 UTC): the bugs of the ponytail audit (`docs/reviews/ponytail-audit.md`, "Bugs found during the audit"), numbers 1 to 14, 17 and 20, then version 0.5.0. Bug fixes only: each bug gets a test that fails first, then the smallest fix; none of the audit's shared pieces (items 1 to 79, parts A, B and C) is built. ADR 0056 holds the decisions; DECISIONS.md "Audit bug fixes" holds the log.
 
-- **Merged:** M25 ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045), M26 ([#38](https://github.com/ihsankoolz/firescale/pull/38), ADR 0046), M27 ([#39](https://github.com/ihsankoolz/firescale/pull/39), ADR 0047), M28 ([#40](https://github.com/ihsankoolz/firescale/pull/40), ADR 0048), M29 ([#41](https://github.com/ihsankoolz/firescale/pull/41), ADR 0049); M30 ([#42](https://github.com/ihsankoolz/firescale/pull/42), ADR 0050) is the last pull request.
-- **After the run:** the owner asked for other languages, "as deep as the options go": M31 (ADR 0051, merged), ecosystems for Java, Kotlin, Android, Swift, Xcode, C, C++, .NET and Dart; M32 (ADR 0052, merged as [#44](https://github.com/ihsankoolz/firescale/pull/44)), the tamper guard in Java, Kotlin, Swift, Dart, C, C++, C# and Go; then one stack pack per milestone (PLAN.md "M33 to M39"): M33 Go (ADR 0053, merged as [#45](https://github.com/ihsankoolz/firescale/pull/45)), M34 Java with Maven (ADR 0054, merged as [#46](https://github.com/ihsankoolz/firescale/pull/46)), **M35 C/C++ with CMake (ADR 0055)**, then M36 Swift, M37 .NET, M38 Android, M39 Flutter; each with an ADR, a fresh review and a pull request merged on green, as before.
-- **M32 data:** the history clones are in the scratch folder (`hist32/`), re-creatable with `git clone --depth 400 --single-branch`; cJSON, Humanizer, commons-lang and cobra were run with `--all-parents`, the others without. Labels and reasons are in `bench/tamper-history-m32.json`.
-- **Boxes left open on purpose:** M28's manual real-agent test; M29's `supabase start` and `supabase test db` (Docker). Each is listed with its steps in DECISIONS.md.
-- **Next in PLAN.md:** nothing after M30 is numbered; see PLAN.md "Later".
-- **Branch:** milestones are pushed to `claude/beautiful-bardeen-gpgxyw` (the session's branch); after each merge the next milestone starts from `main` on a new local branch (a force push is not allowed here).
+- **Pull request 1, stop hook, setup and secrets (bugs 1, 2, 3):** in progress.
+- **Pull request 2, cache inputs and blame (bugs 4, 9, 10, 12, 13, 17):** not started.
+- **Pull request 3, tamper guard and agent runner (bugs 5, 7, 8):** not started.
+- **Pull request 4, writes and packaging (bugs 6, 11, 14, 20):** not started.
+- **Pull request 5, version 0.5.0:** not started. No tag is pushed; the owner tags (`RELEASING.md`).
+- **On hold:** M36 Swift, M37 .NET, M38 Android and M39 Flutter, until the owner says so. So are the audit's parts A, B and C and its other items and bugs (15, 16, 18, 19, 21 to 30).
+- **Branch:** every pull request of the run is pushed to `claude/eager-bell-etp97a`; after each merge the branch restarts from `main`.
+- **Check-ins:** a scheduled check-in is kept about 60 minutes ahead and work is pushed every 30 minutes. Cancel the check-in when pull request 5 is merged.
 - **Careful:** this container has a real, signed-in `claude` next to `node` (`/opt/node22/bin`). A test must never leave a stand-in off the PATH; see ADR 0048, "Tests".
-- **Branch:** milestones are pushed to `claude/beautiful-bardeen-gpgxyw` (the session's branch); after each merge the next milestone starts from `main` on a new local branch and is pushed to that same remote branch only once it holds just merged history (a force push is not allowed here, so if the remote branch has unmerged commits, use a new `m<N>-<name>` branch instead).
-- **Check-ins:** a scheduled check-in ("Read HANDOFF.md, 'In progress', and continue. Schedule the next check-in first.") is kept about 60 minutes ahead; renew it at the start of each milestone and hourly. Cancel it when the run ends.
-- **M26 data:** the clones are in the scratch folder (`history/`), re-creatable with `git clone --depth 400 --single-branch`; labels are in `bench/tamper-history.json`; the labelling brief is in ADR 0046.
-- **0.4.0 is still ready to tag** (`RELEASING.md`). Check whether `v0.3.0` was ever tagged first.
-- Real repos for the after-milestone pass are listed in `DECISIONS.md` ("Real repos used for testing").
+- **Boxes still open from earlier runs:** M28's manual real-agent test; M29's `supabase start` and `supabase test db` (Docker). Each is listed with its steps in DECISIONS.md.
 
 ## Where things stand
 

@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use firescale_core::affected::{changed_files, narrow_report, Changed};
+use firescale_core::affected::{changed_files, narrow_report, Changed, RanRule};
 use firescale_core::blame::{
     changed_since, choose_base, compare, violation_id, BaseChoice, BaseReport, BaseRun,
 };
@@ -283,6 +283,17 @@ impl Output {
     }
 }
 
+/// What `--affected` needs of the rules that ran.
+fn ran_rules<'a>(rules: &'a [ConfiguredRule<'_>]) -> Vec<RanRule<'a>> {
+    rules
+        .iter()
+        .map(|rule| RanRule {
+            meta: &rule.meta,
+            custom: matches!(rule.source, RuleSource::Custom { .. }),
+        })
+        .collect()
+}
+
 fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     if !extra.is_empty() {
         return Err(Error::usage(format!(
@@ -319,7 +330,12 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             )),
             Changed::Files(_) => {}
         }
-        narrow_report(&mut report, &detect_facts(root)?, &changed);
+        narrow_report(
+            &mut report,
+            &detect_facts(root)?,
+            &changed,
+            &ran_rules(&selection.rules),
+        );
     }
     notes.extend(outcome.warnings);
     // FSCALE_LOG=cache shows, per rule, whether its result came from the cache.
@@ -1080,7 +1096,7 @@ fn verify_report(
     let facts = detect_facts(root)?;
     let changed = if args.affected {
         let changed = changed_files(root, args.base.as_deref())?;
-        narrow_report(&mut report, &facts, &changed);
+        narrow_report(&mut report, &facts, &changed, &ran_rules(&selection.rules));
         Some(changed)
     } else {
         None

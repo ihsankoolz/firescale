@@ -424,12 +424,14 @@ pub fn limit_to_affected(
 
 const OFF_IN_CONFIG: &str = "turned off in your firescale config";
 
+/// `npx --no` never downloads a tool that is missing: its refusal is setup
+/// needed (setup.rs). The same prefixes as `node_exec` in facts.rs.
 fn exec_prefix(package_manager: Option<&str>) -> &'static str {
     match package_manager {
         Some("pnpm") => "pnpm exec",
         Some("yarn") => "yarn",
         Some("bun") => "bunx",
-        _ => "npx",
+        _ => "npx --no",
     }
 }
 
@@ -4155,11 +4157,54 @@ mod tests {
         assert_eq!(
             commands_of(&turbo),
             [
-                "lint: npx turbo run lint",
+                "lint: npx --no turbo run lint",
                 "typecheck: skipped (turbo.json has no typecheck task)",
-                "test: npx turbo run test",
+                "test: npx --no turbo run test",
             ]
         );
+    }
+
+    /// With `CI=1` and stdin closed, a bare `npx` downloads a tool that is not
+    /// installed and runs it. `npx --no` refuses, and that refusal is setup
+    /// needed (setup.rs).
+    #[test]
+    fn nx_and_turbo_with_npm_never_let_npx_download_them() {
+        let fixture = Fixture::new(
+            &[
+                ("package.json", "{}"),
+                ("turbo.json", r#"{"tasks":{"lint":{},"test":{}}}"#),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        for package_manager in [None, Some("npm")] {
+            for (tool, affected) in [
+                ("nx", false),
+                ("nx", true),
+                ("turbo", false),
+                ("turbo", true),
+            ] {
+                let plan = plan_verify(
+                    fixture.root(),
+                    &facts(&[tool], package_manager, Commands::default(), &[]),
+                    &VerifyConfig::default(),
+                    affected,
+                    None,
+                );
+                assert_eq!(plan.runner, tool);
+                let commands: Vec<String> = commands_of(&plan)
+                    .into_iter()
+                    .filter(|line| line.contains("npx"))
+                    .collect();
+                assert!(!commands.is_empty(), "{tool}: no step runs npx");
+                for line in commands {
+                    assert!(
+                        line.contains(&format!(": npx --no {tool} ")),
+                        "{tool} with {package_manager:?}: `{line}` lets npx download {tool}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

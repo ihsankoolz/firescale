@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use crate::verify::strip_ansi;
+use crate::verify::{hide_secrets, strip_ansi};
 
 /// How many complete lines are kept for [`Activity::recent`].
 const RECENT_LINES: usize = 200;
@@ -94,32 +94,6 @@ enum Kind {
     Words(String),
     /// Nothing worth showing: blank, or symbols only.
     Noise,
-}
-
-/// `scheme://user:password@host` with the user and password replaced by
-/// `***`, so a heartbeat never shows a connection string's secret.
-#[must_use]
-pub fn redact(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(index) = rest.find("://") {
-        let (before, after) = rest.split_at(index + 3);
-        out.push_str(before);
-        let authority_end = after
-            .find(|c: char| {
-                c == '/' || c == '?' || c == '#' || c.is_whitespace() || c == '"' || c == '\''
-            })
-            .unwrap_or(after.len());
-        match after[..authority_end].rfind('@') {
-            Some(at) => {
-                out.push_str("***");
-                rest = &after[at..];
-            }
-            None => rest = after,
-        }
-    }
-    out.push_str(rest);
-    out
 }
 
 /// True when `text` has a run of two letters or more.
@@ -310,7 +284,8 @@ impl Activity {
             }
         }
         if has_words(line) {
-            Kind::Words(redact(line).chars().take(MAX_SHOWN).collect())
+            // The same hiding as a report's error lines (ADR 0035).
+            Kind::Words(hide_secrets(line).chars().take(MAX_SHOWN).collect())
         } else {
             Kind::Noise
         }
@@ -402,7 +377,7 @@ impl Activity {
             let file = self
                 .file
                 .as_ref()
-                .map_or_else(String::new, |file| format!(" (in {file})"));
+                .map_or_else(String::new, |file| format!(" (in {})", hide_secrets(file)));
             return Some(format!("tests so far: {}{file}", tally.describe()));
         }
         self.last_words
@@ -603,6 +578,61 @@ mod tests {
         assert_eq!(
             activity.heartbeat().as_deref(),
             Some("last output: connecting to postgresql://***@localhost:5432/db and redis://cache:6379")
+        );
+    }
+
+    #[test]
+    fn a_password_setting_in_the_output_is_shown_without_its_value() {
+        let activity = fed("node x.js", &["connecting with password=hunter2 to db\n"]);
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert_eq!(shown, "last output: connecting with password=*** to db");
+    }
+
+    #[test]
+    fn a_failed_login_in_the_output_is_shown_without_the_user_name() {
+        let activity = fed(
+            "node x.js",
+            &["FATAL: password authentication failed for user \"app\"\n"],
+        );
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(!shown.contains("app"), "{shown}");
+        assert_eq!(
+            shown,
+            "last output: FATAL: password authentication failed for user \"***\""
+        );
+    }
+
+    #[test]
+    fn a_connection_string_whose_password_has_a_slash_is_shown_without_it() {
+        let activity = fed(
+            "node x.js",
+            &["connecting to postgres://app:pa/ss@host/db\n"],
+        );
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(
+            !shown.contains("pa/ss") && !shown.contains("app"),
+            "{shown}"
+        );
+        assert_eq!(shown, "last output: connecting to postgres://***@host/db");
+    }
+
+    #[test]
+    fn a_connection_string_read_as_a_test_file_is_shown_without_its_secret() {
+        // After counted markers, a token with a slash is taken for the file
+        // the markers belong to.
+        let activity = fed(
+            "python -m pytest",
+            &[
+                "tests/test_a.py ..\n",
+                "postgres://app:hunter2@localhost/db\n",
+            ],
+        );
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(shown.starts_with("tests so far: 2 passed"), "{shown}");
+        assert!(
+            !shown.contains("hunter2") && !shown.contains("app"),
+            "{shown}"
         );
     }
 
