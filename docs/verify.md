@@ -499,7 +499,7 @@ After a time limit is lowered, a step of a project below the root that passed un
 
 - Its settings are compared with the defaults in every `--affected` run and every run of the stop hook, since no commit has a copy of it. A command or a setting every step shares that it sets affects those projects each time (their kept passes are served when their files did not change); time limits affect nothing.
 - Its bytes are in the key of every step at the repo root, read from disk.
-- Under `--affected` and in the stop hook, the steps at the repo root run when the file is not as the last verify run that passed saw it, or when no run has seen it. The line under "Why each ran" says `firescale.config.json, which git ignores, changed since the last run that passed, ...`. The digest of the file as that run saw it is kept in `.firescale/ignored-config.digest`; deleting it is safe (those steps run once more).
+- Under `--affected` and in the stop hook, the steps at the repo root run when the file is not as the last verify run that passed saw it, or when no run has seen it. The line under "Why each ran" says `firescale.config.json, which git ignores, changed since the last run that passed, ...`. The digest of the file as that run saw it is kept in `.firescale/ignored-config.digest`; deleting it is safe (those steps run once more). A run in which `--budget` left a step out does not count as one that saw it.
 - Blame-aware verify never counts a step at the repo root as the same on the base while an ignored config is there: the base commit has no copy of it.
 
 Not covered: a `firescale.config.ts` that git ignores (its bytes are in no key), and `fscale check --affected`, which does not see a change to an ignored config.

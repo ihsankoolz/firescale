@@ -301,6 +301,12 @@ A second reviewer confirmed both earlier fixes (findings 1 and 2) for a tracked 
   - Time limits: a step they end is only ever `timed out`, which is never kept.
   - The settings that are in no key have no reader inside a step.
 
+**Third review** (a fresh reader of the fix for an ignored config; one high, three low):
+
+- **High, proven: a run in which `--budget` left a step out wrote the record of an ignored config.** Such a run is PARTIAL, so it wrote down the new bytes though the root lint had not run with them. After it, `verify --affected` said `OK (affected only) - 0 of 1 project ran` and the stop hook let the agent stop, while a full run said `FAILED at lint (new)`. Failing test first: `keeps no record of an ignored config from a run in which --budget left a step out` (config-affects.test.ts: "expected 'verify: OK (affected only) - 0 of 1 p…' to match /^verify: FAILED at lint \(new\)/"). Fix: no record is written when a step was not run.
+- **Low, written down in ADR 0058, not changed:** with an ignored config, nothing else changed and no `--base`, `--affected` still runs every project (the older "nothing to compare with" rule); the record is not written after a pre-existing failure or when `.firescale` cannot be written, so the root units are asked again each time; on a disk that ignores case a tracked `Firescale.config.json` is counted twice, which costs base runs and lets nothing through.
+- Checked and held: the record is read before any step and written after all of them; a stopped, failed or dry run writes nothing; an edit during a run or two runs at once can only leave an older record, so the units run again; nothing is read or written through a link.
+
 **Decided on your behalf** (ADR 0058):
 
 - **`packs` and `rules` stay in every key.** A step's command may run firescale on the repo (`"lint": "fscale check && eslint ."`; this repo's own tests do). Unsure, so kept. Turning a rule on still runs every step once.
