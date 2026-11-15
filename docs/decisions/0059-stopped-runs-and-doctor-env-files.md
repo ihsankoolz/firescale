@@ -26,9 +26,9 @@ So the root `.env` is a place a service's variables can really come from, and do
 
 ## Decision
 
-### A stopped run compares nothing, and says so
+### A run stopped before its steps finished compares nothing, and says so
 
-After a stop, verify starts nothing more: no base run, no reading of kept base results, no tamper guard. The report now carries the base it would have used, with `compared: false`, the base's `reference` and `commit`, and the `reason` "the run was stopped before failures were compared with the base commit and before the tamper guard ran". The summary prints one paragraph:
+When the stop arrives before the head's own steps have finished, verify starts nothing more: no base run, no reading of kept base results, no tamper guard. The report now carries the base it would have used, with `compared: false`, the base's `reference` and `commit`, and the `reason` "the run was stopped before failures were compared with the base commit and before the tamper guard ran". The summary prints one paragraph:
 
 ```
 Not compared with the base commit 1a2b3c4 (main): the run was stopped first, so no failure is labelled `new` or `pre-existing`, and the tamper guard did not run. Run fscale verify again and let it finish to get both.
@@ -55,7 +55,7 @@ The JSON format is unchanged: the same `detail` and `fix` strings carry the new 
 
 ## Consequences
 
-- An agent or script that reads `--json` of a stopped run now finds `base` present with `compared: false` and a `commit`. Before, `base` was absent. `compared: false` with a `commit` only happens for a stopped run.
+- An agent or script that reads `--json` of a run stopped before its steps finished now finds `base` present with `compared: false` and a `commit`. Before, `base` was absent. `compared: false` with a `commit` only happens for a stopped run.
 - Doctor can now say `ok` for a variable that a service never reads from the file above (pydantic-settings pointed at the service's own folder, say). It already could not know whether anything loads the file beside the example. The test run is what proves it; doctor's docs say what the check can and cannot know.
-- A stop that arrives during the base run itself is not changed here: the base steps end as stopped, and a failure they could not judge blocks with a note, as ADR 0037 says.
+- **Known limit: a stop that arrives during the base run is not changed here.** The head's steps have finished by then, so `compare` is already running: the base steps end as stopped, the report has `compared: true`, a failure the base could not judge blocks with a note (ADR 0037), and the tamper guard still runs afterwards, which reads the base commit through git. So "starts nothing more" holds only for a stop before the head's steps finished. Skipping the guard in that case would leave a report that says it compared and has no tamper line, with nothing to explain it, so it was left as it is.
 - A `.env` above the firescale root is never read.
