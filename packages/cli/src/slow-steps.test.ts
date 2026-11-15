@@ -156,6 +156,34 @@ describe('the time each step took is kept, and a slow step is announced', () => 
     expect(beside.filter((name) => name.endsWith('.tmp') || name.endsWith('.lock'))).toEqual([]);
   });
 
+  it('says in the summary and in --json, with no progress shown, that --budget could not read the kept times', async () => {
+    const repo = await repoWith(
+      { lint: false, typecheck: false, test: nodeScript('test.js') },
+      { 'test.js': "console.log('one');\n" },
+    );
+    await mkdir(timesPath(repo.root), { recursive: true });
+    const warning =
+      /^could not read \.firescale\/step-times\.json \(.+\), so --budget 30m left out no step for its kept time: a step whose time could not be read ran\. Delete \.firescale\/step-times\.json if it stays unreadable\.$/;
+    // Piped, as an agent or a script runs it: no progress line is shown.
+    const plain = await runCli(['verify', '--budget', '30m', '--no-cache'], repo.root, NOT_CI);
+    expect(plain.code).toBe(EXIT_OK);
+    expect(plain.stderr).toBe('');
+    const said = plain.stdout.split('\n').filter((line) => line.startsWith('warning: '));
+    expect(said).toHaveLength(1);
+    expect(said[0]?.slice('warning: '.length)).toMatch(warning);
+    const json = await runCli(
+      ['verify', '--budget', '30m', '--no-cache', '--json'],
+      repo.root,
+      NOT_CI,
+    );
+    const report = JSON.parse(json.stdout) as { warnings?: string[] };
+    expect(report.warnings).toHaveLength(1);
+    expect(report.warnings?.[0]).toMatch(warning);
+    // Without --budget nothing depends on the kept times: no warning.
+    const full = await runCli(['verify', '--no-cache'], repo.root, NOT_CI);
+    expect(full.stdout).not.toContain('could not read');
+  });
+
   it('keeps the time of a project step under its folder, and warns for it by name', async () => {
     const repo = await repoWith(
       {

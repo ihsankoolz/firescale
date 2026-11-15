@@ -851,6 +851,67 @@ mod tests {
         assert!(!lock.exists());
     }
 
+    /// Something that is not a file where the lock should be can never be
+    /// taken and never goes away: no record waits for it.
+    #[test]
+    fn a_folder_in_the_locks_place_is_not_waited_for() {
+        let (temp, times) = times();
+        let folder = temp.path().join(".firescale");
+        fs::create_dir_all(folder.join(LOCK_FILE)).unwrap();
+        let started = Instant::now();
+        times.record(None, "lint", "l", HOUR, Outcome::Passed);
+        times.record(None, "test", "t", HOUR, Outcome::Passed);
+        assert!(
+            started.elapsed() < LOCK_REFUSED,
+            "two records waited {:?} for a lock that is a folder",
+            started.elapsed()
+        );
+        // Nothing was written without the lock, and the folder is left.
+        assert_eq!(times.last(None, "test", "t"), Ok(None));
+        assert!(folder.join(LOCK_FILE).is_dir());
+    }
+
+    /// A lock that another program keeps (a verify that hangs while it
+    /// holds it, a scanner that holds the stale file open) is waited for by
+    /// the first record of a step that ended, and by no later one: the wait
+    /// is never paid once for every step.
+    #[test]
+    fn a_lock_that_is_never_given_up_is_waited_for_once_in_a_run() {
+        let (temp, times) = times();
+        let folder = temp.path().join(".firescale");
+        fs::create_dir_all(&folder).unwrap();
+        let lock = folder.join(LOCK_FILE);
+        fs::write(&lock, "another verify").unwrap();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let holder = {
+            let (lock, done) = (lock.clone(), done.clone());
+            std::thread::spawn(move || {
+                // Written again and again, so it never looks stale.
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = fs::write(&lock, "another verify");
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            })
+        };
+        let first = Instant::now();
+        times.record(None, "lint", "l", HOUR, Outcome::Passed);
+        let first = first.elapsed();
+        let second = Instant::now();
+        times.record(None, "test", "t", HOUR, Outcome::Passed);
+        let second = second.elapsed();
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        holder.join().unwrap();
+        assert!(
+            first >= LOCK_WAIT_ENDED,
+            "the first record waited {first:?}"
+        );
+        assert!(
+            second < Duration::from_secs(2),
+            "the second record waited {second:?} for the same lock"
+        );
+        assert_eq!(fs::read_to_string(&lock).unwrap(), "another verify");
+    }
+
     /// Another program (a virus scanner, an editor, Python's `open()`) has
     /// the file open without sharing delete for 300 ms, so nothing can be
     /// renamed over it for that long.
