@@ -45,6 +45,22 @@ The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. 
 - A `bail` set in a Jest or Vitest config file is not seen as fail-fast; only the flag in the command or the package script is.
 - `stackkit::CODE` has no `groovy`, so a Groovy-only repo does not count as having code for "another stack".
 
+**Pull request 3: tamper guard and agent runner**
+
+- **Bug 5, fixed.** Failing tests first: `assert_that_with_nothing_to_check_cannot_fail` (kotlin.rs: the lone `assertThat` counted as 1) and the new corpus case `kotlin: an AssertJ assertion with nothing chained` ("missed assertion-removed"). Fix: the Java reader's rule, written into the Kotlin reader.
+- **Bug 7, fixed.** Failing test first: `guardrail 5, budget limits: a firescale.config.ts sets them as a firescale.config.json does, not the defaults` (agent-runner.test.ts: the run got 30 turns, $2 and 900 s where 5, $0.5 and 7 s were set). Fix: the limits come from the config that was loaded.
+- **Bug 8, fixed, both parts.** Failing tests first: `a protected glob that does not compile stops the run: it would protect nothing` (the stand-in agent edited the file and the run PASSED), two config cases (`fscale check` exited 0), and `a violation in the folder [id]`, `{a}`, `*` and `?` (the real file was refused, `app/i/page.tsx` allowed). Fix: a config error for the glob; `globset::escape` for a finding's file.
+
+**Decided on your behalf** (ADR 0056):
+
+- Bug 5 includes Hamcrest's `anything()` forms, since Java's rule is one block with both. `assertThat(x).describedAs("…")` with no check still counts, in Java too.
+- Bug 7 keeps both clamps as they were (the config accepts any value of 1 or more; the run caps turns at 1,000 and time at 86,400 s).
+- Bug 8: a path rule in `.claude/settings.json` that does not compile also stops `fix --agent`, because the runner uses those rules as protected paths and dropped them the same way. It is a refusal of that command, not a `fscale check` error.
+- One existing test changed, to a stricter one: `checks_the_agent_limits` now asserts the values returned.
+- **After the review:** the Kotlin rule counted `with(assertThat(x)) { isEqualTo(3) }` and three like it as no assertion, which would report a false `assertion-removed` on a harmless refactor. Test first (`an_assert_that_checked_some_other_way_still_counts`, and a corpus case that showed the false finding), then one condition: the rule applies only where the call is a statement. The cost is a missed cheat in `@Test fun t() = assertThat(x)` and in a brace-less `if`. Java's rule may have the same false finding for `foo(assertThat(x))`; not tested, not touched.
+
+**Found while fixing, not fixed:** **a `protectedPaths` glob that compiles but can match no path (`./infra/**`, `/infra/**`, a bare `infra`) is accepted and protects nothing**; a rule's `inputs` glob that does not compile is still dropped from what the agent may change (fails safe); Claude Code's rule syntax is not globset's, so a rule Claude Code accepts but globset cannot compile now stops `fix --agent`.
+
 ## Review of the long run
 
 M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.

@@ -83,6 +83,16 @@ describe('config values', () => {
     expect(result.stderr).toBe('');
   });
 
+  it('rejects a protectedPaths glob that does not compile, naming it and the next step', async () => {
+    const repo = await repoWith({ protectedPaths: ['src/{app,lib.js'] });
+    const result = await runCli(['check'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(
+      'fscale: firescale.config.json: "protectedPaths" holds "src/{app,lib.js", which is not a valid glob (unclosed alternate group; missing \'}\' (maybe escape \'{\' with \'[{]\'?)) and would protect nothing. Fix the glob, for example "infra/**".\n',
+    );
+  });
+
   it('turns off every rule of a pack that is not listed', async () => {
     const { code, report } = await checkJson((await repoWith({ packs: [] })).root);
     expect(code).toBe(EXIT_OK);
@@ -104,6 +114,11 @@ describe('config values', () => {
     ['an unknown rule key', { rules: { [RULE]: { level: 'x' } } }, 'unknown key "level"'],
     ['bad options', { rules: { [RULE]: { options: [] } } }, 'options must be an object'],
     ['bad protectedPaths', { protectedPaths: 'x' }, '"protectedPaths" must be a list'],
+    [
+      'a protectedPaths glob that does not compile',
+      { protectedPaths: ['infra/**', 'secrets/['] },
+      '"protectedPaths" holds "secrets/[", which is not a valid glob',
+    ],
   ])('rejects %s with a message that says what to do', async (_name, raw, message) => {
     const repo = await repoWith(raw);
     const result = await runCli(['check'], repo.root);

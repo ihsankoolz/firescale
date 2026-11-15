@@ -62,11 +62,20 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-/** A repo on `main` whose code reads API_URL, which .env.example lacks. */
-async function repo(files: Record<string, string> = {}, agent: Record<string, number> = {}) {
+/**
+ * A repo on `main` whose code reads API_URL, which .env.example lacks. Its
+ * config is `firescale.config.json`, or the same settings as the default
+ * export of a `firescale.config.ts`.
+ */
+async function repo(
+  files: Record<string, string> = {},
+  agent: Record<string, number> = {},
+  configFile: 'firescale.config.json' | 'firescale.config.ts' = 'firescale.config.json',
+) {
   const fixture = await fixtures.create({
     files: {
-      'firescale.config.json': config(agent),
+      [configFile]:
+        configFile === 'firescale.config.ts' ? `export default ${config(agent)}` : config(agent),
       '.gitignore': '.firescale/\n',
       'package.json': '{ "name": "demo", "type": "module" }\n',
       '.env.example': 'NODE_ENV=\n',
@@ -244,6 +253,33 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
     }
     const reasons = (await ledger(root)).map((entry) => entry.reason ?? entry.result);
     expect(reasons).toEqual(['pass', 'over-budget', 'over-budget', 'timeout']);
+  });
+
+  it('guardrail 5, budget limits: a firescale.config.ts sets them as a firescale.config.json does, not the defaults', async () => {
+    const root = await repo(
+      {},
+      { maxTurns: 5, maxCostUsd: 0.5, timeoutSeconds: 7 },
+      'firescale.config.ts',
+    );
+    const within = await fix(root, GOOD);
+    expect(within.code, within.stdout + within.stderr).toBe(EXIT_OK);
+    // Not the defaults: 30 turns, $2 and 900 seconds.
+    expect(within.requests[0]?.request.policy).toMatchObject({
+      maxTurns: 5,
+      maxCostUsd: 0.5,
+      timeoutSecs: 7,
+    });
+    // Under the defaults, but over what the config allows.
+    for (const [scenario, text] of [
+      [{ ...GOOD, result: { ok: true, costUsd: 0.75, turns: 2 } }, 'over the limit of $0.50'],
+      [{ ...GOOD, result: { ok: true, costUsd: 0.1, turns: 9 } }, 'over the limit of 5'],
+    ] as const) {
+      const result = await fix(root, scenario);
+      expect(result.code, text).toBe(EXIT_VIOLATIONS);
+      expect(result.stdout).toContain(text);
+    }
+    const reasons = (await ledger(root)).map((entry) => entry.reason ?? entry.result);
+    expect(reasons).toEqual(['pass', 'over-budget', 'over-budget']);
   });
 
   it("guardrail 6, controlled config: the run says not to load the repo's own hooks, settings or MCP servers", async () => {
@@ -489,6 +525,116 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
       expect(refused.code).toBe(EXIT_USAGE);
       expect(refused.stderr).toContain('deny every tool that edits files');
       expect(refused.requests).toEqual([]);
+    });
+
+    it('a protected glob that does not compile stops the run: it would protect nothing', async () => {
+      // Meant as src/{app,lib}.js; the brace was never closed.
+      const glob = 'src/{app,lib.js';
+      const edit: Scenario = { ...GOOD, write: { ...GOOD.write, 'src/app.js': APP + '// x\n' } };
+      const withProtected = (globs: string[]) =>
+        `${JSON.stringify({ ...(JSON.parse(config()) as object), protectedPaths: globs })}\n`;
+      const fromConfig = await repo({ 'firescale.config.json': withProtected([glob]) });
+      const fromSettings = await repo({
+        '.claude/settings.json': JSON.stringify({ permissions: { deny: [`Edit(${glob})`] } }),
+      });
+      for (const [root, where] of [
+        [fromConfig, 'firescale.config.json: "protectedPaths"'],
+        [fromSettings, '.claude/settings.json'],
+      ] as const) {
+        const result = await fix(root, edit);
+        expect(result.code, where + result.stdout).toBe(EXIT_USAGE);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain(where);
+        expect(result.stderr).toContain(`"${glob}"`);
+        expect(result.stderr).toContain('is not a valid glob');
+        expect(result.stderr).toContain('Fix the glob');
+        // The agent never ran, and nothing is left of a run.
+        expect(result.requests).toEqual([]);
+        expect(await ledger(root)).toEqual([]);
+        expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
+      }
+      // The same glob written correctly protects the file.
+      const closed = await repo({ 'firescale.config.json': withProtected(['src/{app,lib}.js']) });
+      const guarded = await fix(closed, edit);
+      expect(guarded.code).toBe(EXIT_VIOLATIONS);
+      expect(guarded.stdout).toContain('protected path src/app.js');
+    });
+
+    // A file a violation names is a path, not a glob: `app/[id]/page.tsx`
+    // read as a glob names `app/i/page.tsx` and not the file itself.
+    describe.each([
+      ['[id]', 'i'],
+      ['{a}', 'a'],
+      // Windows has no file names with `*` or `?`.
+      ...(process.platform === 'win32'
+        ? []
+        : [
+            ['*', 'x'],
+            ['?', 'x'],
+            // A control: `!` is not special in a glob here, so this one
+            // passed before the fix too.
+            ['!x', 'x'],
+          ]),
+    ])('a violation in the folder %s', (folder, other) => {
+      const named = `app/${folder}/page.tsx`;
+      const sibling = `app/${other}/page.tsx`;
+      const PAGES = 'pages/done';
+      // A custom rule with narrow inputs: every tracked page.tsx is a
+      // violation until done.txt exists. Plain objects, so the run's
+      // worktree needs no node_modules.
+      const pack = [
+        'const rule = {',
+        `  id: '${PAGES}',`,
+        "  severity: 'low',",
+        "  category: 'maintainability',",
+        "  description: 'Pages are marked done.',",
+        "  inputs: ['done.txt'],",
+        '  async check(ctx) {',
+        '    const tracked = await ctx.git.trackedFiles();',
+        "    if (tracked.includes('done.txt')) return [];",
+        '    return tracked',
+        "      .filter((file) => file.endsWith('/page.tsx'))",
+        "      .map((file) => ({ file, message: 'not done', fixable: 'manual' }));",
+        '  },',
+        '};',
+        'export const pack = {',
+        "  name: 'pages',",
+        "  rules: [{ rule, skillFile: new URL('./SKILL.md', import.meta.url) }],",
+        '};',
+        '',
+      ].join('\n');
+      const pages = () =>
+        repo({
+          'firescale.config.json': `${JSON.stringify({ ...(JSON.parse(config()) as object), packs: ['core', './tools/rules/pack.ts'] })}\n`,
+          'tools/rules/pack.ts': pack,
+          'tools/rules/SKILL.md': '---\nname: done\ndescription: Marks pages done.\n---\n',
+          [named]: 'export default 1;\n',
+        });
+
+      it('the file itself may be changed', async () => {
+        const root = await pages();
+        const result = await fix(
+          root,
+          { write: { 'done.txt': 'yes\n', [named]: 'export default 2;\n' }, result: { ok: true } },
+          ['--rule', PAGES],
+        );
+        expect(result.requests[0]?.request.diagnostics.map((d) => d.file)).toEqual([named]);
+        expect(result.code, result.stdout + result.stderr).toBe(EXIT_OK);
+      });
+
+      it('a file its path names only when read as a glob may not', async () => {
+        const root = await pages();
+        const result = await fix(
+          root,
+          {
+            write: { 'done.txt': 'yes\n', [sibling]: 'export default 2;\n' },
+            result: { ok: true },
+          },
+          ['--rule', PAGES],
+        );
+        expect(result.code, result.stdout + result.stderr).toBe(EXIT_VIOLATIONS);
+        expect(result.stdout).toContain(`${sibling}, outside what the rule may change`);
+      });
     });
 
     it('a secret in the code itself stops the run before it starts', async () => {
