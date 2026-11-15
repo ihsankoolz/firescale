@@ -171,7 +171,19 @@ pub fn repo_limits(root: &Path) -> RepoLimits {
                             .trim_end_matches(')')
                             .trim_start_matches("./")
                             .trim_start_matches('/');
-                        if !glob.is_empty() {
+                        // A rule about paths outside the repo (`Read(../**)`)
+                        // says nothing about a path in it: the diff guard
+                        // sees only the repo, so there is nothing to protect.
+                        // The agent still gets the rule, in `denied`.
+                        let outside = glob.split(['/', '\\']).any(|part| part == "..");
+                        if glob.is_empty() || outside {
+                            continue;
+                        }
+                        // Claude Code reads a rule that ends with `/` as the
+                        // folder and all in it (ADR 0060).
+                        if glob.ends_with(['/', '\\']) {
+                            limits.denied_paths.push(format!("{glob}**"));
+                        } else {
                             limits.denied_paths.push(glob.to_owned());
                         }
                     }

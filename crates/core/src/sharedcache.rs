@@ -205,17 +205,23 @@ impl SharedCache {
         self.run.writes()
     }
 
-    /// `.firescale`, or this folder in it, when that is a symbolic link:
-    /// the records are then somewhere else, and are not read, written or
-    /// pruned (ADR 0060). A folder that is not in `.firescale` is the
-    /// caller's own choice and is used as given.
+    /// `.firescale`, or any folder from it down to this one, when that is
+    /// a symbolic link: the records are then somewhere else, and are not
+    /// read, written or pruned (ADR 0060). A folder that is not in
+    /// `.firescale` is the caller's own choice and is used as given.
     fn linked(&self) -> Option<String> {
-        let parent = self.dir.parent()?;
-        if parent.file_name()? != crate::ownfolder::DIR {
-            return None;
+        let mut below = Vec::new();
+        let mut at = self.dir.as_path();
+        loop {
+            let name = at.file_name()?.to_str()?;
+            let parent = at.parent()?;
+            if name == crate::ownfolder::DIR {
+                below.reverse();
+                return crate::ownfolder::linked(parent, &below);
+            }
+            below.push(name);
+            at = parent;
         }
-        let name = self.dir.file_name()?.to_str()?;
-        crate::ownfolder::linked(parent.parent()?, &[name])
     }
 
     fn path(&self, key: &str) -> PathBuf {

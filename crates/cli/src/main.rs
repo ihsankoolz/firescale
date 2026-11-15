@@ -1313,6 +1313,10 @@ fn ledger_command(root: &Path, args: &Args, extra: &[String]) -> Result<Output> 
             extra.join(" ")
         )));
     }
+    // Never read through a symbolic link (ADR 0060).
+    if let Some(link) = firescale_core::ownfolder::linked(root, &["ledger.jsonl"]) {
+        return Err(Error::user(firescale_core::ownfolder::refusal(&link)));
+    }
     let path = root.join(".firescale").join("ledger.jsonl");
     let text = match std::fs::read(&path) {
         Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
