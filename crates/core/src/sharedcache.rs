@@ -274,7 +274,15 @@ impl SharedCache {
         if let Some(link) = self.linked() {
             return Err(crate::ownfolder::refusal(&link));
         }
-        let text = fs::read_to_string(self.path(key)).map_err(|_| "no record".to_owned())?;
+        let path = self.path(key);
+        // In any folder, also one outside `.firescale`: what a linked
+        // record points at was not written by a run of this cache.
+        if crate::ownfolder::is_link(&path) {
+            return Err(
+                "the record is a symbolic link, and nothing is read through one".to_owned(),
+            );
+        }
+        let text = fs::read_to_string(path).map_err(|_| "no record".to_owned())?;
         let record: Record =
             serde_json::from_str(&text).map_err(|_| "the record cannot be read".to_owned())?;
         match self.refusal(&record, key, now_secs()) {

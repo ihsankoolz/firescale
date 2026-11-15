@@ -32,7 +32,7 @@ A lint, typecheck or test step that passed on the default branch, and whose inpu
 - GitHub scopes a cache saved by a pull request to its merge ref; the default branch never restores it.
 - firescale writes records only on a push to the default branch, and uses only records whose writer is the default branch. A run that writes never takes a pass from the machine's own step cache, so a runner kept between jobs cannot carry a pull request's pass into a record.
 - The writer field is a label, not a proof: the guarantee is GitHub's scoping and the read-only token. A pull request that adds its own workflow could save into its own merge ref and fool only its own check, in plain sight in its diff.
-- `--shared-cache` removes only record files, never folders or other files, and refuses the repo, a folder above it and firescale's other folders. When `.firescale`, or the shared folder inside it, is a symbolic link, no record is read, written or removed through it (ADR 0060).
+- `--shared-cache` removes only record files, never folders or other files, and refuses the repo, a folder above it and firescale's other folders. When `.firescale`, or the shared folder inside it, is a symbolic link, no record is read, written or removed through it (ADR 0060). A record file that is itself a symbolic link is never read, in any shared folder: the step runs, and the cache log says `the record is a symbolic link, and nothing is read through one`.
 - `ci.yml` never uses `pull_request_target`; only `tamper-guard.yml` does, with `cache-mode: none` and no cache step.
 
 ### What it does not do

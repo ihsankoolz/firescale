@@ -178,13 +178,19 @@ impl Cache {
     }
 
     /// Returns the stored diagnostics when the entry's key matches. A missing,
-    /// unreadable or outdated entry is a miss, never an error.
+    /// unreadable, outdated or linked entry is a miss, never an error.
     #[must_use]
     pub fn get(&self, rule_id: &str, key: &str) -> Option<Vec<Diagnostic>> {
         if self.linked.is_some() {
             return None;
         }
-        let text = fs::read_to_string(self.entry_path(rule_id)).ok()?;
+        let path = self.entry_path(rule_id);
+        // An entry that is a symbolic link is a miss: what it points at is
+        // not this repo's result.
+        if crate::ownfolder::is_link(&path) {
+            return None;
+        }
+        let text = fs::read_to_string(path).ok()?;
         let entry: Entry = serde_json::from_str(&text).ok()?;
         (entry.key == key).then_some(entry.diagnostics)
     }
@@ -219,6 +225,8 @@ impl Cache {
         };
         let json = serde_json::to_string(&entry).unwrap_or_default();
         // Write then rename, so a concurrent run never reads half an entry.
+        // The rename also replaces an entry that is a symbolic link with
+        // this real file: nothing is written where the link points.
         let target = self.entry_path(rule_id);
         let temporary = target.with_extension(format!("{}.tmp", std::process::id()));
         fs::write(&temporary, json).map_err(failed)?;

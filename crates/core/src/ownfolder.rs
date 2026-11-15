@@ -4,6 +4,14 @@
 //! folder or file in it. Whatever firescale wrote there would land where the
 //! link points, outside the repo. So nothing is read, written or removed
 //! through one: each writer asks [`linked`] first and refuses (ADR 0060).
+//!
+//! The same holds for one entry file in a real cache folder
+//! (`.firescale/cache/<rule>.json`, `.firescale/base/<key>.json`,
+//! `.firescale/steps/<key>.json`, a shared record). A reader asks
+//! [`is_link`] first: a linked entry is a miss, and is neither read nor
+//! touched. It is left where it is. The next result for it is written to a
+//! temporary file and renamed over it, which replaces the link itself and
+//! never writes where it points.
 //! The step cache (`stepcache.rs`) and the stop hook's counter (`hooks.rs`)
 //! make the same check in place (ADR 0056, bug 17).
 
@@ -15,7 +23,8 @@ pub const DIR: &str = ".firescale";
 
 /// True when the path itself is a symbolic link, also one that points
 /// nowhere. On Windows a junction counts too.
-fn is_symlink(path: &Path) -> bool {
+#[must_use]
+pub fn is_link(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
@@ -26,13 +35,13 @@ fn is_symlink(path: &Path) -> bool {
 pub fn linked(root: &Path, below: &[&str]) -> Option<String> {
     let mut path = root.join(DIR);
     let mut name = DIR.to_owned();
-    if is_symlink(&path) {
+    if is_link(&path) {
         return Some(name);
     }
     for part in below {
         path.push(part);
         name = format!("{name}/{part}");
-        if is_symlink(&path) {
+        if is_link(&path) {
             return Some(name);
         }
     }

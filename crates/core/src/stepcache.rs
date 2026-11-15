@@ -1073,13 +1073,18 @@ fn cache_is_linked(root: &Path) -> bool {
 }
 
 /// The stored pass for `key`, if there is one. A hit is touched, so the
-/// least recently used entries are the ones removed.
+/// least recently used entries are the ones removed. An entry that is a
+/// symlink is a miss: it is not read and not touched, and the next pass
+/// stored for the key replaces it with a real file.
 #[must_use]
 pub fn lookup(root: &Path, key: &str) -> Option<Entry> {
     if cache_is_linked(root) {
         return None;
     }
     let path = entry_path(root, key);
+    if is_symlink(&path) {
+        return None;
+    }
     let text = fs::read_to_string(&path).ok()?;
     let entry: Entry = serde_json::from_str(&text).ok()?;
     if entry.format != FORMAT || entry.key != key {

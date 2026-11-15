@@ -395,7 +395,12 @@ fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<Tes
     if crate::ownfolder::linked(root, &["base"]).is_some() {
         return None;
     }
-    let text = fs::read_to_string(store_dir(root).join(format!("{key}.json"))).ok()?;
+    let path = store_dir(root).join(format!("{key}.json"));
+    // Nor an entry that is one: it is a miss, and `keep` replaces it.
+    if crate::ownfolder::is_link(&path) {
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
     let stored: StoredBase = serde_json::from_str(&text).ok()?;
     let fresh = now_secs().saturating_sub(stored.ran_at) <= crate::stepcache::MAX_AGE.as_secs();
     (stored.format == STORE_FORMAT && stored.key == key && fresh).then(|| {
