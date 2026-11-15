@@ -395,7 +395,12 @@ fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<Tes
     if crate::ownfolder::linked(root, &["base"]).is_some() {
         return None;
     }
-    let text = fs::read_to_string(store_dir(root).join(format!("{key}.json"))).ok()?;
+    let path = store_dir(root).join(format!("{key}.json"));
+    // Nor an entry that is one: it is a miss, and `keep` replaces it.
+    if crate::ownfolder::is_link(&path) {
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
     let stored: StoredBase = serde_json::from_str(&text).ok()?;
     let fresh = now_secs().saturating_sub(stored.ran_at) <= crate::stepcache::MAX_AGE.as_secs();
     (stored.format == STORE_FORMAT && stored.key == key && fresh).then(|| {
@@ -2147,6 +2152,40 @@ mod tests {
             assert_eq!(names, ["k.json"], "{linked}");
             assert!(lookup(root, "k").is_none(), "{linked}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_base_result_is_never_read_through_a_symlinked_entry_file() {
+        // A real store elsewhere holds a result for the same key.
+        let other = Fixture::new(&[("a.txt", "one\n")], Track::NoGit).unwrap();
+        keep(other.root(), "k", BaseStatus::Passed, 1, &[], None);
+        let planted = store_dir(other.root()).join("k.json");
+        let record = fs::read_to_string(&planted).unwrap();
+        // The store is a real folder; the entry in it is a link to that file.
+        let fixture = Fixture::new(&[("a.txt", "one\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        fs::create_dir_all(store_dir(root)).unwrap();
+        let entry = store_dir(root).join("k.json");
+        std::os::unix::fs::symlink(&planted, &entry).unwrap();
+        assert!(
+            lookup(root, "k").is_none(),
+            "a base result was read through a linked entry file"
+        );
+        // A miss leaves the link as it is.
+        assert!(fs::symlink_metadata(&entry)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        // The next result replaces the link with a real file. The file the
+        // link pointed at is not written.
+        keep(root, "k", BaseStatus::Failed, 1, &[], None);
+        assert!(fs::symlink_metadata(&entry).unwrap().file_type().is_file());
+        assert_eq!(fs::read_to_string(&planted).unwrap(), record);
+        assert!(matches!(
+            lookup(root, "k"),
+            Some((BaseStatus::Failed, _, _))
+        ));
     }
 
     fn git(root: &Path, args: &[&str]) {

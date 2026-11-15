@@ -49,9 +49,9 @@ use firescale_core::steptimes::StepTimes;
 use firescale_core::tamper;
 use firescale_core::verify::add_tamper;
 use firescale_core::verify::{
-    check_project_folders, format_verify_human, format_verify_json, format_verify_plan,
-    limit_to_affected, plan_verify, run_verify_with, CheckStep, RunOptions, VerifyPlan,
-    VerifyReport, VerifyResult, TAIL_LINES,
+    check_project_folders, format_budget_plan, format_verify_human, format_verify_json,
+    format_verify_plan, limit_to_affected, plan_verify, run_verify_with, stopped_in_check,
+    CheckStep, RunOptions, VerifyPlan, VerifyReport, VerifyResult, STOPPED_IN_CHECK, TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -170,6 +170,43 @@ struct Args {
     positionals: Vec<String>,
 }
 
+/// Every long option that takes no value.
+const FLAG_OPTIONS: &[&str] = &[
+    "--version",
+    "--help",
+    "--json",
+    "--sarif",
+    "--no-cache",
+    "--dry-run",
+    "--affected",
+    "--all",
+    "--force",
+    "--check",
+    "--progress",
+    "--no-progress",
+    "--explain",
+    "--pr-base",
+];
+
+/// Every long option that takes a value (`--name value` or `--name=value`).
+/// [`parse_args`] knows an option only when it is in one of these two lists,
+/// and [`positionals_of`] uses this one to skip the values, so an option
+/// added here is handled by both.
+const VALUE_OPTIONS: &[&str] = &[
+    "--rules",
+    "--cwd",
+    "--base",
+    "--agent",
+    "--bin",
+    "--packs",
+    "--jobs",
+    "--budget",
+    "--shared-cache",
+    "--head",
+    "--approvals",
+    "--rule",
+];
+
 /// Parses the command line. Follows the conventions the CLI has always had:
 /// `--name value` or `--name=value`, grouped short flags (`-vh`), and `--` to
 /// end the options.
@@ -200,62 +237,88 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
             Some((name, value)) => (name.to_owned(), Some(value.to_owned())),
             None => (arg.clone(), None),
         };
-        match name.as_str() {
-            "--version" | "--help" | "--json" | "--sarif" | "--no-cache" | "--dry-run"
-            | "--affected" | "--all" | "--force" | "--check" | "--progress" | "--no-progress"
-            | "--explain" | "--pr-base" => {
-                if inline.is_some() {
+        if FLAG_OPTIONS.contains(&name.as_str()) {
+            if inline.is_some() {
+                return Err(Error::usage(format!(
+                    "option {name} does not take a value."
+                )));
+            }
+            match name.as_str() {
+                "--version" => args.version = true,
+                "--help" => args.help = true,
+                "--json" => args.json = true,
+                "--no-cache" => args.no_cache = true,
+                "--dry-run" => args.dry_run = true,
+                "--sarif" => args.sarif = true,
+                "--affected" => args.affected = true,
+                "--explain" => args.explain = true,
+                "--pr-base" => args.pr_base = true,
+                "--all" => args.all = true,
+                "--force" => args.force = true,
+                "--check" => args.check = true,
+                "--progress" => args.progress = Some(true),
+                "--no-progress" => args.progress = Some(false),
+                _ => return Err(not_stored(&name)),
+            }
+        } else if VALUE_OPTIONS.contains(&name.as_str()) {
+            let value = match inline.or_else(|| argv.next()) {
+                Some(value) if arg.contains('=') || !value.starts_with('-') => value,
+                Some(value) => {
                     return Err(Error::usage(format!(
-                        "option {name} does not take a value."
+                        "option {name} needs a value, but got \"{value}\". To pass a value that starts with \"-\", write {name}=<value>."
                     )));
                 }
-                match name.as_str() {
-                    "--version" => args.version = true,
-                    "--help" => args.help = true,
-                    "--no-cache" => args.no_cache = true,
-                    "--dry-run" => args.dry_run = true,
-                    "--sarif" => args.sarif = true,
-                    "--affected" => args.affected = true,
-                    "--explain" => args.explain = true,
-                    "--pr-base" => args.pr_base = true,
-                    "--all" => args.all = true,
-                    "--force" => args.force = true,
-                    "--check" => args.check = true,
-                    "--progress" => args.progress = Some(true),
-                    "--no-progress" => args.progress = Some(false),
-                    _ => args.json = true,
-                }
+                None => return Err(Error::usage(format!("option {name} needs a value."))),
+            };
+            match name.as_str() {
+                "--rules" => args.rules = Some(value),
+                "--cwd" => args.cwd = Some(value),
+                "--base" => args.base = Some(value),
+                "--agent" => args.agent = Some(value),
+                "--bin" => args.bin = Some(value),
+                "--packs" => args.packs = Some(value),
+                "--jobs" => args.jobs = Some(value),
+                "--budget" => args.budget = Some(value),
+                "--shared-cache" => args.shared_cache = Some(value),
+                "--head" => args.head = Some(value),
+                "--approvals" => args.approvals = Some(value),
+                "--rule" => args.rule = Some(value),
+                _ => return Err(not_stored(&name)),
             }
-            "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs"
-            | "--shared-cache" | "--head" | "--approvals" | "--rule" | "--budget" => {
-                let value = match inline.or_else(|| argv.next()) {
-                    Some(value) if arg.contains('=') || !value.starts_with('-') => value,
-                    Some(value) => {
-                        return Err(Error::usage(format!(
-                            "option {name} needs a value, but got \"{value}\". To pass a value that starts with \"-\", write {name}=<value>."
-                        )));
-                    }
-                    None => return Err(Error::usage(format!("option {name} needs a value."))),
-                };
-                match name.as_str() {
-                    "--rules" => args.rules = Some(value),
-                    "--base" => args.base = Some(value),
-                    "--agent" => args.agent = Some(value),
-                    "--bin" => args.bin = Some(value),
-                    "--packs" => args.packs = Some(value),
-                    "--jobs" => args.jobs = Some(value),
-                    "--budget" => args.budget = Some(value),
-                    "--shared-cache" => args.shared_cache = Some(value),
-                    "--head" => args.head = Some(value),
-                    "--approvals" => args.approvals = Some(value),
-                    "--rule" => args.rule = Some(value),
-                    _ => args.cwd = Some(value),
-                }
-            }
-            _ => return Err(Error::usage(format!("unknown option \"{name}\"."))),
+        } else {
+            return Err(Error::usage(format!("unknown option \"{name}\".")));
         }
     }
     Ok(args)
+}
+
+/// An option that is in [`FLAG_OPTIONS`] or [`VALUE_OPTIONS`] but that
+/// [`parse_args`] does not store: a mistake in fscale, caught by the tests.
+fn not_stored(name: &str) -> Error {
+    Error::internal(format!(
+        "option {name} is listed but not read. Run fscale without it."
+    ))
+}
+
+/// The words of a command line that are neither options nor the values of
+/// options: the command and its arguments. Reads as [`parse_args`] does, but
+/// never fails, so it also works on a command line `parse_args` refuses.
+fn positionals_of(argv: &[String]) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut argv = argv.iter();
+    let mut only_positionals = false;
+    while let Some(arg) = argv.next() {
+        if only_positionals || !arg.starts_with('-') || arg == "-" {
+            words.push(arg.as_str());
+        } else if arg == "--" {
+            only_positionals = true;
+        } else if VALUE_OPTIONS.contains(&arg.as_str()) {
+            // `--name value`: the next word is the value, whatever it says.
+            // `--name=value` is one word and is not in the list.
+            argv.next();
+        }
+    }
+    words
 }
 
 /// Removes `.` and `..` segments without touching the filesystem, so that
@@ -1134,7 +1197,12 @@ fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
     } else {
         "fscale check"
     };
-    Ok(Output::ok(format_verify_plan(&plan, check_command)))
+    let mut text = format_verify_plan(&plan, check_command);
+    // With a budget the plan also names the steps a run would not start.
+    if let Some(budget) = budget(args)? {
+        text.push_str(&format_budget_plan(&plan, &StepTimes::new(root), budget));
+    }
+    Ok(Output::ok(text))
 }
 
 /// Runs check and then the planned lint, typecheck and test commands.
@@ -1146,6 +1214,15 @@ enum VerifyMode {
     /// The stop hook (M21): only the projects the change reaches, measured
     /// from the base commit, and a base run for failures only.
     Hook,
+}
+
+/// The command that repeats verify's check step.
+fn check_command(args: &Args) -> String {
+    match (&args.affected, &args.base) {
+        (true, Some(base)) => format!("fscale check --affected --base {base}"),
+        (true, None) => "fscale check --affected".to_owned(),
+        (false, _) => "fscale check".to_owned(),
+    }
 }
 
 fn verify_report(
@@ -1193,11 +1270,7 @@ fn verify_report(
     let selection = select_rules(config.rules, None)?;
     // The command that repeats the check: with --base when the run used
     // one, so it reports what this run reported.
-    let check_command = match (&args.affected, &args.base) {
-        (true, Some(base)) => format!("fscale check --affected --base {base}"),
-        (true, None) => "fscale check --affected".to_owned(),
-        (false, _) => "fscale check".to_owned(),
-    };
+    let check_command = check_command(args);
     let check_command = check_command.as_str();
     say(&format!("check: started: {check_command}"));
     let started = Instant::now();
@@ -1638,16 +1711,22 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let progress = args
         .progress
         .unwrap_or_else(|| std::io::stderr().is_terminal());
+    let started = Instant::now();
     let (report, notes) = match verify_report(root, args, progress, VerifyMode::Full) {
         Ok(done) => done,
         // Ctrl+C during the check also reaches the Node host and git, which
-        // then fail: that is a stop, not an error.
+        // then fail: that is a stop, not an error. `--json` still prints a
+        // report, so a script that reads it never gets an empty document.
         Err(error) if STOP.load(std::sync::atomic::Ordering::SeqCst) => {
             return Ok(Output {
                 stdout: if args.json {
-                    String::new()
+                    format_verify_json(&stopped_in_check(
+                        version(),
+                        &check_command(args),
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    ))
                 } else {
-                    "verify: STOPPED - interrupted before the check finished\n".to_owned()
+                    format!("verify: STOPPED - {STOPPED_IN_CHECK}\n")
                 },
                 notes: vec![format!(
                     "fscale: verify was stopped before the check finished ({}). Run fscale verify again to check the repo.",
@@ -1701,7 +1780,6 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             let bin = args.bin.as_deref().unwrap_or("fscale");
             let mut out = String::new();
             let mut notes = Vec::new();
-            let mut cursor_note = None;
             let mut ready = Vec::new();
             let mut refused = Vec::new();
             for agent in agents {
@@ -1722,14 +1800,7 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                 if state != "refused" {
                     ready.push(agent.config_file());
                 }
-                if agent == Agent::Cursor && state == "installed" {
-                    cursor_note = Some(
-                        "note: the Cursor hook format could not be checked against Cursor's docs when this was written. Confirm that .cursor/hooks.json matches your Cursor version."
-                            .to_owned(),
-                    );
-                }
             }
-            notes.extend(cursor_note);
             if refused.is_empty() {
                 out.push_str(&format!(
                     "\nEach agent now runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n"
@@ -1905,20 +1976,19 @@ fn run() -> Result<Output> {
     }
 }
 
-/// True for `fscale hooks run ...`. Claude Code and Codex read exit code 2
-/// from a stop hook as "do not stop", so this command must never use it for
-/// its own errors: a broken hook must not trap an agent.
-fn is_stop_hook() -> bool {
-    let words: Vec<String> = env::args()
-        .skip(1)
-        .filter(|arg| !arg.starts_with('-'))
-        .take(2)
-        .collect();
-    words == ["hooks", "run"]
+/// True for `fscale hooks run ...`, wherever its options are written
+/// (`fscale --agent claude hooks run`). Claude Code and Codex read exit code
+/// 2 from a stop hook as "do not stop", so this command must never use it
+/// for its own errors: a broken hook must not trap an agent. The value of an
+/// option is never taken for the command, so `fscale --rules hooks run` is
+/// not the hook.
+fn is_stop_hook(argv: &[String]) -> bool {
+    matches!(positionals_of(argv).as_slice(), ["hooks", "run", ..])
 }
 
 fn main() -> ExitCode {
-    let error_code = if is_stop_hook() { 1 } else { EXIT_USAGE };
+    let argv: Vec<String> = env::args().skip(1).collect();
+    let error_code = if is_stop_hook(&argv) { 1 } else { EXIT_USAGE };
     let (stdout, stderr, code) = match run() {
         Ok(output) => {
             let notes: String = output.notes.iter().map(|note| format!("{note}\n")).collect();
@@ -1947,7 +2017,10 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{ci_run, normalize, parse_args, refuse_budget_in_ci, Args};
+    use super::{
+        ci_run, is_stop_hook, normalize, parse_args, refuse_budget_in_ci, Args, FLAG_OPTIONS, HELP,
+        VALUE_OPTIONS,
+    };
     use std::path::Path;
 
     fn parse(argv: &[&str]) -> Result<Args, String> {
@@ -2008,6 +2081,103 @@ mod tests {
             parse(&["check", "--rules=-x"]).unwrap().rules.as_deref(),
             Some("-x")
         );
+    }
+
+    fn stop_hook(argv: &[&str]) -> bool {
+        let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
+        is_stop_hook(&argv)
+    }
+
+    #[test]
+    fn the_stop_hook_is_seen_wherever_its_options_are() {
+        for argv in [
+            &["hooks", "run"][..],
+            &["hooks", "run", "--agent", "claude"],
+            &["--agent", "claude", "hooks", "run"],
+            &["hooks", "--agent", "claude", "run"],
+            &["--cwd", "some dir", "hooks", "run", "--agent", "claude"],
+            &["--agent=claude", "--json", "hooks", "--bin", "x", "run"],
+            // Command lines parse_args refuses are still the hook's.
+            &["--nope", "hooks", "run"],
+            &["hooks", "run", "--agent"],
+            &["--agent", "--json", "hooks", "run"],
+            &["-x", "hooks", "run", "extra"],
+        ] {
+            assert!(stop_hook(argv), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn the_value_of_an_option_is_never_the_command() {
+        for argv in [
+            &[][..],
+            &["hooks"],
+            &["hooks", "install"],
+            &["verify", "hooks", "run"],
+            &["--rules", "hooks", "run"],
+            &["--agent", "hooks", "run"],
+            &["hooks", "--bin", "run"],
+            &["check", "--rules", "hooks", "run"],
+            &["--bin", "hooks", "--agent", "run", "verify"],
+            // After `--` every word is an argument, in the order written.
+            &["--", "--agent", "hooks", "run"],
+        ] {
+            assert!(!stop_hook(argv), "{argv:?}");
+        }
+    }
+
+    // A value-taking option that `positionals_of` does not know would have
+    // its value read as the command. Both read the same list; this holds
+    // them to it, option by option.
+    #[test]
+    fn every_option_that_takes_a_value_has_it_skipped() {
+        for &name in VALUE_OPTIONS {
+            let args = parse(&[name, "hooks", "run"]).unwrap();
+            assert_eq!(args.positionals, ["run"], "{name}");
+            assert!(!stop_hook(&[name, "hooks", "run"]), "{name}");
+            assert!(stop_hook(&[name, "value", "hooks", "run"]), "{name}");
+            let inline = format!("{name}=value");
+            assert!(stop_hook(&[inline.as_str(), "hooks", "run"]), "{name}");
+        }
+        for &name in FLAG_OPTIONS {
+            let args = parse(&[name, "hooks", "run"]).unwrap();
+            assert_eq!(args.positionals, ["hooks", "run"], "{name}");
+            assert!(stop_hook(&[name, "hooks", "run"]), "{name}");
+        }
+    }
+
+    // The help is the list people read. An option it shows with a `<value>`
+    // must be in VALUE_OPTIONS, and one without in FLAG_OPTIONS, so a new
+    // option cannot be documented without being in the right list.
+    #[test]
+    fn the_help_and_the_option_lists_agree() {
+        let options = HELP
+            .split_once("\nOptions:\n")
+            .and_then(|(_, rest)| rest.split_once("\nExit codes:"))
+            .map(|(options, _)| options)
+            .unwrap();
+        let mut flags = vec!["--version", "--help"];
+        let mut values = Vec::new();
+        for line in options.lines().filter(|line| line.starts_with("  --")) {
+            let mut words = line.split_whitespace();
+            let name = words.next().unwrap();
+            if words.next().is_some_and(|next| next.starts_with('<')) {
+                values.push(name);
+            } else {
+                flags.push(name);
+            }
+        }
+        let sorted = |names: &[&'static str]| {
+            let mut names = names.to_vec();
+            names.sort_unstable();
+            names
+        };
+        assert_eq!(
+            sorted(&values),
+            sorted(VALUE_OPTIONS),
+            "options with a value"
+        );
+        assert_eq!(sorted(&flags), sorted(FLAG_OPTIONS), "options without one");
     }
 
     #[test]

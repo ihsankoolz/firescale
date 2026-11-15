@@ -274,7 +274,15 @@ impl SharedCache {
         if let Some(link) = self.linked() {
             return Err(crate::ownfolder::refusal(&link));
         }
-        let text = fs::read_to_string(self.path(key)).map_err(|_| "no record".to_owned())?;
+        let path = self.path(key);
+        // In any folder, also one outside `.firescale`: what a linked
+        // record points at was not written by a run of this cache.
+        if crate::ownfolder::is_link(&path) {
+            return Err(
+                "the record is a symbolic link, and nothing is read through one".to_owned(),
+            );
+        }
+        let text = fs::read_to_string(path).map_err(|_| "no record".to_owned())?;
         let record: Record =
             serde_json::from_str(&text).map_err(|_| "the record cannot be read".to_owned())?;
         match self.refusal(&record, key, now_secs()) {
@@ -574,6 +582,42 @@ mod tests {
             left.sort();
             assert_eq!(left, ["ab12.json", "cd34.json"], "{linked} {folder}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_is_never_read_through_a_symlinked_record_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let run = ci(temp.path(), "push", "refs/heads/main");
+        // A real shared cache elsewhere holds a record for the same key.
+        let other = temp.path().join("other");
+        SharedCache::new(other.clone(), run.clone())
+            .write(KEY, now_secs(), 1, "d")
+            .unwrap();
+        let planted = other.join(format!("{KEY}.json"));
+        let record = fs::read_to_string(&planted).unwrap();
+        // The folder is real; the record in it is a link to that file.
+        let dir = temp.path().join("shared");
+        fs::create_dir_all(&dir).unwrap();
+        let entry = dir.join(format!("{KEY}.json"));
+        std::os::unix::fs::symlink(&planted, &entry).unwrap();
+        let shared = SharedCache::new(dir, run);
+        assert_eq!(
+            shared.lookup(KEY).unwrap_err(),
+            "the record is a symbolic link, and nothing is read through one"
+        );
+        // Pruning removes no link, and nothing where it points.
+        assert_eq!(shared.prune(), 0);
+        assert!(fs::symlink_metadata(&entry)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        // The next record replaces the link with a real file. The file the
+        // link pointed at is not written.
+        shared.write(KEY, now_secs(), 2, "d").unwrap();
+        assert!(fs::symlink_metadata(&entry).unwrap().file_type().is_file());
+        assert_eq!(fs::read_to_string(&planted).unwrap(), record);
+        assert_eq!(shared.lookup(KEY).unwrap().duration_ms, 2);
     }
 
     #[test]

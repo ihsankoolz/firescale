@@ -4,6 +4,14 @@
 //! folder or file in it. Whatever firescale wrote there would land where the
 //! link points, outside the repo. So nothing is read, written or removed
 //! through one: each writer asks [`linked`] first and refuses (ADR 0060).
+//!
+//! The same holds for one entry file in a real cache folder
+//! (`.firescale/cache/<rule>.json`, `.firescale/base/<key>.json`,
+//! `.firescale/steps/<key>.json`, a shared record). A reader asks
+//! [`is_link`] first: a linked entry is a miss, and is neither read nor
+//! touched. It is left where it is. The next result for it is written to a
+//! temporary file and renamed over it, which replaces the link itself and
+//! never writes where it points.
 //! The step cache (`stepcache.rs`) and the stop hook's counter (`hooks.rs`)
 //! make the same check in place (ADR 0056, bug 17).
 
@@ -15,7 +23,8 @@ pub const DIR: &str = ".firescale";
 
 /// True when the path itself is a symbolic link, also one that points
 /// nowhere. On Windows a junction counts too.
-fn is_symlink(path: &Path) -> bool {
+#[must_use]
+pub fn is_link(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
@@ -26,13 +35,13 @@ fn is_symlink(path: &Path) -> bool {
 pub fn linked(root: &Path, below: &[&str]) -> Option<String> {
     let mut path = root.join(DIR);
     let mut name = DIR.to_owned();
-    if is_symlink(&path) {
+    if is_link(&path) {
         return Some(name);
     }
     for part in below {
         path.push(part);
         name = format!("{name}/{part}");
-        if is_symlink(&path) {
+        if is_link(&path) {
             return Some(name);
         }
     }
@@ -124,6 +133,42 @@ mod tests {
                 assert!(Cache::new(other.root()).get("core/x", "key").is_some());
                 assert!(cache.get("core/x", "key").is_none(), "{linked}");
             }
+        }
+
+        #[test]
+        fn a_rule_result_is_never_read_through_a_symlinked_entry_file() {
+            // A real cache elsewhere holds a result for the same rule and key.
+            let other = Fixture::new(&[("a.md", "one\n")], Track::NoGit).unwrap();
+            Cache::new(other.root()).put("core/x", "key", &[]).unwrap();
+            let planted = other
+                .root()
+                .join(".firescale")
+                .join("cache")
+                .join("core__x.json");
+            let record = fs::read_to_string(&planted).unwrap();
+            // The cache folder is real; the entry in it is a link to that file.
+            let fixture = Fixture::new(&[("a.md", "one\n")], Track::NoGit).unwrap();
+            let dir = fixture.root().join(".firescale").join("cache");
+            fs::create_dir_all(&dir).unwrap();
+            let entry = dir.join("core__x.json");
+            std::os::unix::fs::symlink(&planted, &entry).unwrap();
+            let cache = Cache::new(fixture.root());
+            assert!(
+                cache.get("core/x", "key").is_none(),
+                "a result was read through a linked entry file"
+            );
+            // A miss leaves the link as it is.
+            assert!(fs::symlink_metadata(&entry)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            // The next result replaces the link with a real file. The file
+            // the link pointed at is not written.
+            cache.put("core/x", "key2", &[]).unwrap();
+            assert!(fs::symlink_metadata(&entry).unwrap().file_type().is_file());
+            assert_eq!(fs::read_to_string(&planted).unwrap(), record);
+            assert!(cache.get("core/x", "key2").is_some());
+            assert_eq!(names_in(&dir), ["core__x.json"]);
         }
 
         #[test]

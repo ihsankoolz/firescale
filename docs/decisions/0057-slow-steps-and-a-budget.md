@@ -104,7 +104,7 @@ This was the simplest of the options. Calling the estimate "rough" until the per
 - A step stopped at a time limit now leaves a time, so a suite that always times out at 60 minutes is announced as "ran at least 1h 00m ... and did not finish" and is left out by a budget below that.
 - After ten minutes a killed verify's record is up to five minutes short. Records written at a clean stop are exact.
 - One existing end-to-end expectation changed: a step that printed `[ 25%]` and then nothing for its whole idle limit used to say "25% done, about 6s left at this pace", three times the time it had sat silent. It now says "25% done", whenever the percent was printed.
-- `--budget` with `--dry-run` is accepted and changes nothing in the plan that is printed.
+- `--budget` with `--dry-run` first changed nothing in the plan that was printed. Since the small fixes after 0.5.1 (ADR 0061) the dry run names the planned steps whose kept time is over the budget. It reads the kept times only, not the step cache, and says so.
 
 ## Not done
 

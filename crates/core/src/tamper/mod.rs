@@ -1957,6 +1957,61 @@ mod tests {
         );
     }
 
+    /// Every language the guard reads, with the name people know it by. A
+    /// new variant of [`Language`] does not compile until it is listed here.
+    fn all_languages() -> Vec<(Language, &'static str)> {
+        let all = vec![
+            (Language::Js(JsDialect::TypeScript), "JS/TS"),
+            (Language::Js(JsDialect::Tsx), "JS/TS"),
+            (Language::Python, "Python"),
+            (Language::Rust, "Rust"),
+            (Language::Java, "Java"),
+            (Language::Kotlin, "Kotlin"),
+            (Language::Swift, "Swift"),
+            (Language::C, "C"),
+            (Language::Cpp, "C++"),
+            (Language::CSharp, "C#"),
+            (Language::Go, "Go"),
+            (Language::Dart, "Dart"),
+        ];
+        for (language, _) in &all {
+            match language {
+                Language::Js(JsDialect::TypeScript | JsDialect::Tsx)
+                | Language::Python
+                | Language::Rust
+                | Language::Java
+                | Language::Kotlin
+                | Language::Swift
+                | Language::C
+                | Language::Cpp
+                | Language::CSharp
+                | Language::Go
+                | Language::Dart => {}
+            }
+        }
+        all
+    }
+
+    #[test]
+    fn the_shipped_schema_names_every_language_the_guard_reads() {
+        let schema = shipped_schema();
+        let description = schema["description"].as_str().unwrap();
+        // Whole words only: "C" is not found in "C++", nor "Java" in "JavaScript".
+        let words: Vec<&str> = description
+            .split(|c: char| !(c.is_alphanumeric() || matches!(c, '+' | '#' | '/')))
+            .collect();
+        let missing: Vec<&str> = all_languages()
+            .into_iter()
+            .map(|(_, name)| name)
+            .filter(|name| !words.contains(name))
+            .collect();
+        assert_eq!(
+            missing,
+            Vec::<&str>::new(),
+            "the description of `tamper` in verify-output.schema.json does not name these languages the guard reads: {description}"
+        );
+    }
+
     /// The keys of `value` that `schema` does not describe, as paths.
     fn undescribed(value: &serde_json::Value, schema: &serde_json::Value, at: &str) -> Vec<String> {
         match value {

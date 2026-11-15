@@ -4,18 +4,20 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**Nothing is in progress.** The 0.5.1 run (2026-11-15 and 16: fixes after running 0.5.0 on the course project) is merged, five pull requests, each green on Linux, macOS and Windows (DECISIONS.md "0.5.1"):
+**Nothing is in progress.** The 0.5.1 run (2026-11-15 and 16: fixes after running 0.5.0 on the course project) is merged, six pull requests, each green on Linux, macOS and Windows (DECISIONS.md "0.5.1"):
 
 1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). [#56](https://github.com/ihsankoolz/firescale/pull/56).
 2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). [#57](https://github.com/ihsankoolz/firescale/pull/57).
 3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). [#54](https://github.com/ihsankoolz/firescale/pull/54).
 4. Leftovers from "Found while fixing" (ADR 0060). [#55](https://github.com/ihsankoolz/firescale/pull/55).
-5. Version 0.5.1 and docs: this pull request.
+5. Version 0.5.1 and docs. [#58](https://github.com/ihsankoolz/firescale/pull/58).
 
-After it comes one pull request of small fixes found on the way (branch `small-fixes-cli`, ADR 0061). If `git log main` does not show it, it is still on that branch. Do not start M36 or the project-type table.
+6. Small fixes found on the way, seven items (ADR 0061): this pull request. It came after the version was set and is part of 0.5.1.
+
+The run ended there. Do not start M36 or the project-type table without the owner's word.
 
 - **Version:** 0.5.1 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.1` tag exists**; the owner pushes it when ready (`RELEASING.md`). 0.5.0 is released: the tag `v0.5.0` is on commit `b43a548` (2026-11-15) and it is npm's latest, so 0.5.1 will be the first release with the fixes of this run.
-- **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run.
+- **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run; `fscale doctor` says PROBLEM for a `.env` that is a symbolic link when its variables are set nowhere else; `hooks install` no longer prints the note about the Cursor hook format.
 - **Verify's JSON is schema version 7** (`notRun`, `budgetMs`, the step status `over-budget`).
 - **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
 - **Fixed in that run** (`docs/reviews/ponytail-audit.md`, "Bugs found during the audit"; ADR 0056; DECISIONS.md "Audit bug fixes"): bugs 1, 2, 3 ([#49](https://github.com/ihsankoolz/firescale/pull/49)); 4, 9, 10, 12, 13, 17 ([#50](https://github.com/ihsankoolz/firescale/pull/50)); 5, 7, 8 ([#51](https://github.com/ihsankoolz/firescale/pull/51)); 6, 11, 14, 20 ([#52](https://github.com/ihsankoolz/firescale/pull/52)). Each has a test that failed first. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
@@ -46,7 +48,7 @@ After it comes one pull request of small fixes found on the way (branch `small-f
 - **Done in the session of 2026-11-13 (night):** M24, the tamper guard for Python and Rust, suppressions and policy (ADR 0044).
 - **Done in the sessions of 2026-11-14:** M25 to M30 (ADR 0045 to 0050), then M31 to M35 (ADR 0051 to 0055), and the ponytail audit (`docs/reviews/ponytail-audit.md`).
 - **Done in the session of 2026-11-15:** the audit's bugs 1 to 14, 17 and 20 (ADR 0056) and the 0.5.0 version.
-- **Done in the sessions of 2026-11-15 and 16:** the 0.5.1 fixes from running 0.5.0 on the course project (ADR 0057 to 0060, verify schema 7) and the 0.5.1 version.
+- **Done in the sessions of 2026-11-15 and 16:** the 0.5.1 fixes from running 0.5.0 on the course project (ADR 0057 to 0061, verify schema 7) and the 0.5.1 version.
 - **Not started:** M36 to M39, on hold (see "In progress").
 
 ## How to resume

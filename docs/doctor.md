@@ -67,6 +67,15 @@ A name found nowhere is a problem, and the line names every env file that was re
 
 **What this check can and cannot know.** `fscale verify` loads no env file: a step gets the environment verify was started in, plus `CI`, `NO_COLOR`, `FORCE_COLOR` and `PYTHONUNBUFFERED`. The project's own tools read the files, each in its own way: python-dotenv's `load_dotenv()` looks in the folders above; pydantic-settings and Vite read the folder they are pointed at (often the root, by a path in the code or `envDir`); Docker Compose reads the `.env` beside the Compose file. Doctor cannot tell which of these a project uses, so a name in any `.env` or `.env.local` at or above the project counts as set, the same folders the services check and the rule `core/env-example` look in. A file above the repo root is never read.
 
+**A `.env` or `.env.local` that is a symbolic link is not read**, by this check or by the services check: a link can point at a file outside the repo, and the base run of `fscale verify` does not copy a linked env file into its worktree either. A name set only in such a file is a problem, and the line names the link:
+
+```
+  PROBLEM  backend/orders/.env.example: 1 of 1 variables are not set in the environment: ORDERS_API_KEY. backend/orders/.env is a symbolic link, so it was not read.
+           next: replace backend/orders/.env with a real file that sets ORDERS_API_KEY, or set the variables in your shell (see backend/orders/.env.example for what each one is)
+```
+
+When every name is set in the environment or in a real env file, the link is not mentioned.
+
 ### Dependencies
 
 - **Node projects:** every package in `dependencies` and `devDependencies` (except `workspace:`, `file:` and `link:` ones) has a folder in `node_modules`, here or in a folder above, as Node itself looks them up. When all are there, the lockfile must not be newer than the file the package manager writes on each install (`node_modules/.package-lock.json` for npm, `.modules.yaml` for pnpm, `.yarn-integrity` or `.yarn-state.yml` for Yarn, `.bun-tag` for Bun); if it is, the lockfile changed since the last install. The fix is the project's install command from `fscale facts`, in the form that installs what the lockfile says and never rewrites it when the project has one (see [Install commands that keep the lockfile](#install-commands-that-keep-the-lockfile)).

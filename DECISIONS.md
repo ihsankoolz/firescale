@@ -359,9 +359,60 @@ A second reviewer confirmed both earlier fixes (findings 1 and 2) for a tracked 
 - `docs/verify.md` already had the budget, the warning for a slow step and the config rule, from pull requests 1 and 2. It was searched for lines the three pull requests had left untrue; none was found there. One was found and corrected in `docs/affected.md`, which still said that the firescale config affects every project.
 - `HANDOFF.md` and `PLAN.md` say where things stand. The working notes of the paused run (`docs/wip-0.5.1` on the branch `claude/quirky-cannon-20uxi6`) never reached `main`, so there was no folder and no `.prettierignore` line to delete.
 
+**Pull request 6: small fixes found on the way** (ADR 0061; after the version was set, so it is part of 0.5.1)
+
+Seven things that pull requests 1 to 4 found and left. For each: a test that failed because of it, then the smallest fix. All seven were reproduced.
+
+- **1. `fscale --agent claude hooks run` was not seen as the stop hook, fixed.** Failing tests first: `is the stop hook wherever its options are written, so its own errors never exit 2` ("--agent claud hooks run: expected 2 to be 1") and `does not take an option's value for the command: other commands keep exit code 2` ("--rules hooks run: expected 1 to be 2"), both in hooks.test.ts. The old code dropped every word that starts with `-` and took the next two, so an option's value counted as a word. Fix: `is_stop_hook` reads the command line as `parse_args` does and skips the value of every option that takes one. The options are now two lists, and a new option cannot work without being in one. `--budget`'s value is skipped too: `fscale hooks --budget 30m run --agent claude` is refused with 1 (it was 2; the first review of pull request 1 had found it). A case for it was added to the first test after the rebase onto pull request 1; it passed at once there, since the list already held `--budget`.
+- **2. Ctrl+C during the check with `--json` printed nothing on stdout, fixed.** Failing test first: `a verify run that is stopped during the check step > prints a report with --json too: stopped, and the check did not finish` (stopped-labels.test.ts: "stdout must hold the JSON report, not be empty: expected '' not to be ''"). The slow check is a custom rule that waits; no hook was added to fscale for the test. Fix: a report with `result: stopped` and one step `check`, status `stopped`. No schema change.
+- **3. `--budget` with `--dry-run` changed nothing in the plan, fixed.** Failing test first: `shows in a dry run which steps --budget would leave out, and says so when it is none` (slow-steps.test.ts: the dry run's text was the plain plan's). Fix: the dry run adds `With --budget 30m, 1 step would not be run:` and each step with its kept time, or says that no step would be left out.
+- **4. `hooks install` still said that the Cursor hook format could not be checked, fixed.** Failing test first: `prints no note that the Cursor format is unchecked: ADR 0027 confirmed it` (hooks.test.ts: "expected 'note: the Cursor hook format could no…' to be ''"). ADR 0027 marks `.cursor/hooks.json` "confirmed (official examples)". Fix: the note is removed; three snapshots changed for it.
+- **5. The verify schema's description of `tamper` said "JS/TS, Python and Rust", fixed.** Failing test first: `the_shipped_schema_names_every_language_the_guard_reads` (tamper/mod.rs: `left: ["Java", "Kotlin", "Swift", "C", "C++", "C#", "Go", "Dart"]`, `right: []`). Fix: all eleven are named, and the test builds its list from the code, so a new language fails it until the schema names it.
+- **6. A linked entry file inside a real cache folder was still read, fixed.** Failing tests first, all unix only and seen failing on Linux: `a_rule_result_is_never_read_through_a_symlinked_entry_file` (ownfolder.rs), `a_base_result_is_never_read_through_a_symlinked_entry_file` (blame.rs), `a_pass_is_never_read_or_touched_through_a_symlinked_entry_file` (stepcache.rs), `a_record_is_never_read_through_a_symlinked_record_file` (sharedcache.rs: the record was returned), and end to end `serves no pass from an entry file that is a link, and touches nothing where it points` (step-cache.test.ts). Fix: an entry that is a link is a miss, not read and not touched; the next store puts a real file in its place.
+- **7. Doctor followed a linked `.env`; `blame::env_files` did not. Fixed: doctor does not either.** Failing tests first: `an_env_file_that_is_a_symlink_is_not_read_and_the_check_says_so` (doctor.rs: the variable was `ok`), `a_local_env_file_that_is_a_symlink_is_not_read` (services.rs), and end to end `reads no env file through a symbolic link, says which file, and never prints a value` (doctor.test.ts).
+
+**Decided on your behalf** (ADR 0061):
+
+- **Doctor now says PROBLEM for a `.env` that is a link, when its variables are set nowhere else.** Before it said `ok`. A project that links `.env` on purpose (a shared file, a git worktree that points at the main checkout) gets exit 1 from `fscale doctor` until the link is a real file or the variables are in the shell. Doctor follows blame, not the other way round: a link would let doctor read an env file above the firescale root, which ADR 0059 rules out. Say if you want doctor to follow links and only say so.
+- **The Cursor note was removed, not reworded.** The docs page itself was never read (cursor.com was blocked); the format was confirmed from Cursor's own example repositories. It is one line to put back in a softer form.
+- **The report of a run stopped in the check has `runner: none`, `failOnSkipped: false`, `stepsTotal: 1` and `scope: all`**, also for `--affected`: the run stopped before the config's commands were chosen.
+- **A dry run with `--budget` reads the kept times only**, not the step cache, and says that a kept pass would be taken first. So it can name a step that a real run would take from the cache.
+- A linked entry file is left alone on a miss, not removed: removing a file firescale did not make seemed the larger step.
+- An option that is listed but not stored by the parser is an internal error, where the last arm of each `match` used to be a silent default.
+
+**After the review** (a fresh reader of the diff; nothing high):
+
+- **Doctor's next step sent the person to replace a link above the project, also when a real env file sat beside the example.** The unit test of this branch had pinned that wording (`an_env_file_that_is_a_symlink_is_not_read_and_the_check_says_so`, second half); its expectation was changed first, to `add LINKED_NAME to svc/.env`, and then the code. The link is still named in the detail.
+- The reviewer ran the stop hook's exit code for twelve orders of options and the dry run with a budget against a real run: both held. Items 6 and 7 could not be run on Windows (a file link needs a privilege there) and were read; their tests run on Linux and macOS in CI.
+- Written down in ADR 0061 under "Not done", not changed: two files under `.firescale` that are still read through a link for a comparison only (`step-cache-config.digest`, the stop hook's counter); a run stopped after the check that `--json` reports as stopped in the check; the test of item 5 does not force a new row for a new language.
+
+**Tests changed, none weakened:**
+
+- Three snapshots of hooks.test.ts lost the Cursor note (`claude: stderr`, `codex: stderr` of `--all tries every file`, and `stderr` of `writes a hook file for each of the three agents`). The tamper guard reports them as `snapshot changed`; they need your approval in the pull request.
+- The exact JSON of the stopped report gained `"notRun": []` after the rebase onto schema version 7.
+
+**Known limits:**
+
+- A word after an unknown option is read as a word: `fscale --nope x hooks run` is not seen as the hook.
+- On Linux and macOS the tests of item 2 send SIGINT to fscale's whole process group, as Ctrl+C in a terminal does. A SIGINT to fscale alone does not reach the Node host; that was so before.
+- A linked `.env.example` is still read by doctor. A service named only in a linked `.env` is no longer checked, and nothing says so.
+- A linked entry that is never stored again stays a link and is a miss each time.
+- The unix-only tests of items 6 and 7 were written on Windows. The Rust ones ran on Linux in WSL; the two end-to-end ones first ran in this pull request's CI.
+
+**Found while fixing, not fixed:**
+
+- `--budget`, like `--jobs`, `--progress`, `--shared-cache`, `--head` and `--rule`, is accepted without a word by commands that do not use it (`fscale check --budget 30m`).
+- The help shows `fscale add <generator> --json <input>`, though `--json` is a flag and the input is the next word.
+- The schema's description of `tamper` does not mention the config and CI findings (ADR 0045) or snapshots (ADR 0046).
+- The temporary file of each store is written with a plain write; a link planted under that exact name would be written through.
+- Clippy 1.96 on Linux reports four `nonminimal_bool` errors in files these fixes do not touch (`crates/core/src/ecosystems.rs:908`, `crates/core/src/tamper/go.rs:849`). The pinned 1.97 is clean on every system.
+- With an ignored config, a lint that fails when the config is absent is labelled `pre-existing`: the base worktree has no copy of an ignored file. Seen by the third reviewer of pull request 2, outside its diff.
+
+**Not reproduced:** nothing; all seven were reproduced.
+
 ## 0.5.1 on the course project: what you should see change
 
-Compared with 0.5.0. Each line was checked against the code at 0.5.1 and, where it was cheap, against the real output in a small fixture; nothing here was run on the course project. Line 8 is the one exception: it comes with the small fixes of pull request 6. Run each command in the course project's root, on your own machine (not in CI). The list is ordered by what you are most likely to notice first.
+Compared with 0.5.0. Each line was checked against the code at 0.5.1 and, where it was cheap, against the real output in a small fixture; nothing here was run on the course project. Line 8 came with the small fixes of pull request 6 and was checked there. Run each command in the course project's root, on your own machine (not in CI). The list is ordered by what you are most likely to notice first.
 
 1. **The first run runs every step again, once.** The version and the new cache format are part of every key.
    - `fscale verify`
@@ -378,7 +429,7 @@ Compared with 0.5.0. Each line was checked against the code at 0.5.1 and, where 
    - `fscale verify --progress`, Ctrl+C, then `fscale verify --progress` again
 7. **A budget leaves the slow steps out.** Expect a headline such as `verify: PARTIAL - 6 of 7 steps ran, 1 not run (over the --budget of 30m)` (it can also count steps taken from the cache), the step as `NOT RUN`, a `Not run:` paragraph that says how its kept time comes down, and exit code 0. It never reads `OK`. A step is left out only when it has a kept time over the budget and no pass in the step cache.
    - `fscale verify --budget 30m`
-8. **A dry run shows what a budget would leave out. Not in 0.5.1 as pull request 5 leaves it: it comes with pull request 6 (ADR 0061).** Until then this command prints the plain plan. After it: `With --budget 30m, 1 step would not be run:` and the step with its kept time.
+8. **A dry run shows what a budget would leave out** (pull request 6, ADR 0061): `With --budget 30m, 1 step would not be run:` and each step with its kept time, or `With --budget 30m, no step would be left out: none is known to take longer.` It reads the kept times only, so it can name a step that a real run would take from the cache; it says so.
    - `fscale verify --dry-run --budget 30m`
 9. **The heartbeat is calmer.** A running step prints a line each minute for ten minutes, then one every five minutes.
    - `fscale verify --progress`

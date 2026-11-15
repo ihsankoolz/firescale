@@ -8,13 +8,13 @@ fscale hooks install --agent claude       # one agent
 fscale hooks install --all --bin "npx firescale"
 ```
 
-| Agent       | File written            | Hook                                                            |
-| ----------- | ----------------------- | --------------------------------------------------------------- |
-| Claude Code | `.claude/settings.json` | `hooks.Stop[].hooks[]`: `{ "type": "command", "command" }`      |
-| Codex       | `.codex/hooks.json`     | The same shape as Claude Code.                                  |
-| Cursor      | `.cursor/hooks.json`    | `version: 1`, `hooks.stop[]`: `{ "command" }`. **Unconfirmed.** |
+| Agent       | File written            | Hook                                                       |
+| ----------- | ----------------------- | ---------------------------------------------------------- |
+| Claude Code | `.claude/settings.json` | `hooks.Stop[].hooks[]`: `{ "type": "command", "command" }` |
+| Codex       | `.codex/hooks.json`     | The same shape as Claude Code.                             |
+| Cursor      | `.cursor/hooks.json`    | `version: 1`, `hooks.stop[]`: `{ "command" }`.             |
 
-The Claude Code format was checked against its documentation and the Codex format against its source on 2026-11-11. Cursor's documentation could not be reached from the build environment. On 2026-11-12 the format was checked against Cursor's own example repositories on GitHub (`cursor/cookbook`, `cursor/plugins`), and it matches (ADR 0027); `hooks install` still prints a note until it is checked against the docs page. `fscale sync` with the `agent-ready` pack writes the same hooks (see [init.md](init.md)).
+The Claude Code format was checked against its documentation and the Codex format against its source on 2026-11-11. Cursor's documentation could not be reached from the build environment; on 2026-11-12 its format was checked against Cursor's own example repositories on GitHub (`cursor/cookbook`, `cursor/plugins`), and it matches (ADR 0027). So `hooks install` no longer prints a note that the Cursor format is unchecked. `fscale sync` with the `agent-ready` pack writes the same hooks (see [init.md](init.md)).
 
 Installing never rewrites a file that has something in it. The hook goes in as new lines, in the file's own indentation and line endings, first in its list, and every line you wrote stays as it was (ADR 0027). Running it again changes nothing. A hook counts as installed only when the command is under the agent's stop event. A file that is not valid JSON is left alone and reported. So is a file the hook cannot go into as new lines: one written on one line, or with the object or list the hook goes into written on one line (`"hooks": {}`) or set to `null`. The error then shows what to add by hand. With `--all`, a refused file does not stop the others: every agent's file is tried, the list printed at the end says `installed`, `already installed` or `refused` for each, each refusal's reason is on stderr, and the command exits with 2 when any file was refused (ADR 0060). Commit the files so every teammate's agent gets the hook.
 
@@ -45,7 +45,7 @@ An agent that cannot fix a failure must not be held forever. The hook counts how
 - If the count cannot be stored (a read-only folder, or `.firescale/hooks` is a symlink), the agent is allowed to stop.
 - `FSCALE_HOOK_MAX_BLOCKS=<n>` changes the cap. `0` never blocks.
 
-`fscale hooks run` never exits with code 2 for its own errors, such as a mistyped agent name or a broken config. It exits 1 with the reason, which agents show but do not treat as "keep working".
+`fscale hooks run` never exits with code 2 for its own errors, such as a mistyped agent name or a broken config. It exits 1 with the reason, which agents show but do not treat as "keep working". That holds wherever the options are written: `fscale --agent claude hooks run` and `fscale --cwd <dir> hooks run --agent claude` are the hook too. The value of an option is never read as the command, so `fscale --rules hooks run` is not the hook and keeps exit code 2.
 
 ## Limits
 

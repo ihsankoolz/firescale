@@ -1525,6 +1525,11 @@ impl Doctor<'_> {
     /// read them, and several look in the folders above (python-dotenv) or
     /// are pointed at the root's file, so a name found there counts, and
     /// the check says in which file it was found.
+    ///
+    /// A local env file that is a symbolic link is not read: it can point
+    /// at a file outside the root, which doctor never reads, and the base
+    /// run does not copy one either (`blame::env_files`). A name that is
+    /// then found nowhere is a problem that names the link.
     fn env(&mut self) {
         for folder in self.folders() {
             let dir = dir_of(self.root, &folder);
@@ -1539,6 +1544,8 @@ impl Doctor<'_> {
             // names in each. `beside` counts those in the example's folder.
             let mut files: Vec<(String, BTreeSet<String>)> = Vec::new();
             let mut beside = 0;
+            // The local env files that are symbolic links, and so not read.
+            let mut links: Vec<String> = Vec::new();
             for (depth, up) in folders_up(self.root, &dir).iter().enumerate() {
                 let Ok(rel) = up.strip_prefix(self.root) else {
                     continue;
@@ -1549,7 +1556,12 @@ impl Doctor<'_> {
                     .collect::<Vec<_>>()
                     .join("/");
                 for file in LOCAL_ENV_FILES {
-                    if let Some(text) = read(&up.join(file)) {
+                    let path = up.join(file);
+                    if crate::ownfolder::is_link(&path) {
+                        links.push(shown(&up_folder, file));
+                        continue;
+                    }
+                    if let Some(text) = read(&path) {
                         files.push((shown(&up_folder, file), env_names(&text)));
                         if depth == 0 {
                             beside += 1;
@@ -1622,11 +1634,31 @@ impl Doctor<'_> {
                 continue;
             }
             let target = shown(&folder, ".env");
+            // "There is no <target>" is not said of a link of that name.
+            let no_target = if links.contains(&target) {
+                String::new()
+            } else {
+                format!(", and there is no {target}")
+            };
+            // A real env file beside the example comes first: the missing
+            // names go there, and a link above (which may be shared on
+            // purpose) is only named in the detail.
             let fix = if beside > 0 {
                 format!(
                     "add {} to {} (see {example} for what each one is)",
                     list(&missing),
                     files[0].0
+                )
+            } else if let [link] = links.as_slice() {
+                format!(
+                    "replace {link} with a real file that sets {}, or set the variables in your shell (see {example} for what each one is)",
+                    list(&missing)
+                )
+            } else if !links.is_empty() {
+                format!(
+                    "replace one of {} with a real file that sets {}, or set the variables in your shell (see {example} for what each one is)",
+                    links.join(", "),
+                    list(&missing)
                 )
             } else if files.is_empty() {
                 format!("copy {example} to {target} and fill in the values (or set the variables in your shell)")
@@ -1639,15 +1671,22 @@ impl Doctor<'_> {
             };
             let where_looked = match (files.is_empty(), beside > 0) {
                 (false, true) => format!("the environment or {}", names_of(&files)),
-                (false, false) => format!(
-                    "the environment or {}, and there is no {target}",
-                    names_of(&files)
-                ),
-                (true, _) if folder == "." => {
-                    format!("the environment, and there is no {target}")
+                (false, false) => {
+                    format!("the environment or {}{no_target}", names_of(&files))
+                }
+                (true, _) if folder == "." || !links.is_empty() => {
+                    format!("the environment{no_target}")
                 }
                 (true, _) => format!(
                     "the environment, and there is no {target}, nor a .env in a folder above it"
+                ),
+            };
+            let not_read = match links.as_slice() {
+                [] => String::new(),
+                [link] => format!(" {link} is a symbolic link, so it was not read."),
+                _ => format!(
+                    " {} are symbolic links, so they were not read.",
+                    links.join(", ")
                 ),
             };
             self.add(
@@ -1656,7 +1695,7 @@ impl Doctor<'_> {
                 example,
                 Status::Problem,
                 format!(
-                    "{} of {} variables are not set in {where_looked}: {}.",
+                    "{} of {} variables are not set in {where_looked}: {}.{not_read}",
                     missing.len(),
                     wanted.len(),
                     list(&missing)
@@ -2003,6 +2042,104 @@ mod tests {
     fn env_names_never_keep_values() {
         let names = env_names("# c\nexport A=1\nB = \"two words\"\nnot a line\nC=\n");
         assert_eq!(names.into_iter().collect::<Vec<_>>(), ["A", "B", "C"]);
+    }
+
+    /// A machine with no variable set and no service listening.
+    #[cfg(unix)]
+    struct Bare;
+    #[cfg(unix)]
+    impl Machine for Bare {
+        fn run(&self, _: &Path, _: &str, _: &[&str]) -> Option<String> {
+            None
+        }
+        fn env_set(&self, _: &str) -> bool {
+            false
+        }
+        fn listening(&self, _: &str, _: u16) -> bool {
+            false
+        }
+    }
+
+    // Making a symbolic link to a file needs a privilege on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn an_env_file_that_is_a_symlink_is_not_read_and_the_check_says_so() {
+        // Made-up names and values, in a file outside the repo.
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(
+            outside.path().join("planted.env"),
+            "LINKED_NAME=made-up-value-135\nLINKED_DB_URL=postgresql://u:made-up-pw@localhost:5999/x\n",
+        )
+        .unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        fs::write(root.join(".env.example"), "LINKED_NAME=\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env")).unwrap();
+        let report = run_doctor(root, &RepoFacts::default(), &Bare);
+        let found: Vec<(&str, &str, Status, &str, Option<&str>)> = report
+            .checks
+            .iter()
+            .filter(|check| matches!(check.section, "env" | "services"))
+            .map(|check| {
+                (
+                    check.section,
+                    check.subject.as_str(),
+                    check.status,
+                    check.detail.as_str(),
+                    check.fix.as_deref(),
+                )
+            })
+            .collect();
+        // The name in the linked file does not count as set, and the
+        // database it names is not checked.
+        assert_eq!(
+            found,
+            [(
+                "env",
+                ".env.example",
+                Status::Problem,
+                "1 of 1 variables are not set in the environment: LINKED_NAME. .env is a symbolic link, so it was not read.",
+                Some("replace .env with a real file that sets LINKED_NAME, or set the variables in your shell (see .env.example for what each one is)"),
+            )]
+        );
+        let text = format_doctor_human(&report) + &format_doctor_json(&report);
+        assert!(!text.contains("made-up"), "{text}");
+
+        // Two links: both are named. A real file beside them is still read.
+        std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env.local"))
+            .unwrap();
+        fs::create_dir_all(root.join("svc")).unwrap();
+        fs::write(
+            root.join("svc").join(".env.example"),
+            "LINKED_NAME=\nSVC_OWN=\n",
+        )
+        .unwrap();
+        fs::write(root.join("svc").join(".env"), "SVC_OWN=made-up-own-246\n").unwrap();
+        let facts = RepoFacts {
+            projects: vec![crate::facts::Project {
+                root: "svc".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let report = run_doctor(root, &facts, &Bare);
+        let check = report
+            .checks
+            .iter()
+            .find(|check| check.subject == "svc/.env.example")
+            .unwrap();
+        assert_eq!(
+            check.detail,
+            "1 of 2 variables are not set in the environment or svc/.env: LINKED_NAME. .env, .env.local are symbolic links, so they were not read."
+        );
+        assert_eq!(
+            check.fix.as_deref(),
+            // A real env file beside the example is where the name goes: the
+            // links above may be shared on purpose, and are only named.
+            Some("add LINKED_NAME to svc/.env (see svc/.env.example for what each one is)")
+        );
+        let text = format_doctor_human(&report) + &format_doctor_json(&report);
+        assert!(!text.contains("made-up"), "{text}");
     }
 
     #[test]

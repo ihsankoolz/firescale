@@ -634,6 +634,7 @@ pub fn services_in(root: &Path, folders: &[PathBuf]) -> Vec<Service> {
 /// What `fscale doctor` checks: [`services_in`], plus the local database,
 /// cache and queue URLs of the `.env` and `.env.local` files in the same
 /// folders (only the variable's name, the host and the port are kept).
+/// A local env file that is a symbolic link is not read.
 /// Verify's service watch does not read those files: it uses
 /// [`services_for_folder`].
 #[must_use]
@@ -658,7 +659,13 @@ fn collect(root: &Path, folders: &[PathBuf], local_env: bool) -> Vec<Service> {
             continue;
         }
         for name in LOCAL_ENV_FILES {
-            if let Ok(text) = std::fs::read_to_string(folder.join(name)) {
+            let path = folder.join(name);
+            // Never through a symbolic link: it can point at a file outside
+            // the repo. Doctor's env check says which file was not read.
+            if crate::ownfolder::is_link(&path) {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(path) {
                 env.extend(from_local_env(&text, &join(&rel, name)));
             }
         }
@@ -798,6 +805,32 @@ REDIS_PORT=6390
                 "MongoDB on 127.0.0.1:27017 (.env (LOCAL_MONGO))",
             ]
         );
+    }
+
+    // Making a symbolic link to a file needs a privilege on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_env_file_that_is_a_symlink_is_not_read() {
+        let outside = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            outside.path().join("planted.env"),
+            "LINKED_DB_URL=postgresql://u:p@localhost:5999/x\n",
+        )
+        .expect("write");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join(".env.local"),
+            "OWN_DB_URL=postgresql://u:p@localhost:5433/test\n",
+        )
+        .expect("write");
+        std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env"))
+            .expect("symlink");
+        let found: Vec<(u16, String)> = services_with_local_env(root, &[root.to_path_buf()])
+            .into_iter()
+            .map(|service| (service.port, service.source))
+            .collect();
+        assert_eq!(found, vec![(5433, ".env.local (OWN_DB_URL)".to_owned())]);
     }
 
     #[test]

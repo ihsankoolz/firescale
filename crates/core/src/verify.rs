@@ -3183,6 +3183,70 @@ pub fn run_verify_with(
     Ok(report)
 }
 
+/// What the `check` step of [`stopped_in_check`] says in `detail`.
+pub const STOPPED_IN_CHECK: &str = "interrupted before the check finished";
+
+/// The report of a run that was stopped (Ctrl+C or a termination signal)
+/// while the `check` step ran: `stopped`, with that one step, also
+/// `stopped`. No command was chosen yet, so `runner` is `none`, no other
+/// step is listed, and `scope` is `all` whatever the run was asked for.
+/// `command` is the check command; `duration_ms` is how long the run lasted.
+#[must_use]
+pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> VerifyReport {
+    let mut report = VerifyReport {
+        schema_version: VERIFY_SCHEMA_VERSION,
+        version: version.to_owned(),
+        ok: false,
+        result: VerifyResult::Stopped,
+        runner: "none".to_owned(),
+        steps_total: 1,
+        steps_run: 0,
+        fail_on_skipped: false,
+        failed_step: None,
+        failed_project: None,
+        rerun: None,
+        steps: vec![StepReport {
+            name: "check".to_owned(),
+            project: None,
+            kind: None,
+            status: StepStatus::Stopped,
+            command: Some(command.to_owned()),
+            exit_code: None,
+            duration_ms,
+            detail: STOPPED_IN_CHECK.to_owned(),
+            output_tail: Vec::new(),
+            fix: None,
+            timeout_ms: None,
+            timeout_key: None,
+            tests: None,
+            first_error: Vec::new(),
+            cache: None,
+            label: None,
+            base: None,
+            signature: Vec::new(),
+            failed_tests: Vec::new(),
+            test_results: None,
+            output_digest: None,
+            not_cached: None,
+            estimate: None,
+            last_known_ms: None,
+            last_known_finished: None,
+        }],
+        skipped: Vec::new(),
+        warnings: Vec::new(),
+        notes: Vec::new(),
+        scope: Scope::All,
+        affected: None,
+        cache: None,
+        base: None,
+        tamper: None,
+        budget_ms: None,
+        not_run: Vec::new(),
+    };
+    settle(&mut report, true);
+    report
+}
+
 /// True for a step whose failure blocks: failed, needs setup or timed out,
 /// and not labelled `pre-existing` or `flaky` (ADR 0037).
 fn blocking(step: &StepReport) -> bool {
@@ -3526,6 +3590,56 @@ fn affected_report(plan: &VerifyPlan) -> Option<AffectedReport> {
         projects_run: affected.units.iter().filter(|unit| unit.affected).count(),
         projects: affected.units.clone(),
     })
+}
+
+/// What a dry run adds to its plan for `--budget`: the planned steps whose
+/// kept time is over the budget, which a run would not start (ADR 0057). A
+/// dry run does not read the step cache, so it says that a kept pass there
+/// would be taken first.
+#[must_use]
+pub fn format_budget_plan(plan: &VerifyPlan, times: &StepTimes, budget: Duration) -> String {
+    let limit = format_limit(budget);
+    let runs =
+        |project: Option<&ProjectPlan>| plan.affected.as_ref().is_none_or(|a| a.runs(project));
+    let root = runs(None).then_some((None, plan.steps.as_slice()));
+    let projects = plan
+        .projects
+        .iter()
+        .filter(|project| runs(Some(project)))
+        .map(|project| (Some(project.root.as_str()), project.steps.as_slice()));
+    let mut left_out = Vec::new();
+    for (project, steps) in root.into_iter().chain(projects) {
+        for (name, planned) in steps {
+            let Planned::Command(command) = planned else {
+                continue;
+            };
+            let known = match times.last(project, name, command) {
+                Ok(known) => known,
+                Err(error) => {
+                    return format!(
+                        "\nWith --budget {limit}: {error}, so which steps would be left out is not known.\n"
+                    );
+                }
+            };
+            if let Some(known) = known.filter(|known| known.duration > budget) {
+                let place = match project {
+                    Some(project) => format!("{name} in {}", place_name(project)),
+                    None => name.clone(),
+                };
+                left_out.push(format!("  {place}: {}\n", known.describe()));
+            }
+        }
+    }
+    if left_out.is_empty() {
+        return format!(
+            "\nWith --budget {limit}, no step would be left out: none is known to take longer.\n"
+        );
+    }
+    format!(
+        "\nWith --budget {limit}, {} would not be run:\n{}A step whose pass is in the step cache is taken from it and not left out; a dry run does not look there.\n",
+        plural_steps(left_out.len()),
+        left_out.concat()
+    )
 }
 
 /// `fscale verify --dry-run`: what would run, and for `--affected` why,
@@ -5706,6 +5820,44 @@ mod tests {
         );
         assert!(
             text.contains("\nFix the failure, then run again in b: "),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_run_stopped_in_the_check_is_a_report_with_one_stopped_step() {
+        let report = stopped_in_check("1.2.3", "fscale check --affected", 40);
+        assert_eq!(
+            format_verify_json(&report),
+            format!(
+                r#"{{
+  "schemaVersion": {VERIFY_SCHEMA_VERSION},
+  "version": "1.2.3",
+  "ok": false,
+  "result": "stopped",
+  "runner": "none",
+  "stepsTotal": 1,
+  "stepsRun": 0,
+  "failOnSkipped": false,
+  "steps": [
+    {{
+      "name": "check",
+      "status": "stopped",
+      "command": "fscale check --affected",
+      "durationMs": 40,
+      "detail": "interrupted before the check finished"
+    }}
+  ],
+  "skipped": [],
+  "notRun": [],
+  "scope": "all"
+}}
+"#
+            )
+        );
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with("verify: STOPPED - interrupted after 0 of 1 step ran\n"),
             "{text}"
         );
     }

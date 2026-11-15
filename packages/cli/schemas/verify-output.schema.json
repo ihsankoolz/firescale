@@ -513,7 +513,7 @@
       }
     },
     "tamper": {
-      "description": "The tamper guard (ADR 0042, ADR 0044): tests, skips and assertions in the changed JS/TS, Python and Rust test files, and lint suppressions in every changed source file of those languages, compared with the base commit. Absent without a base commit.",
+      "description": "The tamper guard (ADR 0042, ADR 0044, ADR 0052): tests, skips and assertions in the changed test files of the languages it reads (JS/TS, Python, Rust, Java, Kotlin, Swift, Dart, C, C++, C# and Go), and lint suppressions in every changed source file of those languages, compared with the base commit. Absent without a base commit.",
       "type": "object",
       "additionalProperties": false,
       "required": ["policy", "base", "files", "counts", "findings"],

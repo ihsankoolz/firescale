@@ -1073,13 +1073,18 @@ fn cache_is_linked(root: &Path) -> bool {
 }
 
 /// The stored pass for `key`, if there is one. A hit is touched, so the
-/// least recently used entries are the ones removed.
+/// least recently used entries are the ones removed. An entry that is a
+/// symlink is a miss: it is not read and not touched, and the next pass
+/// stored for the key replaces it with a real file.
 #[must_use]
 pub fn lookup(root: &Path, key: &str) -> Option<Entry> {
     if cache_is_linked(root) {
         return None;
     }
     let path = entry_path(root, key);
+    if is_symlink(&path) {
+        return None;
+    }
     let text = fs::read_to_string(&path).ok()?;
     let entry: Entry = serde_json::from_str(&text).ok()?;
     if entry.format != FORMAT || entry.key != key {
@@ -2713,6 +2718,50 @@ mod tests {
             assert!(lookup(other.root(), "k").is_some(), "{linked}");
             assert!(lookup(root, "k").is_none(), "{linked}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pass_is_never_read_or_touched_through_a_symlinked_entry_file() {
+        // A real cache elsewhere holds a pass for the same key, last used
+        // an hour ago.
+        let other = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        store(other.root(), &pass("k")).unwrap();
+        let planted = cache_dir(other.root()).join("k.json");
+        let record = fs::read_to_string(&planted).unwrap();
+        let earlier = SystemTime::now() - Duration::from_secs(3600);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&planted)
+            .unwrap()
+            .set_modified(earlier)
+            .unwrap();
+        let before = fs::metadata(&planted).unwrap().modified().unwrap();
+        // The cache folder is real; the entry in it is a link to that file.
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        fs::create_dir_all(cache_dir(root)).unwrap();
+        let entry = cache_dir(root).join("k.json");
+        std::os::unix::fs::symlink(&planted, &entry).unwrap();
+        assert!(
+            lookup(root, "k").is_none(),
+            "a pass was read through a linked entry file"
+        );
+        assert_eq!(
+            fs::metadata(&planted).unwrap().modified().unwrap(),
+            before,
+            "a file outside the repo was touched"
+        );
+        // A miss leaves the link as it is.
+        assert!(is_symlink(&entry));
+        // The next pass replaces the link with a real file. The file the
+        // link pointed at is not written or touched.
+        store(root, &pass("k")).unwrap();
+        assert!(fs::symlink_metadata(&entry).unwrap().file_type().is_file());
+        assert_eq!(fs::read_to_string(&planted).unwrap(), record);
+        assert_eq!(fs::metadata(&planted).unwrap().modified().unwrap(), before);
+        assert!(lookup(root, "k").is_some());
+        assert_eq!(fs::metadata(&planted).unwrap().modified().unwrap(), before);
     }
 
     #[cfg(unix)]

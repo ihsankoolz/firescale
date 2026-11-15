@@ -4,13 +4,14 @@
 // so, with the command that gets them.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BIN, commitAll, HOST } from './test-helpers.js';
+import { BIN, commitAll, HOST, REPO } from './test-helpers.js';
 
 const fixtures = fixtureSet();
 const started: ChildProcess[] = [];
@@ -23,6 +24,7 @@ const WINDOWS = process.platform === 'win32';
 const EXIT_STOPPED = 130;
 const CTRL_BREAK = path.join(path.dirname(BIN), `fscale-ctrl-break${WINDOWS ? '.exe' : ''}`);
 const SCHEMA = new URL('../schemas/verify-output.schema.json', import.meta.url);
+const CUSTOM_PACK = fileURLToPath(new URL('../test-fixtures/custom-pack/', import.meta.url));
 // The wait for the hanging step is shorter than the test's limit, so a slow
 // machine fails with the wait's own message and fscale's output, not with
 // Vitest's bare timeout. The limit covers the wait and the stop after it.
@@ -71,6 +73,9 @@ function childEnv(): NodeJS.ProcessEnv {
 async function interrupted(
   repo: { root: string; ready: string; scratch: string },
   args: string[],
+  // As Ctrl+C in a terminal does: the signal goes to fscale and to every
+  // process it started. (On Windows the helper always does this.)
+  { wholeGroup = false } = {},
 ): Promise<{ code: number | null; stdout: string }> {
   await rm(repo.ready, { force: true });
   if (WINDOWS) {
@@ -97,6 +102,8 @@ async function interrupted(
     cwd: repo.root,
     env: childEnv(),
     stdio: ['ignore', 'pipe', 'pipe'],
+    // Its own process group, so the signal can be sent to the group.
+    detached: wholeGroup,
   });
   started.push(child);
   let stdout = '';
@@ -113,12 +120,115 @@ async function interrupted(
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  child.kill('SIGINT');
+  if (wholeGroup && child.pid !== undefined) process.kill(-child.pid, 'SIGINT');
+  else child.kill('SIGINT');
   return { code: await exited, stdout };
+}
+
+/**
+ * A repo whose check step writes `ready` and then waits: a custom rule (the
+ * sample pack of the bridge tests, with a check that does not finish).
+ */
+async function slowCheckRepo() {
+  const outside = await fixtures.create({ files: {}, track: 'no-git' });
+  const ready = path.join(outside.root, 'ready');
+  const repo = await fixtures.create({
+    files: {
+      'firescale.config.json': JSON.stringify({
+        packs: ['core', './tools/rules/pack.ts'],
+        verify: { lint: false, typecheck: false, test: 'node test.js' },
+      }),
+      '.gitignore': '.firescale/\nnode_modules/\n',
+      'test.js': "console.log('ok');\n",
+    },
+  });
+  const rules = path.join(repo.root, 'tools', 'rules');
+  await cp(CUSTOM_PACK, rules, { recursive: true });
+  await writeFile(
+    path.join(rules, 'rules', 'no-todo-file', 'rule.ts'),
+    [
+      "import { writeFileSync } from 'node:fs';",
+      "import { defineRule } from '@firescale/sdk';",
+      'export default defineRule({',
+      "  id: 'sample/no-todo-file',",
+      "  severity: 'low',",
+      "  category: 'maintainability',",
+      "  description: 'Never finishes: the test interrupts it.',",
+      "  inputs: ['**/TODO.md'],",
+      '  async check() {',
+      `    writeFileSync(${JSON.stringify(ready)}, '');`,
+      '    await new Promise((resolve) => setTimeout(resolve, 120000));',
+      '    return [];',
+      '  },',
+      '});',
+      '',
+    ].join('\n'),
+  );
+  // Makes `@firescale/sdk` resolvable from the fixture, as bridge.test.ts does.
+  const scope = path.join(repo.root, 'node_modules', '@firescale');
+  await mkdir(scope, { recursive: true });
+  await symlink(path.join(REPO, 'packages', 'sdk'), path.join(scope, 'sdk'), 'junction');
+  return { root: repo.root, ready, scratch: outside.root };
 }
 
 const NOT_COMPARED =
   /\nNot compared with the base commit [0-9a-f]{7} \(main\): the run was stopped first, so no failure is labelled `new` or `pre-existing`, and the tamper guard did not run\. Run fscale verify again and let it finish to get both\.\n/;
+
+describe('a verify run that is stopped during the check step', () => {
+  it(
+    'says in plain text that it was stopped before the check finished',
+    async () => {
+      const repo = await slowCheckRepo();
+      const { code, stdout } = await interrupted(repo, [], { wholeGroup: true });
+      expect(code).toBe(EXIT_STOPPED);
+      expect(stdout).toBe('verify: STOPPED - interrupted before the check finished\n');
+    },
+    TEST_LIMIT,
+  );
+
+  it(
+    'prints a report with --json too: stopped, and the check did not finish',
+    async () => {
+      const repo = await slowCheckRepo();
+      const { code, stdout } = await interrupted(repo, ['--json'], { wholeGroup: true });
+      expect(code).toBe(EXIT_STOPPED);
+      expect(stdout, 'stdout must hold the JSON report, not be empty').not.toBe('');
+      const schema: object = JSON.parse(await readFile(SCHEMA, 'utf8'));
+      const check = new Ajv({ strict: true }).compile(schema);
+      const report = JSON.parse(stdout) as {
+        ok: boolean;
+        result: string;
+        stepsTotal: number;
+        stepsRun: number;
+        failedStep?: string;
+        steps: { name: string; status: string; command?: string; detail: string }[];
+      };
+      check(report);
+      expect(check.errors ?? []).toEqual([]);
+      expect(report.ok).toBe(false);
+      expect(report.result).toBe('stopped');
+      expect(report.stepsTotal).toBe(1);
+      expect(report.stepsRun).toBe(0);
+      expect(report.failedStep).toBeUndefined();
+      expect(
+        report.steps.map(({ name, status, command, detail }) => ({
+          name,
+          status,
+          command,
+          detail,
+        })),
+      ).toEqual([
+        {
+          name: 'check',
+          status: 'stopped',
+          command: 'fscale check',
+          detail: 'interrupted before the check finished',
+        },
+      ]);
+    },
+    TEST_LIMIT,
+  );
+});
 
 describe('a verify run with a base that is stopped after a step failed', () => {
   it(
