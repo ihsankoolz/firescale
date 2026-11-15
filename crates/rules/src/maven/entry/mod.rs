@@ -77,7 +77,8 @@ impl BuiltinRule for Entry {
             category: Category::Consistency,
             description: "The project has Java code; a new one gets App.java and AppTest.java."
                 .to_owned(),
-            inputs: super::inputs(&["src/**/*.java"]),
+            // `java_files` counts Groovy; the pack-wide inputs cover the rest.
+            inputs: super::inputs(&["src/**/*.java", "src/**/*.groovy"]),
             has_fix: true,
             after: vec!["maven/pom".to_owned()],
         }

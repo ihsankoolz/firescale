@@ -24,7 +24,8 @@ impl BuiltinRule for Tests {
             category: Category::Consistency,
             description: "A project with Java code under src/main has a test under src/test."
                 .to_owned(),
-            inputs: super::inputs(&["src/**/*.java"]),
+            // `java_files` counts Groovy; the pack-wide inputs cover the rest.
+            inputs: super::inputs(&["src/**/*.java", "src/**/*.groovy"]),
             has_fix: false,
             after: Vec::new(),
         }
