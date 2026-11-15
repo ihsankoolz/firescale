@@ -18,6 +18,7 @@ import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CheckReport } from './report.js';
 import {
+  commitAll,
   ENFORCED_CONFIG,
   onlyEnvRules,
   EXIT_OK,
@@ -115,6 +116,26 @@ describe('custom pack through the Node bridge', () => {
     ]);
     const diagnostic = report.diagnostics.find((d) => d.file === 'TODO.md');
     expect(diagnostic).toMatchObject({ file: 'TODO.md', fixable: 'manual', status: 'enforced' });
+  });
+
+  // Nothing reads a custom rule's `inputs`, so they cannot say that a change
+  // left its findings alone: under --affected it reads every change.
+  it("keeps a custom rule's finding on a repo-level file under --affected", async () => {
+    const repo = await sampleRepo({
+      files: {
+        '.gitignore': 'node_modules/\n.firescale/\n',
+        'web/package.json': `${JSON.stringify({ name: 'web', version: '1.0.0' })}\n`,
+        'web/index.js': 'export const a = 1;\n',
+      },
+    });
+    await commitAll(repo.root, 'initial');
+    const affected = async () =>
+      parseReport((await runCli(['check', '--json', '--affected'], repo.root)).stdout);
+    expect((await affected()).diagnostics).toEqual([]);
+    await repo.write('web/index.js', 'export const a = 2;\n');
+    expect((await affected()).diagnostics.map((d) => `${d.ruleId} ${d.file}`)).toEqual([
+      `${SAMPLE} TODO.md`,
+    ]);
   });
 
   it('passes rule options to the custom rule', async () => {

@@ -138,6 +138,14 @@ fn affected_projects(facts: &RepoFacts, changed: &BTreeSet<String>) -> BTreeSet<
     }
 }
 
+/// A rule that ran, as `narrow_report` needs it.
+pub struct RanRule<'a> {
+    /// Its id and its `inputs`.
+    pub meta: &'a RuleMeta,
+    /// Not compiled into the binary: a rule of a pack named in the config.
+    pub custom: bool,
+}
+
 /// Keeps only the diagnostics a change can have caused and recomputes the
 /// counts. A diagnostic is kept when its file changed, when its file belongs
 /// to an affected project, or when its file belongs to no project below the
@@ -148,22 +156,27 @@ pub fn narrow_report(
     report: &mut CheckReport,
     facts: &RepoFacts,
     changed: &Changed,
-    rules: &[&RuleMeta],
+    rules: &[RanRule<'_>],
 ) {
     let Changed::Files(changed) = changed else {
         return;
     };
     let projects = affected_projects(facts, changed);
-    // The rules that read a changed file. Inputs that cannot be read as
-    // globs count as matching: keeping too much is the safe side.
+    // The rules that read a changed file. Keeping too much is the safe side:
+    // inputs that cannot be read as globs count as matching, and a custom
+    // rule reads every change, because nothing else uses its `inputs` (its
+    // result is never cached), so an empty or short list proves nothing.
     let reads_a_change: BTreeSet<&str> = rules
         .iter()
-        .filter(|meta| {
-            input_matcher(&meta.id, &meta.inputs).map_or(true, |matcher| {
+        .filter(|rule| {
+            if rule.custom {
+                return !changed.is_empty();
+            }
+            input_matcher(&rule.meta.id, &rule.meta.inputs).map_or(true, |matcher| {
                 changed.iter().any(|file| matcher.is_match(file.as_str()))
             })
         })
-        .map(|meta| meta.id.as_str())
+        .map(|rule| rule.meta.id.as_str())
         .collect();
     report.diagnostics.retain(|diagnostic| {
         if changed.contains(&diagnostic.file) {
@@ -301,7 +314,13 @@ mod tests {
             ..RepoFacts::default()
         };
         let mut report = report(findings);
-        let rules: Vec<&RuleMeta> = rules.iter().collect();
+        let rules: Vec<RanRule<'_>> = rules
+            .iter()
+            .map(|meta| RanRule {
+                meta,
+                custom: meta.id.starts_with("custom/"),
+            })
+            .collect();
         narrow_report(&mut report, &facts, &Changed::Files(set(changed)), &rules);
         assert_eq!(report.summary.violations, report.diagnostics.len());
         assert_eq!(report.ok, report.diagnostics.is_empty());
@@ -370,17 +389,52 @@ mod tests {
         );
     }
 
+    // Nothing ever read a custom rule's `inputs` (its result is not cached),
+    // so the list says nothing about what the rule reads.
+    #[test]
+    fn a_custom_rule_counts_as_reading_every_change() {
+        let custom = [
+            rule("custom/no-inputs", &[]),
+            rule("custom/other-inputs", &["**/TODO.md"]),
+        ];
+        let findings = [
+            ("custom/no-inputs", "AGENTS.md"),
+            ("custom/other-inputs", "TODO.md"),
+            ("custom/no-inputs", "packages/other/notes.md"),
+        ];
+        assert_eq!(
+            kept(graph(), &["packages/lib/src/a.ts"], &custom, &findings),
+            ["custom/no-inputs AGENTS.md", "custom/other-inputs TODO.md"]
+        );
+        // Nothing changed, so nothing is kept.
+        assert_eq!(kept(graph(), &[], &custom, &findings), [] as [&str; 0]);
+    }
+
+    #[test]
+    fn a_built_in_rule_with_no_inputs_reads_no_change() {
+        let branch = [rule("group-project/branch-name", &[])];
+        assert_eq!(
+            kept(
+                graph(),
+                &["packages/lib/src/a.ts"],
+                &branch,
+                &[("group-project/branch-name", ".git/HEAD")]
+            ),
+            [] as [&str; 0]
+        );
+    }
+
     #[test]
     fn a_rule_whose_inputs_cannot_be_read_keeps_its_repo_level_findings() {
-        let broken = [rule("custom/broken", &["["])];
+        let broken = [rule("core/broken", &["["])];
         assert_eq!(
             kept(
                 graph(),
                 &["packages/lib/src/a.ts"],
                 &broken,
-                &[("custom/broken", "AGENTS.md")]
+                &[("core/broken", "AGENTS.md")]
             ),
-            ["custom/broken AGENTS.md"]
+            ["core/broken AGENTS.md"]
         );
     }
 }

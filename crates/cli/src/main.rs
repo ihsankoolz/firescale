@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use firescale_core::affected::{changed_files, narrow_report, Changed};
+use firescale_core::affected::{changed_files, narrow_report, Changed, RanRule};
 use firescale_core::blame::{
     changed_since, choose_base, compare, violation_id, BaseChoice, BaseReport, BaseRun,
 };
@@ -30,7 +30,7 @@ use firescale_core::hooks::{
     block_summary, decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent,
     AGENTS,
 };
-use firescale_core::model::{RuleMeta, Status};
+use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
 use firescale_core::process::{install_stop_handler, EXIT_STOPPED, STOP};
 use firescale_core::progress::{format_duration, heartbeat_from_env, Progress};
@@ -283,9 +283,15 @@ impl Output {
     }
 }
 
-/// What `--affected` needs of the rules that ran: their ids and inputs.
-fn metas<'a>(rules: &'a [ConfiguredRule<'_>]) -> Vec<&'a RuleMeta> {
-    rules.iter().map(|rule| &rule.meta).collect()
+/// What `--affected` needs of the rules that ran.
+fn ran_rules<'a>(rules: &'a [ConfiguredRule<'_>]) -> Vec<RanRule<'a>> {
+    rules
+        .iter()
+        .map(|rule| RanRule {
+            meta: &rule.meta,
+            custom: matches!(rule.source, RuleSource::Custom { .. }),
+        })
+        .collect()
 }
 
 fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
@@ -328,7 +334,7 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             &mut report,
             &detect_facts(root)?,
             &changed,
-            &metas(&selection.rules),
+            &ran_rules(&selection.rules),
         );
     }
     notes.extend(outcome.warnings);
@@ -1090,7 +1096,7 @@ fn verify_report(
     let facts = detect_facts(root)?;
     let changed = if args.affected {
         let changed = changed_files(root, args.base.as_deref())?;
-        narrow_report(&mut report, &facts, &changed, &metas(&selection.rules));
+        narrow_report(&mut report, &facts, &changed, &ran_rules(&selection.rules));
         Some(changed)
     } else {
         None
