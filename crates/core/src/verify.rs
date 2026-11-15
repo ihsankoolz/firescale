@@ -3787,6 +3787,13 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                     }
                 ));
             }
+        } else if report.result == VerifyResult::Stopped && base.commit.is_some() {
+            // Stopped before the comparison (ADR 0059): said even with no
+            // failure, because the tamper guard did not run either.
+            out.push_str(&format!(
+                "\nNot compared with the base commit {base_short} ({}): the run was stopped first, so no failure is labelled `new` or `pre-existing`, and the tamper guard did not run. Run fscale verify again and let it finish to get both.\n",
+                base.reference.as_deref().unwrap_or("?"),
+            ));
         } else if report.steps.iter().any(|step| blocks(step.status)) {
             if let Some(reason) = &base.reason {
                 out.push_str(&format!(

@@ -1245,7 +1245,17 @@ fn verify_report(
                 }
             }
         }
-        BaseChoice::Compare(_) => {}
+        // Stopped (ADR 0059): nothing more is started, not even git. The
+        // report names the base and says that nothing was compared.
+        BaseChoice::Compare(base) => {
+            verify.base = Some(BaseReport {
+                compared: false,
+                reference: Some(base.reference.clone()),
+                commit: Some(base.commit.clone()),
+                reason: Some(firescale_core::blame::STOPPED_REASON.to_owned()),
+                ..BaseReport::default()
+            });
+        }
         BaseChoice::Nothing(reason) => {
             verify.base = Some(BaseReport {
                 compared: false,

@@ -259,6 +259,8 @@ Progress is on when stderr is a terminal, and off when stderr goes to a file or 
 
 On Ctrl+C, on `SIGTERM` or `SIGHUP` (macOS and Linux), and on Ctrl+Break or closing the console (Windows), verify stops every command it started **with every process that command started**, prints the summary of what finished, and exits with code 130. The step that was running is `STOPPED`, the steps that had not started are `not run`, and the headline reads `verify: STOPPED - interrupted after 3 of 9 steps ran`, followed by any failures found before that.
 
+A stopped run **compares nothing with the base commit** (ADR 0059): after the stop verify starts nothing more, so a failure that had already finished has no `new` or `pre-existing` label, and the tamper guard does not run. The summary says so (`Not compared with the base commit 1a2b3c4 (main): the run was stopped first, ...`), and in `--json` the `base` object has `compared: false`, the base's `reference` and `commit`, and a `reason` that says the run was stopped. Run `fscale verify` again and let it finish to get the labels and the tamper guard; steps that passed come from the cache.
+
 - On macOS and Linux each command runs in its own process group. Stopping sends `SIGTERM` to the group, then `SIGKILL` to whatever is left after 2 seconds.
 - On Windows each command runs in its own job object, which it enters before it can start anything. Stopping terminates the job. If fscale itself is killed outright, Windows closes the job and its processes end with it.
 
