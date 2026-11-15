@@ -3,7 +3,7 @@
 // stopped or timed out, and `--budget` leaves out steps slower than a time.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
@@ -133,6 +133,27 @@ describe('the time each step took is kept, and a slow step is announced', () => 
     expect(after.steps.find((r) => r.step === 'test')?.durationMs).toBeLessThan(MINUTE);
     // Progress only: the summary on stdout says nothing about it.
     expect(second.stdout).not.toContain('slow step');
+  });
+
+  it('says so when the kept times are there but cannot be read, and runs the step', async () => {
+    const repo = await repoWith(
+      { lint: false, typecheck: false, test: nodeScript('test.js') },
+      { 'test.js': "console.log('one');\n" },
+    );
+    // A folder where the file should be: it is there, and is not a file.
+    await mkdir(timesPath(repo.root), { recursive: true });
+    const result = await runCli(['verify', '--budget', '30m', '--progress'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_OK);
+    const lines = progressLines(result.stderr);
+    const said = lines.findIndex((line) => line.includes('could not read'));
+    expect(lines[said]).toMatch(
+      /^test: could not read \.firescale\/step-times\.json \(.+\), so how long this step took the last time is not known: it runs$/,
+    );
+    expect(lines[said + 1]).toBe(`test: started: ${nodeScript('test.js')}`);
+    // What is there is left alone, and nothing is left beside it.
+    expect(await readdir(timesPath(repo.root))).toEqual([]);
+    const beside = await readdir(path.join(repo.root, '.firescale'));
+    expect(beside.filter((name) => name.endsWith('.tmp') || name.endsWith('.lock'))).toEqual([]);
   });
 
   it('keeps the time of a project step under its folder, and warns for it by name', async () => {
@@ -474,6 +495,15 @@ describe('verify --budget leaves out the steps that are known to take longer', (
     expect([whole.result, whole.notRun, whole.budgetMs]).toEqual(['ok', [], undefined]);
   });
 
+  it('announces a slow step that is within the budget without telling you to use --budget', async () => {
+    const repo = await repoWith(verify, files);
+    await seedTimes(repo.root, slowTest(true, 100));
+    const result = await runCli(['verify', '--budget', '3h', '--progress'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_OK);
+    const slow = progressLines(result.stderr).filter((line) => line.includes('slow step'));
+    expect(slow).toEqual(['test: slow step: it took 1h 40m when it last ran']);
+  });
+
   it('runs a step with no known time, and a step whose time is within the budget', async () => {
     const repo = await repoWith(verify, files);
     // Nothing is known about lint; the test took exactly the budget.
@@ -643,6 +673,25 @@ describe('--budget is refused where a partial run must not pass for a whole one'
     expect(whole.code).toBe(EXIT_OK);
     expect(await ran(repo.root)).toEqual(['test']);
   });
+
+  // `CI=false` is how some people turn CI behaviour off on their own
+  // machine. It still counts as CI (as for verify's commands), so the
+  // message says how to get out of it there.
+  it.each(['false', '0'])(
+    'with CI=%s: also says that the value counts as CI, and to unset it on your own machine',
+    async (value) => {
+      const repo = await repoWith(verify, files);
+      const result = await runCli(['verify', '--budget', '30m'], repo.root, {
+        CI: value,
+        GITHUB_ACTIONS: undefined,
+      });
+      expect(result.code).toBe(EXIT_USAGE);
+      expect(result.stderr).toContain(
+        `fscale: --budget cannot be used in CI (CI is set in the environment): it leaves slow steps out, so the run would pass without them. ${NEXT_STEP} CI is "${value}" here, and any value that is not empty counts as CI: on your own machine, unset CI.\n`,
+      );
+      expect(await ran(repo.root)).toEqual([]);
+    },
+  );
 
   it('is not taken for CI by an empty CI variable', async () => {
     const repo = await repoWith(verify, files);
