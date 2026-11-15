@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use crate::verify::strip_ansi;
+use crate::verify::{hide_secrets, strip_ansi};
 
 /// How many complete lines are kept for [`Activity::recent`].
 const RECENT_LINES: usize = 200;
@@ -94,32 +94,6 @@ enum Kind {
     Words(String),
     /// Nothing worth showing: blank, or symbols only.
     Noise,
-}
-
-/// `scheme://user:password@host` with the user and password replaced by
-/// `***`, so a heartbeat never shows a connection string's secret.
-#[must_use]
-pub fn redact(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(index) = rest.find("://") {
-        let (before, after) = rest.split_at(index + 3);
-        out.push_str(before);
-        let authority_end = after
-            .find(|c: char| {
-                c == '/' || c == '?' || c == '#' || c.is_whitespace() || c == '"' || c == '\''
-            })
-            .unwrap_or(after.len());
-        match after[..authority_end].rfind('@') {
-            Some(at) => {
-                out.push_str("***");
-                rest = &after[at..];
-            }
-            None => rest = after,
-        }
-    }
-    out.push_str(rest);
-    out
 }
 
 /// True when `text` has a run of two letters or more.
@@ -310,7 +284,8 @@ impl Activity {
             }
         }
         if has_words(line) {
-            Kind::Words(redact(line).chars().take(MAX_SHOWN).collect())
+            // The same hiding as a report's error lines (ADR 0035).
+            Kind::Words(hide_secrets(line).chars().take(MAX_SHOWN).collect())
         } else {
             Kind::Noise
         }
