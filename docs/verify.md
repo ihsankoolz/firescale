@@ -384,7 +384,7 @@ For each of `lint`, `typecheck` and `test`, the first match wins:
 | 5     | A Rust-only repo (`Cargo.toml`, no `package.json`) | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace`.                |
 | 6     | A Python or Go project at the root                 | The commands `fscale facts` shows for it, for example `python -m pytest`.                            |
 
-`<exec>` is `pnpm exec`, `yarn`, `bunx` or `npx`, by package manager. `fscale facts` shows the package manager, scripts and tools that were detected, and [facts.md](facts.md) lists which config files give which command.
+`<exec>` is `pnpm exec`, `yarn`, `bunx` or `npx --no`, by package manager. `npx --no` never downloads nx or turbo when it is not installed: the step is `SETUP NEEDED` instead. `fscale facts` shows the package manager, scripts and tools that were detected, and [facts.md](facts.md) lists which config files give which command.
 
 ### In projects below the root
 
