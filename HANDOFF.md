@@ -8,8 +8,8 @@ Run of 2026-11-15 (started 01:30 UTC): the bugs of the ponytail audit (`docs/rev
 
 - **Pull request 1, stop hook, setup and secrets (bugs 1, 2, 3):** merged as [#49](https://github.com/ihsankoolz/firescale/pull/49), green on Linux, macOS and Windows.
 - **Pull request 2, cache inputs and blame (bugs 4, 9, 10, 12, 13, 17):** merged as [#50](https://github.com/ihsankoolz/firescale/pull/50), green on the three systems. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
-- **Pull request 3, tamper guard and agent runner (bugs 5, 7, 8):** in progress.
-- **Pull request 4, writes and packaging (bugs 6, 11, 14, 20):** not started.
+- **Pull request 3, tamper guard and agent runner (bugs 5, 7, 8):** merged as [#51](https://github.com/ihsankoolz/firescale/pull/51), green on the three systems.
+- **Pull request 4, writes and packaging (bugs 6, 11, 14, 20):** in progress.
 - **Pull request 5, version 0.5.0:** not started. No tag is pushed; the owner tags (`RELEASING.md`).
 - **On hold:** M36 Swift, M37 .NET, M38 Android and M39 Flutter, until the owner says so. So are the audit's parts A, B and C and its other items and bugs (15, 16, 18, 19, 21 to 30).
 - **Branch:** every pull request of the run is pushed to `claude/eager-bell-etp97a`; after each merge the branch restarts from `main`.
@@ -188,7 +188,7 @@ Notes on M13, for whoever touches the agent files:
 - The shared pieces are `crates/rules/src/agent-ready/managed.rs`: the block markers, `with_block` (append or replace, keeping line endings), `fscale_command` (how this repo starts fscale), `agents_block`, `claude_block`, and `FACTS_INPUTS` (cache inputs of rules whose output lists commands).
 - Existing JSON settings are only ever changed through `firescale_core::jsonedit::insert_merge`, which adds new lines and refuses otherwise. Keep it that way: the owner's course project has hand-made `.claude` settings.
 - `agent-skills` reads `firescale.config.json` itself (`resolve_config` with custom packs removed). M14's generator skill goes in `pack_skills`.
-- `fscale hooks install` still re-serialises a settings file (M7); only the fixes use `insert_merge`.
+- `fscale hooks install` goes through `insert_merge` too since ADR 0056 (bug 6): it adds lines, or refuses and says what to add by hand.
 
 Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 

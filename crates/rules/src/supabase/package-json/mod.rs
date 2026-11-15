@@ -12,6 +12,7 @@ use super::{
     applies, create, depends_on, elsewhere, finding, new_package_json, package_json,
     package_json_with, VERSIONS,
 };
+use crate::stackkit::MANIFESTS;
 
 #[cfg(test)]
 mod tests;
@@ -30,22 +31,15 @@ const LOCKFILES: [&str; 5] = [
     "bun.lockb",
 ];
 
-/// Manifests of other stacks: a Supabase project in a Flutter, Python, Go,
-/// Rust or Deno repo gets no package.json written for it.
-const OTHER_STACKS: [&str; 7] = [
-    "pubspec.yaml",
-    "pyproject.toml",
-    "requirements.txt",
-    "go.mod",
-    "Cargo.toml",
-    "deno.json",
-    "deno.jsonc",
-];
-
+/// The manifest of another stack at the root, if any: a Supabase project
+/// in a Flutter, Python, Java, Ruby, Go, Rust or Deno repo gets no
+/// package.json written for it. Every manifest the packs know counts: a
+/// list of seven here missed `Pipfile`, `setup.py`, `pom.xml`,
+/// `build.gradle.kts` and `Gemfile`.
 pub(crate) fn other_stack(ctx: &RuleContext) -> Option<&'static str> {
-    OTHER_STACKS
+    MANIFESTS
         .into_iter()
-        .find(|name| ctx.root().join(name).is_file())
+        .find(|name| *name != "package.json" && ctx.root().join(name).is_file())
 }
 
 fn has_lockfile(ctx: &RuleContext) -> bool {
@@ -70,20 +64,8 @@ impl BuiltinRule for PackageJson {
             severity: Severity::High,
             category: Category::Reliability,
             description: "package.json has the Supabase CLI (`supabase`) as a dev dependency, so `npx supabase` runs the repo's version.".to_owned(),
-            inputs: super::inputs(&[
-                "package-lock.json",
-                "pnpm-lock.yaml",
-                "yarn.lock",
-                "bun.lock",
-                "bun.lockb",
-                "pubspec.yaml",
-                "pyproject.toml",
-                "requirements.txt",
-                "go.mod",
-                "Cargo.toml",
-                "deno.json",
-                "deno.jsonc",
-            ]),
+            // The lockfiles and every manifest `other_stack` looks for.
+            inputs: super::inputs(&[LOCKFILES.as_slice(), MANIFESTS.as_slice()].concat()),
             has_fix: true,
             after: Vec::new(),
         }

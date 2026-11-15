@@ -120,7 +120,9 @@ async function writeManifest(dir, manifest) {
 const without = (object, keys) =>
   Object.fromEntries(Object.entries(object).filter(([key]) => !keys.includes(key)));
 
-const notTest = (source) => !/(\.test\.|[\\/]test-helpers\.)/.test(source);
+// Tests and what only tests import. `tsc` leaves these out of a new build
+// (tsconfig.build.json); this also keeps out a copy an older build left in dist.
+const notTest = (source) => !/(\.test\.|[\\/](test-helpers|course-fixture)\.)/.test(source);
 
 /**
  * Filter for a package's `dist` folder: skips tests, source maps (their sources

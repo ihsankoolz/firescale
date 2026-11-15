@@ -1,7 +1,8 @@
 // The supabase stack pack (M29, ADR 0049): init builds a starter, adopt
 // proposes nothing on a project that is set up and exactly the gap on one
 // that is not.
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -131,5 +132,44 @@ describe('fscale adopt --dry-run with the supabase pack', () => {
     ]);
     const result = await runCli(['adopt', '--dry-run'], repo.root);
     expect(result.stdout).toContain('Dry run: `fscale adopt` would change nothing.');
+  });
+});
+
+// Audit bug 11: the rule knew seven manifests of other stacks, so these
+// repos were given a package.json.
+describe('the supabase pack in a repo of another stack', () => {
+  const OTHER_STACKS = ['Pipfile', 'setup.py', 'pom.xml', 'build.gradle.kts', 'Gemfile'];
+
+  function files(manifest?: string): Record<string, string> {
+    return {
+      ...(manifest === undefined ? {} : { [manifest]: '' }),
+      'supabase/config.toml': 'project_id = "x"\n',
+      'firescale.config.json': JSON.stringify({ packs: ['supabase'] }),
+    };
+  }
+
+  it.each(OTHER_STACKS)('sync and fix create no package.json beside %s', async (manifest) => {
+    const repo = await fixtures.create({ files: files(manifest) });
+    const found = (await diagnostics(repo.root)).filter(
+      (d) => d.ruleId === 'supabase/package-json',
+    );
+    expect(found).toEqual([expect.objectContaining({ file: 'package.json', fixable: 'manual' })]);
+    expect((await runCli(['sync'], repo.root)).code).toBe(EXIT_OK);
+    expect(existsSync(path.join(repo.root, 'package.json'))).toBe(false);
+    await runCli(['fix'], repo.root);
+    expect(existsSync(path.join(repo.root, 'package.json'))).toBe(false);
+  });
+
+  it('a cached "sync creates one" finding does not outlive a new Gemfile', async () => {
+    const repo = await fixtures.create({ files: files() });
+    const check = async (): Promise<Diagnostic[]> => {
+      const result = await runCli(['check', '--json'], repo.root);
+      return (JSON.parse(result.stdout) as { diagnostics: Diagnostic[] }).diagnostics.filter(
+        (d) => d.ruleId === 'supabase/package-json',
+      );
+    };
+    expect(await check()).toEqual([expect.objectContaining({ fixable: 'deterministic' })]);
+    await writeFile(path.join(repo.root, 'Gemfile'), "source 'https://rubygems.org'\n");
+    expect(await check()).toEqual([expect.objectContaining({ fixable: 'manual' })]);
   });
 });

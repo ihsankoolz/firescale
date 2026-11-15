@@ -19,7 +19,7 @@ The hook runs `fscale verify` when the agent is about to stop and sends it back 
 2. If `fscale` is not on the `PATH` of your teammates and CI, say how to start it with `--bin`, for example `fscale hooks install --all --bin "npx firescale"`.
 3. Commit the files it wrote, so every teammate's agent gets the hook.
 
-`fscale sync` does the same: it adds the hook for every agent (or the agents in the `agents` option) with the command that starts fscale in this repo: its own `fscale` package script when it has one, else `npx firescale`. A settings file that exists keeps everything in it; the hook goes in as new lines. A file that is not valid JSON, or whose lists are written on one line, is left for you.
+`fscale sync` and `fscale hooks install` work the same way. `fscale sync` adds the hook for every agent (or the agents in the `agents` option) with the command that starts fscale in this repo: its own `fscale` package script when it has one, else `npx firescale`. A settings file that exists keeps everything in it; the hook goes in as new lines. A file that is not valid JSON, or whose lists are written on one line, is left for you: `fscale hooks install --agent <name>` then prints what to add by hand.
 
 Codex runs a project's hooks only in a trusted project, and only after you approve the hook in Codex.
 
@@ -31,7 +31,7 @@ Codex runs a project's hooks only in a trusted project, and only after you appro
 
 ### REPORT
 
-- If the finding is a manual one (a settings file firescale could not add to), report the file and the command `fscale hooks install --agent <name>`. A hook changes how every agent session in this repo ends, so let the user run it.
+- If the finding is a manual one (a settings file firescale could not add to), report the file and the command `fscale hooks install --agent <name>`, which changes nothing in such a file and prints what to do (for a file it can read, the item to add by hand). A hook changes how every agent session in this repo ends, so let the user add it.
 
 ## Verify
 
