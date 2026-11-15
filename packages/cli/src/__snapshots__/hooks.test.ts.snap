@@ -1,5 +1,81 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > claude and cursor: stderr 1`] = `
+"fscale: .claude/settings.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add this item to the list "hooks.Stop" by hand:
+
+{
+  "hooks": [
+    {
+      "type": "command",
+      "command": "fscale hooks run --agent claude"
+    }
+  ]
+}
+
+Then run this again to check it.
+fscale: .cursor/hooks.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add "version": 1 at the top level and this item to the list "hooks.stop" by hand:
+
+{
+  "command": "fscale hooks run --agent cursor"
+}
+
+Then run this again to check it.
+"
+`;
+
+exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > claude and cursor: stdout 1`] = `
+"refused           .claude/settings.json
+installed         .codex/hooks.json
+refused           .cursor/hooks.json
+
+Not every hook is installed. Refused and left as it was: .claude/settings.json, .cursor/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.
+The hook is in .codex/hooks.json: there the agent runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+"
+`;
+
+exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > claude: stderr 1`] = `
+"fscale: .claude/settings.json is not valid JSON (key must be a string at line 1 column 3), so the hook cannot be added. Fix the file, then run this again.
+note: the Cursor hook format could not be checked against Cursor's docs when this was written. Confirm that .cursor/hooks.json matches your Cursor version.
+"
+`;
+
+exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > claude: stdout 1`] = `
+"refused           .claude/settings.json
+installed         .codex/hooks.json
+installed         .cursor/hooks.json
+
+Not every hook is installed. Refused and left as it was: .claude/settings.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.
+The hook is in .codex/hooks.json, .cursor/hooks.json: there the agent runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+"
+`;
+
+exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > codex: stderr 1`] = `
+"fscale: .codex/hooks.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add this item to the list "hooks.Stop" by hand:
+
+{
+  "hooks": [
+    {
+      "type": "command",
+      "command": "fscale hooks run --agent codex"
+    }
+  ]
+}
+
+Then run this again to check it.
+note: the Cursor hook format could not be checked against Cursor's docs when this was written. Confirm that .cursor/hooks.json matches your Cursor version.
+"
+`;
+
+exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > codex: stdout 1`] = `
+"installed         .claude/settings.json
+refused           .codex/hooks.json
+installed         .cursor/hooks.json
+
+Not every hook is installed. Refused and left as it was: .codex/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.
+The hook is in .claude/settings.json, .cursor/hooks.json: there the agent runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+"
+`;
+
 exports[`fscale hooks install > refuses a file written on one line, and says what to add by hand > stderr 1`] = `
 "fscale: .claude/settings.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add this item to the list "hooks.Stop" by hand:
 
