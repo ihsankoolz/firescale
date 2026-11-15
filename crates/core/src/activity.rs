@@ -410,9 +410,83 @@ pub fn time_left(elapsed: std::time::Duration, percent: u8) -> Option<std::time:
     Some(elapsed.mul_f64((1.0 - done) / done))
 }
 
+/// About how long a step has left, when it printed `percent` done at
+/// `since` and has now run for `elapsed`.
+#[must_use]
+pub fn time_left_since(
+    elapsed: std::time::Duration,
+    percent: u8,
+    since: std::time::Duration,
+) -> Option<std::time::Duration> {
+    // The time the percent was printed at is not used yet.
+    let _ = since;
+    time_left(elapsed, percent)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The heartbeats of a pytest step on the course project (0.5.0). pytest
+    /// prints the percent when a test file is done; one slow file held it
+    /// at 8% for six minutes. Each entry: the time so far, the percent, and
+    /// when that percent was printed, in seconds.
+    const SLOW_FILE: [(u64, u8, u64); 3] = [
+        (10 * 60 + 27, 8, 10 * 60 + 27),
+        (16 * 60 + 42, 8, 10 * 60 + 27),
+        (16 * 60 + 48, 14, 16 * 60 + 48),
+    ];
+
+    fn shown(left: Option<std::time::Duration>) -> String {
+        left.map_or_else(|| "none".to_owned(), crate::progress::format_duration)
+    }
+
+    #[test]
+    fn the_estimate_from_the_time_so_far_swings_while_a_slow_test_file_runs() {
+        // What 0.5.0 printed: 2h, then 3h 12m, then 1h 43m, within minutes.
+        let said: Vec<String> = SLOW_FILE
+            .iter()
+            .map(|(elapsed, percent, _)| {
+                shown(time_left(
+                    std::time::Duration::from_secs(*elapsed),
+                    *percent,
+                ))
+            })
+            .collect();
+        assert_eq!(said, ["2h 00m", "3h 12m", "1h 43m"]);
+    }
+
+    #[test]
+    fn the_estimate_is_steady_while_a_slow_test_file_runs() {
+        let secs = std::time::Duration::from_secs;
+        let said: Vec<String> = SLOW_FILE
+            .iter()
+            .map(|(elapsed, percent, since)| {
+                shown(time_left_since(secs(*elapsed), *percent, secs(*since)))
+            })
+            .collect();
+        assert_eq!(said, ["2h 00m", "1h 53m", "1h 43m"]);
+        // While the percent stands still, the time left only goes down, by
+        // the time that passes.
+        let since = secs(10 * 60 + 27);
+        let mut before = time_left_since(since, 8, since).unwrap();
+        for minute in 1..=6 {
+            let now = since + secs(minute * 60);
+            let left = time_left_since(now, 8, since).unwrap();
+            assert_eq!(before - left, secs(60), "minute {minute}");
+            before = left;
+        }
+        // When the percent has stood still past the whole time worked out
+        // from it, there is no honest number left to give.
+        assert_eq!(time_left_since(secs(600), 1, secs(5)), None);
+        assert_eq!(time_left_since(secs(600), 0, secs(5)), None);
+        assert_eq!(time_left_since(secs(600), 100, secs(600)), None);
+        // A percent printed just now gives what the plain rule gives.
+        assert_eq!(
+            time_left_since(secs(600), 50, secs(600)),
+            time_left(secs(600), 50)
+        );
+    }
 
     #[test]
     fn the_percent_done_is_read_from_the_end_of_pytest_lines() {
