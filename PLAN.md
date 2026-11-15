@@ -689,7 +689,7 @@ Decisions in ADR 0049: eight rules from the CLI's source at v3.1.0 and Supabase'
 - ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (the `[inbucket]` rename).
 - ☑ Every fix is idempotent, proven by tests (`crates/rules/src/supabase/tests.rs`: every fix run twice; `sync` twice after `init`).
 
-## M30 — Stack pack: Expo ☐
+## M30 — Stack pack: Expo ☑
 
 Decisions in ADR 0050: seven rules from Expo's SDK 58 blank TypeScript template and CLI; the starter has no image files and ships ESLint so `expo lint` changes nothing.
 

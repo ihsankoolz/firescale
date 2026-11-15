@@ -85,7 +85,7 @@ The version is 0.5.0 in `Cargo.toml`, `Cargo.lock` and every `package.json` (`no
 
 ## 0.5.0 on the course project: what you should see change
 
-Compared with 0.4.0, which is npm's latest and was tagged before M24. So 0.5.0 brings M24 to M35 and the audit bug fixes at once. Each line was checked against the code at 0.5.0 and against tag `v0.4.0`; nothing here was run on the course project. Most likely to be noticed first.
+Compared with 0.4.0, which is npm's latest and was tagged before M24. So 0.5.0 brings M24 to M35 and the audit bug fixes at once. Each line was checked against the code at 0.5.0 and against tag `v0.4.0`; nothing here was run on the course project. The list is ordered by what you are most likely to notice first.
 
 1. **The first `fscale verify` runs every step again**, and the base run for the four failing Vitest tests happens once more. The version is part of every cache key. No line says so; the second run is cached as before.
 2. **`npx firescale` downloads a larger binary.** For Windows x64 the download goes from 3.0 MB to 5.7 MB, and the binary on disk from 9.8 MB to 32.4 MB (next section).
@@ -99,7 +99,7 @@ Compared with 0.4.0, which is npm's latest and was tagged before M24. So 0.5.0 b
 10. **`fscale hooks install` on your hand-made `.claude/settings.json`** adds the hook as new lines, first in the Stop list, and changes no line of yours. A file written on one line is refused, with the item to add by hand; 0.4.0 rewrote it (bug 6).
 11. **Heartbeat lines hide more.** A failed login reads `password authentication failed for user "***"`, and a `password=` value shows as `***` (bug 3).
 12. **New in `fscale --help`:** `fscale tamper`, `fscale ledger`, `fscale fix --agent <name>`, `--pr-base`, `--head`, `--approvals` (M25, M27, M28).
-13. **`verify --json`** keeps schema version 6. `tamper.counts` gains `baseSuppressions` and `headSuppressions`, and `findings[].kind` has eleven possible values.
+13. **`verify --json`** keeps schema version 6. `tamper.counts` gains `baseSuppressions` and `headSuppressions`, and `findings[].kind` has eleven possible values (the shipped schema file still lists five; see pull request 5 above).
 14. **Config:** a `protectedPaths` glob that does not compile stops every command with a message that names it (bug 8). `agent` and `verify.tamper` as an object are accepted.
 
 Probably not seen in this run: the five new opt-in packs (off unless in `packs`); the new project kinds, unless a folder holds a Java, Swift, C, .NET, Dart or Go project, or a lone `Makefile` with a `test` target, which now counts as a `make` project; the tamper guard's eight new languages; bugs 2, 4, 5, 7, 9, 11, 12, 13, 14, 17 and 20; and fewer stale cached passes of `agents-md` and `agent-permissions` (bug 10).
@@ -123,7 +123,7 @@ The same run is the first release build with no cache (bug 14): the six build jo
 
 **What each of the eight M32 grammars adds.** Measured on Linux x64 only, at commit `11cf6e4` (0.5.0's code before the version change): `cargo build --release -p firescale-cli`, rustc 1.97.0, gcc 13.3.0 for the grammars' C code, the release profile of `Cargo.toml` (`lto = true`, `strip = "symbols"`). The binary is **31,238,768 bytes** (29.79 MiB), and 5,420,787 bytes after `gzip -9`. A second build gave the same bytes.
 
-Three ways, which agree within 0.6% on the total:
+Three ways, which agree within about 0.6% on the total:
 
 - **Objects:** the sections of each grammar's static library (`size -A` on `libtree-sitter-<x>.a`).
 - **Link map:** the bytes the linker's map gives to that grammar's `parser.o` and `scanner.o`.
@@ -142,7 +142,7 @@ Three ways, which agree within 0.6% on the total:
 | **The eight, summed**        | 18,898,565 | 18,881,483 | 18,995,392 |              60.81% |        1,553,948 |
 | The eight, removed in one go |            |            | 18,995,968 |              60.81% |        1,541,659 |
 
-All numbers are bytes. With all eight removed the binary is 12,242,800 bytes (11.68 MiB), and 3,879,128 bytes gzipped: 28.4% less than the gzipped full binary, since parse tables compress well.
+All numbers are bytes. With all eight removed the binary is 12,242,800 bytes (11.68 MiB), and 3,879,128 bytes gzipped: 28.4% less than the gzipped full binary.
 
 For comparison, the three older grammars by removal: TypeScript with TSX 2,874,016 bytes (9.20%), Rust 1,124,320 (3.60%), Python 472,672 (1.51%). The tree-sitter runtime is 90,663 bytes in the map, and everything that is neither a grammar nor the runtime is 7,788,138.
 
@@ -152,7 +152,7 @@ Limits of the measurement: one platform, one compiler; the release workflow buil
 
 ## Review of the long run
 
-M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
+M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version was still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
 
 **M25, tamper guard: config and CI** ([#37](https://github.com/ihsankoolz/firescale/pull/37), ADR 0045)
 
@@ -268,7 +268,7 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 - **(M26) `COLLABORATOR` counts as write access**, as GitHub's `author_association` reports it; a collaborator invited read-only has it too. Say if the workflow should check the exact permission (it needs a wider token).
 - **(M26) 42 of 98 held-out cheats are missed** (assertions weakened in place, golden files, test selection in config, hook files edited, mocks and conftest hooks). Say which of these you want detectors for; fixing them makes that corpus development data, and a new held-out set is needed to measure again.
 - **(M25) `fscale init` now writes `.github/workflows/tamper-guard.yml`, on `pull_request_target`** (ADR 0045), against ADR 0041's "never". To make it a gate, mark `tamper-guard` as a required check and set `verify.tamper` to `"enforced"` on the default branch. Say if you would rather keep `pull_request_target` out and accept that a pull request can edit the job that judges it.
-- **(M25) The job runs `npx --yes firescale@<version>`**, the version that wrote the file, from npm. The version is still 0.4.0, which has no `fscale tamper`, so the job works only once a release with M25 is published and `fscale sync` has written the workflow with that version. No release was made (you asked for none).
+- **(M25) The job runs `npx --yes firescale@<version>`**, the version that wrote the file, from npm. The version was 0.4.0 then (0.5.0 since 2026-11-15), which has no `fscale tamper`, so the job works only once a release with M25 is published and `fscale sync` has written the workflow with that version. No release was made (you asked for none).
 - **(M25) A pull request can add a job named `tamper-guard` to its own workflow.** Branch protection matches required checks by name; look at the `pull_request_target` run.
 - **(M24) Lint suppressions are counted per rule over the whole change, not per file** as PLAN.md's M25 line said (ADR 0044): a function moved to another file keeps its `#[allow]` or `# noqa` without a finding. The cost: removing a suppression of a rule in one file while adding one of the same rule elsewhere is not reported.
 - **(M24) The suppression detector came forward from M25** at your request. Suppressions in linter config files (`.eslintrc` rules turned off, ruff's `ignore`, `Cargo.toml` `[lints]`) stay in M25 with the coverage thresholds.

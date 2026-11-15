@@ -4,12 +4,12 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**Nothing is in progress.** The last run (2026-11-15, 01:30 to about 06:00 UTC) fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0. It ends with the pull request that holds this text.
+**Nothing is in progress.** The last run (2026-11-15, started 01:30 UTC) fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0. It ends with the pull request that holds this text.
 
 - **Version:** 0.5.0 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.0` tag exists**; the owner pushes it when ready (`RELEASING.md`). npm's latest is 0.4.0 (tag `v0.4.0`, commit `7e13ee3`, which is before M24), so 0.5.0 is the first release with M24 to M35.
 - **Fixed in the run** (`docs/reviews/ponytail-audit.md`, "Bugs found during the audit"; ADR 0056; DECISIONS.md "Audit bug fixes"): bugs 1, 2, 3 ([#49](https://github.com/ihsankoolz/firescale/pull/49)); 4, 9, 10, 12, 13, 17 ([#50](https://github.com/ihsankoolz/firescale/pull/50)); 5, 7, 8 ([#51](https://github.com/ihsankoolz/firescale/pull/51)); 6, 11, 14, 20 ([#52](https://github.com/ihsankoolz/firescale/pull/52)). Each has a test that failed first. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
 - **Not fixed, by the owner's choice:** audit bugs 15, 16, 18, 19 and 21 to 30, and every simplification item (1 to 79) and shared piece (parts A, B and C) of the audit. Problems found beside the fixed bugs are listed, not fixed, in DECISIONS.md "Audit bug fixes" under each "Found while fixing".
-- **On hold until the owner says so:** M36 Swift, M37 .NET, M38 Android and M39 Flutter (PLAN.md "M33 to M39"). Do not start them, and do not start the audit's part C, without the owner's word.
+- **On hold until the owner says so:** M36 Swift, M37 .NET, M38 Android and M39 Flutter (PLAN.md "M33 to M39"). Do not start them, and do not start the audit's parts A, B or C, without the owner's word.
 - **Done before the run:** M31 to M35 are merged (M35 as [#47](https://github.com/ihsankoolz/firescale/pull/47), ADR 0055), and the audit itself ([#48](https://github.com/ihsankoolz/firescale/pull/48)).
 - **Boxes still open from earlier runs:** M28's manual real-agent test; M29's `supabase start` and `supabase test db` (Docker). Each is listed with its steps in DECISIONS.md.
 - **For the next session in this kind of container:**
@@ -23,9 +23,9 @@ Current state of the project, so a new session can resume cold. Updated in every
 - **Done and merged:** M0 skeleton, M1 rule SDK, M2 Rust front door, M3 engine and cache, M4 `fix`, SARIF, facts and `--affected`, M5 core rule pack, M6 npm packaging, M7 `verify` and hooks, M8 the fix loop (pull request #12, with the plan update of ADR 0017 and the CI trim of ADR 0016), M9 `init`, `adopt` and `sync`.
 - **CI owed:** nothing. M6's Windows npm install test passed in a manual run on `main` on 2026-11-11.
 - **Published:** the owner published 0.1.0 to npm by hand on 2026-11-12. **0.1.1 and 0.1.2 were released on 2026-11-12 through the Release workflow with trusted publishing; every stage passed.** The second box of the publishing checkpoint (a generated repo passing its own CI on GitHub) is still open.
-- **Done in the latest session:** the 0.1.2 fixes from running 0.1.1 on the course project (ADR 0022): each Python project runs with its own `.venv` interpreter (or uv, poetry, pipenv, an active `VIRTUAL_ENV`, then `python`), projects are independent in verify, `setup-needed` is reported apart from failures, ruff and mypy come from dependency lists, and test-runner config files are test code for `core/env-example`. 0.1.2 was released through the Release workflow on 2026-11-12. Earlier: automated releases (ADR 0021, `RELEASING.md`) and M10 (ADR 0020).
+- **Done in a session of 2026-11-12:** the 0.1.2 fixes from running 0.1.1 on the course project (ADR 0022): each Python project runs with its own `.venv` interpreter (or uv, poetry, pipenv, an active `VIRTUAL_ENV`, then `python`), projects are independent in verify, `setup-needed` is reported apart from failures, ruff and mypy come from dependency lists, and test-runner config files are test code for `core/env-example`. 0.1.2 was released through the Release workflow on 2026-11-12. Earlier: automated releases (ADR 0021, `RELEASING.md`) and M10 (ADR 0020).
 - **Done in an earlier session, after 0.1.2:** M11 the group-project pack (ADR 0023).
-- **Done in the latest session:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. **0.1.3 was released on 2026-11-12** and run on the course project on Windows: progress lines, setup detection, parallel projects and Ctrl+C worked, and no process was left behind.
+- **Done in a session of 2026-11-12:** 0.1.3, verify on slow, real projects (ADR 0024): progress on stderr, stopping whole process trees on Ctrl+C and termination, time limits, `CI=1` with no input, run-once sibling scripts for watch mode, refused local connections as setup needed, `--jobs`, and run records instead of locks. **0.1.3 was released on 2026-11-12** and run on the course project on Windows: progress lines, setup detection, parallel projects and Ctrl+C worked, and no process was left behind.
 - **Done in the session of 2026-11-12 (evening):** M12 `doctor` and the two fixes from the 0.1.3 run (ADR 0025, 0026), M13 agent files (ADR 0027), M14 generators (ADR 0028), M15 Next.js pack (ADR 0029), M16 Python pack (ADR 0030), and the 0.2.0 version.
 - **Done in the session of 2026-11-12/13:** the plan update (ADR 0031) and M17, the project graph and affected verify (ADR 0032, ADR 0033).
 - **Done in the session of 2026-11-13 (day):** M18, the local step cache (ADR 0036); M19 to M21, blame-aware verify (ADR 0037 to 0039, verify schema 6).
@@ -202,7 +202,6 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 - M11's CI rule runs after `core/ci-exists`, whose fix now writes `.github/workflows/ci.yml` with `npx firescale verify`. A hand-written workflow is never rewritten; there are tests to copy in `packages/cli/src/scaffold.test.ts` ("existing work survives").
 - M13's managed block is the first fix that rewrites lines. The byte-for-byte tests in `scaffold.test.ts` use an AGENTS.md with look-alike markers; keep them passing for text outside the real block.
 - `fscale init` refuses a folder that is not empty. Tests that need a new repo use `fixtures.create({ track: 'no-git' })` with no files.
-- Cursor's hook format is still unconfirmed (cursor.com is blocked from the cloud build environment). M13 needs it.
 
 ## Things to know before changing code
 
@@ -225,10 +224,9 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 - Run 0.5.0 on the course project: DECISIONS.md, "0.5.0 on the course project: what you should see change".
 - Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
 - Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
-- Run 0.2.0 on the course project: `fscale doctor`, and `fscale adopt --dry-run` with `agent-ready` and `python` in `packs`, to see the agent files and the per-service checks on the real repo.
 
-- Consider turning off token publishing for the eight packages now that two workflow releases have worked (`RELEASING.md`).
+- Consider turning off token publishing for the eight packages now that several workflow releases have worked (`RELEASING.md`).
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
 - Tick the second box of the publishing checkpoint: see a repo made by `npx firescale@0.1.0 init` pass its generated CI on GitHub (step 7 under "Publishing to npm" in `DECISIONS.md`).
-- The manual test with a real agent (now M28) is not reachable yet.
+- Run M28's manual test with a real agent (ADR 0048, "Manual checks").
