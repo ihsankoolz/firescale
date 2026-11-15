@@ -187,6 +187,7 @@ Each agent sits behind an adapter interface. Exact CLI flags must be confirmed a
 - `fscale hooks install` writes hook config for each supported agent so the agent can't stop while verify fails.
 - With no workspace file at the root, verify runs each project that `fscale facts` finds in a subfolder: that project's lint, typecheck and test, in its folder (ADR 0020).
 - A step with no command is skipped, and verify prints a visible warning that names it. A skipped step is not a failure unless `verify.failOnSkipped` is on, but a run with a skipped step is never reported as a clean pass: the headline says `PARTIAL` and how many steps ran.
+- `fscale verify --budget <time>` does not start a step that took longer than `<time>` the last time it ran. Verify keeps each step's time in `.firescale/step-times.json` and announces a step that took over 5 minutes before it starts. A step left out is `NOT RUN` and the run is `PARTIAL`, never `OK`. The flag is refused in CI and in the stop hook, where a run stands for the whole repo (ADR 0057).
 - Hooks must guard against loops: detect a repeated stop attempt and cap retries. The hook releases an agent after 3 blocks in a row.
 
 ### Affected-only verify (M17)

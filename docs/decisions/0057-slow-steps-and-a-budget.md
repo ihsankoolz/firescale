@@ -26,9 +26,25 @@ What a run writes:
 - **A run that did not finish only raises it too**, and marks the record as not finished: stopped by Ctrl+C or a signal, stopped at a time limit (the step's, the project's, `verify.timeout`, the idle limit), or stopped early for a service that is down. The next run reads it as "it ran at least 1h 33m when it last ran and did not finish".
 - The base run of blame-aware verify, a rerun for flakiness and the extra `--maxfail=1` run keep nothing: they are not the step as the user runs it.
 
-The file is read again before each write, so two verify runs of one repo keep each other's records, and it is written beside and renamed (up to five tries, 20 ms apart, for Windows, where a rename fails while another program holds the file). A record that cannot be written is not an error. At most 2000 records are kept.
+The file is read again before each write, and it is written beside and renamed, so a reader never sees half a file. A record that cannot be written is not an error. At most 2000 records are kept.
 
-**Symbolic links.** As for the step cache since ADR 0056 (bug 17): when `.firescale` or the file is a symbolic link, nothing is read and nothing is written. The check is written in place, as that ADR chose; no shared writer was built.
+**Reading: "no file" is not "cannot read it now".** Three cases are told apart (added after the review of this change, which showed the first version taking every error for an empty file):
+
+- **There is no file.** Nothing is kept yet.
+- **The file is not a step times file of this format** (broken, or written by another version). It holds nothing that can be used, and the next write replaces it: nothing else would repair it.
+- **The file is there and cannot be read right now.** On Windows a reader gets "Access is denied" for a moment while another verify renames a new file over this one, so a read is tried five times, 20 ms apart. If it still fails, it is an error, never an empty file:
+  - a **write is skipped**. A write that started from an empty file would keep its own record and drop every other step's.
+  - a **step whose time is asked for runs**, as a step with no kept time does, after a progress line that says so: `test: could not read .firescale/step-times.json (Access is denied. (os error 5)), so how long this step took the last time is not known: it runs`. This was the simplest safe choice. The budget only ever leaves out what is known to be slow, and failing a run for a file that is only a help would be worse than running one step too many. The line makes it visible, so with `--budget` a slow step does not start without a word.
+
+**Writing: one writer at a time, in any process.** A write holds a lock file, `.firescale/step-times.json.lock`, from the read to the rename, so two verify runs of one repo keep each other's records. (The first version only had a mutex, which covers one process: two runs at once undid each other's writes, and a step that had passed could be left as "did not finish".)
+
+- The lock is created with `create_new`, which fails when the name is taken, also by a symbolic link, so nothing is written through one. It holds a token of its owner, and is removed after the rename, by its owner only.
+- **A lock older than 5 seconds is stale**: a writer holds it for about a second at most, so this one was left by a process that was killed while it wrote. It is removed, so it cannot block the file for good.
+- **A write made while a step runs** (each heartbeat) waits 100 ms for the lock and tries the rename five times, 20 ms apart. If it does not get through it is dropped: the next heartbeat writes again. A step that verify stops (Ctrl+C, closing the console) is written this way too, since Windows gives verify about 5 seconds then.
+- **The record of a step that ended** (passed or failed) waits up to 7 seconds for the lock, which is longer than a stale lock lives, and tries the rename for about a second (21 tries, 50 ms apart). On Windows a rename fails while another program (a virus scanner, an editor) holds the file open, and a pass that is dropped leaves the old, longer time in place.
+- No dependency was added: the lock is `std::fs` only. A lock made by the operating system (`flock`, `LockFileEx`) would need platform code or a crate for a file that is only a help.
+
+**Symbolic links.** As for the step cache since ADR 0056 (bug 17): when `.firescale` or the file is a symbolic link (on Windows also a junction), nothing is read and nothing is written. The check is written in place, as that ADR chose; no shared writer was built.
 
 ### A stopped run leaves the time on the path Windows really takes
 
@@ -38,7 +54,7 @@ Some stops run no code of verify at all: a second Ctrl+C, Task Manager, `taskkil
 
 ### The warning
 
-Before verify starts a step whose kept time is over 5 minutes, it prints one progress line, in the form of the other progress lines (stderr, `[verify] <place>: ...`): `slow step: it took 1h 40m when it last ran. To leave out steps this slow, run fscale verify --budget <time>`, or `it ran at least 1h 33m when it last ran and did not finish`. It is a progress line, so it shows where progress shows (a terminal, or `--progress`), and never in the summary or the JSON. A step that comes from the cache is not announced: it does not run.
+Before verify starts a step whose kept time is over 5 minutes, it prints one progress line, in the form of the other progress lines (stderr, `[verify] <place>: ...`): `slow step: it took 1h 40m when it last ran. To leave out steps this slow, run fscale verify --budget <time>`, or `it ran at least 1h 33m when it last ran and did not finish`. It is a progress line, so it shows where progress shows (a terminal, or `--progress`), and never in the summary or the JSON. A step that comes from the cache is not announced: it does not run. In a run that already has `--budget`, the line ends after the time: such a run is not told to use the flag it is using.
 
 ### `--budget <time>`
 
@@ -47,8 +63,9 @@ A step whose kept time is longer than the budget is not started. It is reported 
 - **A flag only.** No config setting: a budget in the config would make every run of the repo partial without anyone asking for it.
 - **The time format** is the config's (`30m`, `90s`, `1h 30m`, or a number of seconds). The text parser of `parse_limit` was taken out into `config::time_text_seconds` and is used by both. Zero, and anything else, is a usage error that shows the forms.
 - **Its own state.** The step status is `over-budget` in JSON and `NOT RUN` in the summary. It is not `skipped` (the step has a command, and no config key would fix it), not `not-affected`, and not `not-run` (an earlier step failed). It does not stop the steps after it in its project.
-- **Never OK.** The run's result is `partial`, the result ADR 0020 made for a run that verified less than the whole. The headline is built where the skipped one is, and counts the two apart: `verify: PARTIAL - 2 of 4 steps ran, 1 skipped, 1 not run (over the --budget of 30m)`. Beside a failure the headline adds `; 1 step not run (...)`. With a base to compare with, a run whose only failures are `pre-existing` or `flaky` would read `OK - no new failures`; with a step left out it is `partial` instead, and the headline still names those failures.
-- **Exit code 0**, as for a partial run with skipped steps.
+- **Never OK.** The run's result is `partial`, the result ADR 0020 made for a run that verified less than the whole. The headline is built where the skipped one is, and counts the two apart: `verify: PARTIAL - 2 of 4 steps ran, 1 skipped, 1 not run (over the --budget of 30m)`. Beside a failure the headline adds `; 1 step not run (...)`. With a base to compare with, a run whose only failures are `pre-existing` or `flaky` would read `OK - no new failures`; with a step left out it is `partial` instead, and the headline still names those failures, with `--affected` too (`verify: PARTIAL (affected only) - 1 of 2 projects ran, 1 not affected; 2 of 3 steps ran, 1 not run (over the --budget of 30m); pre-existing (fails on the base commit 1a2b3c4 too): lint in a`).
+- **Exit code 0**, as for a partial run with skipped steps. So the JSON's `ok` is true for such a run; it is its `result` that is never `ok`.
+- **What gets a step back in.** A kept time is set by a pass and only raised by a failure or a stop (above), and `--budget` does not start the step, so a step that got quicker stays out until it passes in a run of `fscale verify` without `--budget`. Running its command by hand changes nothing: verify did not time it. The `Not run:` paragraph of the summary says exactly that, and that deleting `.firescale/step-times.json` forgets every kept time (then the step runs, and its pass sets a new time).
 - **`verify.failOnSkipped` covers it.** With the setting on, a run that left a step out fails (exit 1, `verify: FAILED - 1 of 3 steps not run (over the --budget of 30m), and verify.failOnSkipped is on`). The setting says "in this repo a run that verified less than everything is not a pass"; the safe reading is that a budget does not get around it. It was also the simplest: one more condition where the setting is read. The cost: in such a repo `--budget` is only good for seeing the quick steps' results, not for a green run.
 - **Nothing is kept about it.** Only a step with status `passed` is stored in the step cache and the shared cache, and only `passed`, `failed` and `timed-out` steps get a base result and a label (`blame::head_outcome`), so no code had to change for either; tests pin both. Its kept time is not touched, since nothing ran.
 - **A step with no kept time runs.** So does a step whose time is exactly the budget. A step whose pass is in the step cache is taken from the cache, not left out: the budget check sits after the cache lookup.
@@ -58,7 +75,7 @@ A step whose kept time is longer than the budget is not started. It is reported 
 
 Both are places where a run stands for the whole repo, and where exit code 0 is read as "it passed".
 
-- **CI** is `GITHUB_ACTIONS=true` (what the shared cache goes by, ADR 0041) or a `CI` variable that is set and not empty (what verify's own commands go by, ADR 0024). Verify exits with 2 before anything runs, the dry run included, and says to run without the flag there and to bound a slow step with its time limit.
+- **CI** is `GITHUB_ACTIONS=true` (what the shared cache goes by, ADR 0041) or a `CI` variable that is set and not empty (what verify's own commands go by, ADR 0024). Verify exits with 2 before anything runs, the dry run included, and says to run without the flag there and to bound a slow step with its time limit. `CI=false` and `CI=0` count as CI too, as they do for verify's commands; for those two the message adds that any value that is not empty counts, and that on your own machine you can unset `CI`.
 - **The stop hook** (`fscale hooks run`, the hook mode of verify) refuses the flag with a message that says to remove it from the hook command. Its exit code is 1, not 2, and verify does not run: Claude Code and Codex read 2 from a stop hook as "do not stop", and the rule that a hook's own errors never trap an agent (ADR 0014) is kept. An agent that can edit its hook command could already free itself with any bad flag; this adds no new way.
 
 Tests in this repo run under verify, which sets `CI=1` for its commands, and in GitHub Actions: every test of a laptop run removes `CI` and `GITHUB_ACTIONS`.
@@ -73,17 +90,20 @@ The swing was reproduced first, with the 0.5.0 rule and a realistic sequence: py
 
 The fix: the watch loop notes how long the step had run when each percent first showed. The whole run is worked out once, at that moment, when the percent is exact, and the time left is that, less the time so far. The same sequence gives 2h 00m, 1h 53m, 1h 43m. When a percent has stood still for longer than the whole time worked out from it, no time is given, only the percent.
 
+**A step stopped by the idle limit gives only the percent.** It printed nothing new for the whole limit, so it has no pace any more, and "about 0.7s left at this pace" beside "stopped for printing nothing" means nothing. The rule above would give a time or not depending on when the percent was printed (in a test: within 0.67 s of the start or after), so the detail and the `Timed out:` paragraph of such a step never give one. A step stopped at its overall limit still does: it was printing.
+
 This was the simplest of the options. Calling the estimate "rough" until the percent has moved three times would not have helped: in the sequence above the swing comes after the percent has moved more often than that. A moving average needs a window and a history. The words of the line are unchanged.
 
 ## Consequences
 
-- A repo gets a new file, `.firescale/step-times.json`. It is ignored by git with the rest of the folder, is never part of a cache key, and can be deleted at any time.
+- A repo gets a new file, `.firescale/step-times.json`, and for the moment of each write a lock file beside it. Both are ignored by git with the rest of the folder and are never part of a cache key. The file can be deleted at any time: that forgets every kept time.
 - The first run on a machine knows no times: nothing is announced and `--budget` runs everything. A step whose command changes starts again with no time.
-- A step that fails quickly keeps its old, longer time. If a step really got quicker, the warning stays until it passes once.
+- A step that fails quickly keeps its old, longer time. If a step really got quicker, the warning stays until it passes once, and `--budget` leaves it out until it passes in a run without `--budget`, or the file is deleted.
+- A verify that ends while another one was killed in the middle of a write waits up to 5 seconds, once, for that lock to become stale.
 - `verify --json` consumers must accept schema version 7. The stop hook is the only consumer in this repo, and it reads `ok` and the steps' statuses it already knew.
 - A step stopped at a time limit now leaves a time, so a suite that always times out at 60 minutes is announced as "ran at least 1h 00m ... and did not finish" and is left out by a budget below that.
 - After ten minutes a killed verify's record is up to five minutes short. Records written at a clean stop are exact.
-- One existing end-to-end expectation changed: a step that printed `[ 25%]` and then nothing for its whole idle limit used to say "25% done, about 6s left at this pace", three times the time it had sat silent. It now says "25% done".
+- One existing end-to-end expectation changed: a step that printed `[ 25%]` and then nothing for its whole idle limit used to say "25% done, about 6s left at this pace", three times the time it had sat silent. It now says "25% done", whenever the percent was printed.
 - `--budget` with `--dry-run` is accepted and changes nothing in the plan that is printed.
 
 ## Not done
@@ -91,3 +111,5 @@ This was the simplest of the options. Calling the estimate "rough" until the per
 - No config setting for the budget, by the owner's brief.
 - No estimate across test sessions: a command that runs several sessions prints a percent that starts again, and the time left follows the session it is in.
 - The other stores under `.firescale` that ADR 0056 found writing through a linked folder are as they were.
+- `--budget` given to another command (`fscale check --budget 30m`) is accepted and does nothing, as the other options that only verify reads are there (`--jobs`, `--progress`, `--shared-cache`). Refusing one of them alone would be a rule of its own.
+- Taking over a stale lock is not atomic: two writers that both find the same stale lock at the same instant could both take it, and one write would be lost. It needs a process killed in the middle of a write first, and the next heartbeat or the next run writes again.
