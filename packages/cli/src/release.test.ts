@@ -464,6 +464,29 @@ describe('.github/workflows/release.yml', () => {
     for (const line of uses) expect(line).toMatch(/^uses: [\w./-]+@[0-9a-f]{40} # v\d+\.\d+\.\d+$/);
   });
 
+  it('restores no cache in any job', async () => {
+    // What a release publishes is built from the tagged commit and the
+    // lockfiles only. A cache is files from an earlier run, which a run on
+    // another ref may have written. So no job may hold a line that names a
+    // cache: an action (actions/cache, actions/cache/restore, rust-cache,
+    // sccache), a `cache:` input of a setup action, a `cache-from:`, an env
+    // variable. The one thing allowed is a key that turns a cache off.
+    const text = await read();
+    const jobs = text.slice(text.indexOf('\njobs:\n'));
+    const names = [...jobs.matchAll(/^ {2}([a-z][\w-]*):\r?$/gm)].map((match) => match[1] ?? '');
+    expect(names).toEqual(['version', 'build', 'publish', 'verify']);
+    const turnedOff = /^\s*(- )?[\w-]*cache[\w-]*: (false|none)$/i;
+    const found = names.flatMap((name) =>
+      job(text, name)
+        .split(/\r?\n/)
+        // Comments may say "cache"; a comment restores nothing.
+        .filter((line) => !/^\s*#/.test(line))
+        .filter((line) => /cache/i.test(line) && !turnedOff.test(line))
+        .map((line) => `${name}: ${line.trim()}`),
+    );
+    expect(found).toEqual([]);
+  });
+
   it('builds all six platforms', async () => {
     const build = job(await read(), 'build');
     for (const platform of PLATFORMS) expect(build).toContain(`key: ${platform}`);
