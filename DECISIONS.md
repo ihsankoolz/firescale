@@ -2,6 +2,25 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## Audit bug fixes (run of 2026-11-15)
+
+The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. For each: a test that failed because of the bug, then the smallest fix. None of the audit's shared pieces was built. Choices are in ADR 0056.
+
+**Pull request 1: stop hook, setup and secrets**
+
+- **Bug 1, fixed.** Failing tests first: `a_repo_level_finding_is_kept_when_a_changed_file_is_an_input_of_its_rule` (affected.rs), `keeps a finding on a repo-level file when the change is one its rule reads` (affected.test.ts) and `blocks on a finding the change caused on a file that did not change` (stop-hook-blame.test.ts: the hook exited 0). Fix: `--affected` also keeps a finding on a file no sub-project owns when a changed file is an input of its rule.
+- **Bug 2, fixed.** Failing tests first: `nx_and_turbo_with_npm_never_let_npx_download_them` (verify.rs) and, end to end with a stand-in `npx`, `says SETUP NEEDED when nx|turbo is not installed, and never lets npx download it` (verify.test.ts: "downloaded nx run-many -t lint"). Fix: `npx --no`.
+- **Bug 3, fixed.** Failing tests first: three in activity.rs (the heartbeat showed `password=hunter2`, `user "app"` and `pa/ss`) and one end to end in verify-run.test.ts. Fix: the heartbeat calls `hide_secrets`.
+
+**Decided on your behalf** (ADR 0056):
+
+- Bug 1 keeps a repo-level finding only when its rule reads a changed file, so sibling projects' findings stay out. One visible cost: in a repo with no root project, an old repo-level finding (a tracked root `.env`) now shows under `--affected` once a file its rule reads changes; one test expectation changed for that.
+- Bug 2 changed one literal; verify's and facts' two copies of the prefix were not merged (audit item 69).
+- Bug 3 uses the existing `hide_secrets` and removes the heartbeat's own `redact`, which nothing else called. That is most of audit item 39; it was the smallest fix.
+- Two existing tests changed because they pinned a bug: `nx_and_turbo_take_precedence_and_honour_affected` (expected a bare `npx`) and `works when the firescale root is a folder inside a larger git repo` (expected the root `.env` finding to be hidden).
+
+**Known limits, not fixed here:** a finding inside an unaffected project, caused by a change elsewhere, is still dropped by `--affected` (needs audit item 23); `bunx` can still fetch a missing nx or turbo; `token=` and `secret=` values are not hidden by `hide_secrets`.
+
 ## Review of the long run
 
 M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
