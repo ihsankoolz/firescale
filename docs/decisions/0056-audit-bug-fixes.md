@@ -59,7 +59,7 @@ No `inputs` helper and no project-type table was built (audit items 24 and 26, p
 
 ### Bug 10: the files that decide a command are inputs of `agents-md` and `agent-permissions`
 
-`FACTS_INPUTS` grew from 28 globs to 44, by hand. Each added glob has an end-to-end case that showed a cached pass where an uncached run reported a finding:
+`FACTS_INPUTS` grew from 28 globs to 44, by hand. Each family below has end-to-end cases that showed a cached pass where an uncached run reported a finding:
 
 - the Maven and Gradle wrappers (`mvnw`, `mvnw.cmd`, `gradlew`, `gradlew.bat`);
 - Node tool configs (`.oxlintrc.json`, `oxlint.config.*`, `biome.json`, `.eslintrc*`, `vitest.workspace.*`);
@@ -81,9 +81,11 @@ Since bug 1's fix, these inputs also decide what the stop hook keeps: a change t
 
 ### Bug 17: the step cache never reads, writes or cleans through a symbolic link
 
-A committed `.firescale/.gitignore` that is a dangling link made the step cache create a file outside the repo. Tests showed the same for the config digest file, and, with `.firescale` or `.firescale/steps` itself a link, for storing a pass, touching an entry on lookup and removing old entries. All get the check `hooks.rs` already makes, written in place: a linked cache is refused, never followed, and verify says "the folder is a symbolic link; replace it with a real folder". No shared writer was built (audit item 72).
+A committed `.firescale/.gitignore` that is a dangling link made the step cache create a file outside the repo. Tests showed the same for the config digest file, and, with `.firescale` or `.firescale/steps` itself a link, for storing a pass, touching an entry on lookup and removing old entries. All get the check `hooks.rs` already makes, written in place: a linked cache is refused, never followed, and verify says "`.firescale` or `.firescale/steps` is a symbolic link; replace it with a real folder". No shared writer was built (audit item 72).
 
-**Found, not fixed** (not on the owner's list): the rule-result cache has the same hole. `Cache::put` in `cache.rs` writes `.firescale/.gitignore` without the check, so `fscale check` with a dangling link there still creates the outside file. The base-result store in `blame.rs`, and `runs.rs` and `sharedcache.rs`, create folders and write without a link check; those were read, not tested.
+The rule-result cache wrote the same ignore file with the same mistake (`Cache::put` in `cache.rs` asked `exists()`, which is false for a dangling link), so a plain `fscale verify` or `fscale check` still created the outside file. It is the same file and the same case as the bug's entry, so its one condition was fixed too, with its own failing test.
+
+**Found, not fixed** (not on the owner's list): with `.firescale` itself a link, the rule-result cache (`cache.rs`), the base-result store (`blame.rs`), the run records (`runs.rs`) and a shared cache folder under it (`sharedcache.rs`) still create folders and write through it. Those were read, not tested. With a linked digest file whose target differs, the "config changed" note can print on every run.
 
 ## Consequences
 

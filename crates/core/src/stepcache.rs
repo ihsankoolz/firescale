@@ -1074,7 +1074,7 @@ pub fn now_secs() -> u64 {
 pub fn store(root: &Path, entry: &Entry) -> std::io::Result<()> {
     if cache_is_linked(root) {
         return Err(std::io::Error::other(
-            "the folder is a symbolic link; replace it with a real folder",
+            ".firescale or .firescale/steps is a symbolic link; replace it with a real folder",
         ));
     }
     let dir = cache_dir(root);
