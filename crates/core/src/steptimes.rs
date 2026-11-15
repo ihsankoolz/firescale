@@ -18,6 +18,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -122,6 +123,14 @@ pub struct StepTimes {
     root: PathBuf,
     /// One writer at a time in this process: projects run side by side.
     lock: Mutex<()>,
+    /// Set once the record of a step that ended waited its whole time for
+    /// the lock and did not get it. Later records of this run then wait
+    /// only as long as one made while a step runs: a lock that is never
+    /// given up costs the long wait once, not once for every step.
+    lock_given_up: AtomicBool,
+    /// The first reason a reader was given for a file that could not be
+    /// read, for the run's summary.
+    unreadable: Mutex<Option<Unreadable>>,
 }
 
 /// The file is there, but could not be read just now.
@@ -233,6 +242,10 @@ impl FileLock {
                         token,
                     });
                 }
+                // A folder in the lock's place can be neither taken nor
+                // removed, however long the wait (on Windows creating the
+                // file there is refused, elsewhere the name is taken).
+                Err(_) if is_folder(path) => return None,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                     refused_since = None;
                     if lock_is_stale(path) {
@@ -286,6 +299,10 @@ fn lock_is_stale(path: &Path) -> bool {
         .is_ok_and(|apart| apart > LOCK_STALE)
 }
 
+fn is_folder(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_dir())
+}
+
 fn is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
@@ -308,6 +325,8 @@ impl StepTimes {
         Self {
             root: root.to_path_buf(),
             lock: Mutex::new(()),
+            lock_given_up: AtomicBool::new(false),
+            unreadable: Mutex::new(None),
         }
     }
 
@@ -367,8 +386,13 @@ impl StepTimes {
         step: &str,
         command: &str,
     ) -> Result<Option<Known>, Unreadable> {
-        Ok(self
-            .read()?
+        let file = self.read().inspect_err(|error| {
+            self.unreadable
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_or_insert_with(|| error.clone());
+        })?;
+        Ok(file
             .steps
             .iter()
             .find(|record| {
@@ -402,6 +426,43 @@ impl StepTimes {
         duration: Duration,
         outcome: Outcome,
     ) {
+        let ended = outcome != Outcome::Unfinished;
+        self.write(project, step, command, duration, outcome, ended);
+    }
+
+    /// Keeps the record of a step whose command has ended, however it
+    /// ended: also one that a time limit stopped, which is unfinished and
+    /// gets no later heartbeat to write it again. It waits as long as a
+    /// pass does.
+    pub fn record_ended(
+        &self,
+        project: Option<&str>,
+        step: &str,
+        command: &str,
+        duration: Duration,
+        outcome: Outcome,
+    ) {
+        self.write(project, step, command, duration, outcome, true);
+    }
+
+    /// The first reason a reader of this run was given for kept times that
+    /// could not be read, if any was.
+    pub fn unreadable(&self) -> Option<Unreadable> {
+        self.unreadable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn write(
+        &self,
+        project: Option<&str>,
+        step: &str,
+        command: &str,
+        duration: Duration,
+        outcome: Outcome,
+        ended: bool,
+    ) {
         let _guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
         if self.linked() {
             return;
@@ -420,12 +481,16 @@ impl StepTimes {
             return;
         }
         ignore_firescale_folder(&self.root);
-        let patience = if outcome == Outcome::Unfinished {
-            LOCK_WAIT_RUNNING
-        } else {
+        let patient = ended && !self.lock_given_up.load(Ordering::Relaxed);
+        let patience = if patient {
             LOCK_WAIT_ENDED
+        } else {
+            LOCK_WAIT_RUNNING
         };
         let Some(_lock) = FileLock::acquire(&folder.join(LOCK_FILE), patience) else {
+            if patient {
+                self.lock_given_up.store(true, Ordering::Relaxed);
+            }
             return;
         };
         let Ok(mut file) = self.read() else {
@@ -466,11 +531,7 @@ impl StepTimes {
         // while. A step that ended is worth about a second: a pass that is
         // dropped leaves the old time in place. A write made while the step
         // runs is not: the next heartbeat makes it again.
-        let (tries, pause) = if outcome == Outcome::Unfinished {
-            RENAME_RUNNING
-        } else {
-            RENAME_ENDED
-        };
+        let (tries, pause) = if ended { RENAME_ENDED } else { RENAME_RUNNING };
         let path = self.path();
         if retrying(tries, pause, || fs::rename(&temporary, &path)).is_err() {
             let _ = fs::remove_file(&temporary);
@@ -849,6 +910,38 @@ mod tests {
             }))
         );
         assert!(!lock.exists());
+    }
+
+    /// A step that a time limit stopped has ended: no heartbeat follows to
+    /// write its time again, so its record waits for a lock that another
+    /// verify holds for a moment, as a pass does.
+    #[test]
+    fn the_record_of_a_step_that_a_limit_stopped_waits_for_the_lock() {
+        let (temp, times) = times();
+        let folder = temp.path().join(".firescale");
+        fs::create_dir_all(&folder).unwrap();
+        let lock = folder.join(LOCK_FILE);
+        fs::write(&lock, "another verify").unwrap();
+        let holder = {
+            let lock = lock.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(LOCK_WAIT_RUNNING * 5);
+                fs::remove_file(&lock).unwrap();
+            })
+        };
+        // Written while the step runs: dropped, the next heartbeat comes.
+        times.record(None, "test", "t", HOUR, Outcome::Unfinished);
+        assert_eq!(times.last(None, "test", "t"), Ok(None));
+        // Written when the limit stopped it: kept.
+        times.record_ended(None, "test", "t", HOUR, Outcome::Unfinished);
+        holder.join().unwrap();
+        assert_eq!(
+            times.last(None, "test", "t"),
+            Ok(Some(Known {
+                duration: HOUR,
+                finished: false
+            }))
+        );
     }
 
     /// Something that is not a file where the lock should be can never be

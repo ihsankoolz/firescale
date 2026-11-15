@@ -2167,7 +2167,12 @@ fn run_step(
             Ending::Exited(_) => Outcome::Failed,
             Ending::TimedOut | Ending::Stopped | Ending::GaveUp => Outcome::Unfinished,
         };
-        times.record(project, name, command, finished.duration, outcome);
+        if finished.ending == Ending::Stopped {
+            // The person wants verify gone: no long wait for the file.
+            times.record(project, name, command, finished.duration, outcome);
+        } else {
+            times.record_ended(project, name, command, finished.duration, outcome);
+        }
     }
     let mut report = StepReport {
         name: name.to_owned(),
@@ -3073,6 +3078,18 @@ pub fn run_verify_with(
         }
     };
     let mut warnings = warnings;
+    // Progress lines are not shown to a script or an agent: a budget that
+    // could not see the kept times says so in the report too (ADR 0057).
+    if let (Some(budget), Some(error)) = (
+        options.budget,
+        options.times.and_then(StepTimes::unreadable),
+    ) {
+        warnings.push(format!(
+            "{error}, so --budget {} left out no step for its kept time: a step whose time could not be read ran. Delete .firescale/{} if it stays unreadable.",
+            format_limit(budget),
+            crate::steptimes::STEP_TIMES_FILE
+        ));
+    }
     if let Some(affected) = &plan.affected {
         warnings.extend(affected.warnings.iter().cloned());
     }
