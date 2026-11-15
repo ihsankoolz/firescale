@@ -469,6 +469,29 @@ describe('doctor and env files in the folders above a project', () => {
     );
     expect(result.code).toBe(EXIT_VIOLATIONS);
   });
+
+  it('never reads a .env above the firescale root', async () => {
+    // The firescale root is `repo/`, inside the fixture's own temp folder;
+    // the `.env` beside it is outside the root.
+    const outer = await fixtures.create({
+      files: {
+        '.env': 'ABOVE_ROOT_KEY=above-root-secret-987\n',
+        'repo/firescale.config.json': JSON.stringify({ packs: ['core'] }),
+        'repo/svc/.env.example': 'ABOVE_ROOT_KEY=\n',
+        'repo/svc/requirements.txt': '',
+        'repo/svc/main.py': '',
+      },
+      track: 'no-git',
+    });
+    const tools = path.join(outer.root, 'tools');
+    await writeVersionTools(tools, {});
+    const result = await runCli(['doctor'], path.join(outer.root, 'repo'), toolPath(tools));
+    expect(result.stdout).toContain(
+      '  PROBLEM  svc/.env.example: 1 of 1 variables are not set in the environment, and there is no svc/.env, nor a .env in a folder above it: ABOVE_ROOT_KEY.\n',
+    );
+    expect(result.stdout + result.stderr).not.toContain('above-root-secret-987');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+  });
 });
 
 describe('verify points at doctor', () => {

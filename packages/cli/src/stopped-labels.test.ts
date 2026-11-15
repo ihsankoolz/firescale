@@ -23,6 +23,11 @@ const WINDOWS = process.platform === 'win32';
 const EXIT_STOPPED = 130;
 const CTRL_BREAK = path.join(path.dirname(BIN), `fscale-ctrl-break${WINDOWS ? '.exe' : ''}`);
 const SCHEMA = new URL('../schemas/verify-output.schema.json', import.meta.url);
+// The wait for the hanging step is shorter than the test's limit, so a slow
+// machine fails with the wait's own message and fscale's output, not with
+// Vitest's bare timeout. The limit covers the wait and the stop after it.
+const READY_WAIT = 30_000;
+const TEST_LIMIT = 60_000;
 
 /**
  * A repo on a `feature` branch whose lint fails at once and whose test
@@ -80,8 +85,13 @@ async function interrupted(
     let helperErr = '';
     helper.stderr.on('data', (chunk: Buffer) => (helperErr += chunk.toString()));
     const code = await new Promise<number | null>((resolve) => helper.on('close', resolve));
-    expect(helperErr).toBe('');
-    return { code, stdout: (await readFile(output, 'utf8')).replace(/\r\n/g, '\n') };
+    // What fscale wrote to stderr goes into the message, so a failure seen
+    // only on Windows can be read from the CI log.
+    const fscaleErr = await readFile(`${output}.err`, 'utf8').catch(() => '(no stderr file)');
+    expect(helperErr, `the helper failed; fscale's stderr:\n${fscaleErr}`).toBe('');
+    const stdout = (await readFile(output, 'utf8').catch(() => '')).replace(/\r\n/g, '\n');
+    expect(code, `fscale's stdout:\n${stdout}\nfscale's stderr:\n${fscaleErr}`).toBe(EXIT_STOPPED);
+    return { code, stdout };
   }
   const child = spawn(BIN, ['verify', ...args], {
     cwd: repo.root,
@@ -91,11 +101,16 @@ async function interrupted(
   started.push(child);
   let stdout = '';
   child.stdout.on('data', (chunk: Buffer) => (stdout += chunk.toString()));
-  child.stderr.resume();
+  let stderr = '';
+  child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
   const exited = new Promise<number | null>((resolve) => child.on('close', resolve));
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + READY_WAIT;
   while (!existsSync(repo.ready)) {
-    if (Date.now() > deadline) throw new Error('the test step never started');
+    if (Date.now() > deadline) {
+      throw new Error(
+        `the test step did not start within ${READY_WAIT} ms.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   child.kill('SIGINT');
@@ -106,44 +121,52 @@ const NOT_COMPARED =
   /\nNot compared with the base commit [0-9a-f]{7} \(main\): the run was stopped first, so no failure is labelled `new` or `pre-existing`, and the tamper guard did not run\. Run fscale verify again and let it finish to get both\.\n/;
 
 describe('a verify run with a base that is stopped after a step failed', () => {
-  it('says that failures were not labelled and the tamper guard did not run', async () => {
-    const repo = await stoppedRepo();
-    const { code, stdout } = await interrupted(repo, []);
-    expect(code).toBe(EXIT_STOPPED);
-    expect(stdout.split('\n')[0]).toBe(
-      'verify: STOPPED - interrupted after 2 of 3 steps ran; FAILED at lint',
-    );
-    expect(stdout).toMatch(/ {2}lint +FAILED +node lint\.js \(exit 1\)/);
-    expect(stdout).toMatch(/ {2}test +STOPPED /);
-    expect(stdout).toMatch(NOT_COMPARED);
-    // No base run was started after the interrupt.
-    expect(existsSync(path.join(repo.root, '.firescale', 'base'))).toBe(false);
-  });
+  it(
+    'says that failures were not labelled and the tamper guard did not run',
+    async () => {
+      const repo = await stoppedRepo();
+      const { code, stdout } = await interrupted(repo, []);
+      expect(code).toBe(EXIT_STOPPED);
+      expect(stdout.split('\n')[0]).toBe(
+        'verify: STOPPED - interrupted after 2 of 3 steps ran; FAILED at lint',
+      );
+      expect(stdout).toMatch(/ {2}lint +FAILED +node lint\.js \(exit 1\)/);
+      expect(stdout).toMatch(/ {2}test +STOPPED /);
+      expect(stdout).toMatch(NOT_COMPARED);
+      // No base run was started after the interrupt.
+      expect(existsSync(path.join(repo.root, '.firescale', 'base'))).toBe(false);
+    },
+    TEST_LIMIT,
+  );
 
-  it('carries the same fact in --json', async () => {
-    const repo = await stoppedRepo();
-    const { code, stdout } = await interrupted(repo, ['--json']);
-    expect(code).toBe(EXIT_STOPPED);
-    const schema: object = JSON.parse(await readFile(SCHEMA, 'utf8'));
-    const check = new Ajv({ strict: true }).compile(schema);
-    const report = JSON.parse(stdout) as {
-      result: string;
-      steps: { name: string; status: string; label?: string }[];
-      base?: { compared: boolean; reference?: string; commit?: string; reason?: string };
-      tamper?: unknown;
-    };
-    check(report);
-    expect(check.errors ?? []).toEqual([]);
-    expect(report.result).toBe('stopped');
-    const lint = report.steps.find((step) => step.name === 'lint');
-    expect(lint?.status).toBe('failed');
-    expect(lint?.label).toBeUndefined();
-    expect(report.tamper).toBeUndefined();
-    expect(report.base?.compared).toBe(false);
-    expect(report.base?.reference).toBe('main');
-    expect(report.base?.commit).toMatch(/^[0-9a-f]{40}$/);
-    expect(report.base?.reason).toBe(
-      'the run was stopped before failures were compared with the base commit and before the tamper guard ran',
-    );
-  });
+  it(
+    'carries the same fact in --json',
+    async () => {
+      const repo = await stoppedRepo();
+      const { code, stdout } = await interrupted(repo, ['--json']);
+      expect(code).toBe(EXIT_STOPPED);
+      const schema: object = JSON.parse(await readFile(SCHEMA, 'utf8'));
+      const check = new Ajv({ strict: true }).compile(schema);
+      const report = JSON.parse(stdout) as {
+        result: string;
+        steps: { name: string; status: string; label?: string }[];
+        base?: { compared: boolean; reference?: string; commit?: string; reason?: string };
+        tamper?: unknown;
+      };
+      check(report);
+      expect(check.errors ?? []).toEqual([]);
+      expect(report.result).toBe('stopped');
+      const lint = report.steps.find((step) => step.name === 'lint');
+      expect(lint?.status).toBe('failed');
+      expect(lint?.label).toBeUndefined();
+      expect(report.tamper).toBeUndefined();
+      expect(report.base?.compared).toBe(false);
+      expect(report.base?.reference).toBe('main');
+      expect(report.base?.commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(report.base?.reason).toBe(
+        'the run was stopped before failures were compared with the base commit and before the tamper guard ran',
+      );
+    },
+    TEST_LIMIT,
+  );
 });
