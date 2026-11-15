@@ -255,21 +255,27 @@ describe('the step cache', () => {
     );
     const note =
       "A setting of the firescale config that every step's result can depend on changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.";
-    // The default, written out, and a time limit: no key changes.
+    // The default, written out, and a time limit: no setting every step
+    // shares changed, so the note is not said. These steps are the repo
+    // root's own, which can read the config as a file, so they run again
+    // for its new bytes (ADR 0058, after the review); a project in a folder
+    // below the root would not (config-affects.test.ts).
     config.verify.failOnSkipped = false;
     config.verify.timeout = '2h';
     await repo.write('firescale.config.json', JSON.stringify(config));
     const unchanged = await runCli(['verify'], repo.root, {});
     expect(unchanged.stdout).not.toContain(note);
-    expect(await ran()).toHaveLength(3);
+    expect(await ran()).toHaveLength(6);
+    expect((await runCli(['verify'], repo.root, {})).stdout).not.toContain(note);
+    expect(await ran()).toHaveLength(6);
     config.verify.ci = false;
     await repo.write('firescale.config.json', JSON.stringify(config));
     const changed = await runCli(['verify'], repo.root, {});
     expect(changed.stdout.split(note)).toHaveLength(2);
-    expect(await ran()).toHaveLength(6);
+    expect(await ran()).toHaveLength(9);
     const after = await runCli(['verify'], repo.root, {});
     expect(after.stdout).not.toContain(note);
-    expect(await ran()).toHaveLength(6);
+    expect(await ran()).toHaveLength(9);
   });
 
   it('caches a step whose service the repo starts with Compose', async () => {

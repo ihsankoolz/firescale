@@ -374,6 +374,15 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// True when the scope holds the repo root's folder: the root's own
+    /// steps, a project at the root, a folder the graph cannot place and a
+    /// project that uses one of those. Its steps can read
+    /// `firescale.config.json` as a file (ADR 0058).
+    #[must_use]
+    pub fn holds_root(&self) -> bool {
+        self.folders.contains(".")
+    }
+
     fn whole_repo() -> Self {
         Self {
             folders: BTreeSet::from([".".to_owned()]),
@@ -477,11 +486,13 @@ fn owners(graph: Option<&Graph>) -> Vec<String> {
 
 /// True when the scope's key holds `path`.
 fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
-    // The JSON config is in no key as a file: the settings that can change
-    // a step's result are in its key by value (ADR 0058). A
+    // The JSON config is a file only for a unit whose folders hold the repo
+    // root, where a step may read it as one (`prettier --check .`). For
+    // every other unit the settings that can change a step's result are in
+    // its key by value, and the file is not (ADR 0058). A
     // `firescale.config.ts` is code and stays a file like any other.
     if path == crate::config::JSON_CONFIG {
-        return false;
+        return scope.holds_root();
     }
     if scope.folders.iter().any(|folder| inside(path, folder)) {
         return true;
@@ -1507,9 +1518,11 @@ impl<'a> StepCache<'a> {
         if self.key(folder, kind, step, command, dir).is_err() {
             return false;
         }
-        // The config is in the key by value, not as a file. When it differs
-        // from the base's, the step is the same only if that difference was
-        // worked out and does not reach it (ADR 0058).
+        // For a unit that does not hold the repo root, the config is in the
+        // key by value, not as a file. When it differs from the base's, the
+        // step is the same only if that difference was worked out and does
+        // not reach it (ADR 0058). A unit that holds the root has the file
+        // in its key, so the check of the changed files below answers too.
         if changed.contains(crate::config::JSON_CONFIG)
             && self
                 .base_config
@@ -2199,10 +2212,15 @@ mod tests {
     }
 
     /// A cache over `root` whose every key holds `settings` (ADR 0058).
-    fn cache_with<'a>(root: &Path, machine: &'a NoTools, settings: &'a str) -> StepCache<'a> {
+    fn cache_over<'a>(
+        root: &Path,
+        graph: Option<Graph>,
+        machine: &'a NoTools,
+        settings: &'a str,
+    ) -> StepCache<'a> {
         StepCache::new(
             root,
-            None,
+            graph,
             &CacheSettings {
                 version: "0.0.0",
                 read: true,
@@ -2214,80 +2232,154 @@ mod tests {
         )
     }
 
-    #[test]
-    fn the_json_config_is_in_no_key_as_a_file_but_its_shared_settings_are() {
-        let machine = NoTools;
-        let fixture = Fixture::new(
-            &[("a.py", "x = 1\n"), ("firescale.config.json", "{}\n")],
+    /// Two projects in folders below the root, and no project at the root.
+    fn two_projects_below_the_root() -> Fixture {
+        Fixture::new(
+            &[
+                ("api/requirements.txt", "fastapi\n"),
+                ("api/main.py", "app = None\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                ("firescale.config.json", "{}\n"),
+            ],
             Track::NoGit,
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn the_json_config_is_a_file_only_in_the_key_of_a_unit_that_holds_the_repo_root() {
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
         let root = fixture.root();
-        let key = |settings: &str| {
-            cache_with(root, &machine, settings)
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        // A project in a folder below the root, and the root's own steps.
+        let project = |settings: &str| {
+            cache_over(root, Some(graph.clone()), &machine, settings)
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let root_steps = |settings: &str| {
+            cache_over(root, Some(graph.clone()), &machine, settings)
                 .key(None, None, "test", "node -e 0", root)
                 .unwrap()
                 .key
         };
-        let first = key("one");
-        // Other bytes, the same settings: the same key, also for the repo
-        // root's own steps, whose key holds every file of the repo.
+        let (first, first_root) = (project("one"), root_steps("one"));
+        // Other bytes, the same settings: the same key for the project. The
+        // root's own steps can read the file (`prettier --check .`), so
+        // their key holds its bytes.
         fs::write(
             root.join("firescale.config.json"),
             "{ \"verify\": { \"timeout\": \"2h\" } }\n",
         )
         .unwrap();
-        assert_eq!(key("one"), first);
+        assert_eq!(project("one"), first);
+        let changed_root = root_steps("one");
+        assert_ne!(changed_root, first_root);
         fs::remove_file(root.join("firescale.config.json")).unwrap();
-        assert_eq!(key("one"), first);
-        // Other settings: another key.
-        assert_ne!(key("two"), first);
+        assert_eq!(project("one"), first);
+        assert_ne!(root_steps("one"), changed_root);
+        // Other settings: another key, for both.
+        assert_ne!(project("two"), first);
+        assert_ne!(root_steps("two"), root_steps("one"));
         // Only the root's own config: one in a folder below is a file.
         fs::create_dir_all(root.join("sub")).unwrap();
-        fs::write(root.join("sub/firescale.config.json"), "{}\n").unwrap();
-        let nested = key("one");
+        fs::write(root.join("sub").join("firescale.config.json"), "{}\n").unwrap();
+        let nested = project("one");
         assert_ne!(nested, first);
         // A TypeScript config is code: its bytes stay in every key.
         fs::write(root.join("firescale.config.ts"), "export default {};\n").unwrap();
-        let with_ts = key("one");
+        let with_ts = project("one");
         assert_ne!(with_ts, nested);
         fs::write(
             root.join("firescale.config.ts"),
             "export default { verify: { timeout: '2h' } };\n",
         )
         .unwrap();
-        assert_ne!(key("one"), with_ts);
+        assert_ne!(project("one"), with_ts);
+    }
+
+    #[test]
+    fn the_json_config_is_a_file_in_the_key_of_a_project_at_the_repo_root() {
+        let machine = NoTools;
+        let fixture = Fixture::new(
+            &[
+                ("package.json", "{\"name\":\"app\"}\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                ("firescale.config.json", "{}\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let key = |folder: &str| {
+            let dir = abs(root, folder);
+            cache_over(root, Some(graph.clone()), &machine, "")
+                .key(Some(folder), Some("node"), "lint", "node -e 0", &dir)
+                .unwrap()
+                .key
+        };
+        let (at_root, below) = (key("."), key("web"));
+        fs::write(root.join("firescale.config.json"), "{ }\n").unwrap();
+        assert_ne!(key("."), at_root);
+        assert_eq!(key("web"), below);
     }
 
     #[test]
     fn a_changed_config_is_the_same_on_the_base_only_for_steps_it_does_not_reach() {
         use crate::configkey::ConfigEffect;
         let machine = NoTools;
-        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let fixture = two_projects_below_the_root();
         let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let cache = || cache_over(root, Some(graph.clone()), &machine, "");
+        let unit = (Some("api".to_owned()), Some("python".to_owned()));
         let config: BTreeSet<String> = BTreeSet::from(["firescale.config.json".to_owned()]);
+        // A step of a project in a folder below the root.
         let same = |cache: &StepCache<'_>, step: &str, changed: &BTreeSet<String>| {
-            cache.same_on_base(None, None, step, "node -e 0", root, changed)
+            cache.same_on_base(
+                Some("api"),
+                Some("python"),
+                step,
+                "node -e 0",
+                &api,
+                changed,
+            )
+        };
+        // A step of the repo root's own.
+        let same_at_root = |cache: &StepCache<'_>, changed: &BTreeSet<String>| {
+            cache.same_on_base(None, None, "test", "node -e 0", root, changed)
         };
         // Not worked out: a changed config is a difference, as before.
-        let unknown = cache_with(root, &machine, "");
+        let unknown = cache();
         assert!(same(&unknown, "test", &BTreeSet::new()));
         assert!(!same(&unknown, "test", &config));
         // Worked out, and it reaches nothing: the same.
-        let nothing = cache_with(root, &machine, "").with_base_config(ConfigEffect::default());
+        let nothing = cache().with_base_config(ConfigEffect::default());
         assert!(same(&nothing, "test", &config));
+        // Not for the root's own steps: the config is a file of their key,
+        // so a change of its bytes reaches them whatever the settings say.
+        assert!(same_at_root(&nothing, &BTreeSet::new()));
+        assert!(!same_at_root(&nothing, &config));
         // Another changed file the key holds is still a difference.
         let mut more = config.clone();
-        more.insert("a.py".to_owned());
+        more.insert("api/main.py".to_owned());
         assert!(!same(&nothing, "test", &more));
         // It reaches one step: only the others are the same.
         let mut effect = ConfigEffect::default();
-        effect.units.insert((None, None), vec!["test".to_owned()]);
-        let one = cache_with(root, &machine, "").with_base_config(effect);
+        effect.units.insert(unit, vec!["test".to_owned()]);
+        let one = cache().with_base_config(effect);
         assert!(!same(&one, "test", &config));
         assert!(same(&one, "lint", &config));
         // It reaches every step.
-        let all = cache_with(root, &machine, "").with_base_config(ConfigEffect {
+        let all = cache().with_base_config(ConfigEffect {
             everything: Some("verify.ci".to_owned()),
             ..ConfigEffect::default()
         });

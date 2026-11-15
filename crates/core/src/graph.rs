@@ -1706,10 +1706,12 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
     affected_except(graph, changed, &[])
 }
 
-/// [`affected`], leaving `settled` out of the walk: changed files whose
-/// effect the caller works out itself. `verify --affected` does so for
-/// `firescale.config.json`, which it compares setting by setting
-/// ([`crate::configkey`], ADR 0058). They still count as changed files.
+/// [`affected`], with each `settled` file taken as a file of the repo
+/// root's project only, when there is one: it never affects every project
+/// and is never inert. `verify --affected` does so for
+/// `firescale.config.json`, whose settings it compares one by one
+/// ([`crate::configkey`], ADR 0058); as a file, only a step whose key holds
+/// the repo root can read it. They still count as changed files.
 #[must_use]
 pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Affected {
     let files = match changed {
@@ -1742,6 +1744,9 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
     let mut everything: Option<String> = None;
     for file in files {
         if settled.contains(&file.as_str()) {
+            for root in projects.iter().filter(|node| node.path == ".") {
+                direct.entry(root.id.clone()).or_default().push(file);
+            }
             continue;
         }
         if let Some(reason) = widening_reason(file) {
@@ -2239,6 +2244,56 @@ mod tests {
         );
         let set = affected(&graph, &changed(&["image.png", "deploy.sh"]));
         assert!(set.everything.is_some());
+    }
+
+    /// A file whose effect the caller works out itself (the firescale
+    /// config, ADR 0058) is a changed file of the project at the repo root,
+    /// whose steps can read it, and of no project below.
+    #[test]
+    fn a_settled_file_is_a_changed_file_of_the_root_project_only() {
+        let config = "firescale.config.json";
+        let walk = |graph: &Graph, files: &[&str]| {
+            let set = affected_except(graph, &changed(files), &[config]);
+            let projects: Vec<String> = graph
+                .nodes
+                .iter()
+                .filter(|node| node.node_type == NodeType::Project && set.contains(&node.id))
+                .map(|node| node.path.clone())
+                .collect();
+            (set, projects)
+        };
+        // No project at the root: it reaches nothing, and is not inert.
+        let below = fixture(&[
+            ("web/package.json", r#"{"name":"web"}"#),
+            ("api/requirements.txt", "fastapi\n"),
+            ("api/main.py", "app = None\n"),
+        ]);
+        let graph = graph_of(&below);
+        let (set, projects) = walk(&graph, &[config]);
+        assert!(set.is_empty(), "{set:?}");
+        assert!(projects.is_empty());
+        assert!(set.inert_files.is_empty());
+        assert_eq!(set.changed_files, 1);
+        // Left to the usual walk, it runs every project.
+        assert!(affected(&graph, &changed(&[config])).everything.is_some());
+        // A project at the root: the file is that project's.
+        let with_root = fixture(&[
+            (
+                "package.json",
+                r#"{"name":"root","scripts":{"lint":"node l.js"}}"#,
+            ),
+            ("web/package.json", r#"{"name":"web"}"#),
+        ]);
+        let graph = graph_of(&with_root);
+        let (set, projects) = walk(&graph, &[config]);
+        assert!(set.everything.is_none(), "{set:?}");
+        assert_eq!(projects, ["."]);
+        assert_eq!(
+            set.reason("node:.").as_deref(),
+            Some("changed: firescale.config.json")
+        );
+        let (_, projects) = walk(&graph, &[config, "web/a.ts"]);
+        assert_eq!(projects, [".", "web"]);
     }
 
     /// The owner's report (ADR 0058): an untracked `image.png` was not named

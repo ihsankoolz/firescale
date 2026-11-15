@@ -356,21 +356,33 @@ describe('the note that names inert files', () => {
 // Why a time limit is in no key (ADR 0058): a step it stops is never kept,
 // and a pass kept under another limit is still true of the code.
 describe('time limits and the step cache', () => {
+  // The slow test belongs to a project in a folder below the root: the key
+  // of a step at the root holds the config's bytes, so every edit of a
+  // limit would run it again (see "a step that can read the config as a
+  // file" below).
   it('never keeps a step that a limit stopped, and serves a kept pass after the limit is lowered', async () => {
     const repo = await fixtures.create({
-      files: { 'slow.js': "setTimeout(() => console.log('done'), 2000);\n" },
+      files: {
+        'app/package.json': `${JSON.stringify({ name: 'app', private: true })}\n`,
+        'app/slow.js': "setTimeout(() => console.log('done'), 2000);\n",
+      },
     });
     const limits = (limit: Record<string, string>) =>
       repo.write(
         'firescale.config.json',
         JSON.stringify({
-          verify: { lint: false, typecheck: false, test: 'node slow.js', ...limit },
+          verify: {
+            lint: false,
+            typecheck: false,
+            projects: { app: { test: 'node slow.js' } },
+            ...limit,
+          },
         }),
       );
     for (const limit of ['timeout', 'idleTimeout']) {
       await limits({ [limit]: '1s' });
       const stopped = await runCli(['verify'], repo.root, {});
-      expect(stopped.stdout).toMatch(/ {2}test +TIMED OUT /);
+      expect(stopped.stdout).toMatch(/^ {4}test +TIMED OUT /m);
       expect(stopped.stdout).not.toContain('from the cache');
     }
     // A longer limit: the step was not kept as anything, so it runs.
@@ -475,5 +487,34 @@ describe('a step that can read the config as a file', () => {
     expect(affected.stdout).toContain(
       "  the repo root's own steps: firescale.config.json changed, and these steps can read every file of the repo, the config among them",
     );
+  });
+
+  // The rule's two sides in one repo: the root project can read the file,
+  // the project in a folder below it cannot.
+  it("runs the root project, and no project below it, for a change of the config's bytes only", async () => {
+    const { repo, verify } = await branchRepo({
+      'package.json': `${JSON.stringify({ name: 'app', private: true, scripts: { lint: 'node lint.js' } })}\n`,
+      'web/package.json': `${JSON.stringify({ name: 'web', private: true, scripts: { lint: 'node check.js' } })}\n`,
+      'web/check.js': "console.log('ok');\n",
+    });
+    const first = await verify();
+    expect(first.stdout).toMatch(/^ {2}lint +passed /m);
+    expect(first.stdout).toMatch(/^ {4}lint +passed /m);
+
+    // Only a time limit, well formatted: the root's lint still passes.
+    await repo.write('firescale.config.json', '{ "verify": { "timeout": "2h" } }\n');
+    const full = await verify();
+    // The root project's lint ran again; the one below was served.
+    expect(full.stdout).toMatch(/^ {2}lint +passed /m);
+    expect(full.stdout).toMatch(/^ {4}lint +cached /m);
+
+    await repo.write('firescale.config.json', '{"verify":{"timeout":"2h"}}\n');
+    const affected = await verify('--affected');
+    expect(affected.stdout).toContain('1 of 2 projects ran, 1 not affected');
+    expect(affected.stdout).toContain(
+      "  the repo root's own steps: changed: firescale.config.json",
+    );
+    expect(affected.stdout).toContain('  in web: not affected');
+    expect(affected.stdout).not.toContain('runs no project');
   });
 });

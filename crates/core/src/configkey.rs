@@ -15,6 +15,12 @@
 //! A setting this version does not know is on the "every step" side: the
 //! other settings are made by taking out what is known ([`other_settings`]),
 //! and a base config that cannot be read affects every project.
+//!
+//! This holds for a step whose key does not hold the repo root. A step that
+//! runs where the config is (the root's own steps, a project at the root)
+//! can read it as a file, so for such a step the config stays a file too:
+//! its bytes are in the key ([`crate::stepcache::Scope::holds_root`]) and a
+//! change of them runs the step's unit ([`mark_file_readers`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -24,6 +30,8 @@ use serde_json::{Map, Value};
 use crate::config::{verify_settings, JSON_CONFIG, TS_CONFIG};
 use crate::facts::RepoFacts;
 use crate::git::run_git;
+use crate::graph::Graph;
+use crate::stepcache::unit_scope;
 use crate::verify::{plan_verify, Planned, ProjectPlan, VerifyConfig, VerifyPlan};
 
 /// The top-level keys that are in no step's key: `$schema` (only editors
@@ -303,8 +311,41 @@ impl ConfigEffect {
 }
 
 /// The note of an affected run whose config changed in nothing that can
-/// change a step's result.
+/// change a step's result, when no unit of the plan can read the config as
+/// a file ([`mark_file_readers`]).
 pub const NOTHING_TO_RUN_NOTE: &str = "firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs no project.";
+
+/// The reason of a unit that runs only because its steps can read the
+/// changed config as a file.
+pub const READ_AS_A_FILE_REASON: &str = "firescale.config.json changed, and these steps can read every file of the repo, the config among them";
+
+/// Marks the units of an affected plan whose steps can read a changed
+/// `firescale.config.json` as a file and that nothing else already runs:
+/// those whose key holds the repo root
+/// ([`crate::stepcache::Scope::holds_root`]: the root's
+/// own steps, a project at the root, a folder the graph cannot place, a
+/// project that uses one of those). For them a change of the file's bytes
+/// is a change, whatever its settings say (ADR 0058). Returns true when
+/// the plan has such a unit, marked here or before.
+pub fn mark_file_readers(plan: &mut VerifyPlan, graph: &Graph) -> bool {
+    let Some(affected) = plan.affected.as_mut() else {
+        return false;
+    };
+    let mut any = false;
+    for unit in &mut affected.units {
+        let reads = unit_scope(Some(graph), unit.project.as_deref(), unit.kind.as_deref())
+            .is_ok_and(|scope| scope.holds_root());
+        if !reads {
+            continue;
+        }
+        any = true;
+        if !unit.affected {
+            unit.affected = true;
+            READ_AS_A_FILE_REASON.clone_into(&mut unit.reason);
+        }
+    }
+    any
+}
 
 /// The steps of `now` that the config change reaches: one with a command
 /// that it did not have, with that exact text, in `before`, and one that
@@ -415,7 +456,8 @@ pub fn effect_since(
 /// measured from the commit the run compares with. `None` when the config
 /// is not among the changed files, or when that commit is not known: then
 /// the config counts as a changed file like any other, and affects every
-/// project ([`crate::graph::widening_reason`]).
+/// project ([`crate::graph::widening_reason`]). The units that can read the
+/// config as a file are not in the answer: [`mark_file_readers`] marks them.
 #[must_use]
 pub fn effect_for_affected(
     root: &Path,
@@ -999,6 +1041,80 @@ mod tests {
                 "{reason}"
             );
         }
+    }
+
+    /// After the review: a step whose key holds the repo root can read the
+    /// config as a file, so a change of its bytes runs that step's unit.
+    #[test]
+    fn the_units_that_can_read_the_config_as_a_file_are_marked() {
+        use crate::graph::build_graph;
+        use crate::testing::{Fixture, Track};
+        use crate::verify::{AffectedPlan, AffectedUnit};
+        let unit = |project: Option<&str>, kind: Option<&str>, affected: bool| AffectedUnit {
+            project: project.map(str::to_owned),
+            kind: kind.map(str::to_owned),
+            affected,
+            reason: "before".to_owned(),
+        };
+        let plan_of = |units: Vec<AffectedUnit>| VerifyPlan {
+            affected: Some(AffectedPlan {
+                units,
+                ..AffectedPlan::default()
+            }),
+            ..VerifyPlan::default()
+        };
+        let marked = |plan: VerifyPlan| -> Vec<(bool, String)> {
+            plan.affected
+                .map(|affected| affected.units)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|unit| (unit.affected, unit.reason))
+                .collect()
+        };
+        let fixture = Fixture::new(
+            &[
+                ("package.json", "{\"name\":\"app\"}\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                ("api/requirements.txt", "fastapi\n"),
+                ("api/main.py", "app = None\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let facts = detect_facts(fixture.root()).unwrap();
+        let graph = build_graph(fixture.root(), &facts);
+
+        // Only projects in folders below the root: none can read it.
+        let mut plan = plan_of(vec![
+            unit(Some("web"), Some("node"), false),
+            unit(Some("api"), Some("python"), false),
+        ]);
+        assert!(!mark_file_readers(&mut plan, &graph));
+        assert_eq!(
+            marked(plan),
+            [(false, "before".to_owned()), (false, "before".to_owned())]
+        );
+
+        // The root's own steps, a project at the root and a folder only
+        // named in the config can; one that already runs keeps its reason.
+        let mut plan = plan_of(vec![
+            unit(None, None, false),
+            unit(Some("."), Some("node"), true),
+            unit(Some("tools"), None, false),
+            unit(Some("web"), Some("node"), false),
+        ]);
+        assert!(mark_file_readers(&mut plan, &graph));
+        assert_eq!(
+            marked(plan),
+            [
+                (true, READ_AS_A_FILE_REASON.to_owned()),
+                (true, "before".to_owned()),
+                (true, READ_AS_A_FILE_REASON.to_owned()),
+                (false, "before".to_owned()),
+            ]
+        );
+        // A plan that is not an affected one has no unit to mark.
+        assert!(!mark_file_readers(&mut VerifyPlan::default(), &graph));
     }
 
     #[test]

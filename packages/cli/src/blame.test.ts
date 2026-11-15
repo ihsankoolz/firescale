@@ -212,39 +212,74 @@ describe('blame-aware verify', () => {
     expect(step(third, 'test').base?.source).toBe('ran');
   });
 
-  // ADR 0058: the config is compared with the base's by value. The base
-  // run executes the head's settings, so a step whose settings did not
-  // change has the same inputs on both.
+  // ADR 0058: for a project in a folder below the root, the config is
+  // compared with the base's by value. The base run executes the head's
+  // settings, so a step whose settings did not change has the same inputs
+  // on both. (The failing test is a project's, not the root's own: a step
+  // at the root can read the config as a file; see the next test.)
   it('counts a step as the same on the base after a config change that cannot reach it, and runs the base after one that can', async () => {
-    const { root, runs, write } = await blameRepo('ok', 'fail');
-    const baseRuns = async () => (await runs()).filter((run) => run.startsWith('base '));
-    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    const outside = await fixtures.create({ files: {}, track: 'no-git' });
+    const log = path.join(outside.root, 'runs.log');
+    const settings = (test: unknown, verify: Record<string, unknown> = {}) =>
+      JSON.stringify({
+        packs: ['core'],
+        verify: { lint: false, typecheck: false, projects: { svc: { test } }, ...verify },
+      });
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': settings('node test.js'),
+        '.gitignore': '.firescale/\n',
+        'svc/package.json': '{"name":"svc","private":true}\n',
+        'svc/test.js': stepScript('test', 'test.txt', log),
+        'svc/test.txt': 'fail\n',
+      },
+      track: 'no-git',
+    });
+    const root = repo.root;
+    expect((await runGit(root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+    await commitAll(root, 'base');
+    expect((await runGit(root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    const baseRuns = async (): Promise<string[]> =>
+      (await readFile(log, 'utf8').catch(() => ''))
+        .split(/\r?\n/)
+        .filter((run) => run.startsWith('base '));
+    const verify = async () => report((await runCli(['verify', '--json'], root)).stdout);
+
     // Only time limits and a budget differ from the base commit.
-    config.verify.timeout = '2h';
-    config.verify.baseBudget = '4m';
-    config.verify.test = { command: 'node test.js', timeout: '3h' };
-    await write('firescale.config.json', JSON.stringify(config));
-    const limits = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect(step(limits, 'test').label).toBe('pre-existing');
-    expect(step(limits, 'test').base?.source).toBe('same-inputs');
+    await repo.write(
+      'firescale.config.json',
+      settings({ command: 'node test.js', timeout: '3h' }, { timeout: '2h', baseBudget: '4m' }),
+    );
+    const limits = await verify();
+    expect(step(limits, 'test', 'svc').label).toBe('pre-existing');
+    expect(step(limits, 'test', 'svc').base?.source).toBe('same-inputs');
     expect(await baseRuns()).toEqual([]);
 
     // A setting every step shares differs: the base runs, as it did
     // before for any config change.
-    config.verify.stopAfterErrors = 25;
-    await write('firescale.config.json', JSON.stringify(config));
-    const shared = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect(step(shared, 'test').base?.source).toBe('ran');
+    await repo.write('firescale.config.json', settings('node test.js', { stopAfterErrors: 25 }));
+    const shared = await verify();
+    expect(step(shared, 'test', 'svc').base?.source).toBe('ran');
     expect(await baseRuns()).toEqual(['base test']);
 
-    // The step's own command differs: its base runs; lint, which the
-    // change does not reach, would still be the same.
-    delete config.verify.stopAfterErrors;
-    config.verify.test = 'node  test.js';
-    await write('firescale.config.json', JSON.stringify(config));
-    const command = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect(step(command, 'test').base?.source).toBe('ran');
+    // The step's own command differs: its base runs.
+    await repo.write('firescale.config.json', settings('node  test.js'));
+    const command = await verify();
+    expect(step(command, 'test', 'svc').base?.source).toBe('ran');
     expect(await baseRuns()).toEqual(['base test', 'base test']);
+  });
+
+  // After the review of ADR 0058: the repo root's own steps can read the
+  // config as a file, so a change of its bytes reaches them.
+  it("runs the base for a step of the repo root's own after a change of the config's bytes only", async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.timeout = '2h';
+    await write('firescale.config.json', JSON.stringify(config));
+    const limits = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(limits, 'test').label).toBe('pre-existing');
+    expect(step(limits, 'test').base?.source).toBe('ran');
+    expect((await runs()).filter((run) => run.startsWith('base '))).toEqual(['base test']);
   });
 
   it("does not judge the base with the head's dependencies after a lockfile change", async () => {

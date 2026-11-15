@@ -1092,7 +1092,10 @@ fn verify_plan(
     limit_to_affected(&mut plan, facts, &graph, &set, base);
     if let Some(effect) = &config_effect {
         effect.mark(&mut plan);
-        if effect.is_empty() {
+        // As a file, the config reaches only the units whose key holds the
+        // repo root, where a step can read it (`prettier --check .`).
+        let read_as_a_file = configkey::mark_file_readers(&mut plan, &graph);
+        if effect.is_empty() && !read_as_a_file {
             notes.push(configkey::NOTHING_TO_RUN_NOTE.to_owned());
         }
     }
