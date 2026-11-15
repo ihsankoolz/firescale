@@ -583,8 +583,8 @@ describe('a step that can read the config as a file', () => {
       await repo.write('firescale.config.json', NOT_FORMATTED);
       const full = await verify();
       expect(full.stdout).not.toContain('from the cache');
-      // New: the base commit has no copy of an ignored config.
-      expect(full.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+      // (Git sees no change from the base commit, so no label: it blocks.)
+      expect(full.headline).toBe('verify: FAILED at lint');
     });
 
     /**
