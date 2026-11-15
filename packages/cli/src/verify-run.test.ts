@@ -247,6 +247,13 @@ describe('stopping verify stops every process it started', () => {
       expect(stdout).not.toContain('FAILED');
       expect(stdout).toContain('Stopped: verify was interrupted');
       expect(await readFile(`${output}.err`, 'utf8')).toContain('[verify] test: STOPPED after');
+      // How long the stopped step ran is kept for the next run (ADR 0057).
+      const times = JSON.parse(
+        await readFile(path.join(repo.root, '.firescale', 'step-times.json'), 'utf8'),
+      ) as { steps: { step: string; finished: boolean; durationMs: number }[] };
+      const kept = times.steps.find((record) => record.step === 'test');
+      expect(kept?.finished).toBe(false);
+      expect(kept?.durationMs).toBeGreaterThan(0);
       await expectTreeGone(pids, 3);
     },
   );
