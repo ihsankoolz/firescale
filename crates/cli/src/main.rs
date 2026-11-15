@@ -50,8 +50,8 @@ use firescale_core::tamper;
 use firescale_core::verify::add_tamper;
 use firescale_core::verify::{
     check_project_folders, format_verify_human, format_verify_json, format_verify_plan,
-    limit_to_affected, plan_verify, run_verify_with, CheckStep, RunOptions, VerifyPlan,
-    VerifyReport, VerifyResult, TAIL_LINES,
+    limit_to_affected, plan_verify, run_verify_with, stopped_in_check, CheckStep, RunOptions,
+    VerifyPlan, VerifyReport, VerifyResult, STOPPED_IN_CHECK, TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -1211,6 +1211,15 @@ enum VerifyMode {
     Hook,
 }
 
+/// The command that repeats verify's check step.
+fn check_command(args: &Args) -> String {
+    match (&args.affected, &args.base) {
+        (true, Some(base)) => format!("fscale check --affected --base {base}"),
+        (true, None) => "fscale check --affected".to_owned(),
+        (false, _) => "fscale check".to_owned(),
+    }
+}
+
 fn verify_report(
     root: &Path,
     args: &Args,
@@ -1256,11 +1265,7 @@ fn verify_report(
     let selection = select_rules(config.rules, None)?;
     // The command that repeats the check: with --base when the run used
     // one, so it reports what this run reported.
-    let check_command = match (&args.affected, &args.base) {
-        (true, Some(base)) => format!("fscale check --affected --base {base}"),
-        (true, None) => "fscale check --affected".to_owned(),
-        (false, _) => "fscale check".to_owned(),
-    };
+    let check_command = check_command(args);
     let check_command = check_command.as_str();
     say(&format!("check: started: {check_command}"));
     let started = Instant::now();
@@ -1701,16 +1706,22 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let progress = args
         .progress
         .unwrap_or_else(|| std::io::stderr().is_terminal());
+    let started = Instant::now();
     let (report, notes) = match verify_report(root, args, progress, VerifyMode::Full) {
         Ok(done) => done,
         // Ctrl+C during the check also reaches the Node host and git, which
-        // then fail: that is a stop, not an error.
+        // then fail: that is a stop, not an error. `--json` still prints a
+        // report, so a script that reads it never gets an empty document.
         Err(error) if STOP.load(std::sync::atomic::Ordering::SeqCst) => {
             return Ok(Output {
                 stdout: if args.json {
-                    String::new()
+                    format_verify_json(&stopped_in_check(
+                        version(),
+                        &check_command(args),
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    ))
                 } else {
-                    "verify: STOPPED - interrupted before the check finished\n".to_owned()
+                    format!("verify: STOPPED - {STOPPED_IN_CHECK}\n")
                 },
                 notes: vec![format!(
                     "fscale: verify was stopped before the check finished ({}). Run fscale verify again to check the repo.",

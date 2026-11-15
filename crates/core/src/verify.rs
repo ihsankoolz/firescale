@@ -3183,6 +3183,66 @@ pub fn run_verify_with(
     Ok(report)
 }
 
+/// What the `check` step of [`stopped_in_check`] says in `detail`.
+pub const STOPPED_IN_CHECK: &str = "interrupted before the check finished";
+
+/// The report of a run that was stopped (Ctrl+C or a termination signal)
+/// while the `check` step ran: `stopped`, with that one step, also
+/// `stopped`. No command was chosen yet, so `runner` is `none`, no other
+/// step is listed, and `scope` is `all` whatever the run was asked for.
+/// `command` is the check command; `duration_ms` is how long the run lasted.
+#[must_use]
+pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> VerifyReport {
+    let mut report = VerifyReport {
+        schema_version: VERIFY_SCHEMA_VERSION,
+        version: version.to_owned(),
+        ok: false,
+        result: VerifyResult::Stopped,
+        runner: "none".to_owned(),
+        steps_total: 1,
+        steps_run: 0,
+        fail_on_skipped: false,
+        failed_step: None,
+        failed_project: None,
+        rerun: None,
+        steps: vec![StepReport {
+            name: "check".to_owned(),
+            project: None,
+            kind: None,
+            status: StepStatus::Stopped,
+            command: Some(command.to_owned()),
+            exit_code: None,
+            duration_ms,
+            detail: STOPPED_IN_CHECK.to_owned(),
+            output_tail: Vec::new(),
+            fix: None,
+            timeout_ms: None,
+            timeout_key: None,
+            tests: None,
+            first_error: Vec::new(),
+            cache: None,
+            label: None,
+            base: None,
+            signature: Vec::new(),
+            failed_tests: Vec::new(),
+            test_results: None,
+            output_digest: None,
+            not_cached: None,
+            estimate: None,
+        }],
+        skipped: Vec::new(),
+        warnings: Vec::new(),
+        notes: Vec::new(),
+        scope: Scope::All,
+        affected: None,
+        cache: None,
+        base: None,
+        tamper: None,
+    };
+    settle(&mut report, true);
+    report
+}
+
 /// True for a step whose failure blocks: failed, needs setup or timed out,
 /// and not labelled `pre-existing` or `flaky` (ADR 0037).
 fn blocking(step: &StepReport) -> bool {
@@ -5706,6 +5766,43 @@ mod tests {
         );
         assert!(
             text.contains("\nFix the failure, then run again in b: "),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_run_stopped_in_the_check_is_a_report_with_one_stopped_step() {
+        let report = stopped_in_check("1.2.3", "fscale check --affected", 40);
+        assert_eq!(
+            format_verify_json(&report),
+            format!(
+                r#"{{
+  "schemaVersion": {VERIFY_SCHEMA_VERSION},
+  "version": "1.2.3",
+  "ok": false,
+  "result": "stopped",
+  "runner": "none",
+  "stepsTotal": 1,
+  "stepsRun": 0,
+  "failOnSkipped": false,
+  "steps": [
+    {{
+      "name": "check",
+      "status": "stopped",
+      "command": "fscale check --affected",
+      "durationMs": 40,
+      "detail": "interrupted before the check finished"
+    }}
+  ],
+  "skipped": [],
+  "scope": "all"
+}}
+"#
+            )
+        );
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with("verify: STOPPED - interrupted after 0 of 1 step ran\n"),
             "{text}"
         );
     }
