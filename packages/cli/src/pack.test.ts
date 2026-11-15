@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -142,6 +142,25 @@ describe('npm packaging', () => {
       'schemas/verify-output.schema.json',
     ]) {
       expect(await exists(path.join(extracted['firescale'] ?? '', file)), file).toBe(true);
+    }
+  });
+
+  it('ships no test-only file in the firescale or sdk package', async () => {
+    // A test, a snapshot, a test helper or a fixture builder: `course-fixture`
+    // is the fixture repo the CLI's own tests build. `dist/testing.js` of the
+    // sdk is not one of these: it is the public `@firescale/sdk/testing`.
+    const testOnly =
+      /(^|\/)(course-fixture|test-helpers)\.|\.test\.|\.snap$|(^|\/)(__snapshots__|__fixtures__|fixtures?|test-fixtures|testdata)(\/|$)/;
+    for (const kind of ['firescale', 'sdk'] as const) {
+      const root = extracted[kind] ?? '';
+      const files = (await readdir(root, { recursive: true })).map((file) =>
+        file.split(path.sep).join('/'),
+      );
+      expect(files).toContain('dist/index.js');
+      expect(
+        files.filter((file) => testOnly.test(file)),
+        kind,
+      ).toEqual([]);
     }
   });
 
