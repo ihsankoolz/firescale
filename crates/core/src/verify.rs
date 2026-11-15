@@ -4053,12 +4053,15 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         let place = step.project.as_ref().map_or_else(String::new, |project| {
             format!(" in {}", place_name(project))
         });
+        // Running the command by hand leaves the kept time as it is, so the
+        // paragraph says what does change it (ADR 0057).
         out.push_str(&format!(
-            "\nNot run: {} was not started, because {} and the budget is {} (--budget). This run says nothing about it. To run it{place}: {}, or run fscale verify without --budget.\n",
+            "\nNot run: {} was not started, because {} and the budget is {} (--budget). This run says nothing about it. To run it{place}: {}. Its kept time comes down only when it passes in a run of fscale verify without --budget; running the command by hand changes nothing. To forget every kept time, delete .firescale/{}.\n",
             step_place(step),
             known.describe(),
             format_limit(Duration::from_millis(report.budget_ms.unwrap_or_default())),
-            step.command.as_deref().unwrap_or_default()
+            step.command.as_deref().unwrap_or_default(),
+            crate::steptimes::STEP_TIMES_FILE
         ));
     }
     if report.result == VerifyResult::Stopped {
