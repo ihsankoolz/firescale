@@ -1092,7 +1092,8 @@ pub struct VerifyReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget_ms: Option<u64>,
     /// Every step that was not started because it is known to take longer
-    /// than the budget. A run with one is never `ok`.
+    /// than the budget. The `result` of a run with one is never `ok`: it is
+    /// `partial` at best, though `ok` (the exit code is 0) is then true.
     pub not_run: Vec<NotRunStep>,
     /// Things the user should know that are not failures: steps that were
     /// skipped because no command was found.

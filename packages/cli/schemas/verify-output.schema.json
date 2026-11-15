@@ -311,7 +311,7 @@
       "minimum": 1
     },
     "notRun": {
-      "description": "Every step that was not started because it is known to take longer than --budget; its status in steps is over-budget. The count of such steps is the length of this list. Empty without --budget. A run with one is never ok: its result is partial, or failed.",
+      "description": "Every step that was not started because it is known to take longer than --budget; its status in steps is over-budget. The count of such steps is the length of this list. Empty without --budget. The result of a run with one is never ok: it is partial, or failed. The ok field is still true for a partial run, whose exit code is 0: read result.",
       "type": "array",
       "items": {
         "type": "object",
