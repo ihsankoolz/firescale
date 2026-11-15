@@ -350,6 +350,55 @@ A second reviewer confirmed both earlier fixes (findings 1 and 2) for a tracked 
 
 - Nothing. Both reports and both review findings were reproduced.
 
+**Pull request 5: version 0.5.1**
+
+- The version is 0.5.1 in `Cargo.toml`, `Cargo.lock` and every `package.json` (`node scripts/bump-version.mjs 0.5.1`; `--check` passes). **No tag was pushed.** `RELEASING.md` says how you do that.
+- One snapshot holds the version and changed with it: the `tamper-guard.yml` that `fscale adopt` writes pins `npx --yes firescale@0.5.1`, and its content mark changed with that line (scaffold.test.ts.snap, two lines, as in the 0.5.0 release). The bump script does not touch snapshots; CI found it.
+- **After the review** (a fresh reader checked every line of the list below against the code and the real output): eight lines of the list said more than the code does, and were corrected before the merge. The larger ones: a `protectedPaths` error stops `check`, `fix`, `verify`, `explain` and `sync`, not every command; a slow step is announced only when it really runs, not when it is taken from the cache; and line 8 comes with pull request 6.
+- `AGENTS.md`'s command list names `fscale verify --budget <time>`.
+- `docs/verify.md` already had the budget, the warning for a slow step and the config rule, from pull requests 1 and 2. It was searched for lines the three pull requests had left untrue; none was found there. One was found and corrected in `docs/affected.md`, which still said that the firescale config affects every project.
+- `HANDOFF.md` and `PLAN.md` say where things stand. The working notes of the paused run (`docs/wip-0.5.1` on the branch `claude/quirky-cannon-20uxi6`) never reached `main`, so there was no folder and no `.prettierignore` line to delete.
+
+## 0.5.1 on the course project: what you should see change
+
+Compared with 0.5.0. Each line was checked against the code at 0.5.1 and, where it was cheap, against the real output in a small fixture; nothing here was run on the course project. Line 8 is the one exception: it comes with the small fixes of pull request 6. Run each command in the course project's root, on your own machine (not in CI). The list is ordered by what you are most likely to notice first.
+
+1. **The first run runs every step again, once.** The version and the new cache format are part of every key.
+   - `fscale verify`
+2. **Your untracked `firescale.config.json` with only the two test timeouts runs nothing.** Expect `verify: OK (affected only) - 0 of 6 projects ran, 6 not affected` and the note `firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs no project.` A full run afterwards takes every pass from the cache.
+   - `fscale verify --affected`
+   - If the file is in `.gitignore` and nothing else is changed, git sees no change at all, so name a base: `fscale verify --affected --base HEAD`. The headline is the same; the note is not printed.
+3. **The untracked `image.png` is named as a file that runs nothing**, also when another changed file runs every project (`note: 1 changed file (image.png) belongs to no project ...`).
+   - `fscale verify --affected`
+4. **Each step's time is kept.** After a full run there is a `.firescale/step-times.json` with one record for each lint, typecheck and test step that ran. The check has no record.
+   - `fscale verify`, then open `.firescale/step-times.json`
+5. **A slow step is announced before it starts.** The next time a step that took over 5 minutes really runs (its files changed, it failed or was stopped the last time, or with `--no-cache`), it prints `[verify] test in backend/<service>: slow step: it took 1h 40m when it last ran. To leave out steps this slow, run fscale verify --budget <time>` on stderr. A step taken from the cache prints no such line.
+   - `fscale verify --progress --no-cache`
+6. **A stopped run leaves its time.** Stop a run with Ctrl+C after a step has run for more than 5 minutes. The next run says `slow step: it ran at least <time> when it last ran and did not finish` for that step. A step stopped sooner leaves its time too, but nothing is printed for it.
+   - `fscale verify --progress`, Ctrl+C, then `fscale verify --progress` again
+7. **A budget leaves the slow steps out.** Expect a headline such as `verify: PARTIAL - 6 of 7 steps ran, 1 not run (over the --budget of 30m)` (it can also count steps taken from the cache), the step as `NOT RUN`, a `Not run:` paragraph that says how its kept time comes down, and exit code 0. It never reads `OK`. A step is left out only when it has a kept time over the budget and no pass in the step cache.
+   - `fscale verify --budget 30m`
+8. **A dry run shows what a budget would leave out. Not in 0.5.1 as pull request 5 leaves it: it comes with pull request 6 (ADR 0061).** Until then this command prints the plain plan. After it: `With --budget 30m, 1 step would not be run:` and the step with its kept time.
+   - `fscale verify --dry-run --budget 30m`
+9. **The heartbeat is calmer.** A running step prints a line each minute for ten minutes, then one every five minutes.
+   - `fscale verify --progress`
+10. **The time left no longer swings.** While one slow pytest file holds the percent, the time left falls with the clock (2h 00m, 1h 53m, 1h 43m), where 0.5.0 gave 2h 00m, 3h 12m, 1h 43m. A step stopped for printing nothing gives only its percent.
+    - `fscale verify --progress`
+11. **A stopped run says that nothing was labelled.** With a base, after Ctrl+C: `Not compared with the base commit <commit> (<branch>): the run was stopped first, so no failure is labelled ...`. With `--json` the report has `base.compared: false`.
+    - `fscale verify`, then Ctrl+C after the first failure
+12. **Doctor finds the root `.env`.** A variable listed in `backend/<service>/.env.example` and set in the root `.env` is `ok`, with the file it was found in. No value is printed.
+    - `fscale doctor`
+13. **`verify --json` is schema version 7.** New: `notRun` (always there, `[]` when no step was left out), `budgetMs`, the step status `over-budget`, and `lastKnownMs` and `lastKnownFinished` on such a step. A script that checks `schemaVersion` needs 7.
+    - `fscale verify --json`
+14. **`hooks install --all` tries every agent's file** and lists each as `installed`, `already installed` or `refused`; exit 2 when one was refused. Your hand-made `.claude/settings.json` is added to or refused, never rewritten.
+    - `fscale hooks install --all`
+15. **A `protectedPaths` entry that can match no path is a config error.** If your config has `./infra/**`, `/infra/**`, `infra/` or the bare name of a folder that exists, then `check`, `fix`, `verify`, `explain` and `sync` stop with exit 2 and the form to write (`infra/**`). `facts`, `doctor`, `graph` and `verify --dry-run` do not read that setting and run as before.
+    - `fscale check`
+16. **New in `fscale --help`:** `--budget <time>`.
+    - `fscale --help`
+
+Probably not seen in this run: a linked `.firescale` (refused, caches off); two verify runs at once keeping each other's step times; `--budget` refused in CI and in the stop hook; the eleven tamper kinds in the shipped schema; the rule for a config change at the repo root (your six projects are below the root, and nothing runs at the root).
+
 ## Audit bug fixes (run of 2026-11-15)
 
 The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. For each: a test that failed because of the bug, then the smallest fix. None of the audit's shared pieces was built. Choices are in ADR 0056.

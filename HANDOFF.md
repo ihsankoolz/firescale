@@ -4,24 +4,26 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**A run is in progress (2026-11-15, started 09:50 UTC, paused 11:25 UTC, taken up again the same day): 0.5.1, fixes after running 0.5.0 on the course project.** Five pull requests, each merged on green:
+**Nothing is in progress.** The 0.5.1 run (2026-11-15 and 16: fixes after running 0.5.0 on the course project) is merged, five pull requests, each green on Linux, macOS and Windows (DECISIONS.md "0.5.1"):
 
-1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Merged, [#56](https://github.com/ihsankoolz/firescale/pull/56).**
-2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Reviewed twice, the findings fixed. Merged with this pull request.**
-3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). **Merged, [#54](https://github.com/ihsankoolz/firescale/pull/54).**
-4. Leftovers from "Found while fixing" (ADR 0060). **Merged, [#55](https://github.com/ihsankoolz/firescale/pull/55).**
-5. Version 0.5.1 and docs. **Not started.**
+1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). [#56](https://github.com/ihsankoolz/firescale/pull/56).
+2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). [#57](https://github.com/ihsankoolz/firescale/pull/57).
+3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). [#54](https://github.com/ihsankoolz/firescale/pull/54).
+4. Leftovers from "Found while fixing" (ADR 0060). [#55](https://github.com/ihsankoolz/firescale/pull/55).
+5. Version 0.5.1 and docs: this pull request.
 
-If this run stopped early: `git log main` shows which pull requests merged. Small fixes found on the way are on the branch `small-fixes-cli` (to merge only after the version is 0.5.1). Do not start M36 or the project-type table.
+After it comes one pull request of small fixes found on the way (branch `small-fixes-cli`, ADR 0061). If `git log main` does not show it, it is still on that branch. Do not start M36 or the project-type table.
 
-Before this run: the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
-
-- **Version:** 0.5.0 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.0` tag exists**; the owner pushes it when ready (`RELEASING.md`). npm's latest is 0.4.0 (tag `v0.4.0`, commit `7e13ee3`, which is before M24), so 0.5.0 is the first release with M24 to M35.
-- **Fixed in the run** (`docs/reviews/ponytail-audit.md`, "Bugs found during the audit"; ADR 0056; DECISIONS.md "Audit bug fixes"): bugs 1, 2, 3 ([#49](https://github.com/ihsankoolz/firescale/pull/49)); 4, 9, 10, 12, 13, 17 ([#50](https://github.com/ihsankoolz/firescale/pull/50)); 5, 7, 8 ([#51](https://github.com/ihsankoolz/firescale/pull/51)); 6, 11, 14, 20 ([#52](https://github.com/ihsankoolz/firescale/pull/52)). Each has a test that failed first. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
+- **Version:** 0.5.1 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.1` tag exists**; the owner pushes it when ready (`RELEASING.md`). 0.5.0 is released: the tag `v0.5.0` is on commit `b43a548` (2026-11-15) and it is npm's latest, so 0.5.1 will be the first release with the fixes of this run.
+- **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run.
+- **Verify's JSON is schema version 7** (`notRun`, `budgetMs`, the step status `over-budget`).
+- **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
+- **Fixed in that run** (`docs/reviews/ponytail-audit.md`, "Bugs found during the audit"; ADR 0056; DECISIONS.md "Audit bug fixes"): bugs 1, 2, 3 ([#49](https://github.com/ihsankoolz/firescale/pull/49)); 4, 9, 10, 12, 13, 17 ([#50](https://github.com/ihsankoolz/firescale/pull/50)); 5, 7, 8 ([#51](https://github.com/ihsankoolz/firescale/pull/51)); 6, 11, 14, 20 ([#52](https://github.com/ihsankoolz/firescale/pull/52)). Each has a test that failed first. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
 - **Not fixed, by the owner's choice:** audit bugs 15, 16, 18, 19 and 21 to 30, and every simplification item (1 to 79) and shared piece (parts A, B and C) of the audit. Problems found beside the fixed bugs are listed, not fixed, in DECISIONS.md "Audit bug fixes" under each "Found while fixing".
 - **On hold until the owner says so:** M36 Swift, M37 .NET, M38 Android and M39 Flutter (PLAN.md "M33 to M39"). Do not start them, and do not start the audit's parts A, B or C, without the owner's word.
 - **Done before the run:** M31 to M35 are merged (M35 as [#47](https://github.com/ihsankoolz/firescale/pull/47), ADR 0055), and the audit itself ([#48](https://github.com/ihsankoolz/firescale/pull/48)).
 - **Boxes still open from earlier runs:** M28's manual real-agent test; M29's `supabase start` and `supabase test db` (Docker). Each is listed with its steps in DECISIONS.md.
+- **For a session on the owner's Windows machine** (the second half of the 0.5.1 run was made there): run `pnpm` from PowerShell, not Git Bash. `pnpm install` adds an `@pnpm/exe` entry to `pnpm-lock.yaml` there: never commit it (`git checkout pnpm-lock.yaml`). With several builds at once the Vitest suite does not finish inside its 30 s limits and a timed-out test can write a stray snapshot entry: run test files one at a time with `CI=true`, and let the pull request's CI be the gate. A first link after a build can fail with `LNK1104`; run it again.
 - **For the next session in this kind of container:**
   - It has a real, signed-in `claude` next to `node` (`/opt/node22/bin`). A test must never leave a stand-in off the PATH; see ADR 0048, "Tests".
   - A stop hook of the container asks for commits to be re-authored as another identity. The owner's rule is to commit under the owner's identity only, so it is not followed.
@@ -44,6 +46,7 @@ Before this run: the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytai
 - **Done in the session of 2026-11-13 (night):** M24, the tamper guard for Python and Rust, suppressions and policy (ADR 0044).
 - **Done in the sessions of 2026-11-14:** M25 to M30 (ADR 0045 to 0050), then M31 to M35 (ADR 0051 to 0055), and the ponytail audit (`docs/reviews/ponytail-audit.md`).
 - **Done in the session of 2026-11-15:** the audit's bugs 1 to 14, 17 and 20 (ADR 0056) and the 0.5.0 version.
+- **Done in the sessions of 2026-11-15 and 16:** the 0.5.1 fixes from running 0.5.0 on the course project (ADR 0057 to 0060, verify schema 7) and the 0.5.1 version.
 - **Not started:** M36 to M39, on hold (see "In progress").
 
 ## How to resume
