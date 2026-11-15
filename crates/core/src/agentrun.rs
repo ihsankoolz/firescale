@@ -566,6 +566,42 @@ pub fn glob_error(glob: &str) -> Option<String> {
         .map(|error| error.kind().to_string())
 }
 
+/// For a glob that compiles and still can name no path: `Some`, holding
+/// the form that works when one can be worked out. `None` for a glob that
+/// can match. The guards compare repo-relative paths as git prints them
+/// (`infra/main.tf`), so a glob with an empty, `.` or `..` part (`./infra/**`,
+/// `/infra/**`, `infra/`, `../x`) names nothing: as a protected path it
+/// would protect nothing (ADR 0060).
+#[must_use]
+pub fn unmatchable_glob(glob: &str) -> Option<Option<String>> {
+    let glob = glob.replace('\\', "/");
+    let parts: Vec<&str> = glob.split('/').collect();
+    if !parts.iter().any(|part| matches!(*part, "" | "." | "..")) {
+        return None;
+    }
+    let mut kept: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|part| !matches!(*part, "" | "."))
+        .collect();
+    if kept.is_empty() || kept.contains(&"..") {
+        return Some(None);
+    }
+    // Written as a folder: what is meant is everything in it.
+    if matches!(parts.last(), Some(&("" | "."))) && kept.last() != Some(&"**") {
+        kept.push("**");
+    }
+    Some(Some(kept.join("/")))
+}
+
+/// True for a glob with no wildcard, class or group: it names one path.
+/// As a protected path it names one file, and nothing in a folder of that
+/// name.
+#[must_use]
+pub fn is_plain_path(glob: &str) -> bool {
+    !glob.contains(['*', '?', '[', '{'])
+}
+
 /// The glob that names exactly `path` and nothing else. A file a violation
 /// names is a path, not a glob: read as one, `app/[id]/page.tsx` names
 /// `app/i/page.tsx` and not the file itself.
