@@ -2180,6 +2180,7 @@ mod tests {
         assert!(lookup(fixture.root(), "k").is_none());
     }
 
+    #[cfg(unix)]
     fn pass(key: &str) -> Entry {
         Entry {
             format: FORMAT,
@@ -2197,6 +2198,7 @@ mod tests {
     }
 
     /// The names in a folder, sorted.
+    #[cfg(unix)]
     fn names_in(dir: &Path) -> Vec<String> {
         let mut names: Vec<String> = fs::read_dir(dir)
             .unwrap()
