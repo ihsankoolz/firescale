@@ -4714,6 +4714,49 @@ mod tests {
     }
 
     #[test]
+    fn an_affected_partial_headline_still_names_the_failures_that_do_not_block() {
+        use crate::blame::Label;
+        let (_fixture, mut report) =
+            over_budget_report(false, Planned::Command("exit 1".to_owned()));
+        report.affected = Some(AffectedReport {
+            base: Some("main".to_owned()),
+            everything: false,
+            reason: None,
+            changed_files: 1,
+            projects_total: 2,
+            projects_run: 1,
+            projects: Vec::new(),
+        });
+        for (label, named) in [
+            (
+                Label::PreExisting,
+                "pre-existing (fails on the base commit too): typecheck",
+            ),
+            (
+                Label::Flaky,
+                "flaky (failed, then passed when run again): typecheck",
+            ),
+        ] {
+            report.steps[2].label = Some(label);
+            settle(&mut report, false);
+            assert_eq!(report.result, VerifyResult::Partial);
+            let text = format_verify_human(&report);
+            assert_eq!(
+                text.lines().next(),
+                Some(
+                    format!("verify: PARTIAL (affected only) - 1 of 2 projects ran, 1 not affected; 2 of 4 steps ran, 1 not run (over the --budget of 30m); {named}")
+                        .as_str()
+                )
+            );
+        }
+        // With nothing labelled the headline is as it was.
+        report.steps[2].label = None;
+        report.steps[2].status = StepStatus::Passed;
+        settle(&mut report, false);
+        assert!(format_verify_human(&report).starts_with("verify: PARTIAL (affected only) - 1 of 2 projects ran, 1 not affected; 3 of 4 steps ran, 1 not run (over the --budget of 30m)\n"));
+    }
+
+    #[test]
     fn everything_passing_is_ok() {
         let fixture = Fixture::new(&[], Track::NoGit).unwrap();
         let plan = VerifyPlan {
