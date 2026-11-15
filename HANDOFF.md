@@ -7,8 +7,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 Run of 2026-11-15 (started 01:30 UTC): the bugs of the ponytail audit (`docs/reviews/ponytail-audit.md`, "Bugs found during the audit"), numbers 1 to 14, 17 and 20, then version 0.5.0. Bug fixes only: each bug gets a test that fails first, then the smallest fix; none of the audit's shared pieces (items 1 to 79, parts A, B and C) is built. ADR 0056 holds the decisions; DECISIONS.md "Audit bug fixes" holds the log.
 
 - **Pull request 1, stop hook, setup and secrets (bugs 1, 2, 3):** merged as [#49](https://github.com/ihsankoolz/firescale/pull/49), green on Linux, macOS and Windows.
-- **Pull request 2, cache inputs and blame (bugs 4, 9, 10, 12, 13, 17):** in progress.
-- **Pull request 3, tamper guard and agent runner (bugs 5, 7, 8):** not started.
+- **Pull request 2, cache inputs and blame (bugs 4, 9, 10, 12, 13, 17):** merged as [#50](https://github.com/ihsankoolz/firescale/pull/50), green on the three systems. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
+- **Pull request 3, tamper guard and agent runner (bugs 5, 7, 8):** in progress.
 - **Pull request 4, writes and packaging (bugs 6, 11, 14, 20):** not started.
 - **Pull request 5, version 0.5.0:** not started. No tag is pushed; the owner tags (`RELEASING.md`).
 - **On hold:** M36 Swift, M37 .NET, M38 Android and M39 Flutter, until the owner says so. So are the audit's parts A, B and C and its other items and bugs (15, 16, 18, 19, 21 to 30).
