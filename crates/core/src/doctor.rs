@@ -1525,6 +1525,11 @@ impl Doctor<'_> {
     /// read them, and several look in the folders above (python-dotenv) or
     /// are pointed at the root's file, so a name found there counts, and
     /// the check says in which file it was found.
+    ///
+    /// A local env file that is a symbolic link is not read: it can point
+    /// at a file outside the root, which doctor never reads, and the base
+    /// run does not copy one either (`blame::env_files`). A name that is
+    /// then found nowhere is a problem that names the link.
     fn env(&mut self) {
         for folder in self.folders() {
             let dir = dir_of(self.root, &folder);
@@ -1539,6 +1544,8 @@ impl Doctor<'_> {
             // names in each. `beside` counts those in the example's folder.
             let mut files: Vec<(String, BTreeSet<String>)> = Vec::new();
             let mut beside = 0;
+            // The local env files that are symbolic links, and so not read.
+            let mut links: Vec<String> = Vec::new();
             for (depth, up) in folders_up(self.root, &dir).iter().enumerate() {
                 let Ok(rel) = up.strip_prefix(self.root) else {
                     continue;
@@ -1549,7 +1556,12 @@ impl Doctor<'_> {
                     .collect::<Vec<_>>()
                     .join("/");
                 for file in LOCAL_ENV_FILES {
-                    if let Some(text) = read(&up.join(file)) {
+                    let path = up.join(file);
+                    if crate::ownfolder::is_link(&path) {
+                        links.push(shown(&up_folder, file));
+                        continue;
+                    }
+                    if let Some(text) = read(&path) {
                         files.push((shown(&up_folder, file), env_names(&text)));
                         if depth == 0 {
                             beside += 1;
@@ -1622,7 +1634,24 @@ impl Doctor<'_> {
                 continue;
             }
             let target = shown(&folder, ".env");
-            let fix = if beside > 0 {
+            // "There is no <target>" is not said of a link of that name.
+            let no_target = if links.contains(&target) {
+                String::new()
+            } else {
+                format!(", and there is no {target}")
+            };
+            let fix = if let [link] = links.as_slice() {
+                format!(
+                    "replace {link} with a real file that sets {}, or set the variables in your shell (see {example} for what each one is)",
+                    list(&missing)
+                )
+            } else if !links.is_empty() {
+                format!(
+                    "replace one of {} with a real file that sets {}, or set the variables in your shell (see {example} for what each one is)",
+                    links.join(", "),
+                    list(&missing)
+                )
+            } else if beside > 0 {
                 format!(
                     "add {} to {} (see {example} for what each one is)",
                     list(&missing),
@@ -1639,15 +1668,22 @@ impl Doctor<'_> {
             };
             let where_looked = match (files.is_empty(), beside > 0) {
                 (false, true) => format!("the environment or {}", names_of(&files)),
-                (false, false) => format!(
-                    "the environment or {}, and there is no {target}",
-                    names_of(&files)
-                ),
-                (true, _) if folder == "." => {
-                    format!("the environment, and there is no {target}")
+                (false, false) => {
+                    format!("the environment or {}{no_target}", names_of(&files))
+                }
+                (true, _) if folder == "." || !links.is_empty() => {
+                    format!("the environment{no_target}")
                 }
                 (true, _) => format!(
                     "the environment, and there is no {target}, nor a .env in a folder above it"
+                ),
+            };
+            let not_read = match links.as_slice() {
+                [] => String::new(),
+                [link] => format!(" {link} is a symbolic link, so it was not read."),
+                _ => format!(
+                    " {} are symbolic links, so they were not read.",
+                    links.join(", ")
                 ),
             };
             self.add(
@@ -1656,7 +1692,7 @@ impl Doctor<'_> {
                 example,
                 Status::Problem,
                 format!(
-                    "{} of {} variables are not set in {where_looked}: {}.",
+                    "{} of {} variables are not set in {where_looked}: {}.{not_read}",
                     missing.len(),
                     wanted.len(),
                     list(&missing)

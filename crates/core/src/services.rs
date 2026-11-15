@@ -634,6 +634,7 @@ pub fn services_in(root: &Path, folders: &[PathBuf]) -> Vec<Service> {
 /// What `fscale doctor` checks: [`services_in`], plus the local database,
 /// cache and queue URLs of the `.env` and `.env.local` files in the same
 /// folders (only the variable's name, the host and the port are kept).
+/// A local env file that is a symbolic link is not read.
 /// Verify's service watch does not read those files: it uses
 /// [`services_for_folder`].
 #[must_use]
@@ -658,7 +659,13 @@ fn collect(root: &Path, folders: &[PathBuf], local_env: bool) -> Vec<Service> {
             continue;
         }
         for name in LOCAL_ENV_FILES {
-            if let Ok(text) = std::fs::read_to_string(folder.join(name)) {
+            let path = folder.join(name);
+            // Never through a symbolic link: it can point at a file outside
+            // the repo. Doctor's env check says which file was not read.
+            if crate::ownfolder::is_link(&path) {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(path) {
                 env.extend(from_local_env(&text, &join(&rel, name)));
             }
         }
