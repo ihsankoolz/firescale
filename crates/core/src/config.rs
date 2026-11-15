@@ -693,10 +693,7 @@ pub fn load_config<'a>(
     // A name with no wildcard names one file. Where it is a folder, no file
     // in the folder would be protected (ADR 0060).
     for glob in &config.protected_paths {
-        let path = glob
-            .split(['/', '\\'])
-            .fold(root.to_path_buf(), |path, part| path.join(part));
-        if crate::agentrun::is_plain_path(glob) && path.is_dir() {
+        if crate::agentrun::is_plain_path(glob) && names_a_folder(root, glob) {
             return Err(Error::user(format!(
                 "{}: \"protectedPaths\" holds \"{glob}\", which is a folder. A name with no wildcard names one file, so no file in the folder would be protected. Write \"{}/**\".",
                 file.unwrap_or("config"),
@@ -705,6 +702,39 @@ pub fn load_config<'a>(
         }
     }
     Ok(config)
+}
+
+/// True when the plain path `name` is a folder below `root` and no file.
+/// Names are compared without regard to case, as the guards compare paths
+/// (`agentrun::normalise`), so the answer is the same on every system. A
+/// symbolic link is not a folder here: it is one path in a diff.
+fn names_a_folder(root: &Path, name: &str) -> bool {
+    let parts: Vec<String> = name.split(['/', '\\']).map(str::to_lowercase).collect();
+    let mut folders = vec![root.to_path_buf()];
+    for (index, part) in parts.iter().enumerate() {
+        let mut next = Vec::new();
+        let mut file = false;
+        for folder in &folders {
+            let Ok(entries) = std::fs::read_dir(folder) else {
+                continue;
+            };
+            for entry in entries.filter_map(std::result::Result::ok) {
+                if entry.file_name().to_string_lossy().to_lowercase() != *part {
+                    continue;
+                }
+                if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    next.push(entry.path());
+                } else {
+                    file = true;
+                }
+            }
+        }
+        if index + 1 == parts.len() {
+            return !next.is_empty() && !file;
+        }
+        folders = next;
+    }
+    false
 }
 
 /// Reads only the `verify` settings, never starting Node: for

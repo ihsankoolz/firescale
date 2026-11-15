@@ -33,7 +33,9 @@ The guards compare a changed file's path as git prints it: from the repo root, w
 **Rules from `.claude/settings.json`.** The agent runner also takes `Edit(…)`, `Write(…)` and `Read(…)` rules under `deny` and `ask` as protected paths (ADR 0056, bug 8).
 
 - A `./` or `/` in front was already dropped there, so `Edit(./src/**)` and `Edit(/src/**)` protect `src/**`. A test now pins it.
-- A rule that still can match no path (`Edit(src/)`, a `.` or `..` part) stops `fix --agent` before any agent starts, with the form to write. It is not a `fscale check` error: that file is not firescale's config.
+- A rule that ends with `/` is the folder and all in it, as Claude Code reads it: `Edit(src/)` protects `src/**`.
+- A rule with a `..` part (`Read(../**)`, `Edit(../shared/**)`) is about paths outside the repo. It is valid for Claude Code and can neither protect nor open a path the diff guard sees, so it is not a protected path and does not stop the run. The agent still gets it as written.
+- A rule that still can match no path (a `.` part, `a//b`) stops `fix --agent` before any agent starts, with the form to write. It is not a `fscale check` error: that file is not firescale's config.
 - **A plain name there is left as it was**: `Edit(dist)` protects the one file `dist` in the diff guard and nothing in a folder `dist`. Claude Code itself reads such a rule more widely, and the rule is still handed to Claude Code as written, so its own tools refuse the folder. Refusing the run for a rule that is valid for Claude Code seemed the larger surprise. `docs/fix.md` says to write `Edit(dist/**)`.
 
 Two helpers were added to `agentrun.rs` beside bug 8's (`unmatchable_glob`, `is_plain_path`). The folder check sits in `load_config`, the one place that has both the config and the repo root.
@@ -61,7 +63,7 @@ What each does when it finds a link:
 - **Rule results** (`cache.rs`): nothing is read or stored. Every rule runs, and `fscale check` prints one warning with the refusal. The check does not fail: its result is already known.
 - **Base results** (`blame.rs`): nothing is read or kept, without a note, as when the folder cannot be written. The base runs again next time.
 - **The ledger**: `fix --agent` is refused before the agent starts, so no run's work ends in an error about its last line. `append_ledger` refuses too.
-- **Shared records**: with `.firescale` or the records folder inside it a link, nothing is read, written or pruned; the cache log says why. A `--shared-cache` folder outside `.firescale` is the caller's choice and is used as given.
+- **Shared records**: with `.firescale`, or any folder from it down to the records folder (`.firescale/shared/linux`), a link, nothing is read, written or pruned; the cache log says why. A `--shared-cache` folder outside `.firescale` is the caller's choice and is used as given.
 
 The text: "`.firescale` is a symbolic link, and firescale reads and writes nothing through one. Remove the link: a real folder or file is made in its place."
 
@@ -82,11 +84,21 @@ Both kept every assertion, and every case still starts the real binary.
 - `scaffold.test.ts`, "`--check` exits 1 after a generated file is deleted, and 0 after sync": the four files were handled one after the other in one repo. Each now has its own copy of the freshly built repo, and the four run side by side. The 60 s limit stays, for a runner with few cores.
 - `verify.test.ts`, "rejects a project folder that does not exist, and a malformed projects section": it built seven repos and seven folders of stand-in tools. It now builds one and writes each case's config into it. The cases cannot affect each other: each ends at the config error, and the test now also asserts that no step ran in any case, that stdout is empty, and that no `.firescale` folder was made.
 
+### After the review
+
+A fresh reader of the diff found four gaps. Each got a test that failed, then its fix.
+
+- **Claude Code rules were treated too strictly.** `Read(../**)` and `Edit(../shared/**)` stopped `fix --agent` with no form to write, and `Read(secrets/)`, a folder rule in Claude Code, was refused too. Settings rules now follow Claude Code's reading (above). `protectedPaths` in the firescale config stays strict: it is firescale's own key, and one form is easier to check than two.
+- **A nested shared folder passed the link check.** `--shared-cache .firescale/shared/linux` was looked at only one level up. Every part from `.firescale` down is now checked.
+- **The folder check depended on the system.** `protectedPaths: ["Infra"]` beside a folder `infra/` was accepted on Linux, where it protected nothing, and was an error on macOS and Windows. The name is now compared with the folder's entries without regard to case, as the guard compares paths. A symbolic link of that name is not called a folder, and a name that is both a file and, in another case, a folder is accepted, since it protects the file.
+- **`fscale ledger` read a linked ledger** while the docs said nothing is read through a link. It now stops with the same refusal.
+
+A test was added for `hooks install --all` with all three files refused. It passed as written.
+
 ## Consequences
 
 - `fscale hooks install --all` on a repo with one hand-made, minified settings file installs the other two hooks and exits 2. Before, what it did depended on which file was the minified one.
 - A config with `./infra/**`, `/infra/**` or `infra/` in `protectedPaths`, or a plain folder name, stops every command until the entry is rewritten. Before, the run went on with that path unprotected.
-- `fix --agent` in a repo whose Claude Code settings hold `Edit(src/)` is refused until it reads `Edit(src/**)`.
 - A repo whose `.firescale` is a symbolic link gets no cache of any kind and no agent fix run, and is told to remove the link. Someone who linked `.firescale` to another disk on purpose loses that.
 - JSON with any tamper kind, or with approvals, validates against the shipped schema.
-- **Known limits.** A linked entry file inside a real cache folder is still read (`.firescale/cache/<rule>.json`, `.firescale/base/<key>.json`, `.firescale/steps/<key>.json`), and a step-cache hit sets its modified time; a stored entry replaces the link and never writes through it. Such a file is used only when it holds the key the run worked out itself. `fscale ledger` still reads a linked ledger. A plain `protectedPaths` name whose folder is made later, in the same agent run, is not seen until the next command.
+- **Known limits.** A linked entry file inside a real cache folder is still read (`.firescale/cache/<rule>.json`, `.firescale/base/<key>.json`, `.firescale/steps/<key>.json`), and a step-cache hit sets its modified time; a stored entry replaces the link and never writes through it. Such a file is used only when it holds the key the run worked out itself. A plain `protectedPaths` name whose folder is made later, in the same agent run, is not seen until the next command. A submodule named by a plain name is called a folder, though it is one path in a diff. `C:/infra/**`, `~/infra/**` and a bad part inside braces (`{./infra,src}/**`) are still accepted in `protectedPaths`, and protect nothing or less than meant.
