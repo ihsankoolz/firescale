@@ -109,6 +109,10 @@ pub struct Snapshot {
     /// When it was taken. A hash is reused only for a file last changed
     /// well before this (git's "racily clean" rule).
     taken: Option<SystemTime>,
+    /// True when `firescale.config.json` is on disk and git did not list
+    /// it, because it ignores it: the file is among `files` all the same,
+    /// read from disk, and no commit has a copy of it (ADR 0058).
+    config_unlisted: bool,
 }
 
 fn abs(root: &Path, rel: &str) -> PathBuf {
@@ -188,7 +192,12 @@ fn read_state(path: &Path) -> (FileState, Option<Stamp>) {
 
 /// The files git lists for the working tree: tracked files and untracked
 /// files it does not ignore. Outside git, every file and link the walk finds.
-fn list_files(root: &Path) -> Result<Vec<String>, String> {
+///
+/// One ignored file is added: `firescale.config.json`. A step whose key
+/// holds the repo root can read it as a file whether git ignores it or not,
+/// so its bytes must be in that key ([`covers`], ADR 0058). The second
+/// value says that it was added.
+fn list_files(root: &Path) -> Result<(Vec<String>, bool), String> {
     let top = run_git(root, &["rev-parse", "--show-toplevel"])
         .ok()
         .filter(|out| out.code == 0)
@@ -202,6 +211,7 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
                     .map(|(path, _)| path)
                     .collect()
             })
+            .map(|files| (files, false))
             .map_err(|error| error.message().to_owned());
     };
     let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
@@ -241,7 +251,13 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
         .map(|path| path.replace('\\', "/").trim_end_matches('/').to_owned())
         .collect();
     files.retain(|path| !path.starts_with(".firescale/") && !path.starts_with(".git/"));
-    Ok(files.into_iter().collect())
+    let config = crate::config::JSON_CONFIG;
+    let config_unlisted =
+        !files.contains(config) && fs::symlink_metadata(root.join(config)).is_ok();
+    if config_unlisted {
+        files.insert(config.to_owned());
+    }
+    Ok((files.into_iter().collect(), config_unlisted))
 }
 
 /// Files changed within this long before a snapshot are hashed again, as
@@ -261,13 +277,14 @@ impl Snapshot {
     #[must_use]
     pub fn capture_reusing(root: &Path, earlier: Option<&Self>) -> Self {
         let taken = SystemTime::now();
-        let paths = match list_files(root) {
-            Ok(paths) => paths,
+        let (paths, config_unlisted) = match list_files(root) {
+            Ok(listed) => listed,
             Err(problem) => {
                 return Self {
                     files: BTreeMap::new(),
                     problem: Some(problem),
                     taken: Some(taken),
+                    config_unlisted: false,
                 }
             }
         };
@@ -323,12 +340,14 @@ impl Snapshot {
                 files: BTreeMap::new(),
                 problem: Some("the files could not all be hashed".to_owned()),
                 taken: Some(taken),
+                config_unlisted,
             };
         }
         Self {
             files: hashed.into_iter().collect(),
             problem: None,
             taken: Some(taken),
+            config_unlisted,
         }
     }
 
@@ -1123,6 +1142,47 @@ pub fn ignore_firescale_folder(root: &Path) {
     }
 }
 
+/// Where the digest of an ignored `firescale.config.json` is kept, as the
+/// last verify run that passed saw the file.
+fn ignored_config_record(root: &Path) -> PathBuf {
+    root.join(".firescale").join("ignored-config.digest")
+}
+
+/// True when `digest`, of a `firescale.config.json` that git ignores
+/// ([`crate::configkey::ignored_config`]), is not the one the last verify
+/// run that passed wrote down ([`remember_ignored_config`]), or when no run
+/// wrote one down. No commit has a copy of an ignored file, so this record
+/// is what `verify --affected` compares its bytes with (ADR 0058).
+#[must_use]
+pub fn ignored_config_changed(root: &Path, digest: &str) -> bool {
+    let file = ignored_config_record(root);
+    if is_symlink(&root.join(".firescale")) || is_symlink(&file) {
+        return true;
+    }
+    fs::read_to_string(file).map_or(true, |before| before.trim() != digest)
+}
+
+/// Writes down the digest of the ignored `firescale.config.json` that a
+/// verify run saw. Call it only after a run in which nothing failed: every
+/// step that can read the file then passed with these bytes, or was left
+/// out because the record already held them. Never through a symlink.
+pub fn remember_ignored_config(root: &Path, digest: &str) {
+    let file = ignored_config_record(root);
+    if is_symlink(&root.join(".firescale"))
+        || is_symlink(&file)
+        || !file
+            .parent()
+            .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
+    {
+        return;
+    }
+    ignore_firescale_folder(root);
+    if fs::read_to_string(&file).is_ok_and(|before| before.trim() == digest) {
+        return;
+    }
+    let _ = fs::write(&file, digest);
+}
+
 /// Removes entries older than [`MAX_AGE`], and the least recently used
 /// beyond [`MAX_ENTRIES`]. Runs at the end of a verify run that stored
 /// something, so the folder never needs a command of its own.
@@ -1543,6 +1603,11 @@ impl<'a> StepCache<'a> {
             return false;
         };
         let owned = &self.digests.owned;
+        // A config that git ignores is in no commit, so it differs from the
+        // base for every unit whose key holds it as a file.
+        if snapshot.config_unlisted && covers(&scope, owned, config) {
+            return false;
+        }
         !changed.iter().any(|path| covers(&scope, owned, path))
     }
 
@@ -1995,6 +2060,7 @@ mod tests {
             )]),
             problem: None,
             taken: None,
+            config_unlisted: false,
         };
         let reason = UnitDigests::new(None)
             .digest(&snapshot, &Scope::whole_repo())
@@ -2004,6 +2070,7 @@ mod tests {
             files: BTreeMap::new(),
             problem: Some("git ls-files failed".to_owned()),
             taken: None,
+            config_unlisted: false,
         };
         assert!(UnitDigests::new(None)
             .digest(&unlisted, &Scope::whole_repo())

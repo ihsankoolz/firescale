@@ -21,6 +21,12 @@
 //! can read it as a file, so for such a step the config stays a file too:
 //! its bytes are in the key ([`crate::stepcache::Scope::holds_root`]) and a
 //! change of them runs the step's unit ([`mark_file_readers`]).
+//!
+//! None of this depends on git listing the file. A config that git ignores
+//! is in no list of changed files and in no commit: its settings are
+//! compared with the defaults all the same, its bytes are read from disk
+//! for the keys that hold them, and under `--affected` they are compared
+//! with what the last run that passed saw ([`ignored_config`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -319,15 +325,36 @@ pub const NOTHING_TO_RUN_NOTE: &str = "firescale.config.json changed, but only i
 /// changed config as a file.
 pub const READ_AS_A_FILE_REASON: &str = "firescale.config.json changed, and these steps can read every file of the repo, the config among them";
 
+/// The same, for a config that git ignores: no commit has a copy of it, so
+/// "changed" is measured from the last verify run that passed.
+pub const IGNORED_READ_AS_A_FILE_REASON: &str = "firescale.config.json, which git ignores, changed since the last run that passed, and these steps can read every file of the repo, the config among them";
+
+/// The digest of `firescale.config.json` when it is on disk and git ignores
+/// it; `None` for a config git tracks or lists as untracked, and when there
+/// is none.
+///
+/// Git lists an ignored file nowhere and no commit has a copy of it, so
+/// `verify --affected` cannot tell from git whether its bytes changed. It
+/// compares this digest with the one the last run that passed wrote down
+/// ([`crate::stepcache::ignored_config_changed`]).
+#[must_use]
+pub fn ignored_config(root: &Path) -> Option<String> {
+    let bytes = std::fs::read(root.join(JSON_CONFIG)).ok()?;
+    let ignored = run_git(root, &["check-ignore", "--quiet", "--", JSON_CONFIG])
+        .is_ok_and(|out| out.code == 0);
+    ignored.then(|| blake3::hash(&bytes).to_hex().to_string())
+}
+
 /// Marks the units of an affected plan whose steps can read a changed
 /// `firescale.config.json` as a file and that nothing else already runs:
 /// those whose key holds the repo root
 /// ([`crate::stepcache::Scope::holds_root`]: the root's
 /// own steps, a project at the root, a folder the graph cannot place, a
 /// project that uses one of those). For them a change of the file's bytes
-/// is a change, whatever its settings say (ADR 0058). Returns true when
-/// the plan has such a unit, marked here or before.
-pub fn mark_file_readers(plan: &mut VerifyPlan, graph: &Graph) -> bool {
+/// is a change, whatever its settings say (ADR 0058). `reason` is what a
+/// unit marked here is told. Returns true when the plan has such a unit,
+/// marked here or before.
+pub fn mark_file_readers(plan: &mut VerifyPlan, graph: &Graph, reason: &str) -> bool {
     let Some(affected) = plan.affected.as_mut() else {
         return false;
     };
@@ -341,7 +368,7 @@ pub fn mark_file_readers(plan: &mut VerifyPlan, graph: &Graph) -> bool {
         any = true;
         if !unit.affected {
             unit.affected = true;
-            READ_AS_A_FILE_REASON.clone_into(&mut unit.reason);
+            reason.clone_into(&mut unit.reason);
         }
     }
     any
@@ -1141,6 +1168,44 @@ mod tests {
         );
     }
 
+    /// No commit has a copy of an ignored config, so `--affected` compares
+    /// its bytes with what the last run that passed wrote down.
+    #[test]
+    fn only_a_config_that_git_ignores_has_a_digest_and_a_record() {
+        use crate::stepcache::{ignored_config_changed, remember_ignored_config};
+        use crate::testing::{Fixture, Track};
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        git(root, &["init", "--quiet", "--initial-branch=main"]);
+        commit(root, "one file");
+        // No config, and one git lists as untracked: nothing to remember.
+        assert_eq!(ignored_config(root), None);
+        fs::write(root.join(JSON_CONFIG), "{}\n").unwrap();
+        assert_eq!(ignored_config(root), None);
+
+        fs::write(root.join(".gitignore"), "firescale.config.json\n").unwrap();
+        let first = ignored_config(root).expect("git ignores the config");
+        // No run wrote anything down yet: it counts as changed.
+        assert!(ignored_config_changed(root, &first));
+        remember_ignored_config(root, &first);
+        assert!(!ignored_config_changed(root, &first));
+        fs::write(root.join(JSON_CONFIG), "{}").unwrap();
+        let second = ignored_config(root).expect("git ignores the config");
+        assert_ne!(second, first);
+        assert!(ignored_config_changed(root, &second));
+        // The record is firescale's own file, which git never lists.
+        assert!(root
+            .join(".firescale")
+            .join("ignored-config.digest")
+            .is_file());
+        let listed = run_git(root, &["status", "--porcelain"]).unwrap().stdout;
+        assert!(!listed.contains(".firescale"), "{listed}");
+
+        // Tracked all the same (`git add --force`): git answers for it.
+        git(root, &["add", "--force", JSON_CONFIG]);
+        assert_eq!(ignored_config(root), None);
+    }
+
     /// After the review: a step whose key holds the repo root can read the
     /// config as a file, so a change of its bytes runs that step's unit.
     #[test]
@@ -1187,7 +1252,7 @@ mod tests {
             unit(Some("web"), Some("node"), false),
             unit(Some("api"), Some("python"), false),
         ]);
-        assert!(!mark_file_readers(&mut plan, &graph));
+        assert!(!mark_file_readers(&mut plan, &graph, READ_AS_A_FILE_REASON));
         assert_eq!(
             marked(plan),
             [(false, "before".to_owned()), (false, "before".to_owned())]
@@ -1201,7 +1266,7 @@ mod tests {
             unit(Some("tools"), None, false),
             unit(Some("web"), Some("node"), false),
         ]);
-        assert!(mark_file_readers(&mut plan, &graph));
+        assert!(mark_file_readers(&mut plan, &graph, READ_AS_A_FILE_REASON));
         assert_eq!(
             marked(plan),
             [
@@ -1212,7 +1277,11 @@ mod tests {
             ]
         );
         // A plan that is not an affected one has no unit to mark.
-        assert!(!mark_file_readers(&mut VerifyPlan::default(), &graph));
+        assert!(!mark_file_readers(
+            &mut VerifyPlan::default(),
+            &graph,
+            READ_AS_A_FILE_REASON
+        ));
     }
 
     #[test]

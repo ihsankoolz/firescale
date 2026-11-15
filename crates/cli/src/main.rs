@@ -44,7 +44,7 @@ use firescale_core::sarif::format_sarif;
 use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
 use firescale_core::sharedcache::{CiRun, SharedCache};
-use firescale_core::stepcache::{CacheSettings, StepCache};
+use firescale_core::stepcache::{self, CacheSettings, StepCache};
 use firescale_core::steptimes::StepTimes;
 use firescale_core::tamper;
 use firescale_core::verify::add_tamper;
@@ -1043,8 +1043,14 @@ fn verify_plan(
     // config it ignores nowhere, and its settings count all the same.
     let config_effect =
         configkey::effect_for_affected(root, base, &changed, facts, verify_config, &plan);
-    // As a file, the config changed when git says so.
+    // As a file, the config changed when git says so. A config that git
+    // ignores is in no commit to compare its bytes with: it changed when it
+    // is not as the last verify run that passed saw it (or none did).
     let config_listed = matches!(&changed, Changed::Files(files) if files.contains(JSON_CONFIG));
+    let ignored_config_changed = !config_listed
+        && matches!(&changed, Changed::Files(_))
+        && configkey::ignored_config(root)
+            .is_some_and(|digest| stepcache::ignored_config_changed(root, &digest));
     let mut set = match &config_effect {
         Some(effect) => {
             let mut set = affected_except(&graph, &changed, &[JSON_CONFIG]);
@@ -1098,13 +1104,17 @@ fn verify_plan(
         if config_listed {
             // As a file, the config reaches only the units whose key holds
             // the repo root, where a step can read it (`prettier --check .`).
-            let read_as_a_file = configkey::mark_file_readers(&mut plan, &graph);
+            let read_as_a_file =
+                configkey::mark_file_readers(&mut plan, &graph, configkey::READ_AS_A_FILE_REASON);
             // Not when another changed file runs every project (the config
             // renamed to `firescale.config.ts`, say): then something runs.
             if effect.is_empty() && !read_as_a_file && set.everything.is_none() {
                 notes.push(configkey::NOTHING_TO_RUN_NOTE.to_owned());
             }
         }
+    }
+    if ignored_config_changed {
+        configkey::mark_file_readers(&mut plan, &graph, configkey::IGNORED_READ_AS_A_FILE_REASON);
     }
     if let Some(affected) = plan.affected.as_mut() {
         affected.notes = notes;
@@ -1223,6 +1233,9 @@ fn verify_report(
         violations: violation_ids(&report),
     };
     let head_violations = check.violations.clone();
+    // An ignored config, as it is before any step runs: written down at the
+    // end if nothing failed, for the next `--affected` run to compare with.
+    let ignored_config = configkey::ignored_config(root);
     let (plan, graph) = verify_plan(root, args, &facts, &verify_config, changed)?;
     // The step cache (ADR 0036) needs the graph only for projects below the
     // root: the root's own steps cover the whole repo.
@@ -1389,6 +1402,13 @@ fn verify_report(
     }
     if verify.result == VerifyResult::Stopped {
         say("stopped: every command verify started has been stopped");
+    }
+    // Nothing failed: every step that can read an ignored config passed
+    // with these bytes, or was left out because they were seen before.
+    if let Some(digest) = &ignored_config {
+        if matches!(verify.result, VerifyResult::Ok | VerifyResult::Partial) {
+            stepcache::remember_ignored_config(root, digest);
+        }
     }
     let mut notes = outcome.warnings;
     verify.notes.extend(shared_note);

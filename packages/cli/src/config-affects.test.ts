@@ -563,6 +563,9 @@ describe('a step that can read the config as a file', () => {
     const ROOT_LINT = { verify: { lint: 'node lint.js', typecheck: false, test: false } };
     const FORMATTED = `${JSON.stringify(ROOT_LINT, null, 2)}\n`;
     const NOT_FORMATTED = JSON.stringify(ROOT_LINT);
+    // Only a time limit: no setting of it reaches a step.
+    const LIMIT = '{ "verify": { "timeout": "2h" } }\n';
+    const LIMIT_ON_ONE_LINE = '{"verify":{"timeout":"2h"}}';
     const IGNORED_CONFIG_CHANGED =
       "  the repo root's own steps: firescale.config.json, which git ignores, changed since the last run that passed, and these steps can read every file of the repo, the config among them";
     const stopHook = (root: string) =>
@@ -585,41 +588,47 @@ describe('a step that can read the config as a file', () => {
     });
 
     /**
-     * A repo whose root lint reads the ignored config, with a changed file
-     * that runs nothing: --affected has a change to measure, and the config
-     * is the only thing that can run a step.
+     * A root project whose lint reads the ignored config, which only sets a
+     * time limit, and a changed file that runs nothing: --affected has a
+     * change to measure, and the config's bytes are the only thing that can
+     * run a step.
      */
-    const rootLint = async () => {
-      const made = await branchRepo({ '.gitignore': IGNORES });
-      await made.repo.write('firescale.config.json', FORMATTED);
+    const rootProject = async () => {
+      const made = await branchRepo({
+        '.gitignore': IGNORES,
+        'package.json': `${JSON.stringify({ name: 'app', private: true, scripts: { lint: 'node lint.js' } })}\n`,
+      });
+      await made.repo.write('firescale.config.json', LIMIT);
       await made.repo.write('notes.md', 'a note\n');
       return made;
     };
 
-    it("runs the repo root's own steps once under --affected for an ignored config that no run has seen, and not again", async () => {
-      const { verify } = await rootLint();
+    it('runs the root project once under --affected for an ignored config that no run has seen, and not again', async () => {
+      const { verify } = await rootProject();
       // Nothing is known of an earlier run: the safe side, once.
       const once = await verify('--affected');
-      expect(once.headline).toBe('verify: OK (affected only) - 1 of 1 project ran');
+      expect(once.headline).toBe(
+        'verify: PARTIAL (affected only) - 1 of 1 project ran; 2 of 4 steps ran, 2 skipped',
+      );
       expect(once.stdout).toContain(IGNORED_CONFIG_CHANGED);
       // The same bytes as that passing run saw: nothing runs.
       const same = await verify('--affected');
       expect(same.headline).toBe('verify: OK (affected only) - 0 of 1 project ran, 1 not affected');
     });
 
-    it("runs the repo root's own steps under --affected when an ignored config is not as the last passing run saw it", async () => {
-      const { repo, verify } = await rootLint();
-      expect((await verify()).headline).toBe('verify: OK');
-      await repo.write('firescale.config.json', NOT_FORMATTED);
+    it('runs the root project under --affected when an ignored config is not as the last passing run saw it', async () => {
+      const { repo, verify } = await rootProject();
+      expect((await verify()).code).toBe(EXIT_OK);
+      await repo.write('firescale.config.json', LIMIT_ON_ONE_LINE);
       const affected = await verify('--affected');
       expect(affected.headline).toMatch(/^verify: FAILED at lint \(new\)/);
       expect(affected.stdout).toContain(IGNORED_CONFIG_CHANGED);
     });
 
     it('blocks the stop hook when an ignored config is not as the last passing run saw it', async () => {
-      const { repo, root, verify } = await rootLint();
-      expect((await verify()).headline).toBe('verify: OK');
-      await repo.write('firescale.config.json', NOT_FORMATTED);
+      const { repo, root, verify } = await rootProject();
+      expect((await verify()).code).toBe(EXIT_OK);
+      await repo.write('firescale.config.json', LIMIT_ON_ONE_LINE);
       const hook = await stopHook(root);
       expect(hook.code).toBe(EXIT_BLOCK);
       expect(hook.stderr).toContain('lint');
