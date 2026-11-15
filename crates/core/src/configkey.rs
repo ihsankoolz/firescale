@@ -806,8 +806,7 @@ mod tests {
         // Every key the verify reader accepts is in the table: its error
         // for an unknown key lists them all.
         let error = verify_settings(JSON_CONFIG, &json!({ "verify": { "zzz": 1 } }))
-            .err()
-            .expect("an unknown verify key is refused");
+            .expect_err("an unknown verify key is refused");
         let listed = error
             .message()
             .split_once("other keys: ")
