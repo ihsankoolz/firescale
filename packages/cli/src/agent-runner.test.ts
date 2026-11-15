@@ -589,7 +589,6 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
         [withProtected(['./src/**']), 'firescale.config.json', './src/**'],
         [withProtected(['/src/**']), 'firescale.config.json', '/src/**'],
         [withProtected(['src']), 'firescale.config.json', 'src'],
-        [settings('Edit(src/)'), '.claude/settings.json', 'src/'],
         [settings('Edit(src/./**)'), '.claude/settings.json', 'src/./**'],
       ] as const) {
         const root = await repo(files);
@@ -605,11 +604,22 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
         expect(await ledger(root)).toEqual([]);
         expect((await branches(root)).filter((b) => b.startsWith('fscale/'))).toEqual([]);
       }
-      // A settings rule that starts with ./ or / is read from the repo root, and protects.
-      for (const rule of ['Edit(./src/**)', 'Edit(/src/**)']) {
+      // A settings rule that starts with ./ or / is read from the repo root, and
+      // one that ends with / is a folder, as Claude Code reads it: each protects.
+      for (const rule of ['Edit(./src/**)', 'Edit(/src/**)', 'Edit(src/)', 'Read(./src/)']) {
         const guarded = await fix(await repo(settings(rule)), edit);
         expect(guarded.code, rule).toBe(EXIT_VIOLATIONS);
         expect(guarded.stdout).toContain('protected path src/app.js');
+      }
+      // A settings rule about paths outside the repo is valid for Claude Code and
+      // says nothing about a path in the repo: the run goes on, and the agent
+      // still gets the rule as it is written.
+      for (const rule of ['Read(../**)', 'Edit(../shared/**)', 'Read(~/.ssh/**)']) {
+        const outside = await fix(await repo(settings(rule)), GOOD);
+        expect(outside.stderr, rule).toBe('');
+        expect(outside.code, rule).toBe(EXIT_OK);
+        expect(outside.requests[0]?.request.policy.deniedCommands).toContain(rule);
+        expect(outside.requests[0]?.request.policy.deniedPaths.join(' ')).not.toContain('..');
       }
     });
 

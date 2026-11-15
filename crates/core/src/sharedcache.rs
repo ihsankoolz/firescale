@@ -528,40 +528,45 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn nothing_is_read_written_or_pruned_through_a_symlinked_firescale_folder() {
-        for linked in [".firescale", ".firescale/shared"] {
+        // The folder may be nested: `--shared-cache .firescale/shared/linux`.
+        for (linked, folder) in [
+            (".firescale", "shared"),
+            (".firescale/shared", "shared"),
+            (".firescale", "shared/linux"),
+            (".firescale/shared", "shared/linux"),
+            (".firescale/shared/linux", "shared/linux"),
+        ] {
+            let below = |base: &Path, rel: &str| {
+                rel.split('/')
+                    .fold(base.to_path_buf(), |path, part| path.join(part))
+            };
             let temp = tempfile::tempdir().unwrap();
             let root = temp.path().join("repo");
             // A real shared cache elsewhere, with a record and a file to prune.
-            let other = temp.path().join("other").join(".firescale");
-            let records = other.join("shared");
+            let other = temp.path().join("other");
+            let records = below(&other.join(".firescale"), folder);
             let run = ci(temp.path(), "push", "refs/heads/main");
             SharedCache::new(records.clone(), run.clone())
                 .write(KEY, now_secs(), 1, "d")
                 .unwrap();
             fs::write(records.join("cd34.json"), "not json").unwrap();
-            let link = linked
-                .split('/')
-                .fold(root.clone(), |path, part| path.join(part));
+            let link = below(&root, linked);
             fs::create_dir_all(link.parent().unwrap()).unwrap();
-            let target = if linked == ".firescale" {
-                &other
-            } else {
-                &records
-            };
-            std::os::unix::fs::symlink(target, &link).unwrap();
-            let shared = SharedCache::new(root.join(".firescale").join("shared"), run);
+            std::os::unix::fs::symlink(below(&other, linked), &link).unwrap();
+            let shared = SharedCache::new(below(&root.join(".firescale"), folder), run);
             assert_eq!(
                 shared.write("ef56", now_secs(), 1, "d").unwrap_err(),
                 format!("{linked} is a symbolic link, and firescale reads and writes nothing through one. Remove the link: a real folder or file is made in its place."),
+                "{folder}"
             );
-            assert!(shared.lookup(KEY).is_err(), "{linked}");
-            assert_eq!(shared.prune(), 0, "{linked}");
+            assert!(shared.lookup(KEY).is_err(), "{linked} {folder}");
+            assert_eq!(shared.prune(), 0, "{linked} {folder}");
             let mut left: Vec<String> = fs::read_dir(&records)
                 .unwrap()
                 .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
                 .collect();
             left.sort();
-            assert_eq!(left, ["ab12.json", "cd34.json"], "{linked}");
+            assert_eq!(left, ["ab12.json", "cd34.json"], "{linked} {folder}");
         }
     }
 

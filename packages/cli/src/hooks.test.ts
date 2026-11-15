@@ -171,6 +171,21 @@ describe('fscale hooks install', () => {
     }
   });
 
+  it('--all with every file refused says so, and claims no hook', async () => {
+    const files = Object.fromEntries(Object.values(HOOK_FILES).map((file) => [file, '{"a":1}\n']));
+    const repo = await fixtures.create({ files });
+    const result = await runCli(['hooks', 'install', '--all'], repo.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stdout).toBe(
+      'refused           .claude/settings.json\nrefused           .codex/hooks.json\nrefused           .cursor/hooks.json\n\nNot every hook is installed. Refused and left as it was: .claude/settings.json, .codex/hooks.json, .cursor/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.\n',
+    );
+    expect(result.stdout).not.toContain('The hook is in');
+    expect(result.stderr.match(/^fscale: /gm)).toHaveLength(3);
+    for (const file of Object.values(HOOK_FILES)) {
+      expect(await read(repo.root, file)).toBe('{"a":1}\n');
+    }
+  });
+
   it('explains bad usage', async () => {
     const repo = await fixtures.create();
     const none = await runCli(['hooks', 'install'], repo.root);
