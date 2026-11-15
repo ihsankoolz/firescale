@@ -112,6 +112,26 @@ fn every_rule_reads_what_decides_where_the_pack_applies() {
     }
 }
 
+#[test]
+fn the_rules_that_count_jvm_files_read_every_extension_they_count() {
+    // `java_files` counts Groovy too (a Spock test): a cached "no test"
+    // must not outlive one.
+    for rule in [super::entry::ID, super::test_files::ID] {
+        let rule = rules()
+            .into_iter()
+            .find(|candidate| candidate.meta().id == rule)
+            .unwrap();
+        let meta = rule.meta();
+        let matcher = firescale_core::cache::input_matcher(&meta.id, &meta.inputs).unwrap();
+        for extension in super::JVM_CODE {
+            for folder in ["src/main", "src/test"] {
+                let file = format!("{folder}/{extension}/ex/AppSpec.{extension}");
+                assert!(matcher.is_match(&file), "{} does not read {file}", meta.id);
+            }
+        }
+    }
+}
+
 // Found on okhttp: a Gradle repo with a test fixture's pom.xml below.
 #[test]
 fn a_pom_below_another_stack_is_that_stacks_business() {

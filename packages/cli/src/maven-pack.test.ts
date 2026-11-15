@@ -114,3 +114,49 @@ describe('fscale adopt --dry-run with the maven pack', () => {
     expect(await snapshot(repo.root)).toEqual(before);
   });
 });
+
+describe('fscale check result cache with the maven pack', () => {
+  const POM =
+    '<project>\n  <modelVersion>4.0.0</modelVersion>\n  <groupId>com.example</groupId>\n  <artifactId>app</artifactId>\n  <version>1.0.0</version>\n</project>\n';
+
+  async function ids(root: string, rule: string, ...args: string[]): Promise<string[]> {
+    const result = await runCli(['check', '--json', '--rules', rule, ...args], root);
+    const found = (JSON.parse(result.stdout) as { diagnostics: Diagnostic[] }).diagnostics;
+    return found.map((d) => d.ruleId);
+  }
+
+  // The rules count Groovy files as code and tests, so their cached
+  // results depend on them.
+  it('stops reporting "no test" once a Spock test is added', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({ packs: ['maven'] }),
+        'pom.xml': POM,
+        'src/main/java/ex/App.java': 'package ex;\n\nclass App {}\n',
+      },
+    });
+    // This run fills the cache.
+    expect(await ids(repo.root, 'maven/tests')).toEqual(['maven/tests']);
+
+    await repo.write(
+      'src/test/groovy/ex/AppSpec.groovy',
+      'package ex\n\nclass AppSpec extends spock.lang.Specification {}\n',
+    );
+    expect(await ids(repo.root, 'maven/tests', '--no-cache')).toEqual([]);
+    expect(await ids(repo.root, 'maven/tests')).toEqual([]);
+  });
+
+  it('stops reporting "no code" once a Groovy class is added', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({ packs: ['maven'] }),
+        'pom.xml': POM,
+      },
+    });
+    expect(await ids(repo.root, 'maven/entry')).toEqual(['maven/entry']);
+
+    await repo.write('src/main/groovy/ex/App.groovy', 'package ex\n\nclass App {}\n');
+    expect(await ids(repo.root, 'maven/entry', '--no-cache')).toEqual([]);
+    expect(await ids(repo.root, 'maven/entry')).toEqual([]);
+  });
+});
