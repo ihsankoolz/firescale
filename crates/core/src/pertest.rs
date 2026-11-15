@@ -1082,7 +1082,8 @@ pub fn script_text(dir: &std::path::Path, command: &str) -> Option<String> {
         _ => return None,
     };
     let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    // Editors on Windows save a byte order mark, which is not JSON.
+    let json: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     json.get("scripts")?.get(name)?.as_str().map(str::to_owned)
 }
 
