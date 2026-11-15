@@ -63,7 +63,7 @@ So an untracked `image.png` or `report.pdf` at the root runs nothing, while `fro
 
 When unsure, more is affected, never less. These affect **every** project:
 
-- a root lockfile, a CI file, a Compose file anywhere, or a `firescale.config.ts`. A changed `firescale.config.json` is compared with the base's, setting by setting, and affects only the steps a changed setting can reach ([verify.md](verify.md#what-a-config-change-affects), ADR 0058);
+- a root lockfile, a CI file, a Compose file anywhere, or a `firescale.config.ts`. A changed `firescale.config.json` is compared with the base's, setting by setting, and affects only the steps a changed setting can reach; as a file it is a changed file of the repo root project and of the repo root's own steps only, never of a project in a folder below ([verify.md](verify.md#what-a-config-change-affects), ADR 0058);
 - a file that no project and no narrow shared node holds. A shared node is **wide** when a project's folder is inside it (a Docker build context of `.`, say): it says that one project uses everything there, not that nobody else reads a file in it, so it does not count as an owner;
 - with a repo root project, a file directly in the repo root folder that no shared node holds: settings that projects below read (`ruff.toml`, `tsconfig.base.json`, `.prettierrc`) live there.
 
