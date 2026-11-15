@@ -155,8 +155,8 @@ core/ci-exists
 +          GH_TOKEN: \${{ github.token }}
 +          REPO: \${{ github.repository }}
 +          PR: \${{ github.event.pull_request.number }}
-+      - run: npx --yes firescale@0.4.0 tamper --pr-base --approvals "$RUNNER_TEMP/reviews.json"
-+# firescale-workflow: 7044f63325f6176a849b570cfa39a578
++      - run: npx --yes firescale@0.5.0 tamper --pr-base --approvals "$RUNNER_TEMP/reviews.json"
++# firescale-workflow: da8f822b3b0e871e0caf849a7339a76e
 
 core/gitignore-basics
   would create .gitignore
