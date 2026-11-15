@@ -144,6 +144,12 @@ impl std::error::Error for Unreadable {}
 const READ_TRIES: u32 = 5;
 const READ_PAUSE: Duration = Duration::from_millis(20);
 
+/// How often, and how far apart, the rename over the file is tried: for a
+/// write made while a step runs (80 ms in all), and for the record of a
+/// step that ended (about a second in all).
+const RENAME_RUNNING: (u32, Duration) = (5, Duration::from_millis(20));
+const RENAME_ENDED: (u32, Duration) = (21, Duration::from_millis(50));
+
 /// Runs `once` until it succeeds, at most `tries` times, `pause` apart, and
 /// returns the last error when none did.
 fn retrying<T>(
@@ -453,16 +459,19 @@ impl StepTimes {
             return;
         }
         // On Windows a rename fails while another program (a virus scanner,
-        // an indexer) holds the file open for a moment: try a few times.
-        for attempt in 0..5 {
-            if fs::rename(&temporary, self.path()).is_ok() {
-                return;
-            }
-            if attempt < 4 {
-                std::thread::sleep(Duration::from_millis(20));
-            }
+        // an indexer, an editor) holds the file open: try again for a
+        // while. A step that ended is worth about a second: a pass that is
+        // dropped leaves the old time in place. A write made while the step
+        // runs is not: the next heartbeat makes it again.
+        let (tries, pause) = if outcome == Outcome::Unfinished {
+            RENAME_RUNNING
+        } else {
+            RENAME_ENDED
+        };
+        let path = self.path();
+        if retrying(tries, pause, || fs::rename(&temporary, &path)).is_err() {
+            let _ = fs::remove_file(&temporary);
         }
-        let _ = fs::remove_file(&temporary);
     }
 }
 
