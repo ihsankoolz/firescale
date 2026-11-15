@@ -1896,6 +1896,123 @@ fn covers(wide: &str, narrow: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Every kind. A new variant does not compile here until it is listed.
+    fn all_kinds() -> Vec<Kind> {
+        let all = vec![
+            Kind::TestDeleted,
+            Kind::TestSkipped,
+            Kind::AssertionRemoved,
+            Kind::SuppressionAdded,
+            Kind::CoverageLowered,
+            Kind::CiWeakened,
+            Kind::NoVerify,
+            Kind::RuleDisabled,
+            Kind::SnapshotChanged,
+            Kind::ExpectedChanged,
+            Kind::NotChecked,
+        ];
+        for kind in &all {
+            match kind {
+                Kind::TestDeleted
+                | Kind::TestSkipped
+                | Kind::AssertionRemoved
+                | Kind::SuppressionAdded
+                | Kind::CoverageLowered
+                | Kind::CiWeakened
+                | Kind::NoVerify
+                | Kind::RuleDisabled
+                | Kind::SnapshotChanged
+                | Kind::ExpectedChanged
+                | Kind::NotChecked => {}
+            }
+        }
+        all
+    }
+
+    /// The `tamper` object of the schema that ships with the npm package.
+    fn shipped_schema() -> serde_json::Value {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("packages")
+            .join("cli")
+            .join("schemas")
+            .join("verify-output.schema.json");
+        let schema: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        schema["properties"]["tamper"].clone()
+    }
+
+    #[test]
+    fn every_kind_the_guard_can_report_is_in_the_shipped_schema() {
+        let kinds = serde_json::to_value(all_kinds()).unwrap();
+        let schema = shipped_schema();
+        assert_eq!(
+            schema["properties"]["findings"]["items"]["properties"]["kind"]["enum"], kinds,
+            "the kind of a finding"
+        );
+        assert_eq!(
+            schema["properties"]["allowed"]["items"]["properties"]["kinds"]["items"]["enum"], kinds,
+            "the kinds of an allowed file"
+        );
+    }
+
+    /// The keys of `value` that `schema` does not describe, as paths.
+    fn undescribed(value: &serde_json::Value, schema: &serde_json::Value, at: &str) -> Vec<String> {
+        match value {
+            serde_json::Value::Object(map) => map
+                .iter()
+                .flat_map(|(key, value)| {
+                    let at = format!("{at}/{key}");
+                    match schema["properties"].get(key) {
+                        Some(schema) => undescribed(value, schema, &at),
+                        None => vec![at],
+                    }
+                })
+                .collect(),
+            serde_json::Value::Array(items) => items
+                .iter()
+                .flat_map(|item| undescribed(item, &schema["items"], at))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn every_field_of_the_report_is_in_the_shipped_schema() {
+        let kinds = all_kinds();
+        let report = TamperReport {
+            policy: Policy::Enforced,
+            base: "abc".to_owned(),
+            files: 1,
+            counts: Counts::default(),
+            findings: kinds
+                .iter()
+                .map(|kind| Finding {
+                    kind: *kind,
+                    file: "a.test.ts".to_owned(),
+                    line: 1,
+                    on_base: false,
+                    what: "x".to_owned(),
+                })
+                .collect(),
+            not_checked: vec!["b.test.ts".to_owned()],
+            allowed: vec![AllowedFile {
+                file: "c.test.ts".to_owned(),
+                kinds,
+            }],
+            approvals: Some(Approvals {
+                head: "def".to_owned(),
+                by: vec!["someone".to_owned()],
+            }),
+        };
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(
+            undescribed(&value, &shipped_schema(), ""),
+            Vec::<String>::new()
+        );
+    }
+
     // Humanizer: an `#if` gives one loop body two heads, and tree-sitter
     // reads the whole class as an error. The first branch is read instead.
     #[test]
