@@ -566,6 +566,14 @@ pub fn glob_error(glob: &str) -> Option<String> {
         .map(|error| error.kind().to_string())
 }
 
+/// The glob that names exactly `path` and nothing else. A file a violation
+/// names is a path, not a glob: read as one, `app/[id]/page.tsx` names
+/// `app/i/page.tsx` and not the file itself.
+#[must_use]
+pub fn literal_glob(path: &str) -> String {
+    globset::escape(path)
+}
+
 /// Why a run's diff is rejected (guardrail 7), or `None`.
 #[must_use]
 pub fn diff_guard(
@@ -1035,6 +1043,44 @@ mod tests {
         // The runner's own lists compile: none is dropped.
         for glob in SECRET_PATHS.iter().chain(&PROTECTED_PATHS) {
             assert_eq!(glob_error(glob), None, "{glob}");
+        }
+    }
+
+    #[test]
+    fn a_path_taken_literally_allows_that_file_and_no_other() {
+        let change = |path: &str| {
+            vec![Change {
+                path: path.to_owned(),
+                mode: "100644".to_owned(),
+            }]
+        };
+        // The file a violation names, and a file its path names when read
+        // as a glob.
+        for (file, other) in [
+            ("app/[id]/page.tsx", "app/i/page.tsx"),
+            ("app/[...slug]/page.tsx", "app/s/page.tsx"),
+            ("app/{a}/page.tsx", "app/a/page.tsx"),
+            ("app/{a,b}/page.tsx", "app/b/page.tsx"),
+            ("app/*/page.tsx", "app/x/page.tsx"),
+            ("app/**/page.tsx", "app/x/y/page.tsx"),
+            ("app/?/page.tsx", "app/x/page.tsx"),
+            ("app/[!a]/page.tsx", "app/b/page.tsx"),
+            ("!app/page.tsx", "app/page.tsx"),
+            ("app/[id/page.tsx", "app/i/page.tsx"),
+        ] {
+            let allowed = vec![literal_glob(file)];
+            assert_eq!(diff_guard(&change(file), &allowed, &[]), None, "{file}");
+            assert!(
+                diff_guard(&change(other), &allowed, &[])
+                    .is_some_and(|why| why.contains("outside")),
+                "{file} allows {other}"
+            );
+            // As git on Windows may report it: another letter case.
+            assert_eq!(
+                diff_guard(&change(&file.to_uppercase()), &allowed, &[]),
+                None,
+                "{file}"
+            );
         }
     }
 

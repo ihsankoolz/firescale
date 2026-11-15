@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use firescale_core::agentrun::{
-    append_ledger, diff_guard, glob_error, now_utc, repo_limits, staged_changes, Adapter,
-    AgentResult, LedgerEntry, Policy, ProgramAdapter, RepoState, Request, RunWorktree,
+    append_ledger, diff_guard, glob_error, literal_glob, now_utc, repo_limits, staged_changes,
+    Adapter, AgentResult, LedgerEntry, Policy, ProgramAdapter, RepoState, Request, RunWorktree,
 };
 use firescale_core::blame::BaseCommit;
 use firescale_core::check::run_check;
@@ -263,10 +263,10 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
     let diagnostics_json =
         serde_json::to_value(&diagnostics).map_err(|e| Error::internal(e.to_string()))?;
     let skill = rule_skill(rule)?;
-    // What the fix may change: the rule's inputs and the files its
-    // violations name.
+    // What the fix may change: the rule's inputs (globs) and the files its
+    // violations name (paths, never read as globs).
     let mut allowed: Vec<String> = rule.meta.inputs.clone();
-    allowed.extend(diagnostics.iter().map(|d| d.file.clone()));
+    allowed.extend(diagnostics.iter().map(|d| literal_glob(&d.file)));
     let description = rule.meta.description.clone();
 
     // 2. Isolation: a worktree on a new branch, rolled back when dropped
