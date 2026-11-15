@@ -22,7 +22,7 @@ pub const JSON_CONFIG: &str = "firescale.config.json";
 /// Status of a rule that the config does not mention.
 pub const DEFAULT_STATUS: Status = Status::Evaluated;
 
-const TOP_LEVEL_KEYS: [&str; 6] = [
+pub(crate) const TOP_LEVEL_KEYS: [&str; 6] = [
     "$schema",
     "packs",
     "rules",
@@ -325,7 +325,7 @@ pub fn resolve_config<'a>(
         }
     }
 
-    let verify = parse_verify(name, object.get("verify"))?;
+    let verify = verify_settings(name, raw)?;
     let agent = check_agent(name, object.get("agent"))?;
 
     rules.sort_by(|a, b| a.meta.id.cmp(&b.meta.id));
@@ -749,10 +749,19 @@ pub fn load_verify_config(root: &Path) -> Result<VerifyConfig> {
         )));
     }
     if !root.join(JSON_CONFIG).exists() {
-        return Ok(VerifyConfig::default());
+        return verify_settings(JSON_CONFIG, &Value::Object(Map::new()));
     }
     let raw = read_json(root)?;
-    parse_verify(JSON_CONFIG, raw.get("verify"))
+    verify_settings(JSON_CONFIG, &raw)
+}
+
+/// The `verify` settings of a raw config value, with the other settings
+/// that every step's key holds (ADR 0058). Nothing else of the value is
+/// checked.
+pub fn verify_settings(name: &str, raw: &Value) -> Result<VerifyConfig> {
+    let mut verify = parse_verify(name, raw.get("verify"))?;
+    verify.other_settings = crate::configkey::other_settings(raw);
+    Ok(verify)
 }
 
 /// Checks the shape of `agent` (the limits of `fscale fix --agent`, M27):

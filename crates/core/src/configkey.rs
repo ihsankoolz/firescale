@@ -1,0 +1,945 @@
+//! What of the firescale config a verify step's result can depend on
+//! (ADR 0058).
+//!
+//! A change to `firescale.config.json` used to affect every project and
+//! change every step's cache key, because the config was treated as a file.
+//! Here it is compared by value, setting by setting:
+//!
+//! - a step's **command**, and whether it is on, come out of the plan
+//!   ([`crate::verify::plan_verify`]); the command is in the step's key;
+//! - the settings **every step shares** ([`shared_settings`]) are a line of
+//!   every step's key, and a change to one affects every project;
+//! - everything else (time limits, budgets, labels, the tamper policy, the
+//!   limits of `fix --agent`) is in no key and affects nothing.
+//!
+//! A setting this version does not know is on the "every step" side: the
+//! other settings are made by taking out what is known ([`other_settings`]),
+//! and a base config that cannot be read affects every project.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use serde_json::{Map, Value};
+
+use crate::config::{verify_settings, JSON_CONFIG, TS_CONFIG};
+use crate::facts::RepoFacts;
+use crate::git::run_git;
+use crate::verify::{plan_verify, Planned, ProjectPlan, VerifyConfig, VerifyPlan};
+
+/// The top-level keys that are in no step's key: `$schema` (only editors
+/// read it), `protectedPaths` and `agent` (read only by `fix --agent`).
+/// `verify` is taken out too, and read setting by setting.
+const NOT_IN_OTHER_SETTINGS: [&str; 4] = ["$schema", "protectedPaths", "agent", "verify"];
+
+/// The value with the keys of every object sorted, so the order in which a
+/// person wrote them never matters.
+fn sorted(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => {
+            let ordered: BTreeMap<&String, Value> = object
+                .iter()
+                .map(|(key, value)| (key, sorted(value)))
+                .collect();
+            Value::Object(
+                ordered
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), value))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The settings outside `verify` that every step's key holds, as JSON with
+/// sorted keys: the raw config without the keys of
+/// [`NOT_IN_OTHER_SETTINGS`]. `packs`, `rules` and any top-level key this
+/// version does not know are in it, because it is made by taking out what
+/// is known.
+///
+/// A key set to `null` is the same as one left out, `packs` left out is
+/// `["core"]` and `rules` left out is `{}`, as [`crate::config::resolve_config`]
+/// reads them.
+#[must_use]
+pub fn other_settings(raw: &Value) -> String {
+    let Some(object) = raw.as_object() else {
+        return raw.to_string();
+    };
+    let mut rest: Map<String, Value> = object
+        .iter()
+        .filter(|(key, value)| !NOT_IN_OTHER_SETTINGS.contains(&key.as_str()) && !value.is_null())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    rest.entry("packs".to_owned())
+        .or_insert_with(|| Value::Array(vec![Value::String("core".to_owned())]));
+    rest.entry("rules".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    sorted(&Value::Object(rest)).to_string()
+}
+
+/// The settings every step's result can depend on, by name, each with its
+/// resolved value as text.
+///
+/// `VerifyConfig` is taken apart with no `..`: a new field does not compile
+/// until it is put on a side here (and in the table of ADR 0058).
+fn shared_parts(config: &VerifyConfig) -> BTreeMap<String, String> {
+    let VerifyConfig {
+        // In, per step: the plan turns them into each step's command, which
+        // is in its key, or into "off".
+        steps: _,
+        projects: _,
+        // In, every step.
+        fail_on_skipped,
+        no_ci_variable,
+        keep_running_when_service_down,
+        stop_after_errors: _,
+        other_settings,
+        // Out: time limits and budgets. A step they stop is never kept as
+        // passed or failed.
+        timeout: _,
+        idle_timeout: _,
+        step_timeouts: _,
+        project_timeouts: _,
+        base_budget: _,
+        // Out: which passing steps are judged on the base. The label is
+        // worked out again in every run.
+        label_fixed: _,
+        // Out of a head step's key; in the base store's key
+        // (`environment` in `blame::compare`).
+        base_install: _,
+        // Out: the tamper guard reads the base commit's policy and is
+        // never cached.
+        tamper: _,
+    } = config;
+    let mut parts = BTreeMap::new();
+    parts.insert("verify.ci".to_owned(), (!no_ci_variable).to_string());
+    parts.insert(
+        "verify.failOnSkipped".to_owned(),
+        fail_on_skipped.to_string(),
+    );
+    parts.insert(
+        "verify.stopWhenServiceDown".to_owned(),
+        (!keep_running_when_service_down).to_string(),
+    );
+    // The resolved count: the default written out in full is no change.
+    parts.insert(
+        "verify.stopAfterErrors".to_owned(),
+        config
+            .errors_before_stop()
+            .map_or_else(|| "false".to_owned(), |count| count.to_string()),
+    );
+    match serde_json::from_str::<Value>(other_settings) {
+        Ok(Value::Object(other)) => {
+            for (key, value) in other {
+                parts.insert(key, value.to_string());
+            }
+        }
+        // Not made from a config's value (a `VerifyConfig` built in code).
+        _ => {
+            parts.insert("(other settings)".to_owned(), other_settings.clone());
+        }
+    }
+    parts
+}
+
+/// A digest of the settings every step's result can depend on: a line of
+/// every step's cache key (ADR 0058).
+#[must_use]
+pub fn shared_settings(config: &VerifyConfig) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for (name, value) in shared_parts(config) {
+        hasher.update(format!("{name}\0{value}\n").as_bytes());
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+/// The config of a commit, as far as it can be compared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseConfig {
+    /// Its `verify` settings and other settings; the defaults when the
+    /// commit has no config.
+    Settings(Box<VerifyConfig>),
+    /// It cannot be compared, with why: a `firescale.config.ts`, JSON that
+    /// does not parse, a setting this version does not know.
+    Unreadable(String),
+}
+
+/// Reads a config's text as [`BaseConfig`].
+#[must_use]
+pub fn base_config_from(text: Option<&str>) -> BaseConfig {
+    let raw = match text {
+        None => Value::Object(Map::new()),
+        Some(text) => match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
+            Ok(raw) => raw,
+            Err(error) => return BaseConfig::Unreadable(format!("it is not valid JSON ({error})")),
+        },
+    };
+    if !raw.is_object() {
+        return BaseConfig::Unreadable("it does not hold an object".to_owned());
+    }
+    match verify_settings(JSON_CONFIG, &raw) {
+        Ok(settings) => BaseConfig::Settings(Box::new(settings)),
+        Err(error) => BaseConfig::Unreadable(error.message().to_owned()),
+    }
+}
+
+/// The firescale config of `commit`, read with git and never run: the
+/// defaults when the commit has none.
+#[must_use]
+pub fn base_config(root: &Path, commit: &str) -> BaseConfig {
+    let unreadable = |why: &str| BaseConfig::Unreadable(why.to_owned());
+    // Names relative to `root`, also when it is a folder inside a larger repo.
+    let listed = match run_git(
+        root,
+        &[
+            "ls-tree",
+            "--name-only",
+            "-z",
+            commit,
+            "--",
+            JSON_CONFIG,
+            TS_CONFIG,
+        ],
+    ) {
+        Ok(out) if out.code == 0 => out.stdout,
+        _ => return unreadable("git could not list the files of that commit"),
+    };
+    let names: Vec<&str> = listed.split('\0').filter(|name| !name.is_empty()).collect();
+    if names.contains(&TS_CONFIG) {
+        return unreadable("it is a firescale.config.ts, which is code and is not run for this");
+    }
+    if !names.contains(&JSON_CONFIG) {
+        return base_config_from(None);
+    }
+    match run_git(root, &["show", &format!("{commit}:./{JSON_CONFIG}")]) {
+        Ok(out) if out.code == 0 => base_config_from(Some(&out.stdout)),
+        _ => unreadable("git could not read it from that commit"),
+    }
+}
+
+/// The commit `--affected` measures from: the merge base with `base`, or
+/// `HEAD` when no base is given. `None` when git cannot say.
+#[must_use]
+pub fn comparison_commit(root: &Path, base: Option<&str>) -> Option<String> {
+    let out = match base {
+        Some(base) => run_git(root, &["merge-base", "HEAD", base]),
+        None => run_git(root, &["rev-parse", "--verify", "--quiet", "HEAD"]),
+    }
+    .ok()?;
+    let commit = out.stdout.trim();
+    (out.code == 0 && !commit.is_empty()).then(|| commit.to_owned())
+}
+
+/// A unit of a plan: the project's folder and kind, or `(None, None)` for
+/// the repo root's own steps.
+pub type UnitId = (Option<String>, Option<String>);
+
+/// What the difference between two configs affects.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigEffect {
+    /// Set when every step is affected, with the reason: a setting every
+    /// step shares changed, or the base's config cannot be read.
+    pub everything: Option<String>,
+    /// Otherwise: the units with a step whose command is new or changed,
+    /// and those steps.
+    pub units: BTreeMap<UnitId, Vec<String>>,
+}
+
+impl ConfigEffect {
+    /// True when the config change affects no step.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.everything.is_none() && self.units.is_empty()
+    }
+
+    /// True when the change can alter the result of this step.
+    #[must_use]
+    pub fn reaches(&self, folder: Option<&str>, kind: Option<&str>, step: &str) -> bool {
+        self.everything.is_some()
+            || self
+                .units
+                .get(&(folder.map(str::to_owned), kind.map(str::to_owned)))
+                .is_some_and(|steps| steps.iter().any(|name| name == step))
+    }
+
+    /// Marks the units of an affected plan that the config change reaches
+    /// and that no changed file already runs.
+    pub fn mark(&self, plan: &mut VerifyPlan) {
+        let Some(affected) = plan.affected.as_mut() else {
+            return;
+        };
+        for unit in affected.units.iter_mut().filter(|unit| !unit.affected) {
+            let Some(steps) = self.units.get(&(unit.project.clone(), unit.kind.clone())) else {
+                continue;
+            };
+            let steps: Vec<&str> = steps.iter().map(String::as_str).collect();
+            let listed = match steps.as_slice() {
+                [] => continue,
+                [one] => format!("{one} step runs"),
+                [first @ .., last] => format!("{} and {last} steps run", first.join(", ")),
+            };
+            unit.affected = true;
+            unit.reason = format!("{JSON_CONFIG} changes what its {listed}");
+        }
+    }
+}
+
+/// The note of an affected run whose config changed in nothing that can
+/// change a step's result.
+pub const NOTHING_TO_RUN_NOTE: &str = "firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs no project.";
+
+fn commands(steps: &[(String, Planned)]) -> impl Iterator<Item = (&str, &str)> {
+    steps.iter().filter_map(|(name, planned)| match planned {
+        Planned::Command(command) => Some((name.as_str(), command.as_str())),
+        _ => None,
+    })
+}
+
+fn has_command(steps: Option<&[(String, Planned)]>, step: &str, command: &str) -> bool {
+    steps.is_some_and(|steps| commands(steps).any(|found| found == (step, command)))
+}
+
+/// What the difference between the config of a base commit and the loaded
+/// one affects. `plan` is the plan made from `head`; `base_plan` the plan
+/// made the same way, from the same facts, with the base's settings.
+#[must_use]
+pub fn effect_between(
+    base: &BaseConfig,
+    head: &VerifyConfig,
+    base_plan: impl FnOnce(&VerifyConfig) -> VerifyPlan,
+    plan: &VerifyPlan,
+) -> ConfigEffect {
+    let base = match base {
+        BaseConfig::Settings(settings) => settings,
+        BaseConfig::Unreadable(why) => {
+            return ConfigEffect {
+                everything: Some(format!(
+                    "the {JSON_CONFIG} of the commit compared with could not be read by this version ({why}), so its settings cannot be compared"
+                )),
+                units: BTreeMap::new(),
+            };
+        }
+    };
+    let (before, after) = (shared_parts(base), shared_parts(head));
+    let names: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+    let differ: Vec<&str> = names
+        .into_iter()
+        .filter(|name| before.get(*name) != after.get(*name))
+        .map(String::as_str)
+        .collect();
+    if !differ.is_empty() {
+        return ConfigEffect {
+            everything: Some(format!(
+                "a setting of {JSON_CONFIG} that every step's result can depend on changed ({})",
+                differ.join(", ")
+            )),
+            units: BTreeMap::new(),
+        };
+    }
+    let old = base_plan(base);
+    let mut units: BTreeMap<UnitId, Vec<String>> = BTreeMap::new();
+    for (step, command) in commands(&plan.steps) {
+        if !has_command(Some(&old.steps), step, command) {
+            units.entry((None, None)).or_default().push(step.to_owned());
+        }
+    }
+    for project in &plan.projects {
+        let same_unit =
+            |other: &&ProjectPlan| other.root == project.root && other.kind == project.kind;
+        let before = old.projects.iter().find(same_unit);
+        for (step, command) in commands(&project.steps) {
+            if !has_command(before.map(|plan| plan.steps.as_slice()), step, command) {
+                units
+                    .entry((Some(project.root.clone()), project.kind.clone()))
+                    .or_default()
+                    .push(step.to_owned());
+            }
+        }
+    }
+    ConfigEffect {
+        everything: None,
+        units,
+    }
+}
+
+/// What the difference between the config at `commit` and the loaded one
+/// affects, for the plan made from the loaded one. `affected` and `base`
+/// are what [`plan_verify`] was given.
+#[must_use]
+pub fn effect_since(
+    root: &Path,
+    commit: &str,
+    facts: &RepoFacts,
+    head: &VerifyConfig,
+    plan: &VerifyPlan,
+    affected: bool,
+    base: Option<&str>,
+) -> ConfigEffect {
+    effect_between(
+        &base_config(root, commit),
+        head,
+        |settings| plan_verify(root, facts, settings, affected, base),
+        plan,
+    )
+}
+
+/// For `verify --affected`: what a changed `firescale.config.json` affects,
+/// measured from the commit the run compares with. `None` when the config
+/// is not among the changed files, or when that commit is not known: then
+/// the config counts as a changed file like any other, and affects every
+/// project ([`crate::graph::widening_reason`]).
+#[must_use]
+pub fn effect_for_affected(
+    root: &Path,
+    base: Option<&str>,
+    changed: &crate::affected::Changed,
+    facts: &RepoFacts,
+    head: &VerifyConfig,
+    plan: &VerifyPlan,
+) -> Option<ConfigEffect> {
+    let crate::affected::Changed::Files(files) = changed else {
+        return None;
+    };
+    if !files.contains(JSON_CONFIG) {
+        return None;
+    }
+    let commit = comparison_commit(root, base)?;
+    Some(effect_since(root, &commit, facts, head, plan, true, base))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::config::{AgentLimits, TOP_LEVEL_KEYS};
+    use crate::facts::detect_facts;
+    use crate::testing::course_project;
+    use crate::verify::ProjectTimeouts;
+
+    /// The side of a setting (ADR 0058).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Side {
+        /// In no key; a change affects nothing.
+        Out,
+        /// In every step's key; a change affects every project.
+        InAll,
+        /// In the key of these steps only: `(project folder, step)`, with
+        /// `""` for the repo root's own steps.
+        InSteps(&'static [(&'static str, &'static str)]),
+    }
+
+    const LEDGER: &str = "backend/ledger_service";
+
+    /// The table of ADR 0058: every setting, a change of it (from the first
+    /// value to the second) and the side it must land on.
+    fn table() -> Vec<(&'static str, Value, Value, Side)> {
+        let project = |setting: Value| json!({ "verify": { "projects": { LEDGER: setting } } });
+        vec![
+            (
+                "$schema",
+                json!({}),
+                json!({ "$schema": "./schema.json" }),
+                Side::Out,
+            ),
+            (
+                "packs",
+                json!({}),
+                json!({ "packs": ["core", "agent-ready"] }),
+                Side::InAll,
+            ),
+            (
+                "rules.<id>",
+                json!({}),
+                json!({ "rules": { "core/readme-setup": "off" } }),
+                Side::InAll,
+            ),
+            (
+                "rules.<id>.status",
+                json!({ "rules": { "core/readme-setup": { "status": "off" } } }),
+                json!({ "rules": { "core/readme-setup": { "status": "enforced" } } }),
+                Side::InAll,
+            ),
+            (
+                "rules.<id>.options",
+                json!({ "rules": { "core/env-example": { "options": { "excludePaths": ["a/"] } } } }),
+                json!({ "rules": { "core/env-example": { "options": { "excludePaths": ["b/"] } } } }),
+                Side::InAll,
+            ),
+            (
+                "protectedPaths",
+                json!({}),
+                json!({ "protectedPaths": ["infra/**"] }),
+                Side::Out,
+            ),
+            (
+                "agent.maxTurns",
+                json!({}),
+                json!({ "agent": { "maxTurns": 5 } }),
+                Side::Out,
+            ),
+            (
+                "agent.maxCostUsd",
+                json!({}),
+                json!({ "agent": { "maxCostUsd": 1.5 } }),
+                Side::Out,
+            ),
+            (
+                "agent.timeoutSeconds",
+                json!({}),
+                json!({ "agent": { "timeoutSeconds": 60 } }),
+                Side::Out,
+            ),
+            // A root command runs once, in place of every project's own.
+            (
+                "verify.<step>",
+                json!({}),
+                json!({ "verify": { "test": "python -m pytest backend" } }),
+                Side::InSteps(&[("", "test")]),
+            ),
+            (
+                "verify.<step>.command",
+                json!({ "verify": { "test": "python -m pytest backend" } }),
+                json!({ "verify": { "test": { "command": "python -m pytest -x backend" } } }),
+                Side::InSteps(&[("", "test")]),
+            ),
+            // Turned off: nothing to run. Turned on again: the projects'
+            // own test steps are new.
+            (
+                "verify.<step>: false",
+                json!({ "verify": { "test": false } }),
+                json!({}),
+                Side::InSteps(&[
+                    ("backend/audit_service", "test"),
+                    ("backend/auth_service", "test"),
+                    (LEDGER, "test"),
+                    ("backend/market_service", "test"),
+                    ("backend/realtime_service", "test"),
+                    ("frontend", "test"),
+                ]),
+            ),
+            (
+                "verify.<step>.timeout",
+                json!({}),
+                json!({ "verify": { "test": { "timeout": "2h" } } }),
+                Side::Out,
+            ),
+            (
+                "verify.timeout",
+                json!({}),
+                json!({ "verify": { "timeout": "2h" } }),
+                Side::Out,
+            ),
+            (
+                "verify.idleTimeout",
+                json!({}),
+                json!({ "verify": { "idleTimeout": false } }),
+                Side::Out,
+            ),
+            (
+                "verify.ci",
+                json!({}),
+                json!({ "verify": { "ci": false } }),
+                Side::InAll,
+            ),
+            (
+                "verify.failOnSkipped",
+                json!({}),
+                json!({ "verify": { "failOnSkipped": true } }),
+                Side::InAll,
+            ),
+            (
+                "verify.stopWhenServiceDown",
+                json!({}),
+                json!({ "verify": { "stopWhenServiceDown": false } }),
+                Side::InAll,
+            ),
+            (
+                "verify.stopAfterErrors",
+                json!({}),
+                json!({ "verify": { "stopAfterErrors": false } }),
+                Side::InAll,
+            ),
+            (
+                "verify.labelFixed",
+                json!({}),
+                json!({ "verify": { "labelFixed": true } }),
+                Side::Out,
+            ),
+            (
+                "verify.baseBudget",
+                json!({}),
+                json!({ "verify": { "baseBudget": "1m" } }),
+                Side::Out,
+            ),
+            (
+                "verify.baseInstall",
+                json!({}),
+                json!({ "verify": { "baseInstall": "npm ci" } }),
+                Side::Out,
+            ),
+            (
+                "verify.tamper",
+                json!({}),
+                json!({ "verify": { "tamper": { "policy": "enforced", "testPaths": ["checks/**"], "allow": ["a/**"] } } }),
+                Side::Out,
+            ),
+            (
+                "verify.projects.<folder>: false",
+                project(json!(false)),
+                json!({}),
+                Side::InSteps(&[(LEDGER, "test")]),
+            ),
+            (
+                "verify.projects.<folder>.<step>",
+                json!({}),
+                project(json!({ "test": "python -m pytest -q" })),
+                Side::InSteps(&[(LEDGER, "test")]),
+            ),
+            (
+                "verify.projects.<folder>.<step>.command",
+                project(json!({ "lint": "ruff check ." })),
+                project(json!({ "lint": { "command": "ruff check --fix ." } })),
+                Side::InSteps(&[(LEDGER, "lint")]),
+            ),
+            (
+                "verify.projects.<folder>.<step>: false",
+                project(json!({ "test": false })),
+                json!({}),
+                Side::InSteps(&[(LEDGER, "test")]),
+            ),
+            (
+                "verify.projects.<folder>.timeout",
+                json!({}),
+                project(json!({ "timeout": "2h" })),
+                Side::Out,
+            ),
+            (
+                "verify.projects.<folder>.<step>.timeout",
+                project(json!({ "test": { "timeout": "1h" } })),
+                project(json!({ "test": { "timeout": "2h" } })),
+                Side::Out,
+            ),
+            // A top-level key of a newer firescale, in the base commit.
+            (
+                "(unknown)",
+                json!({ "future": true }),
+                json!({}),
+                Side::InAll,
+            ),
+        ]
+    }
+
+    fn settings(raw: &Value) -> VerifyConfig {
+        verify_settings(JSON_CONFIG, raw).expect("a valid config")
+    }
+
+    #[test]
+    fn every_setting_lands_on_the_side_the_adr_gives_it() {
+        let fixture = course_project().unwrap();
+        let root = fixture.root();
+        let facts = detect_facts(root).unwrap();
+        for affected in [false, true] {
+            for (name, before, after, side) in table() {
+                // The unknown key is refused in the working tree; the base
+                // side goes through the same reader as a commit's config.
+                let base = base_config_from(Some(&before.to_string()));
+                let head = settings(&after);
+                let plan = plan_verify(root, &facts, &head, affected, None);
+                let effect = effect_between(
+                    &base,
+                    &head,
+                    |old| plan_verify(root, &facts, old, affected, None),
+                    &plan,
+                );
+                let BaseConfig::Settings(old) = &base else {
+                    panic!("{name}: the base config was not read");
+                };
+                let same_key = shared_settings(old) == shared_settings(&head);
+                match side {
+                    Side::Out => {
+                        assert!(effect.is_empty(), "{name}: {effect:?}");
+                        assert!(same_key, "{name}: the shared settings changed");
+                        assert_eq!(
+                            plan,
+                            plan_verify(root, &facts, old, affected, None),
+                            "{name}: the plan changed"
+                        );
+                    }
+                    Side::InAll => {
+                        assert!(effect.everything.is_some(), "{name}: {effect:?}");
+                        assert!(!same_key, "{name}: the shared settings did not change");
+                    }
+                    Side::InSteps(steps) => {
+                        assert!(effect.everything.is_none(), "{name}: {effect:?}");
+                        assert!(same_key, "{name}: the shared settings changed");
+                        let found: Vec<(String, String)> = effect
+                            .units
+                            .iter()
+                            .flat_map(|((folder, _), steps)| {
+                                steps.iter().map(move |step| {
+                                    (folder.clone().unwrap_or_default(), step.clone())
+                                })
+                            })
+                            .collect();
+                        let expected: Vec<(String, String)> = steps
+                            .iter()
+                            .map(|(folder, step)| ((*folder).to_owned(), (*step).to_owned()))
+                            .collect();
+                        assert_eq!(found, expected, "{name}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The settings each field of the config carries, by the names of the
+    /// table. No `..`: a new field does not compile until it is named here,
+    /// and the test below then asks for its row.
+    fn settings_carried() -> Vec<&'static str> {
+        let VerifyConfig {
+            steps: _,
+            fail_on_skipped: _,
+            projects: _,
+            timeout: _,
+            idle_timeout: _,
+            label_fixed: _,
+            step_timeouts: _,
+            project_timeouts: _,
+            no_ci_variable: _,
+            keep_running_when_service_down: _,
+            stop_after_errors: _,
+            base_budget: _,
+            base_install: _,
+            tamper: _,
+            other_settings: _,
+        } = VerifyConfig::default();
+        let ProjectTimeouts { all: _, steps: _ } = ProjectTimeouts::default();
+        let AgentLimits {
+            max_turns: _,
+            max_cost_usd: _,
+            timeout_seconds: _,
+        } = AgentLimits::default();
+        vec![
+            // steps
+            "verify.<step>",
+            "verify.<step>.command",
+            "verify.<step>: false",
+            // fail_on_skipped
+            "verify.failOnSkipped",
+            // projects
+            "verify.projects.<folder>: false",
+            "verify.projects.<folder>.<step>",
+            "verify.projects.<folder>.<step>.command",
+            "verify.projects.<folder>.<step>: false",
+            // timeout, idle_timeout, label_fixed, step_timeouts
+            "verify.timeout",
+            "verify.idleTimeout",
+            "verify.labelFixed",
+            "verify.<step>.timeout",
+            // project_timeouts: all, steps
+            "verify.projects.<folder>.timeout",
+            "verify.projects.<folder>.<step>.timeout",
+            // no_ci_variable, keep_running_when_service_down, stop_after_errors
+            "verify.ci",
+            "verify.stopWhenServiceDown",
+            "verify.stopAfterErrors",
+            // base_budget, base_install, tamper
+            "verify.baseBudget",
+            "verify.baseInstall",
+            "verify.tamper",
+            // other_settings
+            "packs",
+            "rules.<id>",
+            "rules.<id>.status",
+            "rules.<id>.options",
+            "(unknown)",
+            // Top-level keys that are in no key, and the agent limits.
+            "$schema",
+            "protectedPaths",
+            "agent.maxTurns",
+            "agent.maxCostUsd",
+            "agent.timeoutSeconds",
+        ]
+    }
+
+    #[test]
+    fn the_table_names_every_setting_and_nothing_else() {
+        let mut rows: Vec<&str> = table().iter().map(|(name, ..)| *name).collect();
+        let mut carried = settings_carried();
+        rows.sort_unstable();
+        carried.sort_unstable();
+        assert_eq!(rows, carried);
+        // Every top-level key the config reader accepts has a row.
+        for key in TOP_LEVEL_KEYS {
+            assert!(
+                rows.iter().any(|row| {
+                    *row == key
+                        || row.starts_with(&format!("{key}."))
+                        || row.starts_with(&format!("{key}:"))
+                }),
+                "no row for the top-level key {key}"
+            );
+        }
+        // Every key the verify reader accepts is in the table: its error
+        // for an unknown key lists them all.
+        let error = verify_settings(JSON_CONFIG, &json!({ "verify": { "zzz": 1 } }))
+            .err()
+            .expect("an unknown verify key is refused");
+        let listed = error
+            .message()
+            .split_once("other keys: ")
+            .map(|(_, keys)| keys.trim_end_matches('.').to_owned())
+            .expect("the error lists the keys");
+        for key in listed.split(", ") {
+            let row = if key == "projects" {
+                "verify.projects.<folder>: false".to_owned()
+            } else {
+                format!("verify.{key}")
+            };
+            assert!(rows.contains(&row.as_str()), "no row for verify.{key}");
+        }
+    }
+
+    #[test]
+    fn a_base_config_this_version_cannot_read_affects_everything() {
+        let head = settings(&json!({}));
+        let plan = VerifyPlan::default();
+        for (text, why) in [
+            ("{ not json", "it is not valid JSON"),
+            ("[]", "it does not hold an object"),
+            (
+                r#"{ "verify": { "retries": 2 } }"#,
+                "unknown verify step \"retries\"",
+            ),
+            (
+                r#"{ "verify": { "timeout": "soon" } }"#,
+                "verify.timeout must be a time",
+            ),
+            (
+                r#"{ "verify": { "test": { "retries": 2 } } }"#,
+                "unknown key \"retries\" in verify.test",
+            ),
+            (
+                r#"{ "verify": { "tamper": { "level": 1 } } }"#,
+                "unknown key \"level\" in verify.tamper",
+            ),
+        ] {
+            let base = base_config_from(Some(text));
+            let effect = effect_between(&base, &head, |_| VerifyPlan::default(), &plan);
+            let reason = effect.everything.expect(text);
+            assert!(reason.contains(why), "{text}: {reason}");
+            assert!(effect.units.is_empty());
+        }
+        // A top-level key this version does not know is one of the other
+        // settings, so it is in the key and its change is named.
+        let base = base_config_from(Some(r#"{ "future": { "x": 1 }, "packs": ["core"] }"#));
+        let effect = effect_between(&base, &head, |_| VerifyPlan::default(), &plan);
+        assert_eq!(
+            effect.everything.as_deref(),
+            Some("a setting of firescale.config.json that every step's result can depend on changed (future)")
+        );
+    }
+
+    #[test]
+    fn the_other_settings_do_not_depend_on_how_the_config_is_written() {
+        let plain = other_settings(&json!({}));
+        assert_eq!(plain, r#"{"packs":["core"],"rules":{}}"#);
+        for same in [
+            json!({ "packs": null, "rules": null }),
+            json!({ "packs": ["core"], "rules": {} }),
+            json!({ "$schema": "x", "protectedPaths": ["a/**"], "agent": { "maxTurns": 3 } }),
+            json!({ "verify": { "ci": false, "test": "x" } }),
+        ] {
+            assert_eq!(other_settings(&same), plain, "{same}");
+        }
+        // Key order does not matter; a list's order does.
+        let a: Value = serde_json::from_str(
+            r#"{ "rules": { "b": "off", "a": { "options": { "y": 1, "x": 2 } } } }"#,
+        )
+        .unwrap();
+        let b: Value = serde_json::from_str(
+            r#"{ "rules": { "a": { "options": { "x": 2, "y": 1 } }, "b": "off" } }"#,
+        )
+        .unwrap();
+        assert_eq!(other_settings(&a), other_settings(&b));
+        assert_ne!(
+            other_settings(&json!({ "packs": ["core", "agent-ready"] })),
+            other_settings(&json!({ "packs": ["agent-ready", "core"] }))
+        );
+        // A value inside a rule's options is the rule's to read: null stays.
+        assert_ne!(
+            other_settings(&json!({ "rules": { "a": { "options": { "x": null } } } })),
+            other_settings(&json!({ "rules": { "a": { "options": {} } } }))
+        );
+    }
+
+    #[test]
+    fn a_default_written_out_in_full_is_no_change() {
+        let plain = shared_settings(&settings(&json!({})));
+        let full = settings(&json!({
+            "packs": ["core"],
+            "verify": {
+                "ci": true,
+                "failOnSkipped": false,
+                "stopWhenServiceDown": true,
+                "stopAfterErrors": crate::verify::DEFAULT_ERRORS_BEFORE_STOP,
+            }
+        }));
+        assert_eq!(shared_settings(&full), plain);
+    }
+
+    #[test]
+    fn the_units_a_change_reaches_are_marked_with_the_steps_it_changes() {
+        let mut effect = ConfigEffect::default();
+        effect.units.insert(
+            (Some("api".to_owned()), Some("python".to_owned())),
+            vec!["lint".to_owned(), "typecheck".to_owned(), "test".to_owned()],
+        );
+        effect.units.insert((None, None), vec!["test".to_owned()]);
+        assert!(effect.reaches(Some("api"), Some("python"), "lint"));
+        assert!(!effect.reaches(Some("api"), Some("node"), "lint"));
+        assert!(!effect.reaches(Some("web"), Some("node"), "lint"));
+        assert!(effect.reaches(None, None, "test"));
+        assert!(!effect.reaches(None, None, "lint"));
+        let unit = |project: Option<&str>, kind: Option<&str>, affected: bool| {
+            crate::verify::AffectedUnit {
+                project: project.map(str::to_owned),
+                kind: kind.map(str::to_owned),
+                affected,
+                reason: "before".to_owned(),
+            }
+        };
+        let mut plan = VerifyPlan {
+            affected: Some(crate::verify::AffectedPlan {
+                units: vec![
+                    unit(None, None, false),
+                    unit(Some("api"), Some("python"), false),
+                    unit(Some("web"), Some("node"), false),
+                ],
+                ..crate::verify::AffectedPlan::default()
+            }),
+            ..VerifyPlan::default()
+        };
+        effect.mark(&mut plan);
+        let units = plan.affected.unwrap().units;
+        assert_eq!(
+            units
+                .iter()
+                .map(|unit| (unit.affected, unit.reason.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    true,
+                    "firescale.config.json changes what its test step runs"
+                ),
+                (
+                    true,
+                    "firescale.config.json changes what its lint, typecheck and test steps run"
+                ),
+                (false, "before"),
+            ]
+        );
+    }
+}
