@@ -13,6 +13,7 @@ A diagnostic is kept when its file:
 
 1. changed: it differs from `HEAD` (staged or not), is untracked and not ignored, or, with `--base <ref>`, differs between the merge base of `<ref>` and `HEAD`; or
 2. belongs to an affected project. A project is affected when one of its files changed, or when it depends, directly or through other projects, on a project that is.
+3. belongs to no project below the repo root, and a changed file is one of the `inputs` of the diagnostic's rule. A change in one place can cause a finding on a repo-level file that did not change: a new `lint` script in `web/package.json` makes `AGENTS.md` out of date. Without this the stop hook, which runs `--affected`, would let an agent stop with that finding. It keeps more than needed when a rule reads many files: after any change, `core/no-secrets-in-source` (inputs `**/*`) keeps its findings on repo-level files. Findings inside a project that is not affected are still left out.
 
 Projects and their dependencies come from `fscale facts` (see [facts.md](facts.md)). A file belongs to the project with the deepest root that contains it, so a root package only owns files outside the other packages.
 
@@ -35,3 +36,4 @@ The summary, each rule's violation count, `ok` and the exit code all describe th
 
 - `check --affected` uses the simple graph built from workspace files; `verify --affected` uses the full one. Nx's own graph is not read by either.
 - Rules are not skipped for unaffected projects, so `--affected` changes what is reported, not how long the check takes. The cache already makes unchanged rules cheap.
+- A finding on a file inside a project that is not affected is left out even when a change elsewhere caused it. A rule with no `inputs` (`group-project/branch-name`) reads no file, so point 3 never keeps its findings.

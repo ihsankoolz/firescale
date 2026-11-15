@@ -4,7 +4,15 @@ import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
-import { BIN, baseCalls, commitAll, EXIT_OK, runCli, stepCalls } from './test-helpers.js';
+import {
+  ALL_AGENT_READY_RULES,
+  BIN,
+  baseCalls,
+  commitAll,
+  EXIT_OK,
+  runCli,
+  stepCalls,
+} from './test-helpers.js';
 
 // Blame-aware verify: reruns and the stop hook (M21, ADR 0039).
 
@@ -67,6 +75,44 @@ const hook = (root: string, env: Record<string, string> = {}) =>
   runCli(['hooks', 'run', '--agent', 'claude'], root, env, {
     input: JSON.stringify({ session_id: 'blame', stop_hook_active: false }),
   });
+
+describe('the stop hook and the rules', () => {
+  // The hook narrows the check to the change. A finding the change caused
+  // can sit on a file that did not change: a new script in web/package.json
+  // makes AGENTS.md stale.
+  it('blocks on a finding the change caused on a file that did not change', async () => {
+    const service = (name: string, scripts: Record<string, string>) =>
+      `${JSON.stringify({ name, version: '1.0.0', scripts }, null, 2)}\n`;
+    const rules = Object.fromEntries(
+      ALL_AGENT_READY_RULES.map((id) => [id, id === 'agent-ready/agents-md' ? 'enforced' : 'off']),
+    );
+    const files = {
+      'firescale.config.json': JSON.stringify({
+        packs: ['agent-ready'],
+        rules,
+        verify: { lint: false, typecheck: false, test: 'node test.js' },
+      }),
+      'web/package.json': service('web', { test: 'node test.js' }),
+      'api/package.json': service('api', { test: 'node test.js' }),
+    };
+    const { root, write } = await repoWith('process.exit(0);\n', files);
+    expect((await runCli(['fix'], root)).code).toBe(EXIT_OK);
+    await commitAll(root, 'agent files');
+    // The base branch holds the up-to-date AGENTS.md too.
+    expect((await runGit(root, ['branch', '--force', 'main'])).code).toBe(0);
+    expect((await hook(root)).code).toBe(EXIT_OK);
+
+    await write(
+      path.join('web', 'package.json'),
+      service('web', { test: 'node test.js', lint: 'node lint.js' }),
+    );
+    expect((await runCli(['check'], root)).stdout).toContain('agent-ready/agents-md');
+    const result = await hook(root);
+    expect(result.code).toBe(EXIT_BLOCK);
+    expect(result.stderr).toContain('agent-ready/agents-md');
+    expect(result.stderr).toContain('AGENTS.md');
+  });
+});
 
 describe('reruns', () => {
   it('labels a new failure that passes when run again flaky, and does not block', async () => {

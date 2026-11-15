@@ -30,7 +30,7 @@ use firescale_core::hooks::{
     block_summary, decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent,
     AGENTS,
 };
-use firescale_core::model::Status;
+use firescale_core::model::{RuleMeta, Status};
 use firescale_core::node::NodeHost;
 use firescale_core::process::{install_stop_handler, EXIT_STOPPED, STOP};
 use firescale_core::progress::{format_duration, heartbeat_from_env, Progress};
@@ -283,6 +283,11 @@ impl Output {
     }
 }
 
+/// What `--affected` needs of the rules that ran: their ids and inputs.
+fn metas<'a>(rules: &'a [ConfiguredRule<'_>]) -> Vec<&'a RuleMeta> {
+    rules.iter().map(|rule| &rule.meta).collect()
+}
+
 fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     if !extra.is_empty() {
         return Err(Error::usage(format!(
@@ -319,7 +324,12 @@ fn check(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             )),
             Changed::Files(_) => {}
         }
-        narrow_report(&mut report, &detect_facts(root)?, &changed);
+        narrow_report(
+            &mut report,
+            &detect_facts(root)?,
+            &changed,
+            &metas(&selection.rules),
+        );
     }
     notes.extend(outcome.warnings);
     // FSCALE_LOG=cache shows, per rule, whether its result came from the cache.
@@ -1080,7 +1090,7 @@ fn verify_report(
     let facts = detect_facts(root)?;
     let changed = if args.affected {
         let changed = changed_files(root, args.base.as_deref())?;
-        narrow_report(&mut report, &facts, &changed);
+        narrow_report(&mut report, &facts, &changed, &metas(&selection.rules));
         Some(changed)
     } else {
         None
