@@ -10,3 +10,4 @@ packages/cli/test-fixtures/sarif-schema-2.1.0.json
 dist-npm
 # Git worktrees that coding agents make inside the repo.
 .claude/worktrees
+docs/wip-0.5.1

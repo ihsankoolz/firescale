@@ -4,15 +4,14 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**A run is in progress (2026-11-15, started 09:50 UTC): 0.5.1, fixes after running 0.5.0 on the course project.** Five pull requests, in order, each pushed to the session's one branch and merged on green:
+**A run is paused (2026-11-15, started 09:50 UTC, paused 11:25 UTC at the owner's word): 0.5.1, fixes after running 0.5.0 on the course project.** Read `docs/wip-0.5.1/RESUME.md` first: it says where each of the five pull requests stands, where the unmerged commits are, and what is left, in order.
 
-1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Being built.**
-2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Being built.**
-3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). **In its pull request, the first to be ready.**
-4. Leftovers from "Found while fixing" (ADR 0060). **Being built.**
-5. Version 0.5.1 and docs. **Not started.**
+- **Merged:** pull request 3, stopped runs and doctor ([#54](https://github.com/ihsankoolz/firescale/pull/54), ADR 0059).
+- **Built, not merged:** pull request 4, leftovers (ADR 0060, reviewed); pull request 1, slow steps and `verify --budget` (ADR 0057, review not finished); pull request 2, what a config change affects (ADR 0058, two review findings half fixed).
+- **Not started:** pull request 5, version 0.5.1.
+- The unmerged commits are parents of the "wip" merge commit on `claude/quirky-cannon-20uxi6`. That branch must not be merged as it is.
 
-If this run stopped early: `git log main` shows which pull requests merged; unmerged work is on `claude/quirky-cannon-20uxi6`. Do not start M36 or the project-type table.
+Do not start M36 or the project-type table.
 
 Before this run: the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
 
