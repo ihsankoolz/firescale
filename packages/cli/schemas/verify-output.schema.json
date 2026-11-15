@@ -431,7 +431,7 @@
           "type": "string"
         },
         "reason": {
-          "description": "Without a base: why there is none. Every failure then blocks.",
+          "description": "Without a base: why there is none. Every failure then blocks. With a commit and compared false: the run was stopped before failures were compared with the base commit and before the tamper guard ran, so no step has a label and tamper is absent (ADR 0059).",
           "type": "string"
         },
         "sameInputs": {

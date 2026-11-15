@@ -131,7 +131,8 @@ pub struct BaseReport {
     /// The base commit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
-    /// Without a base: why there is none.
+    /// Without a base: why there is none. For a stopped run: that nothing
+    /// was compared (`STOPPED_REASON`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Steps whose base result was their head result (same inputs).
@@ -148,6 +149,12 @@ pub struct BaseReport {
     /// True when the budget ran out before every base step had run.
     pub over_budget: bool,
 }
+
+/// The `reason` of a run that was stopped before its failures were compared
+/// with the base commit (ADR 0059): the report then has the base's
+/// `reference` and `commit` with `compared` false.
+pub const STOPPED_REASON: &str =
+    "the run was stopped before failures were compared with the base commit and before the tamper guard ran";
 
 /// The base commit to compare with.
 #[derive(Debug, Clone, PartialEq, Eq)]

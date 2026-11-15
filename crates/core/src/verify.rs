@@ -3787,6 +3787,13 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                     }
                 ));
             }
+        } else if report.result == VerifyResult::Stopped && base.commit.is_some() {
+            // Stopped before the comparison (ADR 0059): said even with no
+            // failure, because the tamper guard did not run either.
+            out.push_str(&format!(
+                "\nNot compared with the base commit {base_short} ({}): the run was stopped first, so no failure is labelled `new` or `pre-existing`, and the tamper guard did not run. Run fscale verify again and let it finish to get both.\n",
+                base.reference.as_deref().unwrap_or("?"),
+            ));
         } else if report.steps.iter().any(|step| blocks(step.status)) {
             if let Some(reason) = &base.reason {
                 out.push_str(&format!(
@@ -5920,6 +5927,98 @@ mod tests {
         );
         assert!(text.contains("\nStopped: verify was interrupted"), "{text}");
         assert!(!text.contains("Fix the failure"), "{text}");
+    }
+
+    /// The paragraph of a run with a base that was stopped before its
+    /// failures were compared (ADR 0059): when it is printed, and when not.
+    #[test]
+    fn a_stopped_run_with_a_base_says_that_nothing_was_compared() {
+        use crate::blame::{BaseReport, STOPPED_REASON};
+        const PARAGRAPH: &str = "\nNot compared with the base commit 1a2b3c4 (main): the run was stopped first, so no failure is labelled `new` or `pre-existing`, and the tamper guard did not run. Run fscale verify again and let it finish to get both.\n";
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let fail = if cfg!(windows) { "exit /b 1" } else { "exit 1" };
+        let run = |command: &str| {
+            let plan = VerifyPlan {
+                runner: "config".to_owned(),
+                steps: vec![("lint".to_owned(), Planned::Command(command.to_owned()))],
+                ..VerifyPlan::default()
+            };
+            let config = VerifyConfig::default();
+            let options = RunOptions::quiet(&config);
+            run_verify_with(fixture.root(), "0.0.0", passing_check(), &plan, &options).unwrap()
+        };
+        let stopped_base = || BaseReport {
+            compared: false,
+            reference: Some("main".to_owned()),
+            commit: Some("1a2b3c4d5e6f".to_owned()),
+            reason: Some(STOPPED_REASON.to_owned()),
+            ..BaseReport::default()
+        };
+
+        // Stopped, with a base, after a failure: said once, before the
+        // closing paragraph about the stop.
+        let mut report = run(fail);
+        report.result = VerifyResult::Stopped;
+        report.base = Some(stopped_base());
+        let text = format_verify_human(&report);
+        assert_eq!(text.matches("Not compared with the base commit").count(), 1);
+        let at = text.find(PARAGRAPH).unwrap_or_else(|| panic!("{text}"));
+        assert!(at < text.find("\nStopped: verify was interrupted").unwrap());
+        assert!(!text.contains("No base commit to compare with"), "{text}");
+        let json = format_verify_json(&report);
+        assert!(json.contains("\"compared\": false"), "{json}");
+        assert!(
+            json.contains(&format!("\"reason\": \"{STOPPED_REASON}\"")),
+            "{json}"
+        );
+
+        // Stopped, with a base, and nothing failed: still said, because the
+        // tamper guard did not run either.
+        let mut report = run("echo fine");
+        report.result = VerifyResult::Stopped;
+        report.base = Some(stopped_base());
+        assert!(format_verify_human(&report).contains(PARAGRAPH));
+
+        // Stopped with no base to compare with: not said.
+        let mut report = run(fail);
+        report.result = VerifyResult::Stopped;
+        report.base = Some(BaseReport {
+            compared: false,
+            reason: Some("this is the default branch".to_owned()),
+            ..BaseReport::default()
+        });
+        let text = format_verify_human(&report);
+        assert!(
+            !text.contains("Not compared with the base commit"),
+            "{text}"
+        );
+        assert!(text.contains("No base commit to compare with"), "{text}");
+        report.base = None;
+        let text = format_verify_human(&report);
+        assert!(
+            !text.contains("Not compared with the base commit"),
+            "{text}"
+        );
+
+        // A run that finished and was compared: not said.
+        let mut report = run(fail);
+        assert_eq!(report.result, VerifyResult::Failed);
+        report.base = Some(BaseReport {
+            compared: true,
+            reference: Some("main".to_owned()),
+            commit: Some("1a2b3c4d5e6f".to_owned()),
+            ran: 1,
+            ..BaseReport::default()
+        });
+        let text = format_verify_human(&report);
+        assert!(
+            !text.contains("Not compared with the base commit"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Compared with the base commit 1a2b3c4 (main)"),
+            "{text}"
+        );
     }
 
     #[test]

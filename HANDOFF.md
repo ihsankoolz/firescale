@@ -4,7 +4,17 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**Nothing is in progress.** The last run (2026-11-15, started 01:30 UTC) fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0. It ends with the pull request that holds this text.
+**A run is in progress (2026-11-15, started 09:50 UTC): 0.5.1, fixes after running 0.5.0 on the course project.** Five pull requests, in order, each pushed to the session's one branch and merged on green:
+
+1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Being built.**
+2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Being built.**
+3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). **In its pull request, the first to be ready.**
+4. Leftovers from "Found while fixing" (ADR 0060). **Being built.**
+5. Version 0.5.1 and docs. **Not started.**
+
+If this run stopped early: `git log main` shows which pull requests merged; unmerged work is on `claude/quirky-cannon-20uxi6`. Do not start M36 or the project-type table.
+
+Before this run: the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
 
 - **Version:** 0.5.0 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.0` tag exists**; the owner pushes it when ready (`RELEASING.md`). npm's latest is 0.4.0 (tag `v0.4.0`, commit `7e13ee3`, which is before M24), so 0.5.0 is the first release with M24 to M35.
 - **Fixed in the run** (`docs/reviews/ponytail-audit.md`, "Bugs found during the audit"; ADR 0056; DECISIONS.md "Audit bug fixes"): bugs 1, 2, 3 ([#49](https://github.com/ihsankoolz/firescale/pull/49)); 4, 9, 10, 12, 13, 17 ([#50](https://github.com/ihsankoolz/firescale/pull/50)); 5, 7, 8 ([#51](https://github.com/ihsankoolz/firescale/pull/51)); 6, 11, 14, 20 ([#52](https://github.com/ihsankoolz/firescale/pull/52)). Each has a test that failed first. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
