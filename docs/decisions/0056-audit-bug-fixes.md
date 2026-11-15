@@ -1,6 +1,6 @@
 # 0056 — Fixes for the bugs of the ponytail audit
 
-Status: accepted (2026-11-15, for 0.5.0). Refines ADR 0034 and 0039 (what `--affected` and the stop hook keep), ADR 0035 (what a progress line may show) and ADR 0047 (where the agent limits and protected paths come from).
+Status: accepted (2026-11-15, for 0.5.0). Refines ADR 0034 and 0039 (what `--affected` and the stop hook keep), ADR 0035 (what a progress line may show) ADR 0047 (where the agent limits and protected paths come from), ADR 0027 (existing JSON settings get new lines only, now for `hooks install` too), ADR 0049 (which repos the supabase pack gives a `package.json`) and ADR 0021 (the release build).
 
 ## Context
 
@@ -109,6 +109,38 @@ Two one-line helpers were added to `agentrun.rs` for this (`glob_error`, `litera
 
 **Left as it was:** a rule's `inputs` that does not compile is still dropped from the set the agent may change, which fails safe (it allows less). A `protectedPaths` glob that compiles but can match no path (`./infra/**`, `/infra/**`, a bare `infra`) is still accepted and protects nothing; the owner's rule covers globs that do not compile.
 
+### Bug 6: `fscale hooks install` adds lines, or refuses
+
+`hooks install` parsed a person's settings file and wrote it back whole: 4-space indentation became 2, `1e3` became `1000.0`. It now adds the hook through `jsonedit::insert_merge`, the function the agent-ready fix uses (ADR 0027), so every line a person wrote stays byte for byte. Nothing moved between crates.
+
+Where the hook cannot go in as new lines, the file is left alone and the command fails with the item to add by hand. That is the case for a file written on one line, for `"hooks": {}` or `"Stop": []` on one line, and for `"hooks": null`.
+
+Seen changes:
+
+- **A minified settings file is refused**, where it was rewritten. The audit named this cost.
+- **`"hooks": null` is refused**, where it was treated as missing and replaced. Replacing it would change a line the person wrote.
+- **The hook goes first in the stop list**, where it went last. Appending would need a comma on the person's last line.
+- Four existing tests fed one-line files and so had to change: their inputs got line breaks, the two assertions on the list's order were swapped, and `a_null_hooks_key_is_treated_as_missing` became `a_null_hooks_key_is_left_for_a_person`. No assertion on a kept value was dropped.
+- The `agent-ready/verify-hook` message and skill said "run `fscale hooks install`" for the files the fix cannot edit, which relied on the rewrite. They now say that command tells what to add.
+
+### Bug 11: the supabase pack gives no `package.json` to a repo of any other stack
+
+`supabase/package-json` knew seven manifests of other stacks. With a `Pipfile`, `setup.py`, `pom.xml`, `build.gradle.kts` or `Gemfile`, `fscale sync` wrote a root `package.json`. The rule now asks the list that already exists for this question, `stackkit::MANIFESTS` (28 names, used by the go, maven and cmake packs), and its cache inputs are that same list. This is audit item 57; it was the smaller change, it adds nothing new, and the alternative was typing 21 names into a second list.
+
+A repo that has a `package.json` is not affected. A repo of another language with no manifest at all (only `.py` files) still gets one.
+
+### Bug 14: the release build restores no cache
+
+`cache: pnpm` and `Swatinem/rust-cache` are gone from the `build` job of `release.yml`. A test (`restores no cache in any job`) fails on any line of the four jobs that names a cache, other than a key that turns one off, and fails when a job is added, until someone reads it.
+
+setup-node can also cache a package manager's store with no `cache:` input (ADR 0041), so each of the four jobs now sets `package-manager-cache: false`, pinned by a second test. `ci.yml` keeps its caches.
+
+Release builds are now cold on all six targets, so a release takes longer.
+
+### Bug 20: the test fixture is not in the npm package
+
+`packages/cli/src/course-fixture.ts` is excluded from the build, and from `pack-npm.mjs`'s list, since `tsc` does not delete an older `dist/course-fixture.js`. A test lists every file of the packed `firescale` and `@firescale/sdk` packages and rejects test-only names. `@firescale/sdk/testing` is a public export and stays.
+
 ## Consequences
 
 - The stop hook blocks on a stale `AGENTS.md`, a missing permission or any other repo-level finding that the change itself caused.
@@ -119,3 +151,6 @@ Two one-line helpers were added to `agentrun.rs` for this (`glob_error`, `litera
 - A repo whose `.firescale` or `.firescale/steps` is a symbolic link gets no step cache.
 - A config with a mistyped `protectedPaths` glob stops every command until it is fixed. Before, it ran with that path unprotected.
 - `fix --agent` in a repo whose Claude Code settings hold a path rule globset cannot compile is refused, where before it ran without that protection.
+- `fscale hooks install` on a hand-made settings file changes no line of it. On a minified file it now fails and prints the item to add.
+- A Supabase project in a Python, Java, Ruby or any other listed stack is told it is not a JavaScript project, and gets no `package.json`.
+- What a release publishes is built from the tagged commit and the lockfiles only.

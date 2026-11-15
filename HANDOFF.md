@@ -188,7 +188,7 @@ Notes on M13, for whoever touches the agent files:
 - The shared pieces are `crates/rules/src/agent-ready/managed.rs`: the block markers, `with_block` (append or replace, keeping line endings), `fscale_command` (how this repo starts fscale), `agents_block`, `claude_block`, and `FACTS_INPUTS` (cache inputs of rules whose output lists commands).
 - Existing JSON settings are only ever changed through `firescale_core::jsonedit::insert_merge`, which adds new lines and refuses otherwise. Keep it that way: the owner's course project has hand-made `.claude` settings.
 - `agent-skills` reads `firescale.config.json` itself (`resolve_config` with custom packs removed). M14's generator skill goes in `pack_skills`.
-- `fscale hooks install` still re-serialises a settings file (M7); only the fixes use `insert_merge`.
+- `fscale hooks install` goes through `insert_merge` too since ADR 0056 (bug 6): it adds lines, or refuses and says what to add by hand.
 
 Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
