@@ -943,6 +943,47 @@ mod tests {
         );
     }
 
+    /// After the review: an unknown top-level key of the base's config
+    /// named like a resolved setting took that setting's place, so the
+    /// change of the real one was not seen.
+    #[test]
+    fn an_unknown_key_named_like_a_setting_cannot_hide_that_setting() {
+        let head = settings(&json!({}));
+        let plan = VerifyPlan::default();
+        for name in [
+            "verify.ci",
+            "verify.failOnSkipped",
+            "verify.stopWhenServiceDown",
+            "verify.stopAfterErrors",
+        ] {
+            // The real setting differs from the default; the look-alike
+            // key holds the default's text.
+            let real = match name {
+                "verify.ci" => json!({ "ci": false }),
+                "verify.failOnSkipped" => json!({ "failOnSkipped": true }),
+                "verify.stopWhenServiceDown" => json!({ "stopWhenServiceDown": false }),
+                _ => json!({ "stopAfterErrors": 25 }),
+            };
+            let default = match name {
+                "verify.failOnSkipped" => json!(false),
+                "verify.stopAfterErrors" => json!(crate::verify::DEFAULT_ERRORS_BEFORE_STOP),
+                _ => json!(true),
+            };
+            let text = json!({ name: default, "verify": real }).to_string();
+            let base = base_config_from(Some(&text));
+            let BaseConfig::Settings(old) = &base else {
+                panic!("{name}: the base config was not read");
+            };
+            assert_ne!(shared_settings(old), shared_settings(&head), "{name}");
+            let effect = effect_between(&base, &head, |_| VerifyPlan::default(), &plan);
+            let reason = effect.everything.expect(name);
+            assert!(
+                reason.contains(&format!("({name}, {name} (an unknown key))")),
+                "{reason}"
+            );
+        }
+    }
+
     #[test]
     fn the_other_settings_do_not_depend_on_how_the_config_is_written() {
         let plain = other_settings(&json!({}));

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { rm, writeFile } from 'node:fs/promises';
+import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
@@ -385,5 +386,93 @@ describe('time limits and the step cache', () => {
         'verify: OK (1 of 2 steps passed from the cache, not run now)',
       );
     }
+  });
+});
+
+// After the review of ADR 0058: a step whose folder holds the config can
+// read it as a file (`prettier --check .`, a JSON linter). For such a step
+// the config stays a file: its bytes are in the key and a change to it is
+// a change to that step's project.
+describe('a step that can read the config as a file', () => {
+  const EXIT_BLOCK = 2;
+
+  /** Fails when the config is there and is not formatted (no line end). */
+  const FORMAT_CHECK = [
+    "const fs = require('fs');",
+    "const text = fs.existsSync('firescale.config.json') ? fs.readFileSync('firescale.config.json', 'utf8') : '\\n';",
+    "if (!text.endsWith('\\n')) { console.log('firescale.config.json is not formatted'); process.exit(1); }",
+    '',
+  ].join('\n');
+
+  /** A repo on a branch `feature` off `main`, with `files` committed on main. */
+  async function branchRepo(files: Record<string, string>) {
+    const repo = await fixtures.create({
+      files: { '.gitignore': '.firescale/\n', 'lint.js': FORMAT_CHECK, ...files },
+      track: 'no-git',
+    });
+    const root = repo.root;
+    expect((await runGit(root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+    await commitAll(root, 'base');
+    expect((await runGit(root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    const verify = async (...flags: string[]) => {
+      const result = await runCli(['verify', ...flags], root, {});
+      return { ...result, headline: result.stdout.split('\n')[0] };
+    };
+    return { repo, root, verify };
+  }
+
+  it('runs the root project again for an untracked config that its lint reads, and blocks the stop hook', async () => {
+    const { repo, root, verify } = await branchRepo({
+      'package.json': `${JSON.stringify({ name: 'app', private: true, scripts: { lint: 'node lint.js' } })}\n`,
+    });
+    expect((await verify()).stdout).toMatch(/ {2}lint +passed /);
+
+    // Only a time limit, written on one line with no line end.
+    await repo.write('firescale.config.json', '{"verify":{"test":{"timeout":"2h"}}}');
+    const full = await verify();
+    expect(full.stdout).toMatch(/ {2}lint +FAILED +\[new\] /);
+    expect(full.stdout).not.toContain('from the cache');
+    expect(full.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+
+    const affected = await verify('--affected');
+    expect(affected.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+    expect(affected.stdout).toContain(
+      "  the repo root's own steps: changed: firescale.config.json",
+    );
+    expect(affected.stdout).not.toContain('runs no project');
+
+    // With nothing kept, the failure is still new: the base has no config.
+    await rm(path.join(root, '.firescale'), { recursive: true, force: true });
+    expect((await verify()).headline).toMatch(/^verify: FAILED at lint \(new\)/);
+
+    const hook = await runCli(
+      ['hooks', 'run', '--agent', 'claude'],
+      root,
+      {},
+      {
+        input: JSON.stringify({ session_id: 'config-file', stop_hook_active: false }),
+      },
+    );
+    expect(hook.code).toBe(EXIT_BLOCK);
+    expect(hook.stderr).toContain('lint');
+  });
+
+  it("runs the repo root's own steps again for a white space change of a tracked config", async () => {
+    const config = { verify: { lint: 'node lint.js', typecheck: false, test: false } };
+    const { repo, verify } = await branchRepo({
+      'firescale.config.json': `${JSON.stringify(config, null, 2)}\n`,
+    });
+    expect((await verify()).headline).toBe('verify: OK');
+    expect((await verify()).headline).toBe(
+      'verify: OK (1 of 2 steps passed from the cache, not run now)',
+    );
+    await repo.write('firescale.config.json', JSON.stringify(config));
+    const full = await verify();
+    expect(full.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+    const affected = await verify('--affected');
+    expect(affected.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+    expect(affected.stdout).toContain(
+      "  the repo root's own steps: firescale.config.json changed, and these steps can read every file of the repo, the config among them",
+    );
   });
 });
