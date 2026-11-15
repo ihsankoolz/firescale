@@ -19,7 +19,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -163,6 +163,120 @@ fn retrying<T>(
     }
 }
 
+/// The lock file's name in `.firescale`: whoever created it is the one
+/// writer of the step times file, in any process.
+const LOCK_FILE: &str = "step-times.json.lock";
+
+/// How long a write waits for the lock: one made while a step runs gives up
+/// soon (the next heartbeat writes again); one made when a step ended waits
+/// until a lock left by a killed process has become stale.
+const LOCK_WAIT_RUNNING: Duration = Duration::from_millis(100);
+const LOCK_WAIT_ENDED: Duration = Duration::from_secs(7);
+const LOCK_PAUSE: Duration = Duration::from_millis(2);
+
+/// A lock this old was left by a process that was killed while it held it:
+/// a writer holds it for a second at most. It is removed, so it cannot block
+/// the file for good.
+const LOCK_STALE: Duration = Duration::from_secs(5);
+
+/// On Windows, creating the lock is refused ("Access is denied") for a
+/// moment while the one before it is being deleted. Refused for this long,
+/// the folder really cannot be written.
+const LOCK_REFUSED: Duration = Duration::from_secs(1);
+
+/// The lock file, held: created with `create_new`, which fails when the
+/// name is taken, also by a symbolic link, so nothing is written through
+/// one. Removed when dropped.
+struct FileLock {
+    path: PathBuf,
+    /// What this holder wrote in the file, to know its own lock again.
+    token: String,
+}
+
+impl FileLock {
+    /// Takes the lock, waiting up to `patience`. `None` when another writer
+    /// kept it for that long, or when the lock file cannot be created.
+    fn acquire(path: &Path, patience: Duration) -> Option<Self> {
+        use std::io::Write;
+        let started = Instant::now();
+        let token = format!(
+            "{} {}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos())
+        );
+        let mut refused_since: Option<Instant> = None;
+        loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(mut file) => {
+                    if file.write_all(token.as_bytes()).is_err() {
+                        drop(file);
+                        let _ = fs::remove_file(path);
+                        return None;
+                    }
+                    return Some(Self {
+                        path: path.to_path_buf(),
+                        token,
+                    });
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    refused_since = None;
+                    if lock_is_stale(path) {
+                        let _ = fs::remove_file(path);
+                    }
+                }
+                Err(error) if cfg!(windows) && error.kind() == io::ErrorKind::PermissionDenied => {
+                    let since = *refused_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= LOCK_REFUSED {
+                        return None;
+                    }
+                }
+                Err(_) => return None,
+            }
+            if started.elapsed() >= patience {
+                return None;
+            }
+            std::thread::sleep(LOCK_PAUSE);
+        }
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        // Only its own: after a very long pause another writer may have
+        // taken this lock for a stale one.
+        // Both are tried a few times: on Windows a file that another
+        // program looks at for a moment cannot be opened or deleted.
+        let own = retrying(READ_TRIES, LOCK_PAUSE, || {
+            match fs::read_to_string(&self.path) {
+                Ok(text) => Ok(text == self.token),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(error),
+            }
+        });
+        if own.unwrap_or(false) {
+            let _ = retrying(READ_TRIES, LOCK_PAUSE, || fs::remove_file(&self.path));
+        }
+    }
+}
+
+/// True when the lock file was last written longer ago than a writer ever
+/// holds it (or its time is that far in the future: the clock was changed).
+fn lock_is_stale(path: &Path) -> bool {
+    let Ok(modified) = fs::symlink_metadata(path).and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    let now = SystemTime::now();
+    now.duration_since(modified)
+        .or_else(|_| modified.duration_since(now))
+        .is_ok_and(|apart| apart > LOCK_STALE)
+}
+
 fn is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
@@ -259,12 +373,18 @@ impl StepTimes {
             }))
     }
 
-    /// Keeps how long a run of this step took, or has taken so far. The
-    /// file is read again first, so another verify's records are kept, and
-    /// written beside and renamed, so a reader never sees half a file.
+    /// Keeps how long a run of this step took, or has taken so far.
+    ///
+    /// The file is read again first, so another verify's records are kept,
+    /// and written beside and renamed, so a reader never sees half a file.
+    /// A lock file is held from the read to the rename, so two verify runs
+    /// of one repo do not undo each other's writes.
+    ///
     /// A file that cannot be written is not worth failing the run for, and
     /// one that cannot be read right now is left as it is: this record is
-    /// dropped, not the other steps'.
+    /// dropped, not the other steps'. The record of a step that ended
+    /// waits longer for the lock than one written while the step runs: the
+    /// next heartbeat writes that one again.
     pub fn record(
         &self,
         project: Option<&str>,
@@ -285,6 +405,19 @@ impl StepTimes {
             duration_ms,
             finished: outcome != Outcome::Unfinished,
             ran_at: now_secs().saturating_sub(duration.as_secs()),
+        };
+        let folder = self.folder();
+        if fs::create_dir_all(&folder).is_err() {
+            return;
+        }
+        ignore_firescale_folder(&self.root);
+        let patience = if outcome == Outcome::Unfinished {
+            LOCK_WAIT_RUNNING
+        } else {
+            LOCK_WAIT_ENDED
+        };
+        let Some(_lock) = FileLock::acquire(&folder.join(LOCK_FILE), patience) else {
+            return;
         };
         let Ok(mut file) = self.read() else {
             return;
@@ -311,11 +444,6 @@ impl StepTimes {
         let Ok(text) = serde_json::to_string_pretty(&file) else {
             return;
         };
-        let folder = self.folder();
-        if fs::create_dir_all(&folder).is_err() {
-            return;
-        }
-        ignore_firescale_folder(&self.root);
         let temporary = folder.join(format!(".{STEP_TIMES_FILE}.{}.tmp", std::process::id()));
         if is_symlink(&temporary) {
             return;
@@ -554,10 +682,14 @@ mod tests {
         assert!(times.last(None, "test", "t").is_err());
         times.record(None, "test", "t", HOUR, Outcome::Passed);
         assert!(path.is_dir());
-        assert!(fs::read_dir(temp.path().join(".firescale"))
-            .unwrap()
-            .flatten()
-            .all(|entry| entry.file_name() == STEP_TIMES_FILE));
+        // No half-written file and no lock are left beside it.
+        assert!(
+            fs::read_dir(temp.path().join(".firescale"))
+                .unwrap()
+                .flatten()
+                .all(|entry| entry.file_name() == STEP_TIMES_FILE
+                    || entry.file_name() == ".gitignore")
+        );
     }
 
     #[test]
@@ -666,6 +798,53 @@ mod tests {
             .collect();
         left.sort();
         assert_eq!(left, [".gitignore", STEP_TIMES_FILE]);
+    }
+
+    #[test]
+    fn a_held_lock_drops_a_write_made_while_a_step_runs_and_a_stale_one_is_taken() {
+        let (temp, times) = times();
+        let folder = temp.path().join(".firescale");
+        fs::create_dir_all(&folder).unwrap();
+        let lock = folder.join(LOCK_FILE);
+        // Another verify is writing right now.
+        fs::write(&lock, "another verify").unwrap();
+        let started = Instant::now();
+        times.record(None, "test", "t", HOUR, Outcome::Unfinished);
+        assert!(started.elapsed() < LOCK_STALE);
+        assert_eq!(times.last(None, "test", "t"), Ok(None));
+        assert_eq!(fs::read_to_string(&lock).unwrap(), "another verify");
+        // The lock of a verify that was killed while it wrote: old, so it
+        // is removed, and the write is made.
+        let long_ago = SystemTime::now() - LOCK_STALE - Duration::from_secs(1);
+        fs::File::options()
+            .write(true)
+            .open(&lock)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        times.record(None, "test", "t", HOUR, Outcome::Unfinished);
+        assert_eq!(
+            times.last(None, "test", "t"),
+            Ok(Some(Known {
+                duration: HOUR,
+                finished: false
+            }))
+        );
+        assert!(!lock.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_lock_is_not_written_through_a_symbolic_link() {
+        let (temp, times) = times();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("lock-target");
+        let folder = temp.path().join(".firescale");
+        fs::create_dir_all(&folder).unwrap();
+        std::os::unix::fs::symlink(&target, folder.join(LOCK_FILE)).unwrap();
+        times.record(None, "test", "t", HOUR, Outcome::Unfinished);
+        assert!(!target.exists());
+        assert_eq!(times.last(None, "test", "t"), Ok(None));
     }
 
     #[cfg(unix)]
