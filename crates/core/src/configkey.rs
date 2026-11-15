@@ -31,6 +31,15 @@ use crate::verify::{plan_verify, Planned, ProjectPlan, VerifyConfig, VerifyPlan}
 /// `verify` is taken out too, and read setting by setting.
 const NOT_IN_OTHER_SETTINGS: [&str; 4] = ["$schema", "protectedPaths", "agent", "verify"];
 
+/// The top-level keys outside `verify` that every step's key holds under
+/// their own name.
+const KNOWN_OTHER_SETTINGS: [&str; 2] = ["packs", "rules"];
+
+/// Added to the name of a top-level key this version does not know. No
+/// setting's name ends with it, so an unknown key and a known setting
+/// never share a name, whatever the key is called.
+const UNKNOWN_KEY: &str = " (an unknown key)";
+
 /// The value with the keys of every object sorted, so the order in which a
 /// person wrote them never matters.
 fn sorted(value: &Value) -> Value {
@@ -132,7 +141,15 @@ fn shared_parts(config: &VerifyConfig) -> BTreeMap<String, String> {
     match serde_json::from_str::<Value>(other_settings) {
         Ok(Value::Object(other)) => {
             for (key, value) in other {
-                parts.insert(key, value.to_string());
+                // A key this version does not know gets a name no setting
+                // has, so one called `verify.ci` in a base commit's config
+                // cannot take the place of the real `verify.ci`.
+                let name = if KNOWN_OTHER_SETTINGS.contains(&key.as_str()) {
+                    key
+                } else {
+                    format!("{key}{UNKNOWN_KEY}")
+                };
+                parts.insert(name, value.to_string());
             }
         }
         // Not made from a config's value (a `VerifyConfig` built in code).
@@ -939,7 +956,7 @@ mod tests {
         let effect = effect_between(&base, &head, |_| VerifyPlan::default(), &plan);
         assert_eq!(
             effect.everything.as_deref(),
-            Some("a setting of firescale.config.json that every step's result can depend on changed (future)")
+            Some("a setting of firescale.config.json that every step's result can depend on changed (future (an unknown key))")
         );
     }
 

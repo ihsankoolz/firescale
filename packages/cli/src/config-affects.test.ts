@@ -284,7 +284,8 @@ describe('what a config change affects (ADR 0058)', () => {
       ],
       [
         '{ "future": true }\n',
-        "a setting of firescale.config.json that every step's result can depend on changed (future)",
+        // An unknown key is named apart from the settings this version knows.
+        "a setting of firescale.config.json that every step's result can depend on changed (future (an unknown key))",
       ],
       [
         '{ not json\n',
