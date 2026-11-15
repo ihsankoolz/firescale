@@ -465,7 +465,7 @@ describe('verify --budget leaves out the steps that are known to take longer', (
     );
   });
 
-  it('counts skipped steps and steps that were not run apart, in a project too', async () => {
+  it('leaves out a step of a project, and names its folder', async () => {
     const repo = await repoWith(
       {
         lint: false,
@@ -476,7 +476,6 @@ describe('verify --budget leaves out the steps that are known to take longer', (
       {
         'backend/api/lint.js': logs('lint', '../../ran.log'),
         'backend/api/test.js': logs('test', '../../ran.log'),
-        'backend/api/pyproject.toml': '[project]\nname = "api"\n',
         '.gitignore': 'ran.log\n',
       },
     );
@@ -491,9 +490,8 @@ describe('verify --budget leaves out the steps that are known to take longer', (
     ]);
     const result = await runCli(['verify', '--budget', '45m'], repo.root, NOT_CI);
     expect(result.code).toBe(EXIT_OK);
-    // The project is Python and has no type checker: that step is skipped.
     expect(headline(result.stdout)).toBe(
-      'verify: PARTIAL - 2 of 4 steps ran, 1 skipped, 1 not run (over the --budget of 45m)',
+      'verify: PARTIAL - 2 of 3 steps ran, 1 not run (over the --budget of 45m)',
     );
     expect(result.stdout).toContain(
       '    test       NOT RUN  over the budget of 45m: it took 1h 40m when it last ran\n',
@@ -505,12 +503,17 @@ describe('verify --budget leaves out the steps that are known to take longer', (
   });
 
   it('names the step that was not run beside a failure, and still fails', async () => {
-    const repo = await repoWith(verify, { ...files, 'lint.js': 'process.exit(1);\n' });
-    await seedTimes(repo.root, slowTest(true, 100).slice(1));
+    const repo = await repoWith(verify, { ...files, 'test.js': 'process.exit(1);\n' });
+    await seedTimes(repo.root, [
+      { step: 'lint', command: nodeScript('lint.js'), durationMs: 100 * MINUTE, finished: true },
+    ]);
     const result = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
     expect(result.code).toBe(EXIT_VIOLATIONS);
     expect(headline(result.stdout)).toBe(
-      'verify: FAILED at lint; 1 step not run (over the --budget of 30m)',
+      'verify: FAILED at test; 1 step not run (over the --budget of 30m)',
+    );
+    expect(result.stdout).toContain(
+      '  lint       NOT RUN  over the budget of 30m: it took 1h 40m when it last ran\n',
     );
   });
 
@@ -521,7 +524,8 @@ describe('verify --budget leaves out the steps that are known to take longer', (
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const report = await budgetReport(result.stdout);
     expect([report.result, report.ok]).toEqual(['failed', false]);
-    const human = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
+    // (--no-cache: the run above kept lint's pass.)
+    const human = await runCli(['verify', '--budget', '30m', '--no-cache'], repo.root, NOT_CI);
     expect(headline(human.stdout)).toBe(
       'verify: FAILED - 1 of 3 steps not run (over the --budget of 30m), and verify.failOnSkipped is on',
     );

@@ -28,7 +28,7 @@ use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
 use crate::steptimes::{Outcome, StepTimes};
 
 /// Version of the `fscale verify --json` format.
-pub const VERIFY_SCHEMA_VERSION: u32 = 6;
+pub const VERIFY_SCHEMA_VERSION: u32 = 7;
 
 /// Errors with no test passed and none failed before a test step is stopped
 /// as likely setup, by default (ADR 0035).
@@ -842,6 +842,10 @@ pub enum StepStatus {
     /// Not run because `--affected` found that no change reaches its project
     /// (ADR 0032). Not the same as skipped: the step has a command.
     NotAffected,
+    /// Not started, because it is known to take longer than the run's
+    /// `--budget` (ADR 0057). Nothing is known about it from this run: it
+    /// is not a pass, not skipped and not `not-run` after a failure.
+    OverBudget,
 }
 
 impl StepStatus {
@@ -856,6 +860,7 @@ impl StepStatus {
             Self::NotRun => "not run",
             Self::Off => "off",
             Self::NotAffected => "not affected",
+            Self::OverBudget => "NOT RUN",
         }
     }
 }
@@ -940,6 +945,14 @@ pub struct StepReport {
     /// signature on the head is contained in the base's. Not in JSON.
     #[serde(skip)]
     pub signature: Vec<String>,
+    /// For a step whose status is `over-budget`: how long it took the last
+    /// time it ran, or how long it ran at least (ADR 0057).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_known_ms: Option<u64>,
+    /// With `lastKnownMs`: false when that run did not finish (it was
+    /// stopped or timed out), so the step takes at least that long.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_known_finished: Option<bool>,
 }
 
 /// A failing test of a step (ADR 0038).
@@ -1021,6 +1034,22 @@ pub enum VerifyResult {
     PreExisting,
 }
 
+/// A step that was not started because it is known to take longer than the
+/// run's `--budget` (ADR 0057).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotRunStep {
+    pub step: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// `over the budget of 30m: it took 1h 40m when it last ran`.
+    pub reason: String,
+    /// How long it took the last time it ran, or ran at least.
+    pub last_known_ms: u64,
+    /// False when that run did not finish.
+    pub last_known_finished: bool,
+}
+
 /// A step that was skipped because no command was found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkippedStep {
@@ -1059,6 +1088,12 @@ pub struct VerifyReport {
     pub steps: Vec<StepReport>,
     /// Every step that was skipped because no command was found.
     pub skipped: Vec<SkippedStep>,
+    /// `--budget`, in milliseconds. Absent without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_ms: Option<u64>,
+    /// Every step that was not started because it is known to take longer
+    /// than the budget. A run with one is never `ok`.
+    pub not_run: Vec<NotRunStep>,
     /// Things the user should know that are not failures: steps that were
     /// skipped because no command was found.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1856,6 +1891,9 @@ pub struct RunOptions<'a> {
     /// a slow step, written when a step ends. `None`: nothing is read or
     /// kept, as for the base run and a rerun.
     pub times: Option<&'a StepTimes>,
+    /// `--budget`: a step whose last known time is longer is not started
+    /// (ADR 0057). Needs `times`.
+    pub budget: Option<Duration>,
 }
 
 /// Never set: the stop flag of a run that cannot be stopped from outside.
@@ -1877,6 +1915,7 @@ impl RunOptions<'_> {
             deadline: None,
             base_run: false,
             times: None,
+            budget: None,
         }
     }
 
@@ -1940,6 +1979,44 @@ fn run_step(
     let known = options
         .times
         .and_then(|times| times.last(project, name, command));
+    // A step known to take longer than the budget is not started. Nothing
+    // is kept about it: no pass, no time (ADR 0057).
+    if let (Some(budget), Some(known)) = (options.budget, known) {
+        if known.duration > budget {
+            let limit = format_limit(budget);
+            options.say(&format!(
+                "{place}: NOT RUN: {}, and the budget is {limit} (--budget)",
+                known.describe()
+            ));
+            return Ok(StepReport {
+                name: name.to_owned(),
+                project: project.map(str::to_owned),
+                kind,
+                status: StepStatus::OverBudget,
+                command: Some(command.to_owned()),
+                exit_code: None,
+                duration_ms: 0,
+                detail: format!("over the budget of {limit}: {}", known.describe()),
+                output_tail: Vec::new(),
+                fix: None,
+                timeout_ms: None,
+                timeout_key: None,
+                tests: None,
+                first_error: Vec::new(),
+                cache: None,
+                label: None,
+                base: None,
+                signature: Vec::new(),
+                failed_tests: Vec::new(),
+                test_results: None,
+                output_digest: None,
+                not_cached: None,
+                estimate: None,
+                last_known_ms: Some(known.millis()),
+                last_known_finished: Some(known.finished),
+            });
+        }
+    }
     if let Some(warning) = known.and_then(|known| known.warning()) {
         options.say(&format!("{place}: {warning}"));
     }
@@ -2108,6 +2185,8 @@ fn run_step(
         output_digest: None,
         not_cached: None,
         estimate: None,
+        last_known_ms: None,
+        last_known_finished: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -2497,6 +2576,8 @@ fn run_unit(
                 output_digest: None,
                 not_cached: None,
                 estimate: None,
+                last_known_ms: None,
+                last_known_finished: None,
             })
             .collect());
     }
@@ -2527,6 +2608,8 @@ fn run_unit(
             output_digest: None,
             not_cached: None,
             estimate: None,
+            last_known_ms: None,
+            last_known_finished: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2628,6 +2711,7 @@ pub(crate) fn run_again(
         deadline,
         base_run: false,
         times: None,
+        budget: None,
     };
     let unit = Unit {
         root,
@@ -2663,6 +2747,7 @@ pub(crate) fn run_base_step(
         deadline,
         base_run: true,
         times: None,
+        budget: None,
     };
     let unit = Unit {
         root,
@@ -2750,6 +2835,8 @@ fn cached_or_run(
                 output_digest: None,
                 not_cached: None,
                 estimate: None,
+                last_known_ms: None,
+                last_known_finished: None,
         });
     }
     let ran_at = now_secs();
@@ -2777,6 +2864,10 @@ fn cached_or_run(
                 shared_from: None,
             },
         );
+    } else if report.status == StepStatus::OverBudget {
+        cache.note(format!(
+            "cache: miss {place}; not run (over the budget), so nothing is stored"
+        ));
     } else {
         cache.note(format!(
             "cache: miss {place}; not stored, because it did not pass"
@@ -2840,6 +2931,8 @@ pub fn run_verify_with(
         output_digest: None,
         not_cached: None,
         estimate: None,
+        last_known_ms: None,
+        last_known_finished: None,
     }];
     let check_failed = !check.ok && !options.every_step;
 
@@ -2923,6 +3016,17 @@ pub fn run_verify_with(
             step: step.name.clone(),
             project: step.project.clone(),
             reason: step.detail.clone(),
+        })
+        .collect();
+    let not_run: Vec<NotRunStep> = steps
+        .iter()
+        .filter(|step| step.status == StepStatus::OverBudget)
+        .map(|step| NotRunStep {
+            step: step.name.clone(),
+            project: step.project.clone(),
+            reason: step.detail.clone(),
+            last_known_ms: step.last_known_ms.unwrap_or_default(),
+            last_known_finished: step.last_known_finished.unwrap_or_default(),
         })
         .collect();
     let warnings = match skipped.first() {
@@ -3017,6 +3121,10 @@ pub fn run_verify_with(
         rerun: None,
         steps,
         skipped,
+        budget_ms: options
+            .budget
+            .map(|budget| u64::try_from(budget.as_millis()).unwrap_or(u64::MAX)),
+        not_run,
         warnings,
         notes,
         scope: if plan.affected.is_some() {
@@ -3060,10 +3168,16 @@ pub(crate) fn settle(report: &mut VerifyReport, stopped: bool) {
     });
     let result = if stopped {
         VerifyResult::Stopped
-    } else if any_failed || (report.fail_on_skipped && !report.skipped.is_empty()) {
+    } else if any_failed
+        || (report.fail_on_skipped && !(report.skipped.is_empty() && report.not_run.is_empty()))
+    {
         VerifyResult::Failed
     } else if first_failure.is_some() {
         VerifyResult::SetupNeeded
+    } else if !report.not_run.is_empty() {
+        // Before `pre-existing`, whose headline starts with OK: a run that
+        // left a step out never reads as a pass (ADR 0057).
+        VerifyResult::Partial
     } else if pre_existing {
         VerifyResult::PreExisting
     } else if report.skipped.is_empty() {
@@ -3184,19 +3298,45 @@ fn scoped_headline(report: &VerifyReport) -> String {
 /// instead of running now.
 fn ran_part(report: &VerifyReport) -> String {
     let hits = report.cache.as_ref().map_or(0, |cache| cache.hits);
-    if hits == 0 {
-        return format!(
-            "{} of {} ran, {} skipped",
+    let ran = if hits == 0 {
+        format!(
+            "{} of {} ran",
             report.steps_run,
-            plural_steps(report.steps_total),
-            report.skipped.len()
-        );
+            plural_steps(report.steps_total)
+        )
+    } else {
+        format!(
+            "{} of {} ran, {hits} passed from the cache",
+            report.steps_run.saturating_sub(hits),
+            plural_steps(report.steps_total)
+        )
+    };
+    format!("{ran}, {}", left_out(report).join(", "))
+}
+
+/// What a run left out, steps skipped for lack of a command apart from
+/// steps `--budget` did not start: `1 skipped`, `1 not run (over the
+/// --budget of 30m)`.
+fn left_out(report: &VerifyReport) -> Vec<String> {
+    let mut parts = Vec::new();
+    if !report.skipped.is_empty() || report.not_run.is_empty() {
+        parts.push(format!("{} skipped", report.skipped.len()));
     }
+    if !report.not_run.is_empty() {
+        parts.push(format!(
+            "{} not run ({})",
+            report.not_run.len(),
+            over_budget(report)
+        ));
+    }
+    parts
+}
+
+/// `over the --budget of 30m`.
+fn over_budget(report: &VerifyReport) -> String {
     format!(
-        "{} of {} ran, {hits} passed from the cache, {} skipped",
-        report.steps_run.saturating_sub(hits),
-        plural_steps(report.steps_total),
-        report.skipped.len()
+        "over the --budget of {}",
+        format_limit(Duration::from_millis(report.budget_ms.unwrap_or_default()))
     )
 }
 
@@ -3267,6 +3407,14 @@ fn whole_headline(report: &VerifyReport) -> String {
             format!(" {}", &commit[..commit.len().min(7)])
         });
     if !parts.is_empty() {
+        // A failure does not hide that a step was left out.
+        if !report.not_run.is_empty() {
+            parts.push(format!(
+                "{} not run ({})",
+                plural_steps(report.not_run.len()),
+                over_budget(report)
+            ));
+        }
         if !pre_existing.is_empty() {
             parts.push(format!(
                 "pre-existing (fails on the base commit{base} too, does not block): {}",
@@ -3283,8 +3431,7 @@ fn whole_headline(report: &VerifyReport) -> String {
     }
     match report.result {
         VerifyResult::Ok => "verify: OK".to_owned(),
-        VerifyResult::Partial => format!("verify: PARTIAL - {}", ran_part(report)),
-        VerifyResult::PreExisting => {
+        VerifyResult::Partial | VerifyResult::PreExisting => {
             let mut said = Vec::new();
             if !pre_existing.is_empty() {
                 said.push(format!(
@@ -3298,13 +3445,29 @@ fn whole_headline(report: &VerifyReport) -> String {
                     flaky.join(", ")
                 ));
             }
-            format!("verify: OK - no new failures; {}", said.join("; "))
+            if report.result == VerifyResult::PreExisting {
+                return format!("verify: OK - no new failures; {}", said.join("; "));
+            }
+            // A partial run still names the failures that do not block.
+            said.insert(0, format!("verify: PARTIAL - {}", ran_part(report)));
+            said.join("; ")
         }
-        VerifyResult::Failed | VerifyResult::SetupNeeded | VerifyResult::Stopped => format!(
-            "verify: FAILED - {} of {} skipped, and verify.failOnSkipped is on",
-            report.skipped.len(),
-            plural_steps(report.steps_total)
-        ),
+        VerifyResult::Failed | VerifyResult::SetupNeeded | VerifyResult::Stopped => {
+            // `1 of 3 steps skipped`, `1 of 3 steps not run (...)`, or
+            // `1 of 4 steps skipped and 1 not run (...)`.
+            let parts = left_out(report);
+            let (count, what) = parts
+                .first()
+                .and_then(|first| first.split_once(' '))
+                .unwrap_or(("0", "skipped"));
+            let more = parts
+                .get(1)
+                .map_or_else(String::new, |second| format!(" and {second}"));
+            format!(
+                "verify: FAILED - {count} of {} {what}{more}, and verify.failOnSkipped is on",
+                plural_steps(report.steps_total)
+            )
+        }
     }
 }
 
@@ -3867,6 +4030,26 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             out.push_str(&line);
         }
     }
+    for step in report
+        .steps
+        .iter()
+        .filter(|step| step.status == StepStatus::OverBudget)
+    {
+        let known = crate::steptimes::Known {
+            duration: Duration::from_millis(step.last_known_ms.unwrap_or_default()),
+            finished: step.last_known_finished.unwrap_or_default(),
+        };
+        let place = step.project.as_ref().map_or_else(String::new, |project| {
+            format!(" in {}", place_name(project))
+        });
+        out.push_str(&format!(
+            "\nNot run: {} was not started, because {} and the budget is {} (--budget). This run says nothing about it. To run it{place}: {}, or run fscale verify without --budget.\n",
+            step_place(step),
+            known.describe(),
+            format_limit(Duration::from_millis(report.budget_ms.unwrap_or_default())),
+            step.command.as_deref().unwrap_or_default()
+        ));
+    }
     if report.result == VerifyResult::Stopped {
         out.push_str("\nStopped: verify was interrupted (Ctrl+C or a termination signal), and every command it had started was stopped. Steps marked STOPPED or not run did not finish; run fscale verify again to check them.\n");
     }
@@ -4391,6 +4574,129 @@ mod tests {
                 reason: "no test command found".to_owned(),
             }]
         );
+    }
+
+    /// A plan whose lint is known to take 1h 40m, run with a budget of 30m.
+    fn over_budget_report(fail_on_skipped: bool, typecheck: Planned) -> (Fixture, VerifyReport) {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let times = StepTimes::new(fixture.root());
+        times.record(
+            None,
+            "lint",
+            "echo slow",
+            Duration::from_secs(100 * 60),
+            Outcome::Passed,
+        );
+        let plan = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![
+                ("lint".to_owned(), Planned::Command("echo slow".to_owned())),
+                ("typecheck".to_owned(), typecheck),
+                ("test".to_owned(), Planned::Command("echo fine".to_owned())),
+            ],
+            fail_on_skipped,
+            ..VerifyPlan::default()
+        };
+        let config = VerifyConfig::default();
+        let options = RunOptions {
+            times: Some(&times),
+            budget: Some(Duration::from_secs(30 * 60)),
+            ..RunOptions::quiet(&config)
+        };
+        let report =
+            run_verify_with(fixture.root(), "0.0.0", passing_check(), &plan, &options).unwrap();
+        (fixture, report)
+    }
+
+    #[test]
+    fn a_step_over_the_budget_is_not_run_and_counted_apart_from_a_skipped_one() {
+        let skipped = Planned::Skipped("no typecheck command found".to_owned());
+        let (fixture, report) = over_budget_report(false, skipped.clone());
+        assert_eq!(report.result, VerifyResult::Partial);
+        assert!(report.ok);
+        assert_eq!((report.steps_run, report.steps_total), (2, 4));
+        assert_eq!(
+            report.not_run,
+            [NotRunStep {
+                step: "lint".to_owned(),
+                project: None,
+                reason: "over the budget of 30m: it took 1h 40m when it last ran".to_owned(),
+                last_known_ms: 100 * 60 * 1000,
+                last_known_finished: true,
+            }]
+        );
+        // The step after it still ran: a step that is left out blocks nothing.
+        assert_eq!(
+            statuses(&report),
+            [
+                ("check".to_owned(), StepStatus::Passed),
+                ("lint".to_owned(), StepStatus::OverBudget),
+                ("typecheck".to_owned(), StepStatus::Skipped),
+                ("test".to_owned(), StepStatus::Passed),
+            ]
+        );
+        let text = format_verify_human(&report);
+        assert!(
+            text.starts_with(
+                "verify: PARTIAL - 2 of 4 steps ran, 1 skipped, 1 not run (over the --budget of 30m)\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("\nNot run: lint was not started, because it took 1h 40m when it last ran and the budget is 30m (--budget). This run says nothing about it. To run it: echo slow, or run fscale verify without --budget.\n"), "{text}");
+        let json = format_verify_json(&report);
+        assert!(json.contains("\"status\": \"over-budget\""), "{json}");
+        assert!(json.contains("\"budgetMs\": 1800000"), "{json}");
+        // Its time is kept as it was: nothing ran.
+        assert_eq!(
+            StepTimes::new(fixture.root())
+                .last(None, "lint", "echo slow")
+                .map(|known| (known.duration.as_secs(), known.finished)),
+            Some((6000, true))
+        );
+
+        // With verify.failOnSkipped, leaving a step out fails the run.
+        let (_fixture, report) = over_budget_report(true, skipped);
+        assert_eq!(report.result, VerifyResult::Failed);
+        assert!(!report.ok);
+        assert!(
+            format_verify_human(&report).starts_with("verify: FAILED - 1 of 4 steps skipped and 1 not run (over the --budget of 30m), and verify.failOnSkipped is on\n")
+        );
+        let (_fixture, report) = over_budget_report(true, Planned::NotNeeded("off".to_owned()));
+        assert!(
+            format_verify_human(&report).starts_with("verify: FAILED - 1 of 3 steps not run (over the --budget of 30m), and verify.failOnSkipped is on\n")
+        );
+    }
+
+    #[test]
+    fn a_run_that_left_a_step_out_never_reads_ok_whatever_else_happened() {
+        use crate::blame::Label;
+        let (_fixture, mut report) =
+            over_budget_report(false, Planned::Command("exit 1".to_owned()));
+        assert_eq!(report.result, VerifyResult::Failed);
+        assert!(format_verify_human(&report).starts_with(
+            "verify: FAILED at typecheck; 1 step not run (over the --budget of 30m)\n"
+        ));
+        // The failure turns out to be pre-existing or flaky: it no longer
+        // blocks, but the run is partial, not "OK - no new failures".
+        for label in [Label::PreExisting, Label::Flaky] {
+            report.steps[2].label = Some(label);
+            settle(&mut report, false);
+            assert_eq!(report.result, VerifyResult::Partial);
+            let text = format_verify_human(&report);
+            let first = text.lines().next().unwrap_or_default();
+            assert!(
+                first.starts_with(
+                    "verify: PARTIAL - 2 of 4 steps ran, 1 not run (over the --budget of 30m); "
+                ),
+                "{first}"
+            );
+            assert!(first.ends_with(": typecheck"), "{first}");
+            assert!(!first.contains("OK"), "{first}");
+        }
+        // A step that was not run is never one of the labelled or passed ones.
+        assert_eq!(report.steps[1].status, StepStatus::OverBudget);
+        assert_eq!(report.steps[1].label, None);
+        assert!(report.steps[1].cache.is_none());
     }
 
     #[test]
@@ -5260,7 +5566,7 @@ mod tests {
         let json = format_verify_json(&report);
         assert!(json.contains("\"result\": \"setup-needed\""), "{json}");
         assert!(json.contains("\"status\": \"setup-needed\""), "{json}");
-        assert!(json.contains("\"schemaVersion\": 6"), "{json}");
+        assert!(json.contains("\"schemaVersion\": 7"), "{json}");
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::env;
 use std::io::{IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use firescale_core::affected::{changed_files, narrow_report, Changed, RanRule};
 use firescale_core::blame::{
@@ -113,6 +113,9 @@ Options:
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
+  --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
+                   took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is
+                   reported as NOT RUN, and the run is PARTIAL, never OK
   --shared-cache <dir>
                    verify, in GitHub Actions only: use step results that CI on the
                    default branch kept in <dir>, and keep them there on a push to it
@@ -150,6 +153,8 @@ struct Args {
     /// `--progress` (true) or `--no-progress` (false).
     progress: Option<bool>,
     jobs: Option<String>,
+    /// `--budget <time>`: verify leaves out steps known to take longer.
+    budget: Option<String>,
     shared_cache: Option<String>,
     /// `--pr-base`: the base from GitHub's pull request event (ADR 0045).
     pr_base: bool,
@@ -219,7 +224,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 }
             }
             "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs"
-            | "--shared-cache" | "--head" | "--approvals" | "--rule" => {
+            | "--shared-cache" | "--head" | "--approvals" | "--rule" | "--budget" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -236,6 +241,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--bin" => args.bin = Some(value),
                     "--packs" => args.packs = Some(value),
                     "--jobs" => args.jobs = Some(value),
+                    "--budget" => args.budget = Some(value),
                     "--shared-cache" => args.shared_cache = Some(value),
                     "--head" => args.head = Some(value),
                     "--approvals" => args.approvals = Some(value),
@@ -949,6 +955,26 @@ fn jobs(args: &Args) -> Result<usize> {
     }
 }
 
+/// The value of `--budget`: a time as the config's time limits are written
+/// (`30m`, `90s`, `1h 30m`), or a number of seconds; longer than zero.
+fn budget(args: &Args) -> Result<Option<Duration>> {
+    let Some(value) = &args.budget else {
+        return Ok(None);
+    };
+    let text = value.trim();
+    let seconds = if !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()) {
+        text.parse::<u64>().ok()
+    } else {
+        firescale_core::config::time_text_seconds(text)
+    };
+    match seconds {
+        Some(seconds) if seconds > 0 => Ok(Some(Duration::from_secs(seconds))),
+        _ => Err(Error::usage(format!(
+            "--budget needs a time longer than zero, such as \"30m\", \"90s\" or \"1h 30m\", or a number of seconds; got \"{value}\"."
+        ))),
+    }
+}
+
 /// The commands verify will run. With `--affected`, the units that no change
 /// reaches are marked, using the project graph (ADR 0032). `changed` is
 /// computed here when the caller has not done so already.
@@ -1063,6 +1089,7 @@ fn verify_report(
     }
     let args = &hook_args;
     let jobs = jobs(args)?;
+    let budget = budget(args)?;
     // Ctrl+C and termination signals stop the commands, not fscale at once.
     install_stop_handler();
     let progress = progress.then(Progress::stderr);
@@ -1199,6 +1226,7 @@ fn verify_report(
         deadline: None,
         base_run: false,
         times: Some(&times),
+        budget,
     };
     let mut verify = run_verify_with(root, version(), check, &plan, &options)?;
     match &base {
