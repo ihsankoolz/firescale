@@ -975,6 +975,31 @@ fn budget(args: &Args) -> Result<Option<Duration>> {
     }
 }
 
+/// Why this is a CI run, if it is one: `GITHUB_ACTIONS` is `true` (what the
+/// shared cache of CI goes by, ADR 0041), or `CI` is set and not empty (what
+/// verify's own commands go by, ADR 0024).
+fn ci_run(read: &dyn Fn(&str) -> Option<String>) -> Option<&'static str> {
+    if read("GITHUB_ACTIONS").as_deref() == Some("true") {
+        Some("GITHUB_ACTIONS is true in the environment")
+    } else if read("CI").is_some_and(|value| !value.is_empty()) {
+        Some("CI is set in the environment")
+    } else {
+        None
+    }
+}
+
+/// `--budget` leaves steps out, so it is refused where a run stands for the
+/// whole repo: in CI, where a partial run would pass (exit code 0) for a
+/// whole one (ADR 0057). The stop hook refuses it in `hooks`.
+fn refuse_budget_in_ci(args: &Args, read: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+    match ci_run(read).filter(|_| args.budget.is_some()) {
+        Some(why) => Err(Error::usage(format!(
+            "--budget cannot be used in CI ({why}): it leaves slow steps out, so the run would pass without them. Run fscale verify without --budget there; to bound a slow step in CI, set its time limit in the firescale config (verify.<step>.timeout)."
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// The commands verify will run. With `--affected`, the units that no change
 /// reaches are marked, using the project graph (ADR 0032). `changed` is
 /// computed here when the caller has not done so already.
@@ -1504,6 +1529,9 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             "verify judges the working tree; --head is for `fscale tamper`.",
         ));
     }
+    // Before anything runs, the dry run included.
+    refuse_budget_in_ci(args, &|name| env::var(name).ok())?;
+    budget(args)?;
     let resolved = with_pr_base(root, args)?;
     let args = &resolved;
     if args.dry_run {
@@ -1558,6 +1586,13 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
 
 /// `fscale hooks install` and `fscale hooks run`.
 fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
+    // The stop hook decides whether an agent may stop: a run that leaves
+    // slow steps out must not decide that (ADR 0057).
+    if args.budget.is_some() {
+        return Err(Error::usage(
+            "--budget cannot be used in the stop hook: it leaves slow steps out, so an agent could stop without them having run. Remove --budget from the hook command (fscale hooks run --agent <name>); a person can still run fscale verify --budget <time> by hand.",
+        ));
+    }
     match rest {
         [action] if action == "install" => {
             let agents: Vec<Agent> = match (&args.agent, args.all) {
@@ -1821,7 +1856,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, parse_args, Args};
+    use super::{ci_run, normalize, parse_args, refuse_budget_in_ci, Args};
     use std::path::Path;
 
     fn parse(argv: &[&str]) -> Result<Args, String> {
@@ -1882,6 +1917,35 @@ mod tests {
             parse(&["check", "--rules=-x"]).unwrap().rules.as_deref(),
             Some("-x")
         );
+    }
+
+    #[test]
+    fn a_ci_run_is_known_by_github_actions_or_a_ci_variable_that_is_not_empty() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        assert_eq!(ci_run(&env(&[])), None);
+        assert_eq!(ci_run(&env(&[("CI", "")])), None);
+        assert_eq!(ci_run(&env(&[("GITHUB_ACTIONS", "false")])), None);
+        assert_eq!(
+            ci_run(&env(&[("CI", "true")])),
+            Some("CI is set in the environment")
+        );
+        assert_eq!(
+            ci_run(&env(&[("CI", "1"), ("GITHUB_ACTIONS", "true")])),
+            Some("GITHUB_ACTIONS is true in the environment")
+        );
+        // Only with the flag is a CI run refused.
+        let with = parse(&["verify", "--budget", "30m"]).unwrap();
+        let without = parse(&["verify"]).unwrap();
+        assert!(refuse_budget_in_ci(&with, &env(&[("CI", "true")])).is_err());
+        assert!(refuse_budget_in_ci(&without, &env(&[("CI", "true")])).is_ok());
+        assert!(refuse_budget_in_ci(&with, &env(&[])).is_ok());
     }
 
     #[test]
