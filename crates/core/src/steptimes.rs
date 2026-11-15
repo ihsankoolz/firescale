@@ -409,6 +409,51 @@ mod tests {
         }
     }
 
+    /// Another program has the file open and does not share reading, as a
+    /// reader on Windows also sees for a moment ("Access is denied") while
+    /// another verify renames a new file over it.
+    #[cfg(windows)]
+    fn held_without_sharing_read(path: &Path) -> fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_DELETE only: nobody else can read it, but it can be
+        // replaced.
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(4)
+            .open(path)
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_that_cannot_be_read_right_now_does_not_lose_the_other_steps_times() {
+        let (temp, times) = times();
+        times.record(
+            Some("backend/slow"),
+            "test",
+            "pytest",
+            HOUR,
+            Outcome::Passed,
+        );
+        let held = held_without_sharing_read(&temp.path().join(".firescale").join(STEP_TIMES_FILE));
+        times.record(
+            None,
+            "lint",
+            "eslint .",
+            Duration::from_secs(2),
+            Outcome::Passed,
+        );
+        drop(held);
+        assert_eq!(
+            times.last(Some("backend/slow"), "test", "pytest"),
+            Some(Known {
+                duration: HOUR,
+                finished: true
+            }),
+            "the kept time of backend/slow is gone"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn nothing_is_read_or_written_through_a_symbolic_link() {
