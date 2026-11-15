@@ -8,7 +8,17 @@
  * every file byte for byte before and after.
  */
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
@@ -601,37 +611,50 @@ describe('fscale sync', () => {
     expect(clean.code).toBe(EXIT_OK);
     expect(clean.stdout).toContain('In sync: `fscale sync` would change nothing.');
 
-    for (const file of [
+    // Each file is deleted in its own copy of the fresh repo, so the four
+    // cases run side by side and not one after the other: every case starts
+    // fscale three times, and starting it is what is slow on a Windows
+    // runner (see the limit below).
+    const files = [
       '.github/workflows/ci.yml',
       '.github/workflows/tamper-guard.yml',
       'README.md',
       '.gitignore',
-    ]) {
-      const generated = await repo.read(file);
+    ];
+    const cases = files.map(async (file) => {
+      const copy = await emptyFolder();
+      await cp(repo.root, copy.root, { recursive: true });
+      const generated = await copy.read(file);
       // Deleted for good: from disk and from the git index.
-      await rm(path.join(repo.root, ...file.split('/')));
+      await rm(path.join(copy.root, ...file.split('/')));
       await run('git', ['rm', '--cached', '--quiet', '--ignore-unmatch', '--', file], {
-        cwd: repo.root,
+        cwd: copy.root,
       });
-      const before = await snapshot(repo.root);
-      const indexBefore = await index(repo.root);
+      const before = await snapshot(copy.root);
+      const indexBefore = await index(copy.root);
 
-      const drift = await runCli(['sync', '--check'], repo.root);
+      const drift = await runCli(['sync', '--check'], copy.root);
       expect(drift.code, file).toBe(EXIT_VIOLATIONS);
       expect(drift.stdout, file).toContain(`would create ${file}`);
       expect(drift.stdout, file).toContain('Out of sync: `fscale sync` would make 1 change.');
       // --check changed nothing.
-      expect(await snapshot(repo.root)).toEqual(before);
-      expect(await index(repo.root)).toBe(indexBefore);
+      expect(await snapshot(copy.root)).toEqual(before);
+      expect(await index(copy.root)).toBe(indexBefore);
 
-      const repair = await runCli(['sync'], repo.root);
+      const repair = await runCli(['sync'], copy.root);
       expect(repair.code, file).toBe(EXIT_OK);
       expect(repair.stdout, file).toContain(`created ${file}`);
-      expect(await repo.read(file), file).toBe(generated);
-      expect((await runCli(['sync', '--check'], repo.root)).code, file).toBe(EXIT_OK);
-    }
-    // Fourteen runs of fscale and git: 25 s of the old 30 s limit on a Windows
-    // runner before M17, whose binary is twice the size.
+      expect(await copy.read(file), file).toBe(generated);
+      expect((await runCli(['sync', '--check'], copy.root)).code, file).toBe(EXIT_OK);
+    });
+    // Every case is waited for, so a failure never leaves the others running
+    // into the cleanup.
+    const failed = (await Promise.allSettled(cases)).find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
+    // Fourteen runs of fscale and git. One after the other they took 25 s of
+    // the old 30 s limit on a Windows runner before M17, whose binary is twice
+    // the size, and later timed out there once; twelve of them now run four
+    // at a time. The limit stays, for a runner with fewer cores.
   }, 60_000);
 
   it('does not recreate a file git still tracks: staged work in the index is never replaced', async () => {
