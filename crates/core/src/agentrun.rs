@@ -1047,6 +1047,58 @@ mod tests {
     }
 
     #[test]
+    fn a_glob_that_can_match_no_path_is_named_with_the_form_that_works() {
+        // Each compiles, and names no path git can print.
+        for (glob, works) in [
+            ("./infra/**", Some("infra/**")),
+            ("/infra/**", Some("infra/**")),
+            (".\\Infra\\**", Some("Infra/**")),
+            ("infra/", Some("infra/**")),
+            ("infra//main.tf", Some("infra/main.tf")),
+            ("infra/./main.tf", Some("infra/main.tf")),
+            ("../infra/**", None),
+            ("infra/../secrets/**", None),
+            ("", None),
+            ("/", None),
+            (".", None),
+        ] {
+            assert_eq!(glob_error(glob), None, "{glob}");
+            // What the guards do with it: nothing.
+            for path in ["infra/main.tf", "infra", "main.tf", "secrets/a", "Infra/x"] {
+                assert!(!matches_any(path, &[glob.to_owned()]), "{glob} {path}");
+            }
+            assert_eq!(
+                unmatchable_glob(glob),
+                Some(works.map(str::to_owned)),
+                "{glob}"
+            );
+        }
+        // These can match a path.
+        for glob in [
+            "infra/**",
+            "infra\\**",
+            "infra",
+            "Makefile",
+            ".env",
+            ".github/**",
+            "..data/x",
+            "a/.../b",
+            "**/x",
+            "*",
+        ] {
+            assert_eq!(unmatchable_glob(glob), None, "{glob}");
+        }
+        for glob in SECRET_PATHS.iter().chain(&PROTECTED_PATHS) {
+            assert_eq!(unmatchable_glob(glob), None, "{glob}");
+        }
+        // A name with no wildcard is one file: it names nothing in a folder.
+        assert!(matches_any("infra", &["infra".to_owned()]));
+        assert!(!matches_any("infra/main.tf", &["infra".to_owned()]));
+        assert!(is_plain_path("infra") && is_plain_path("src/app"));
+        assert!(!is_plain_path("infra/**") && !is_plain_path("a/[[]id]") && !is_plain_path("a?"));
+    }
+
+    #[test]
     fn a_path_taken_literally_allows_that_file_and_no_other() {
         let change = |path: &str| {
             vec![Change {

@@ -93,6 +93,45 @@ describe('config values', () => {
     );
   });
 
+  it.each([
+    ['./infra/**', 'Write "infra/**".'],
+    ['/infra/**', 'Write "infra/**".'],
+    ['infra/', 'Write "infra/**".'],
+    ['../infra/**', 'Write it that way, for example "infra/**".'],
+  ])(
+    'rejects the protectedPaths glob %s, which compiles and can match no path',
+    async (glob, write) => {
+      const repo = await repoWith({ protectedPaths: [glob] });
+      const result = await runCli(['check'], repo.root);
+      expect(result.code).toBe(EXIT_USAGE);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe(
+        `fscale: firescale.config.json: "protectedPaths" holds "${glob}", which can match no path and would protect nothing: a path is compared as git prints it, from the repo root, with no "./" or "/" in front, no ".." and no "/" at the end. ${write}\n`,
+      );
+    },
+  );
+
+  it('rejects a protectedPaths name that is a folder: it would protect no file in it', async () => {
+    const files = { 'infra/main.tf': '# x\n', Makefile: 'all:\n' };
+    const config = (protectedPaths: string[]) => ({
+      'firescale.config.json': JSON.stringify({ protectedPaths }),
+    });
+    const folder = await fixtures.create({ files: { ...files, ...config(['Makefile', 'infra']) } });
+    const result = await runCli(['check'], folder.root);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(
+      'fscale: firescale.config.json: "protectedPaths" holds "infra", which is a folder. A name with no wildcard names one file, so no file in the folder would be protected. Write "infra/**".\n',
+    );
+    // A file's name, a name that is nothing yet, and the folder written as a glob are fine.
+    const fine = await fixtures.create({
+      files: { ...files, ...config(['Makefile', 'later', 'infra/**']) },
+    });
+    const ok = await runCli(['check'], fine.root);
+    expect(ok.stderr).toBe('');
+    expect(ok.code).toBe(EXIT_OK);
+  });
+
   it('turns off every rule of a pack that is not listed', async () => {
     const { code, report } = await checkJson((await repoWith({ packs: [] })).root);
     expect(code).toBe(EXIT_OK);
