@@ -127,6 +127,42 @@ mod tests {
         }
 
         #[test]
+        fn a_rule_result_is_never_read_through_a_symlinked_entry_file() {
+            // A real cache elsewhere holds a result for the same rule and key.
+            let other = Fixture::new(&[("a.md", "one\n")], Track::NoGit).unwrap();
+            Cache::new(other.root()).put("core/x", "key", &[]).unwrap();
+            let planted = other
+                .root()
+                .join(".firescale")
+                .join("cache")
+                .join("core__x.json");
+            let record = fs::read_to_string(&planted).unwrap();
+            // The cache folder is real; the entry in it is a link to that file.
+            let fixture = Fixture::new(&[("a.md", "one\n")], Track::NoGit).unwrap();
+            let dir = fixture.root().join(".firescale").join("cache");
+            fs::create_dir_all(&dir).unwrap();
+            let entry = dir.join("core__x.json");
+            std::os::unix::fs::symlink(&planted, &entry).unwrap();
+            let cache = Cache::new(fixture.root());
+            assert!(
+                cache.get("core/x", "key").is_none(),
+                "a result was read through a linked entry file"
+            );
+            // A miss leaves the link as it is.
+            assert!(fs::symlink_metadata(&entry)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+            // The next result replaces the link with a real file. The file
+            // the link pointed at is not written.
+            cache.put("core/x", "key2", &[]).unwrap();
+            assert!(fs::symlink_metadata(&entry).unwrap().file_type().is_file());
+            assert_eq!(fs::read_to_string(&planted).unwrap(), record);
+            assert!(cache.get("core/x", "key2").is_some());
+            assert_eq!(names_in(&dir), ["core__x.json"]);
+        }
+
+        #[test]
         fn the_ledger_is_never_written_through_a_symlink() {
             // The folder is a link.
             let (fixture, outside) = linked_out(".firescale");

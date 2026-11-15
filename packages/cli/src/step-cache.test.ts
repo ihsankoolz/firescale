@@ -1,4 +1,14 @@
-import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
@@ -479,6 +489,53 @@ describe('the step cache stays inside the repo', () => {
       expect(await readdir(outside.root)).toEqual([]);
     },
   );
+  // Making a symlink to a file needs a privilege on Windows, and a junction
+  // can only stand for a folder.
+  it.skipIf(process.platform === 'win32')(
+    'serves no pass from an entry file that is a link, and touches nothing where it points',
+    async () => {
+      const { repo, ran } = await loggingRepo();
+      const outside = await fixtures.create({ files: {}, track: 'no-git' });
+      const steps = path.join(repo.root, '.firescale', 'steps');
+      expect((await runCli(['verify'], repo.root, {})).code).toBe(EXIT_OK);
+      expect(await ran()).toEqual(['lint', 'typecheck', 'test']);
+
+      // Each kept pass moves out of the repo, with a link left in its place.
+      const entries = (await readdir(steps)).filter((name) => name.endsWith('.json'));
+      expect(entries).toHaveLength(3);
+      const old = new Date(Date.now() - 3_600_000);
+      for (const name of entries) {
+        await rename(path.join(steps, name), path.join(outside.root, name));
+        await utimes(path.join(outside.root, name), old, old);
+        await symlink(path.join(outside.root, name), path.join(steps, name));
+      }
+      const planted = async (): Promise<string[]> =>
+        Promise.all(
+          entries.map(async (name) => {
+            const file = path.join(outside.root, name);
+            return `${(await stat(file)).mtimeMs} ${await readFile(file, 'utf8')}`;
+          }),
+        );
+      const before = await planted();
+
+      // Every step runs again: a link is a miss.
+      const second = await runCli(['verify'], repo.root, {});
+      expect(second.code).toBe(EXIT_OK);
+      expect(await ran()).toEqual(['lint', 'typecheck', 'test', 'lint', 'typecheck', 'test']);
+      // The files outside are not written or touched, and no file is added.
+      expect(await planted()).toEqual(before);
+      expect((await readdir(outside.root)).sort()).toEqual([...entries].sort());
+      // Each new pass replaced its link with a real file, which is served.
+      for (const name of entries) {
+        expect((await lstat(path.join(steps, name))).isFile(), name).toBe(true);
+      }
+      const third = await runCli(['verify'], repo.root, {});
+      expect(third.stdout.split('\n')[0]).toContain('3 of 4 steps passed from the cache');
+      expect(await ran()).toHaveLength(6);
+      expect(await planted()).toEqual(before);
+    },
+  );
+
   // A junction on Windows, which needs no privilege; a symbolic link elsewhere.
   it('writes nothing through a .firescale that is a link to a folder outside the repo', async () => {
     const { repo, ran } = await loggingRepo();
