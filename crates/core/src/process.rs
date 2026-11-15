@@ -259,7 +259,7 @@ pub fn run_tree(mut command: Command, watch: &Watch<'_>) -> std::io::Result<Fini
             };
             (watch.on_heartbeat)(elapsed, line.as_deref(), percent);
             while next_heartbeat <= elapsed {
-                next_heartbeat += watch.heartbeat;
+                next_heartbeat = crate::progress::next_heartbeat(next_heartbeat, watch.heartbeat);
             }
         }
         std::thread::sleep(POLL);
