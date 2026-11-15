@@ -59,7 +59,7 @@ describe('fscale hooks install', () => {
 
   it('installs for one agent, keeps existing settings, and honours --bin', async () => {
     const repo = await fixtures.create({
-      files: { '.claude/settings.json': '{"permissions":{"deny":["Read(./.env)"]}}\n' },
+      files: { '.claude/settings.json': '{\n"permissions":{"deny":["Read(./.env)"]}}\n' },
     });
     const result = await runCli(
       ['hooks', 'install', '--agent', 'claude', '--bin', 'npx firescale'],
@@ -80,9 +80,11 @@ describe('fscale hooks install', () => {
   it('adds the stop hook when the same command only appears somewhere else', async () => {
     const repo = await fixtures.create({
       files: {
-        '.claude/settings.json': JSON.stringify({
-          permissions: { allow: ['Bash(fscale hooks run --agent claude)'] },
-        }),
+        '.claude/settings.json': JSON.stringify(
+          { permissions: { allow: ['Bash(fscale hooks run --agent claude)'] } },
+          null,
+          2,
+        ),
       },
     });
     const result = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root);
@@ -91,6 +93,54 @@ describe('fscale hooks install', () => {
       hooks: { Stop: { hooks: { command: string }[] }[] };
     };
     expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe('fscale hooks run --agent claude');
+  });
+
+  it("keeps every line of a person's file and adds only the hook's lines", async () => {
+    const files = {
+      // Four spaces, a number written 1e3, odd spacing and key order.
+      [HOOK_FILES.claude]:
+        '{\n    "zeta" :   1e3,\n    "alpha":[ 1,2 ],\n\n    "permissions": {\n        "deny": [\n            "Read(./.env)"\n        ]\n    }\n}\n',
+      // Tabs and CRLF, no newline at the end, a stop hook of their own.
+      [HOOK_FILES.codex]:
+        '{\r\n\t"hooks": {\r\n\t\t"Stop": [\r\n\t\t\t{ "hooks": [ { "type": "command", "command": "echo bye" } ] }\r\n\t\t]\r\n\t}\r\n}',
+      // No version, another event's hook.
+      [HOOK_FILES.cursor]:
+        '{\n   "hooks": {\n      "afterFileEdit": [ { "command": "fmt" } ]\n   }\n}\n',
+    };
+    const repo = await fixtures.create({ files });
+    const result = await runCli(['hooks', 'install', '--all'], repo.root);
+    expect(result.code).toBe(EXIT_OK);
+    const written: string[] = [];
+    for (const [file, before] of Object.entries(files)) {
+      const after = await read(repo.root, file);
+      // Each line a person wrote is there, with its own line ending, in order.
+      const afterLines = after.split(/(?<=\n)/);
+      let at = 0;
+      for (const line of before.split(/(?<=\n)/)) {
+        at = afterLines.indexOf(line, at) + 1;
+        expect(at, `${file}: ${JSON.stringify(line)} in ${JSON.stringify(after)}`).toBeGreaterThan(
+          0,
+        );
+      }
+      expect(after).toContain('fscale hooks run --agent');
+      expect(after.includes('\r\n')).toBe(before.includes('\r\n'));
+      expect(after.replaceAll('\r\n', '').includes('\r')).toBe(false);
+      written.push(after);
+    }
+    expect(written[0]).toContain('"zeta" :   1e3,');
+    const again = await runCli(['hooks', 'install', '--all'], repo.root);
+    expect(again.code).toBe(EXIT_OK);
+    expect(await Promise.all(Object.keys(files).map((f) => read(repo.root, f)))).toEqual(written);
+  });
+
+  it('refuses a file written on one line, and says what to add by hand', async () => {
+    const minified = '{"permissions":{"deny":["Read(./.env)"]}}\n';
+    const repo = await fixtures.create({ files: { '.claude/settings.json': minified } });
+    const result = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root);
+    expect(result.code).not.toBe(EXIT_OK);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toMatchSnapshot('stderr');
+    expect(await read(repo.root, HOOK_FILES.claude)).toBe(minified);
   });
 
   it('explains bad usage', async () => {

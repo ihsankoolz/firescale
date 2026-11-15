@@ -135,14 +135,17 @@ fn child<'a>(map: &'a mut Map<String, Value>, key: &str, empty: Value) -> &'a mu
     slot
 }
 
-/// Adds the stop hook to an agent's config, keeping everything else in it.
+/// Adds the stop hook to an agent's config. A file that has something in it
+/// is never re-serialised: the hook goes in as new lines and every line a
+/// person wrote stays as it was (ADR 0027). When that cannot be done the
+/// file is refused, with an error that says what to add by hand.
 /// Returns the new file content, or `None` when the hook is already there.
 pub fn merge_hook(existing: Option<&str>, agent: Agent, bin: &str) -> Result<Option<String>> {
     let file = agent.config_file();
-    let mut root: Value = match existing.map(|text| text.trim_start_matches('\u{feff}')) {
+    let existing = existing.filter(|text| !text.trim_start_matches('\u{feff}').trim().is_empty());
+    let mut root: Value = match existing {
         None => json!({}),
-        Some(text) if text.trim().is_empty() => json!({}),
-        Some(text) => serde_json::from_str(text).map_err(|error| {
+        Some(text) => serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|error| {
             Error::user(format!(
                 "{file} is not valid JSON ({error}), so the hook cannot be added. Fix the file, then run this again."
             ))
@@ -153,22 +156,37 @@ pub fn merge_hook(existing: Option<&str>, agent: Agent, bin: &str) -> Result<Opt
     }
     let command = hook_command(bin, agent);
     let top = object_mut(&mut root, file, "the top level")?;
-    match agent {
+    let mut also = "";
+    let (list, entry) = match agent {
         Agent::Claude | Agent::Codex => {
+            let entry = json!({ "hooks": [{ "type": "command", "command": command }] });
             let hooks = object_mut(child(top, "hooks", json!({})), file, "\"hooks\"")?;
             let stop = child(hooks, "Stop", json!([]));
-            array_mut(stop, file, "\"hooks.Stop\"")?
-                .push(json!({ "hooks": [{ "type": "command", "command": command }] }));
+            array_mut(stop, file, "\"hooks.Stop\"")?.push(entry.clone());
+            ("hooks.Stop", entry)
         }
         Agent::Cursor => {
-            top.entry("version").or_insert_with(|| json!(1));
+            if !top.contains_key("version") {
+                top.insert("version".to_owned(), json!(1));
+                also = "\"version\": 1 at the top level and ";
+            }
+            let entry = json!({ "command": command });
             let hooks = object_mut(child(top, "hooks", json!({})), file, "\"hooks\"")?;
             let stop = child(hooks, "stop", json!([]));
-            array_mut(stop, file, "\"hooks.stop\"")?.push(json!({ "command": command }));
+            array_mut(stop, file, "\"hooks.stop\"")?.push(entry.clone());
+            ("hooks.stop", entry)
         }
-    }
-    let text = serde_json::to_string_pretty(&root).unwrap_or_default();
-    Ok(Some(format!("{text}\n")))
+    };
+    let Some(text) = existing else {
+        let text = serde_json::to_string_pretty(&root).unwrap_or_default();
+        return Ok(Some(format!("{text}\n")));
+    };
+    crate::jsonedit::insert_merge(text, &root).map(Some).ok_or_else(|| {
+        Error::user(format!(
+            "{file} was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Add {also}this item to the list \"{list}\" by hand:\n\n{}\n\nThen run this again to check it.",
+            serde_json::to_string_pretty(&entry).unwrap_or_default()
+        ))
+    })
 }
 
 fn resolve(root: &Path, file: &str) -> PathBuf {
@@ -498,17 +516,21 @@ mod tests {
 
     #[test]
     fn existing_settings_and_hooks_are_kept() {
-        let existing = r#"{"permissions":{"allow":["Bash(ls)"]},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo bye"}]}],"PreToolUse":[]}}"#;
+        let existing = r#"{
+"permissions":{"allow":["Bash(ls)"]},"hooks":{"Stop":[
+{"hooks":[{"type":"command","command":"echo bye"}]}],"PreToolUse":[]}}"#;
         let merged = merge_hook(Some(existing), Agent::Claude, "npx fscale")
             .unwrap()
             .unwrap();
         let value: Value = serde_json::from_str(&merged).unwrap();
         assert_eq!(value["permissions"]["allow"][0], "Bash(ls)");
-        assert_eq!(value["hooks"]["Stop"][0]["hooks"][0]["command"], "echo bye");
+        // The new hook goes first in the list, where it needs no change to
+        // an existing line (ADR 0027).
         assert_eq!(
-            value["hooks"]["Stop"][1]["hooks"][0]["command"],
+            value["hooks"]["Stop"][0]["hooks"][0]["command"],
             "npx fscale hooks run --agent claude"
         );
+        assert_eq!(value["hooks"]["Stop"][1]["hooks"][0]["command"], "echo bye");
         assert!(value["hooks"]["PreToolUse"].is_array());
     }
 
@@ -556,6 +578,179 @@ mod tests {
             .read(".codex/hooks.json")
             .unwrap()
             .contains("hooks run --agent codex"));
+    }
+
+    /// Every line of `before`, with its own line ending, is in `after`, in
+    /// the same order.
+    fn every_line_is_kept(before: &str, after: &str) -> bool {
+        let mut lines = after.split_inclusive('\n');
+        before
+            .split_inclusive('\n')
+            .all(|line| lines.any(|candidate| candidate == line))
+    }
+
+    /// Files people wrote, in layouts `serde_json` would not write.
+    const A_PERSONS_FILES: [(&str, Agent, &str); 11] = [
+        (
+            "four spaces",
+            Agent::Claude,
+            "{\n    \"model\": \"opus\",\n    \"permissions\": {\n        \"deny\": [\n            \"Read(./.env)\"\n        ]\n    }\n}\n",
+        ),
+        (
+            "tabs",
+            Agent::Claude,
+            "{\n\t\"model\": \"opus\",\n\t\"hooks\": {\n\t\t\"PreToolUse\": []\n\t}\n}\n",
+        ),
+        (
+            "a number written 1e3, odd spacing and key order",
+            Agent::Claude,
+            "{\n  \"zeta\" :   1e3,\n   \"alpha\":[ 1,2 ],\n\n  \"hooks\" : {\n      \"PreToolUse\" : [ ]\n  }\n}\n",
+        ),
+        (
+            "CRLF line endings",
+            Agent::Claude,
+            "{\r\n    \"model\": \"opus\",\r\n    \"hooks\": {\r\n        \"Stop\": [\r\n            { \"hooks\": [ { \"type\": \"command\", \"command\": \"echo bye\" } ] }\r\n        ]\r\n    }\r\n}\r\n",
+        ),
+        (
+            "no newline at the end",
+            Agent::Claude,
+            "{\n    \"model\": \"opus\"\n}",
+        ),
+        (
+            "a byte order mark",
+            Agent::Claude,
+            "\u{feff}{\n    \"model\": \"opus\"\n}\n",
+        ),
+        (
+            "four spaces",
+            Agent::Codex,
+            "{\n    \"hooks\": {\n        \"SessionStart\": [\n            { \"hooks\": [ { \"type\": \"command\", \"command\": \"echo hi\" } ] }\n        ]\n    }\n}\n",
+        ),
+        (
+            "tabs and CRLF, no newline at the end",
+            Agent::Codex,
+            "{\r\n\t\"hooks\": {\r\n\t\t\"Stop\": [\r\n\t\t\t{ \"hooks\": [ { \"type\": \"command\", \"command\": \"echo bye\" } ] }\r\n\t\t]\r\n\t}\r\n}",
+        ),
+        (
+            "four spaces, a stop hook of their own",
+            Agent::Cursor,
+            "{\n    \"version\": 1,\n    \"hooks\": {\n        \"stop\": [\n            { \"command\": \"echo bye\" }\n        ]\n    }\n}\n",
+        ),
+        (
+            "tabs, no version",
+            Agent::Cursor,
+            "{\n\t\"hooks\": {\n\t\t\"afterFileEdit\": [ { \"command\": \"fmt\" } ]\n\t}\n}\n",
+        ),
+        (
+            "CRLF, a version written 1e0",
+            Agent::Cursor,
+            "{\r\n  \"version\" : 1e0,\r\n  \"hooks\" : {\r\n  }\r\n}\r\n",
+        ),
+    ];
+
+    #[test]
+    fn installing_into_a_persons_file_keeps_every_line_they_wrote() {
+        for (layout, agent, before) in A_PERSONS_FILES {
+            let file = agent.config_file();
+            let fixture = Fixture::new(&[(file, before)], Track::NoGit).unwrap();
+            assert!(
+                install_hook(fixture.root(), agent, "npx firescale").unwrap(),
+                "{file}, {layout}"
+            );
+            let after = fixture.read(file).unwrap();
+            assert!(
+                every_line_is_kept(before, &after),
+                "{file}, {layout}: a line was changed.\nbefore: {before:?}\nafter:  {after:?}"
+            );
+            // The new lines use the file's own line ending.
+            if before.contains("\r\n") {
+                assert!(!after.replace("\r\n", "").contains('\n'), "{after:?}");
+            } else {
+                assert!(!after.contains('\r'), "{after:?}");
+            }
+            // The hook is in, and nothing a person had is gone.
+            assert!(hook_installed(fixture.root(), agent), "{file}, {layout}");
+            let parse = |text: &str| -> Value {
+                serde_json::from_str(text.trim_start_matches('\u{feff}')).unwrap()
+            };
+            assert!(
+                crate::jsonedit::holds(&parse(&after), &parse(before)),
+                "{file}, {layout}: {after}"
+            );
+            // A second install changes nothing.
+            assert!(!install_hook(fixture.root(), agent, "npx firescale").unwrap());
+            assert_eq!(fixture.read(file).unwrap(), after, "{file}, {layout}");
+        }
+    }
+
+    #[test]
+    fn a_file_the_hook_cannot_go_into_as_new_lines_is_refused_and_left_alone() {
+        let cases = [
+            (
+                "written on one line",
+                Agent::Claude,
+                "{\"permissions\":{\"deny\":[\"Read(./.env)\"]}}\n",
+            ),
+            (
+                "an empty object on one line",
+                Agent::Claude,
+                "{\n  \"model\": \"opus\",\n  \"hooks\": {}\n}\n",
+            ),
+            (
+                "a list on one line",
+                Agent::Codex,
+                "{\n  \"hooks\": {\n    \"Stop\": []\n  }\n}\n",
+            ),
+            (
+                "written on one line",
+                Agent::Cursor,
+                "{\"version\":1,\"hooks\":{\"stop\":[{\"command\":\"echo bye\"}]}}",
+            ),
+        ];
+        for (layout, agent, before) in cases {
+            let file = agent.config_file();
+            let fixture = Fixture::new(&[(file, before)], Track::NoGit).unwrap();
+            let error = install_hook(fixture.root(), agent, "fscale").unwrap_err();
+            assert_eq!(fixture.read(file).unwrap(), before, "{file}, {layout}");
+            let message = error.message();
+            // The problem, and the next step: what to add by hand.
+            assert!(
+                message.contains(&format!("{file} was left as it is")),
+                "{message}"
+            );
+            assert!(message.contains("by hand"), "{message}");
+            assert!(
+                message.contains(&format!(
+                    "\"command\": \"fscale hooks run --agent {}\"",
+                    agent.name()
+                )),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_of_another_type_or_a_comment_is_refused_and_left_alone() {
+        let cases = [
+            (
+                "{\n  \"hooks\": {\n    \"Stop\": \"none\"\n  }\n}\n",
+                "\"hooks.Stop\" is not a JSON list",
+            ),
+            (
+                "{\n  \"hooks\": [\n  ]\n}\n",
+                "\"hooks\" is not a JSON object",
+            ),
+            (
+                "{\n  // my settings\n  \"model\": \"opus\"\n}\n",
+                ".claude/settings.json is not valid JSON",
+            ),
+        ];
+        for (before, problem) in cases {
+            let fixture = Fixture::new(&[(".claude/settings.json", before)], Track::NoGit).unwrap();
+            let error = install_hook(fixture.root(), Agent::Claude, "fscale").unwrap_err();
+            assert!(error.message().contains(problem), "{}", error.message());
+            assert_eq!(fixture.read(".claude/settings.json").unwrap(), before);
+        }
     }
 
     #[test]
@@ -740,7 +935,9 @@ mod tests {
 
     #[test]
     fn only_a_stop_hook_counts_as_installed() {
-        let elsewhere = r#"{"permissions":{"allow":["Bash(fscale hooks run --agent claude)"]},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"fscale hooks run --agent claude"}]}]}}"#;
+        let elsewhere = r#"{
+"permissions":{"allow":["Bash(fscale hooks run --agent claude)"]},"hooks":{
+"PreToolUse":[{"hooks":[{"type":"command","command":"fscale hooks run --agent claude"}]}]}}"#;
         let merged = merge_hook(Some(elsewhere), Agent::Claude, "fscale")
             .unwrap()
             .expect("the stop hook is still missing, so it is added");
@@ -757,20 +954,21 @@ mod tests {
     }
 
     #[test]
-    fn a_null_hooks_key_is_treated_as_missing() {
-        let merged = merge_hook(
-            Some(r#"{"hooks":null,"model":"x"}"#),
-            Agent::Codex,
-            "fscale",
-        )
-        .unwrap()
-        .unwrap();
-        let value: Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(value["model"], "x");
-        assert_eq!(
-            value["hooks"]["Stop"][0]["hooks"][0]["command"],
-            "fscale hooks run --agent codex"
-        );
+    fn a_null_hooks_key_is_left_for_a_person() {
+        // Putting the hook there would rewrite the line that says `null`.
+        for existing in [
+            r#"{"hooks":null,"model":"x"}"#,
+            "{\n  \"hooks\": null,\n  \"model\": \"x\"\n}\n",
+        ] {
+            let error = merge_hook(Some(existing), Agent::Codex, "fscale").unwrap_err();
+            assert!(
+                error
+                    .message()
+                    .contains("Add this item to the list \"hooks.Stop\" by hand"),
+                "{}",
+                error.message()
+            );
+        }
     }
 
     #[test]
