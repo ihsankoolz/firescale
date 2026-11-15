@@ -1519,16 +1519,19 @@ impl<'a> StepCache<'a> {
             return false;
         }
         // For a unit that does not hold the repo root, the config is in the
-        // key by value, not as a file. When it differs from the base's, the
-        // step is the same only if that difference was worked out and does
-        // not reach it (ADR 0058). A unit that holds the root has the file
+        // key by value, not as a file. The step is the same only if the
+        // config's difference from the base's does not reach it (ADR 0058).
+        // That difference, when it was worked out, answers whether or not
+        // `changed` names the config: git lists a config it ignores
+        // nowhere. When it was not worked out, a config among the changed
+        // files is a difference. A unit that holds the root has the file
         // in its key, so the check of the changed files below answers too.
-        if changed.contains(crate::config::JSON_CONFIG)
-            && self
-                .base_config
-                .as_ref()
-                .is_none_or(|effect| effect.reaches(folder, kind, step))
-        {
+        let config = crate::config::JSON_CONFIG;
+        let reached = match &self.base_config {
+            Some(effect) => effect.reaches(folder, kind, step),
+            None => changed.contains(config),
+        };
+        if reached {
             return false;
         }
         let snapshot = self

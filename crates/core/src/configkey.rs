@@ -394,6 +394,11 @@ pub fn effect_between(
             };
         }
     };
+    // The same settings, as when the config did not change at all: no plan
+    // needs to be made to see that nothing is reached.
+    if **base == *head {
+        return ConfigEffect::default();
+    }
     let (before, after) = (shared_parts(base), shared_parts(head));
     let names: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
     let differ: Vec<&str> = names
@@ -452,12 +457,19 @@ pub fn effect_since(
     )
 }
 
-/// For `verify --affected`: what a changed `firescale.config.json` affects,
-/// measured from the commit the run compares with. `None` when the config
-/// is not among the changed files, or when that commit is not known: then
-/// the config counts as a changed file like any other, and affects every
-/// project ([`crate::graph::widening_reason`]). The units that can read the
-/// config as a file are not in the answer: [`mark_file_readers`] marks them.
+/// For `verify --affected`: what the difference between the loaded config
+/// and the config of the commit the run compares with affects.
+///
+/// It does not ask whether `firescale.config.json` is among the changed
+/// files: git lists a config it ignores nowhere, and its settings count all
+/// the same. A config with no copy in that commit (new, untracked or
+/// ignored) is compared with the defaults.
+///
+/// `None` when that commit is not known, and for a `firescale.config.ts`
+/// that is there while no `.json` changed: then the whole-file rule holds,
+/// and a changed config file affects every project
+/// ([`crate::graph::widening_reason`]). The units that can read the config
+/// as a file are not in the answer: [`mark_file_readers`] marks them.
 #[must_use]
 pub fn effect_for_affected(
     root: &Path,
@@ -470,7 +482,7 @@ pub fn effect_for_affected(
     let crate::affected::Changed::Files(files) = changed else {
         return None;
     };
-    if !files.contains(JSON_CONFIG) {
+    if !files.contains(JSON_CONFIG) && root.join(TS_CONFIG).exists() {
         return None;
     }
     let commit = comparison_commit(root, base)?;

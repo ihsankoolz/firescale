@@ -16,7 +16,7 @@ use firescale_core::blame::{
 };
 use firescale_core::check::run_check;
 use firescale_core::config::{
-    find_root, load_config, load_verify_config, ConfiguredRule, RuleSource, JSON_CONFIG,
+    find_root, load_config, load_verify_config, ConfiguredRule, RuleSource, JSON_CONFIG, TS_CONFIG,
 };
 use firescale_core::configkey;
 use firescale_core::diff::unified_diff;
@@ -1037,11 +1037,14 @@ fn verify_plan(
         None => changed_files(root, base)?,
     };
     let graph = build_graph(root, facts);
-    // A changed firescale.config.json is compared with the base's, setting
-    // by setting, instead of counting as a file that affects everything
-    // (ADR 0058).
+    // The firescale.config.json is compared with the base's, setting by
+    // setting, instead of counting as a file that affects everything
+    // (ADR 0058). Whether git lists it as changed is not asked: it lists a
+    // config it ignores nowhere, and its settings count all the same.
     let config_effect =
         configkey::effect_for_affected(root, base, &changed, facts, verify_config, &plan);
+    // As a file, the config changed when git says so.
+    let config_listed = matches!(&changed, Changed::Files(files) if files.contains(JSON_CONFIG));
     let mut set = match &config_effect {
         Some(effect) => {
             let mut set = affected_except(&graph, &changed, &[JSON_CONFIG]);
@@ -1092,13 +1095,15 @@ fn verify_plan(
     limit_to_affected(&mut plan, facts, &graph, &set, base);
     if let Some(effect) = &config_effect {
         effect.mark(&mut plan);
-        // As a file, the config reaches only the units whose key holds the
-        // repo root, where a step can read it (`prettier --check .`).
-        let read_as_a_file = configkey::mark_file_readers(&mut plan, &graph);
-        // Not when another changed file runs every project (the config
-        // renamed to `firescale.config.ts`, say): then something runs.
-        if effect.is_empty() && !read_as_a_file && set.everything.is_none() {
-            notes.push(configkey::NOTHING_TO_RUN_NOTE.to_owned());
+        if config_listed {
+            // As a file, the config reaches only the units whose key holds
+            // the repo root, where a step can read it (`prettier --check .`).
+            let read_as_a_file = configkey::mark_file_readers(&mut plan, &graph);
+            // Not when another changed file runs every project (the config
+            // renamed to `firescale.config.ts`, say): then something runs.
+            if effect.is_empty() && !read_as_a_file && set.everything.is_none() {
+                notes.push(configkey::NOTHING_TO_RUN_NOTE.to_owned());
+            }
         }
     }
     if let Some(affected) = plan.affected.as_mut() {
@@ -1282,7 +1287,10 @@ fn verify_report(
     .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
     // What the config's difference from the base commit's reaches, so that
     // a step it does not reach can count as the same on the base (ADR 0058).
+    // Not for a `firescale.config.ts`: it is a file of every key, and its
+    // base copy is never run, so the changed files answer for it.
     let cache = match &base {
+        BaseChoice::Compare(_) if root.join(TS_CONFIG).exists() => cache,
         BaseChoice::Compare(base) => cache.with_base_config(configkey::effect_since(
             root,
             &base.commit,
