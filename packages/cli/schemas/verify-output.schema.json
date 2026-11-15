@@ -551,12 +551,18 @@
             "required": ["kind", "file", "line", "onBase", "what"],
             "properties": {
               "kind": {
-                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, a test that never runs or does nothing, or a new .only), assertion-removed (fewer assertions that run and can fail), suppression-added (more lint suppressions of a rule), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
+                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, a test that never runs or does nothing, or a new .only), assertion-removed (fewer assertions that run and can fail), suppression-added (more lint suppressions of a rule), coverage-lowered (a coverage threshold lower than on the base, or gone), ci-weakened (a CI check step removed or made unable to fail), no-verify (more ways to skip git hooks than on the base), rule-disabled (a lint or type-check rule turned off or made weaker in a config file), snapshot-changed (a stored snapshot rewritten: needs a person's approval), expected-changed (an assertion whose expected value changed and nothing else: needs a person's approval), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
                 "enum": [
                   "test-deleted",
                   "test-skipped",
                   "assertion-removed",
                   "suppression-added",
+                  "coverage-lowered",
+                  "ci-weakened",
+                  "no-verify",
+                  "rule-disabled",
+                  "snapshot-changed",
+                  "expected-changed",
                   "not-checked"
                 ]
               },
@@ -604,9 +610,34 @@
                     "test-skipped",
                     "assertion-removed",
                     "suppression-added",
+                    "coverage-lowered",
+                    "ci-weakened",
+                    "no-verify",
+                    "rule-disabled",
+                    "snapshot-changed",
+                    "expected-changed",
                     "not-checked"
                   ]
                 }
+              }
+            }
+          }
+        },
+        "approvals": {
+          "description": "Who approved the change, when the approvals were read from GitHub (fscale tamper --pr-base --approvals, ADR 0046). Absent everywhere else.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["head", "by"],
+          "properties": {
+            "head": {
+              "description": "The commit they had to approve: the pull request's head.",
+              "type": "string"
+            },
+            "by": {
+              "description": "The people whose latest review approved that commit, other than its author, with write access.",
+              "type": "array",
+              "items": {
+                "type": "string"
               }
             }
           }
