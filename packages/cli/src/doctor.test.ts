@@ -438,8 +438,8 @@ describe('doctor and env files in the folders above a project', () => {
         subject: 'lonely/.env.example',
         status: 'problem',
         detail:
-          '1 of 1 variables are not set in the environment, and there is no lonely/.env, nor a .env in a folder above it: LONELY.',
-        fix: 'copy lonely/.env.example to lonely/.env and fill in the values (or set the variables in your shell)',
+          '1 of 1 variables are not set in the environment or .env, and there is no lonely/.env: LONELY.',
+        fix: 'add LONELY to the env file that lonely reads: .env, or a new lonely/.env (see lonely/.env.example for what each one is)',
       },
     ]);
     const human = await runCli(['doctor'], repo.root, env);
@@ -451,6 +451,23 @@ describe('doctor and env files in the folders above a project', () => {
         expect(out.stdout + out.stderr, secret).not.toContain(secret);
       }
     }
+  });
+
+  it('says so when no folder at or above the project has an env file', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'lonely/.env.example': 'LONELY=\n',
+        'lonely/requirements.txt': '',
+        'lonely/main.py': '',
+      },
+    });
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await writeVersionTools(tools, {});
+    const result = await runCli(['doctor'], repo.root, toolPath(tools));
+    expect(result.stdout).toContain(
+      '  PROBLEM  lonely/.env.example: 1 of 1 variables are not set in the environment, and there is no lonely/.env, nor a .env in a folder above it: LONELY.\n           next: copy lonely/.env.example to lonely/.env and fill in the values (or set the variables in your shell)\n',
+    );
+    expect(result.code).toBe(EXIT_VIOLATIONS);
   });
 });
 

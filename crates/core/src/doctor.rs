@@ -8,8 +8,9 @@
 //!   `.python-version`, `requires-python`, `go.mod`) against what is
 //!   installed.
 //! - **Environment variables**: every name in each `.env.example` is set in
-//!   the environment or present in the local env file beside it. Only names
-//!   are read from a local env file; values are never kept or printed.
+//!   the environment or present in a local env file beside it or in a
+//!   folder above it, up to the root (ADR 0059). Only names are read from
+//!   a local env file; values are never kept or printed.
 //! - **Dependencies**: per project, installed and matching the lockfile or
 //!   the requirements; for Python, the virtual environment too.
 //! - **Services**: the local services that Compose files, `.env.example`
@@ -1518,6 +1519,12 @@ impl Doctor<'_> {
 
     // --- env variables
 
+    /// Each `.env.example` against the environment and the local env files
+    /// of its folder and of every folder above it, up to the root
+    /// (ADR 0059). verify gives a step no env file: the project's own tools
+    /// read them, and several look in the folders above (python-dotenv) or
+    /// are pointed at the root's file, so a name found there counts, and
+    /// the check says in which file it was found.
     fn env(&mut self) {
         for folder in self.folders() {
             let dir = dir_of(self.root, &folder);
@@ -1528,27 +1535,75 @@ impl Doctor<'_> {
             if wanted.is_empty() {
                 continue;
             }
-            let mut local = BTreeSet::new();
-            let mut local_files = Vec::new();
-            for file in LOCAL_ENV_FILES {
-                if let Some(text) = read(&dir.join(file)) {
-                    local.extend(env_names(&text));
-                    local_files.push(shown(&folder, file));
+            // The local env files that exist, nearest first, with the
+            // names in each. `beside` counts those in the example's folder.
+            let mut files: Vec<(String, BTreeSet<String>)> = Vec::new();
+            let mut beside = 0;
+            for (depth, up) in folders_up(self.root, &dir).iter().enumerate() {
+                let Ok(rel) = up.strip_prefix(self.root) else {
+                    continue;
+                };
+                let up_folder = rel
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                for file in LOCAL_ENV_FILES {
+                    if let Some(text) = read(&up.join(file)) {
+                        files.push((shown(&up_folder, file), env_names(&text)));
+                        if depth == 0 {
+                            beside += 1;
+                        }
+                    }
                 }
             }
-            let missing: Vec<String> = wanted
-                .iter()
-                .filter(|name| !self.machine.env_set(name) && !local.contains(*name))
-                .cloned()
-                .collect();
+            let names_of = |files: &[(String, BTreeSet<String>)]| -> String {
+                files
+                    .iter()
+                    .map(|(file, _)| file.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let mut missing: Vec<String> = Vec::new();
+            // For each file above: the names found there and nowhere nearer.
+            let mut from_above: Vec<(String, Vec<String>)> = Vec::new();
+            for name in &wanted {
+                if self.machine.env_set(name) {
+                    continue;
+                }
+                match files.iter().position(|(_, names)| names.contains(name)) {
+                    None => missing.push(name.clone()),
+                    Some(at) if at < beside => {}
+                    Some(at) => {
+                        let file = &files[at].0;
+                        match from_above.iter_mut().find(|(found, _)| found == file) {
+                            Some((_, names)) => names.push(name.clone()),
+                            None => from_above.push((file.clone(), vec![name.clone()])),
+                        }
+                    }
+                }
+            }
             let example = shown(&folder, ENV_EXAMPLE);
             let project = (folder != ".").then_some(folder.as_str());
             if missing.is_empty() {
-                let place = if local_files.is_empty() {
+                let mut place = if beside == 0 {
                     "the environment".to_owned()
                 } else {
-                    format!("the environment or {}", local_files.join(", "))
+                    format!("the environment or {}", names_of(&files[..beside]))
                 };
+                if !from_above.is_empty() {
+                    // Order: the file nearest to the example first.
+                    from_above
+                        .sort_by_key(|(file, _)| files.iter().position(|(found, _)| found == file));
+                    let found: Vec<String> = from_above
+                        .iter()
+                        .map(|(file, names)| format!("{} in {file}", list(names)))
+                        .collect();
+                    place.push_str(&format!(
+                        ", or in an env file of a folder above ({})",
+                        found.join("; ")
+                    ));
+                }
                 self.add(
                     "env",
                     project,
@@ -1567,19 +1622,33 @@ impl Doctor<'_> {
                 continue;
             }
             let target = shown(&folder, ".env");
-            let fix = if local_files.is_empty() {
-                format!("copy {example} to {target} and fill in the values (or set the variables in your shell)")
-            } else {
+            let fix = if beside > 0 {
                 format!(
                     "add {} to {} (see {example} for what each one is)",
                     list(&missing),
-                    local_files[0]
+                    files[0].0
+                )
+            } else if files.is_empty() {
+                format!("copy {example} to {target} and fill in the values (or set the variables in your shell)")
+            } else {
+                format!(
+                    "add {} to the env file that {folder} reads: {}, or a new {target} (see {example} for what each one is)",
+                    list(&missing),
+                    names_of(&files)
                 )
             };
-            let where_looked = if local_files.is_empty() {
-                format!("the environment, and there is no {target}")
-            } else {
-                format!("the environment or {}", local_files.join(", "))
+            let where_looked = match (files.is_empty(), beside > 0) {
+                (false, true) => format!("the environment or {}", names_of(&files)),
+                (false, false) => format!(
+                    "the environment or {}, and there is no {target}",
+                    names_of(&files)
+                ),
+                (true, _) if folder == "." => {
+                    format!("the environment, and there is no {target}")
+                }
+                (true, _) => format!(
+                    "the environment, and there is no {target}, nor a .env in a folder above it"
+                ),
             };
             self.add(
                 "env",

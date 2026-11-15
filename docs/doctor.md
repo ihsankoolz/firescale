@@ -50,7 +50,22 @@ A tool that is missing is a problem with the page or command that installs it.
 
 ### Environment variables
 
-For each `.env.example` at the root and in each project's folder, every name it lists must be set (to something) in the environment, or be present in `.env` or `.env.local` beside it. **For this check only names are read from those files; values are dropped as each line is read, and never printed.** (The services check below reads one more thing from them: the host and port of a local database URL.) The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
+For each `.env.example` at the root and in each project's folder, every name it lists must be set (to something) in the environment, or be present in a `.env` or `.env.local` **in the same folder or in a folder above it, up to the repo root** (ADR 0059). **For this check only names are read from those files; values are dropped as each line is read, and never printed.** (The services check below reads one more thing from them: the host and port of a local database URL.) The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
+
+A repo with one `.env` at the root and services below it is common: `backend/orders/.env.example` lists the names, and the root's `.env` sets them. Doctor then says in which file it found each name:
+
+```
+  ok       backend/orders/.env.example: all 2 variables are set in the environment, or in an env file of a folder above (ORDERS_REGION in backend/.env.local; ORDERS_API_KEY in .env)
+```
+
+A name found nowhere is a problem, and the line names every env file that was read:
+
+```
+  PROBLEM  backend/orders/.env.example: 1 of 2 variables are not set in the environment or .env, and there is no backend/orders/.env: ORDERS_API_KEY.
+           next: add ORDERS_API_KEY to the env file that backend/orders reads: .env, or a new backend/orders/.env (see backend/orders/.env.example for what each one is)
+```
+
+**What this check can and cannot know.** `fscale verify` loads no env file: a step gets the environment verify was started in, plus `CI`, `NO_COLOR`, `FORCE_COLOR` and `PYTHONUNBUFFERED`. The project's own tools read the files, each in its own way: python-dotenv's `load_dotenv()` looks in the folders above; pydantic-settings and Vite read the folder they are pointed at (often the root, by a path in the code or `envDir`); Docker Compose reads the `.env` beside the Compose file. Doctor cannot tell which of these a project uses, so a name in any `.env` or `.env.local` at or above the project counts as set, the same folders the services check and the rule `core/env-example` look in. A file above the repo root is never read.
 
 ### Dependencies
 
