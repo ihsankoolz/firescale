@@ -314,3 +314,30 @@ describe('what a config change affects (ADR 0058)', () => {
     expect(renamed.stdout).toContain('the firescale config firescale.config.ts changed');
   });
 });
+
+// The owner's second report: an untracked image.png at the root was not
+// named as a file that cannot affect a build (ADR 0034, ADR 0043).
+describe('the note that names inert files', () => {
+  it('names an inert file even when another changed file runs every project', async () => {
+    const { repo, verify } = await courseProject();
+    await repo.write('image.png', 'not really a png\n');
+    // Sorts before image.png, and belongs to no project: every project runs.
+    await repo.write('deploy.sh', 'echo deploy\n');
+    const result = await verify('--affected');
+    expect(result.stdout).toContain('6 of 6 projects ran');
+    expect(result.stdout).toContain(
+      'note: 1 changed file (image.png) belongs to no project and cannot change a build or a test',
+    );
+  });
+
+  it('names the image beside an untracked config that only sets time limits', async () => {
+    const { repo, verify, config } = await courseProject();
+    await repo.write('image.png', 'not really a png\n');
+    await config({ verify: { projects: { frontend: { test: { timeout: '30m' } } } } });
+    const result = await verify('--affected');
+    expect(result.headline).toBe(NOTHING_RAN);
+    expect(result.stdout).toContain(
+      'note: 1 changed file (image.png) belongs to no project and cannot change a build or a test',
+    );
+  });
+});
