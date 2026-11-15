@@ -26,9 +26,16 @@ Why both conditions:
 
 An `inputs` glob that does not compile counts as matching, so the finding is kept. A rule with no inputs (`group-project/branch-name`) is not kept by this clause.
 
-**Seen change:** in a repo with no root project, an unchanged repo-level finding (a tracked root `.env`) now shows under `--affected` when any file its rule reads has changed. A repo with one root project already behaved this way. One test expectation changed for it (`works when the firescale root is a folder inside a larger git repo`).
+**Seen change:** an old, unchanged repo-level finding now shows under `--affected`, and blocks the stop hook, once any file its rule reads has changed. Two cases:
 
-**Limit, left open:** a finding inside a project that is not affected, caused by a change elsewhere, is still dropped. Closing it needs the graph (audit item 23), which was not asked for. `docs/affected.md` lists it.
+- In a repo with no root project: a tracked root `.env` shows once another env file changes. One test changed for it (`works when the firescale root is a folder inside a larger git repo`); it now has a project in its fixture, so that it still proves paths are relative to the firescale root.
+- In a repo with a root project, when the change is in a sub-project: a finding of a rule with wide inputs, such as `core/no-secrets-in-source` (`**/*`) in `scripts/deploy.sh`, shows on every change. Before, it showed only when the root project was affected.
+
+No narrower rule was found that still keeps the finding of bug 1: the engine does not know which of a rule's inputs caused a finding.
+
+**Rules that do not declare what they read.** A rule that is not built in was never cached, so its `inputs` meant nothing until now and may be empty. Such a rule counts as reading every change. A change to `firescale.config.json` or `firescale.config.ts` counts as read by every rule, since it can turn any rule on.
+
+**Limit, left open:** a finding inside a project that is not affected, caused by a change elsewhere, is still dropped. Closing it needs the graph (audit item 23), which was not asked for. `docs/affected.md` lists it. The clause is also only as good as a rule's `inputs`: where a rule reads a file it does not list (bug 10), a change to that file still drops the finding.
 
 ### Bug 2: verify runs nx and turbo through `npx --no`
 
@@ -38,7 +45,7 @@ The test `nx_and_turbo_take_precedence_and_honour_affected` asserted `npx turbo 
 
 ### Bug 3: the heartbeat hides what the report hides
 
-The progress line's own `redact` knew only `scheme://user:password@` and stopped at the first `/`. The heartbeat now calls the existing `verify::hide_secrets` (ADR 0035), and `redact`, which had no other caller, is removed. No new redactor was written. `Activity::recent()` still returns lines as printed; its callers only search them for a refused service and print nothing from them.
+The progress line's own `redact` knew only `scheme://user:password@` and stopped at the first `/`. The heartbeat now calls the existing `verify::hide_secrets` (ADR 0035), and `redact`, which had no other caller, is removed. No new redactor was written. The file name a known test runner's markers belong to (`(in tests/test_a.py)`) goes through `hide_secrets` too: a line that is only a connection string was read as that file name. `Activity::recent()` still returns lines as printed; its callers only search them for a refused service and print nothing from them.
 
 ## Consequences
 

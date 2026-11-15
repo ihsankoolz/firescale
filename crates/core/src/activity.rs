@@ -377,7 +377,7 @@ impl Activity {
             let file = self
                 .file
                 .as_ref()
-                .map_or_else(String::new, |file| format!(" (in {file})"));
+                .map_or_else(String::new, |file| format!(" (in {})", hide_secrets(file)));
             return Some(format!("tests so far: {}{file}", tally.describe()));
         }
         self.last_words
@@ -615,6 +615,25 @@ mod tests {
             "{shown}"
         );
         assert_eq!(shown, "last output: connecting to postgres://***@host/db");
+    }
+
+    #[test]
+    fn a_connection_string_read_as_a_test_file_is_shown_without_its_secret() {
+        // After counted markers, a token with a slash is taken for the file
+        // the markers belong to.
+        let activity = fed(
+            "python -m pytest",
+            &[
+                "tests/test_a.py ..\n",
+                "postgres://app:hunter2@localhost/db\n",
+            ],
+        );
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(shown.starts_with("tests so far: 2 passed"), "{shown}");
+        assert!(
+            !shown.contains("hunter2") && !shown.contains("app"),
+            "{shown}"
+        );
     }
 
     #[test]
