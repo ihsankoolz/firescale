@@ -313,6 +313,16 @@ pub fn resolve_config<'a>(
                 "{name}: \"protectedPaths\" holds \"{glob}\", which is not a valid glob ({why}) and would protect nothing. Fix the glob, for example \"infra/**\"."
             )));
         }
+        // Nor does one that compiles and can match no path (ADR 0060).
+        if let Some(works) = crate::agentrun::unmatchable_glob(glob) {
+            let write = works.map_or_else(
+                || "Write it that way, for example \"infra/**\".".to_owned(),
+                |works| format!("Write \"{works}\"."),
+            );
+            return Err(Error::user(format!(
+                "{name}: \"protectedPaths\" holds \"{glob}\", which can match no path and would protect nothing: a path is compared as git prints it, from the repo root, with no \"./\" or \"/\" in front, no \"..\" and no \"/\" at the end. {write}"
+            )));
+        }
     }
 
     let verify = parse_verify(name, object.get("verify"))?;
@@ -679,7 +689,22 @@ pub fn load_config<'a>(
     } else {
         (Value::Object(Map::new()), None)
     };
-    resolve_config(&raw, file, builtin, &mut |specs| host.describe_packs(specs))
+    let config = resolve_config(&raw, file, builtin, &mut |specs| host.describe_packs(specs))?;
+    // A name with no wildcard names one file. Where it is a folder, no file
+    // in the folder would be protected (ADR 0060).
+    for glob in &config.protected_paths {
+        let path = glob
+            .split(['/', '\\'])
+            .fold(root.to_path_buf(), |path, part| path.join(part));
+        if crate::agentrun::is_plain_path(glob) && path.is_dir() {
+            return Err(Error::user(format!(
+                "{}: \"protectedPaths\" holds \"{glob}\", which is a folder. A name with no wildcard names one file, so no file in the folder would be protected. Write \"{}/**\".",
+                file.unwrap_or("config"),
+                glob.replace('\\', "/")
+            )));
+        }
+    }
+    Ok(config)
 }
 
 /// Reads only the `verify` settings, never starting Node: for
