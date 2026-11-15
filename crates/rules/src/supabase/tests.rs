@@ -149,6 +149,53 @@ fn a_supabase_project_in_another_stack_gets_no_package_json() {
 }
 
 #[test]
+fn a_supabase_project_in_any_other_stack_gets_no_package_json() {
+    // Audit bug 11: the rule knew seven manifests, so a Python (Pipfile,
+    // setup.py), Java (pom.xml, build.gradle.kts) or Ruby (Gemfile) repo
+    // was given a package.json.
+    for manifest in crate::stackkit::MANIFESTS {
+        if manifest == "package.json" {
+            continue;
+        }
+        let f = fixture(&[
+            (manifest, String::new()),
+            ("supabase/config.toml", "project_id = \"x\"\n".to_owned()),
+        ]);
+        let found = f
+            .check(&package_json::PackageJson, &Options::new())
+            .unwrap();
+        assert_eq!(found.len(), 1, "{manifest}");
+        assert_eq!(found[0].fixable, Fixable::Manual, "{manifest}");
+        assert!(
+            found[0]
+                .message
+                .contains(&format!("not a JavaScript project ({manifest})")),
+            "{manifest}: {}",
+            found[0].message
+        );
+        let changed = fix_all(&f);
+        assert!(
+            changed.iter().all(|file| file != "package.json"),
+            "{manifest}: {changed:?}"
+        );
+        assert_eq!(f.read("package.json"), None, "{manifest}");
+    }
+}
+
+#[test]
+fn the_package_json_rule_reads_every_manifest_that_stops_its_fix() {
+    // A manifest added after a cached run must change the cache key, or
+    // the cached "fscale sync creates one" finding stays.
+    let inputs = package_json::PackageJson.meta().inputs;
+    for manifest in crate::stackkit::MANIFESTS {
+        assert!(
+            inputs.iter().any(|i| i == manifest),
+            "supabase/package-json lacks {manifest}"
+        );
+    }
+}
+
+#[test]
 fn every_rule_reads_what_decides_where_the_pack_applies() {
     // Review of M29: the cache key of each rule covers package.json and
     // every Supabase project's config, or a cached run hides findings.
