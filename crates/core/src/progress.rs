@@ -9,8 +9,8 @@ use std::io::Write;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-/// How often a running step gets a heartbeat line, unless
-/// `FSCALE_HEARTBEAT_MS` says otherwise.
+/// How often a running step gets a heartbeat line in its first ten minutes
+/// ([`next_heartbeat`]), unless `FSCALE_HEARTBEAT_MS` says otherwise.
 pub const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(60);
 
 /// The environment variable that sets the heartbeat interval, in
@@ -26,11 +26,23 @@ pub fn heartbeat_from_env() -> Duration {
         .map_or(DEFAULT_HEARTBEAT, Duration::from_millis)
 }
 
+/// A step that has run this long gets its heartbeat less often (ADR 0057).
+pub const LONG_STEP: Duration = Duration::from_secs(10 * 60);
+
+/// How often a step that has run for [`LONG_STEP`] gets a heartbeat line.
+pub const LONG_STEP_HEARTBEAT: Duration = Duration::from_secs(5 * 60);
+
 /// When the heartbeat after the one due at `at` is due, for a step whose
-/// heartbeat comes every `every`.
+/// heartbeat comes every `every`: after `every` again, or, once the step
+/// has run for [`LONG_STEP`], after [`LONG_STEP_HEARTBEAT`] if that is
+/// longer. A step of 1h 40m prints 28 heartbeat lines, not 100.
 #[must_use]
 pub fn next_heartbeat(at: Duration, every: Duration) -> Duration {
-    at + every
+    if at >= LONG_STEP {
+        at + every.max(LONG_STEP_HEARTBEAT)
+    } else {
+        at + every
+    }
 }
 
 /// Where progress lines go.
