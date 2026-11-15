@@ -1019,10 +1019,26 @@ fn entry_path(root: &Path, key: &str) -> PathBuf {
     cache_dir(root).join(format!("{key}.json"))
 }
 
+/// True when the path exists and is a symlink. Nothing of the cache is
+/// written through one, so a repo cannot point it at a file outside
+/// `.firescale` (the same check as the stop hook's counter).
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// True when `.firescale` or the cache folder in it is a symlink: the cache
+/// is then somewhere else, and is not read, written or cleaned.
+fn cache_is_linked(root: &Path) -> bool {
+    is_symlink(&root.join(".firescale")) || is_symlink(&cache_dir(root))
+}
+
 /// The stored pass for `key`, if there is one. A hit is touched, so the
 /// least recently used entries are the ones removed.
 #[must_use]
 pub fn lookup(root: &Path, key: &str) -> Option<Entry> {
+    if cache_is_linked(root) {
+        return None;
+    }
     let path = entry_path(root, key);
     let text = fs::read_to_string(&path).ok()?;
     let entry: Entry = serde_json::from_str(&text).ok()?;
@@ -1053,8 +1069,14 @@ pub fn now_secs() -> u64 {
 ///
 /// # Errors
 ///
-/// When the folder or the file cannot be written.
+/// When the folder or the file cannot be written, or when `.firescale` or
+/// `.firescale/steps` is a symlink.
 pub fn store(root: &Path, entry: &Entry) -> std::io::Result<()> {
+    if cache_is_linked(root) {
+        return Err(std::io::Error::other(
+            "the folder is a symbolic link; replace it with a real folder",
+        ));
+    }
     let dir = cache_dir(root);
     fs::create_dir_all(&dir)?;
     ignore_firescale_folder(root);
@@ -1068,10 +1090,11 @@ pub fn store(root: &Path, entry: &Entry) -> std::io::Result<()> {
 
 /// Writes `.firescale/.gitignore` (`*`) when it is missing, so firescale's
 /// own files never show up as changes in git, also when the repo's own
-/// `.gitignore` does not list `.firescale/`.
+/// `.gitignore` does not list `.firescale/`. Never through a symlink.
 pub fn ignore_firescale_folder(root: &Path) {
-    let ignore = root.join(".firescale").join(".gitignore");
-    if !ignore.exists() {
+    let dot_firescale = root.join(".firescale");
+    let ignore = dot_firescale.join(".gitignore");
+    if !is_symlink(&dot_firescale) && !is_symlink(&ignore) && !ignore.exists() {
         let _ = fs::write(
             ignore,
             "# Created by firescale. Nothing in this folder should be committed.\n*\n",
@@ -1088,6 +1111,9 @@ pub fn clean(root: &Path) {
 
 /// [`clean`] with its limits given, for tests.
 pub fn clean_with(root: &Path, max_age: Duration, max_entries: usize, now: SystemTime) {
+    if cache_is_linked(root) {
+        return;
+    }
     let Ok(entries) = fs::read_dir(cache_dir(root)) else {
         return;
     };
@@ -1662,9 +1688,11 @@ impl<'a> StepCache<'a> {
                 .filter_map(Result::ok)
                 .any(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
         });
-        if file
-            .parent()
-            .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
+        if !is_symlink(&self.root.join(".firescale"))
+            && !is_symlink(&file)
+            && file
+                .parent()
+                .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
         {
             ignore_firescale_folder(&self.root);
             let _ = fs::write(&file, &digest);
