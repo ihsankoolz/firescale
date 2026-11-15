@@ -689,7 +689,7 @@ Decisions in ADR 0049: eight rules from the CLI's source at v3.1.0 and Supabase'
 - ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (the `[inbucket]` rename).
 - ☑ Every fix is idempotent, proven by tests (`crates/rules/src/supabase/tests.rs`: every fix run twice; `sync` twice after `init`).
 
-## M30 — Stack pack: Expo ☐
+## M30 — Stack pack: Expo ☑
 
 Decisions in ADR 0050: seven rules from Expo's SDK 58 blank TypeScript template and CLI; the starter has no image files and ships ESLint so `expo lint` changes nothing.
 
@@ -767,7 +767,7 @@ Decisions in ADR 0054: four rules; a starter of `pom.xml` (Java 21, JUnit 6, Che
 - ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (a POM without its source encoding).
 - ☑ Every fix is idempotent, proven by tests (each rule's `tests.rs` runs its fix twice; `sync` twice after `init`).
 
-## M35 — Stack pack: C/C++ with CMake ☐
+## M35 — Stack pack: C/C++ with CMake ☑
 
 Decisions in ADR 0055: five rules; a starter of `CMakeLists.txt` (CMake 3.20, C++20, a clang-format `lint` target), a library, a program and its test.
 
@@ -777,6 +777,12 @@ Decisions in ADR 0055: five rules; a starter of `CMakeLists.txt` (CMake 3.20, C+
 - ☑ In that repo, the stack's own build and test commands succeed. Run by hand on 2026-11-14 with CMake 3.28.3 and 4.4.4 and GCC 13 (and Clang 18 with Ninja): configure and build without a warning, `ctest --test-dir build` (1 test passed), `build/app` (`Hello, world!`) and the `lint` target; `fscale verify` is OK on every step.
 - ☑ `fscale adopt --dry-run` proposes no change on a fixture repo of that stack that is already set up correctly, and exactly the expected change on one with a known gap (a root `CMakeLists.txt` without `enable_testing()`).
 - ☑ Every fix is idempotent, proven by tests (each rule's `tests.rs` runs its fix twice; `sync` twice after `init`).
+
+---
+
+## M36 to M39 — on hold
+
+Swift (M36), .NET (M37), Android (M38) and Flutter (M39) are not started and are on hold until the owner says so (2026-11-15). Before them came a run of bug fixes from the audit of 2026-11-14 (`docs/reviews/ponytail-audit.md`; ADR 0056) and the 0.5.0 version.
 
 ---
 
