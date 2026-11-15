@@ -243,11 +243,21 @@ impl StepTimes {
         if is_symlink(&temporary) {
             return;
         }
-        if fs::write(&temporary, format!("{text}\n")).is_err()
-            || fs::rename(&temporary, self.path()).is_err()
-        {
+        if fs::write(&temporary, format!("{text}\n")).is_err() {
             let _ = fs::remove_file(&temporary);
+            return;
         }
+        // On Windows a rename fails while another program (a virus scanner,
+        // an indexer) holds the file open for a moment: try a few times.
+        for attempt in 0..5 {
+            if fs::rename(&temporary, self.path()).is_ok() {
+                return;
+            }
+            if attempt < 4 {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        let _ = fs::remove_file(&temporary);
     }
 }
 
