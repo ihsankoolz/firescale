@@ -26,6 +26,13 @@ pub fn heartbeat_from_env() -> Duration {
         .map_or(DEFAULT_HEARTBEAT, Duration::from_millis)
 }
 
+/// When the heartbeat after the one due at `at` is due, for a step whose
+/// heartbeat comes every `every`.
+#[must_use]
+pub fn next_heartbeat(at: Duration, every: Duration) -> Duration {
+    at + every
+}
+
 /// Where progress lines go.
 pub struct Progress {
     out: Mutex<Box<dyn Write + Send>>,
@@ -126,6 +133,45 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(245)), "4m 05s");
         assert_eq!(format_duration(Duration::from_secs(13 * 60 + 2)), "13m 02s");
         assert_eq!(format_duration(Duration::from_secs(3720)), "1h 02m");
+    }
+
+    /// When the heartbeats of a step come, up to `until`, as the watch
+    /// loop works them out: no clock, no waiting.
+    fn heartbeats(every: Duration, until: Duration) -> Vec<u64> {
+        let mut times = Vec::new();
+        let mut at = every;
+        while at <= until {
+            times.push(at.as_secs());
+            at = next_heartbeat(at, every);
+        }
+        times
+    }
+
+    #[test]
+    fn a_step_gets_a_heartbeat_a_minute_and_after_ten_minutes_one_every_five() {
+        let minutes: Vec<u64> = heartbeats(DEFAULT_HEARTBEAT, Duration::from_secs(40 * 60))
+            .into_iter()
+            .map(|seconds| seconds / 60)
+            .collect();
+        assert_eq!(
+            minutes,
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20, 25, 30, 35, 40]
+        );
+        // The course project's slow step, 1h 40m: 28 lines, not 100.
+        assert_eq!(
+            heartbeats(DEFAULT_HEARTBEAT, Duration::from_secs(100 * 60)).len(),
+            28
+        );
+        // An interval longer than five minutes is kept as it is.
+        assert_eq!(
+            heartbeats(Duration::from_secs(8 * 60), Duration::from_secs(30 * 60)),
+            [8 * 60, 16 * 60, 24 * 60]
+        );
+        // The short interval tests set is kept for the first ten minutes.
+        assert_eq!(
+            heartbeats(Duration::from_millis(500), Duration::from_secs(2)),
+            [0, 1, 1, 2]
+        );
     }
 
     #[test]
