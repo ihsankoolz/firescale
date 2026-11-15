@@ -175,6 +175,175 @@ From your run of 0.5.0 on the course project on Windows: a full verify ran over 
 
 **Not reproduced:** nothing. Every finding that was mine to fix failed in a test first, except the junction, which already held.
 
+**Pull request 2: what a config change affects** (branch `pr2-config-affects`, ADR 0058)
+
+Your case: an untracked `firescale.config.json` that only set two test timeouts made `verify --affected` run all six projects and changed every step's cache key. Now a step of a project in a folder below the repo root is affected, and its key changes, only when a setting changed that can change its result. A step that runs at the repo root can read the config as a file, so for it the config stays a file (see "After the review").
+
+- **Below the repo root, the config is compared by value, not as a file.** For a step whose scope does not contain the repo root, `firescale.config.json` is no longer a file of the key, and no longer "a file no project owns" for `--affected`. Instead:
+  - a step's command, and whether it is on, come from the plan; the command was already in the key;
+  - `packs`, `rules`, `verify.ci`, `verify.failOnSkipped`, `verify.stopWhenServiceDown`, `verify.stopAfterErrors` and any setting this version does not know are in every step's key, and a change to one affects every project;
+  - time limits (`verify.timeout`, `verify.idleTimeout`, every step and project `timeout`), `verify.baseBudget`, `verify.labelFixed`, `verify.baseInstall`, `verify.tamper`, `protectedPaths`, `agent` and `$schema` are in no key by value and affect no project below the root.
+- **At the repo root, the config is still a file.** For the repo root's own steps, a root project (a project whose folder is the repo root), a folder named only under `verify.projects` and a project that depends on one of those: the config's bytes are in the key, the file is a changed file of that unit under `--affected` and in the stop hook, and blame-aware verify does not count the step as the same on the base. The shared settings are in these keys too.
+- **Failing tests first** (`packages/cli/src/config-affects.test.ts`, committed before the code; 9 of its 16 failed):
+  - `runs no project for an untracked config that only sets two test timeouts`: your case on the course fixture. It failed with `Expected: "verify: OK (affected only) - 0 of 6 projects ran, 6 not affected"`, `Received: "verify: PARTIAL (affected only) - 6 of 6 projects ran; 10 of 19 steps ran, 9 skipped"`. It also checks that a full run afterwards takes every pass from the cache, and that every other "nothing" setting runs nothing.
+  - `writing a default out in full, or reformatting, changes no key`: failed, all nine commands ran again. (Its repo has six projects below the root and no step at the root, so "no key" is still true of it.)
+  - `runs only the project whose command the config changes`: failed, 6 of 6 projects ran.
+  - `runs nothing for a project or a step that the config turns off, and runs it when it is turned on again`: failed, seven commands ran.
+  - `runs the root step, and no project step, when the config gives the whole repo a command`: failed, three project steps ran too.
+  - `compares a committed config with the base commit, setting by setting`, `runs every project when the base commit has a config this version cannot read`, `keeps the whole-file rule for a firescale.config.ts`, and the note of `runs every step again when a setting every step shares changes, with one note`: failed on the reasons and notes, which did not exist.
+  - The seven `runs every step again, and every project under --affected, when <setting> changes` tests (one per setting that every step shares) passed before and pass now: they pin what must not be lost.
+- **Every setting is placed, in code.** `configkey::shared_parts` takes `VerifyConfig` apart with no `..`, so a new field does not compile until it is put on a side. `configkey::tests::every_setting_lands_on_the_side_the_adr_gives_it` walks the table of ADR 0058 (31 rows), changes each setting and checks where it lands; `the_table_names_every_setting_and_nothing_else` checks the table against the struct's fields, the top-level keys the reader accepts and the verify keys its error message lists. These unit tests came with the code, not before it: they could not compile without it.
+- **Unknown settings stay in the key.** The working tree's config cannot have one (the reader refuses it, exit 2, as before). The base commit's can: then every project is affected (`a_base_config_this_version_cannot_read_affects_everything`, and end to end). An unknown top-level key is listed as `<key> (an unknown key)`, so it cannot share a name with a known setting.
+- **A `firescale.config.ts` keeps the old rule**: its bytes are in every key and any change to it affects every project.
+- **The base run of blame-aware verify**: a step of a project below the root counts as "the same on the base" after a config change only when the change cannot reach it. A step at the repo root never does after the config's bytes changed: its base runs. (`a_changed_config_is_the_same_on_the_base_only_for_steps_it_does_not_reach`; `blame.test.ts` "counts a step as the same on the base after a config change that cannot reach it, and runs the base after one that can" and "runs the base for a step of the repo root's own after a change of the config's bytes only".)
+- **The shared CI cache** uses the same keys: `shared-cache.test.ts` "serves a record to a pull request that changes a time limit, and not to one that changes a setting every step shares" (a project below the root) and "serves no record to a step of the repo root's own after a change of the config's bytes only".
+- **Your second report, the untracked `image.png` that was not listed: reproduced and fixed.** Cause: `graph::affected` stopped at the first file that runs every project. Your untracked `firescale.config.json` sorts before `image.png`, so the image was never looked at. Not the cause: untracked or tracked, the mode, the extension list, the root, the Windows path form. Failing test first: `graph::tests::inert_files_are_listed_whatever_else_changed` (`left: ["README.md"]`, `right: ["README.md", "image.png"]`), and end to end `names an inert file even when another changed file runs every project`. Fix: the walk goes to the end and lists every inert file. Which projects run did not change.
+
+**After the review**
+
+A reviewer proved two holes in the first version. Tests for both were committed first (`c44782f` before the rebase), and failed.
+
+- **Finding 1 (high): the config left the key of steps that read it as a file.** `prettier --check .` at the repo root reads `firescale.config.json`. Reformatting the config changes that step's result, but its key did not change.
+  - Failing test: `runs the root project again for an untracked config that its lint reads, and blocks the stop hook`. It failed with `AssertionError: expected 'verify: PARTIAL - 1 of 4 steps ran, 1…' to match / {2}lint +FAILED +\[new\] /`: the lint's kept pass was served although the lint now fails.
+  - Failing test: `runs the repo root's own steps again for a white space change of a tracked config`. Under Vitest it timed out on this loaded machine before it reached the assert (three tries). Replayed by a script with the same files and no time limit, the run printed `verify: OK (1 of 2 steps passed from the cache, not run now)` where the test wants `verify: FAILED at lint (new)`, and `--affected` printed `0 of 1 project ran, 1 not affected` with the note "runs no project".
+  - Both were seen on a binary with the three places of the fix put back to what the test commit had. The first full run of the test commit itself timed out in all 21 tests, under load.
+  - Fix, one line: the by-value rule applies only to a step whose scope does not contain the repo root; for every other step the config is an ordinary file again (in the key, a changed file under `--affected` and in the stop hook, a difference for `same_on_base`).
+  - Where: `stepcache::covers` (`Scope::holds_root`), `graph::affected_except` (the file goes to the root project), `configkey::mark_file_readers` (the root's own steps and the other units that hold the root).
+  - New tests: `runs the root project, and no project below it, for a change of the config's bytes only`; in Rust `the_json_config_is_a_file_only_in_the_key_of_a_unit_that_holds_the_repo_root`, `the_json_config_is_a_file_in_the_key_of_a_project_at_the_repo_root`, `a_settled_file_is_a_changed_file_of_the_root_project_only`, `the_units_that_can_read_the_config_as_a_file_are_marked`. With the fix taken out, the first three and the base test fail (for example `left: []`, `right: ["."]`).
+  - Your case still holds: `runs no project for an untracked config that only sets two test timeouts` passes unchanged. Its six projects are below the root and nothing runs at the root.
+- **Finding 2 (low): an unknown key could take a setting's name.** In `configkey::shared_parts`, a top-level key spelled `"verify.ci"` in the base commit's config overwrote the resolved value of the real `verify.ci`.
+  - Failing test: `configkey::tests::an_unknown_key_named_like_a_setting_cannot_hide_that_setting`. It failed with ``assertion `left != right` failed: verify.ci``: both digests were `4bdbcbc3…`.
+  - Fix, one line: an unknown top-level key is listed as `<key> (an unknown key)`; `packs` and `rules` keep their names.
+  - Seen change: the reason of an affected run names such a key as `future (an unknown key)`, not `future`.
+
+**Existing tests changed after the review, and why**
+
+Each one expected a step at the repo root to be untouched by a change of the config's bytes. Under the decided rule that is the wrong thing to pin.
+
+- `stepcache::tests::the_json_config_is_in_no_key_as_a_file_but_its_shared_settings_are` is now `the_json_config_is_a_file_only_in_the_key_of_a_unit_that_holds_the_repo_root`. It keeps every old check for a project below the root, and checks that the root's own key changes with the bytes.
+- `stepcache::tests::a_changed_config_is_the_same_on_the_base_only_for_steps_it_does_not_reach`: its steps were the root's own. They are now a project's below the root, with the same checks, plus one that a root step is not the same on the base.
+- `config-affects.test.ts` "never keeps a step that a limit stopped, and serves a kept pass after the limit is lowered": the slow test was a root command. It is now the test of a project in `app/`. The checks are the same.
+- `config-affects.test.ts` "runs every project when the base commit has a config this version cannot read", and the Rust `a_base_config_this_version_cannot_read_affects_everything`: the reason now reads `(future (an unknown key))` (finding 2).
+- `step-cache.test.ts` "says once when a change to the config means no kept pass applies": its steps are the root's own. After the default is written out and a time limit added, the note is still not said, but the three steps now run again (6 runs, then 9, where it said 3, then 6).
+- `blame.test.ts` "counts a step as the same on the base after a config change that cannot reach it, and runs the base after one that can": its failing test was a root command. It is now a project's in `svc/`, with the same three checks. A new test beside it pins the root side.
+- `shared-cache.test.ts` "serves a record to a pull request that changes a time limit, and not to one that changes a setting every step shares": the same move, to a project in `app/`. A new test beside it pins the root side.
+
+**Second review**
+
+A second reviewer confirmed both earlier fixes (findings 1 and 2) for a tracked config and for a plainly untracked one. They proved one gap, in two parts, for a config that git ignores (untracked, and matched by `.gitignore`), and one wrong note. All tests were committed first (`af9dca4`) and failed.
+
+- **The cause of both parts.** Git lists an ignored file nowhere. The step cache lists files with `git ls-files --exclude-standard`. `--affected` lists changed files the same way. So an ignored config was never a file of a key, and its settings were never compared.
+- **Part b: `--affected` and the stop hook missed the settings of an ignored config.** Two projects, `api` and `web`. The ignored config gives `web` a failing test command. One other file changed, `api/t.js`. `verify --affected` said `in web: not affected`. A full run fails.
+  - Failing test, Rust: `configkey::tests::a_config_that_git_ignores_is_compared_though_no_list_names_it`. It failed with `the ignored config is compared with the defaults`: the answer was `None`.
+  - Failing test, Rust: `stepcache::tests::a_config_change_that_no_list_names_still_reaches_the_base_comparison`. It failed with `assertion failed: !same(&one, "test")`.
+  - Failing tests, Vitest, under "when git ignores the config":
+    - "runs the project whose command an ignored config changes under --affected": wanted `2 of 2 projects ran`, got `verify: PARTIAL (affected only) - 1 of 2 projects ran, 1 not affected; 2 of 4 steps ran, 2 skipped`.
+    - "blocks the stop hook when an ignored config gives a project a command that fails": `expected +0 to be 2`. The hook let the agent stop.
+    - "runs every project under --affected when an ignored config changes verify.ci", and the same for `verify.failOnSkipped`: only 1 of 2 projects ran.
+  - Fix, one line: `configkey::effect_for_affected` always compares the comparison commit's config with the loaded one; a config with no copy in that commit is compared with the defaults.
+  - The other gates, checked one by one:
+    - The stop hook is `verify --affected` from the base commit. It goes through the same function. No gate of its own.
+    - `StepCache::same_on_base` (blame-aware verify) had its own gate: it asked the config's effect only when the changed files named the config. Fixed: the effect answers whenever it was worked out.
+    - The call that works that effect out for the base (`effect_since` in `main.rs`) was not gated.
+    - `check --affected` (`affected::narrow_report`) still takes "the config changed" from git's list. Not changed: it is about findings, not steps. Named in the limits.
+  - A `firescale.config.ts` keeps the whole-file rule. Without a guard, a repo with an unchanged `.ts` config would have run every project in every `--affected` run ("the base's config could not be read"). The guard is tested in the first Rust test above.
+- **Part a: the bytes of an ignored config were in no key.** A root `verify.lint` that fails when the config has no final line end. `verify` passed and kept the pass. The config was rewritten on one line. `verify` said `cache: hit lint` and `verify: OK`.
+  - Failing test, Rust: `stepcache::tests::a_config_that_git_ignores_is_a_file_of_a_key_that_holds_the_repo_root`. It failed with ``assertion `left != right` failed``: both keys were `f3d451d0…`.
+  - Failing test, Vitest: "runs the repo root's own steps again in a full run for a change of the bytes of an ignored config". It failed with `expected 'verify: OK (1 of 2 steps passed from …' not to contain 'from the cache'`.
+  - Failing test, Vitest, the `--affected` side in its first form: `Expected: "verify: OK (affected only) - 1 of 1 project ran"`, `Received: "verify: OK (affected only) - 0 of 1 project ran, 1 not affected"`.
+  - Fix, one line: for a key that holds the repo root, the config's bytes are read from disk when git does not list the file; under `--affected` they are compared with what the last run that passed saw.
+  - New Rust test with the fix: `only_a_config_that_git_ignores_has_a_digest_and_a_record`.
+- **The rule for the bytes under `--affected`, and why.** No commit has a copy of an ignored file. So there is nothing in git to compare its bytes with.
+  - Tried first in thought: count an ignored config as changed in every `--affected` run. Not taken. A root project's key covers the whole repo. So it would run for real in every `--affected` run, whatever changed, only because an ignored config exists.
+  - Taken: compare with what the last run that passed saw. `.firescale/ignored-config.digest` holds the digest of the file. It is written at the end of a verify run whose result is `ok` or `partial`, from the bytes read before any step ran. When the digest differs, or there is no record, the steps at the repo root run.
+  - Why no change gets through: the record changes only after a run in which nothing failed. In such a run each step at the root ran with the new bytes, or was left out because the record already held them. A failed run writes nothing, so the next run runs them again. With no record they run once.
+  - In a full run the key decides, as for any file. This part is not open to trade.
+  - Blame-aware verify: a step at the repo root is never "the same on the base" while an ignored config is there. The base commit has no copy of it.
+- **Three of my new Vitest tests changed after the test commit.** The three root tests under `--affected` first used a root lint that the ignored config itself set. That cannot show the record. Part b's rule compares an ignored config with the defaults, so a command it sets counts as changed in every `--affected` run and the root steps run each time (their pass comes from the cache). The tests now use a root project whose `package.json` has the lint, and an ignored config with only a time limit. With the marking taken out of a build, replayed by hand: `0 of 1 project ran, 1 not affected` in every run, and the hook exits 0.
+- **One more of my new tests was corrected** (`848af81`). The full-run test wanted `FAILED at lint (new)`. With an ignored config as the only change, git sees no change from the base commit, so there is no base to compare with and no label. The headline is `verify: FAILED at lint`, and the failure blocks. The test's first check (`not from the cache`) was the one that failed before the fix.
+- **Did the gap exist before this branch?** Yes, both parts. Read from `origin/main` (`git show origin/main:<file>`, nothing checked out): `stepcache::list_files` used `--exclude-standard` and `covers` had no special case, so an ignored config was in no key. `affected::changed_files` used `--exclude-standard` too, and on `origin/main` a config counted only when it was in that list.
+- **Cosmetic: a wrong note after `git mv firescale.config.json firescale.config.ts`.** `--affected` ran every project, and still said the change "runs no project".
+  - Failing test: "does not say that the change runs no project after a rename from .json to .ts". It failed with `expected 'verify: PARTIAL (affected only) - 6 o…' not to contain 'note: firescale.config.json changed, …'`.
+  - Fix, one line: the note is said only when nothing runs every project.
+- **Your case still holds**, also with the config ignored: "runs no project for a git-ignored config that only sets two test timeouts" gives `verify: OK (affected only) - 0 of 6 projects ran, 6 not affected`. It passed before the fix too; it is there to pin it.
+- **Existing tests changed, and why.** No check changed.
+  - `configkey::tests::the_units_that_can_read_the_config_as_a_file_are_marked`: `mark_file_readers` takes the reason to give, so the three calls pass it.
+  - `stepcache::tests::an_unreadable_input_is_never_cached`: it builds a `Snapshot` by hand, which has one more field.
+- **Seen changes.**
+  - An ignored config that sets a command, or a setting every step shares, affects those projects in every `--affected` run and every stop hook run. It is compared with the defaults each time, as an untracked one is until it is committed. Their kept passes are served when their files did not change.
+  - The first `--affected` run after the upgrade, in a repo with an ignored config and steps at the root, runs those steps once.
+  - `--affected` reads the comparison commit's config in every run now (two git calls). When the settings are the same, no second plan is made.
+- **Limits.**
+  - A `firescale.config.ts` that git ignores is not covered. Its bytes are in no key, and `--affected` does not compare it.
+  - `check --affected` does not see a change to an ignored config.
+  - Added to the ADR's known limits: a tool that a step below the root runs, and whose settings file at the repo root makes it read the firescale config (cspell with a root `cspell.json`).
+- **The final runs, on this machine (Windows 11, under load).**
+  - `pnpm build`, `pnpm lint`, `pnpm typecheck`: green. `cargo test --workspace`: green (832 in core, 569 in rules, 6 in the CLI). The first try stopped at the linker (`LNK1104`), the second passed.
+  - Each Vitest file run alone with `CI=true`. No assertion failed in any of them. Every failure is the 30 s limit:
+    - `config-affects.test.ts`: 1 passed, 32 timed out, of 33.
+    - `step-cache.test.ts`: 7 passed, 7 timed out, 2 skipped, of 16.
+    - `blame.test.ts`: 21 passed, 16 timed out, of 37.
+    - `shared-cache.test.ts`: 7 passed, 3 timed out, of 10.
+  - In a whole-file run one timed-out test leaves its `fscale` running, which slows the next. So tests were then run one at a time, each in its own Vitest run. 10 of the 11 new tests passed that way, and so did `blame` "runs the base for a step of the repo root's own…", `shared-cache` "serves no record to a step of the repo root's own…" and `step-cache` "runs again after a change… and not for an ignored one".
+  - Still over 30 s alone: the new hook test for the root project (twice), your untracked case, the `.ts` test and "runs the root project again for an untracked config that its lint reads" (twice each), and "white space change of a tracked config", "runs the root project, and no project below it", "compares a committed config with the base commit", `blame` "counts a step as the same on the base…", `step-cache` "says once…" and `shared-cache` "serves a record to a pull request…" (once each).
+  - Replayed by hand with the built binary, by scripts with no test runner and no time limit; every line printed what the test expects:
+    - every new test (the root lint in a full run; the root project once, not again, after a change, after a failed run, back to the old bytes, and in the hook; a project's command under `--affected` and in the hook; `verify.ci`; `verify.failOnSkipped`; a time limit; the rename note);
+    - your case, untracked and ignored: `verify: OK (affected only) - 0 of 6 projects ran, 6 not affected`, no command run, and the full run after it ran no command;
+    - the three root-file tests of the first review, the `.ts` test and the committed-config test;
+    - two more checks: with an unchanged `.ts` config, and with an unchanged tracked config, one changed frontend file runs 1 of 6 projects.
+  - Not replayed by hand: `blame` "counts a step as the same on the base…", `step-cache` "says once…" and `shared-cache` "serves a record to a pull request…". The Rust tests of `same_on_base` and of the keys pass. CI is the gate for these.
+- **What the reviewer tried that held.**
+  - A byte order mark, CRLF, reordered keys, the defaults written out in full.
+  - An untracked config with only timeouts.
+  - The base's config deleted, or not valid.
+  - Another letter case of the file name.
+  - A rename from `.json` to `.ts` (every project runs; only the note was wrong).
+  - Time limits: a step they end is only ever `timed out`, which is never kept.
+  - The settings that are in no key have no reader inside a step.
+
+**Decided on your behalf** (ADR 0058):
+
+- **`packs` and `rules` stay in every key.** A step's command may run firescale on the repo (`"lint": "fscale check && eslint ."`; this repo's own tests do). Unsure, so kept. Turning a rule on still runs every step once.
+- **`stopAfterErrors` and `stopWhenServiceDown` stay in every key.** I tried to move them out as "only an early stop" and found that a step stopped early can be reported `failed`, which a base run keeps.
+- **`failOnSkipped` stays in, and a step that is no longer off but has no command counts as reached.** Under `--affected` the skipped steps of projects that do not run are not counted, so the run said OK where a full run fails. The second case I found while writing the table, after the first version of the code; it has its own row and was fixed in a later commit.
+- **Settings are compared as this version reads them.** For a project below the root, a default written out, a key set to `null`, reordered keys and white space are no change. A different order of `packs` is a change. For a step at the repo root every byte counts.
+- **Which steps count as "at the repo root"**: those whose key covers the repo root's folder. That is the root's own steps, a root project, a folder named only under `verify.projects` (its key covers the whole repo), a project the graph cannot place, and a project that depends on one of those. A project whose inputs are not known (it imports modules chosen at run time) is not cached at all; under `--affected` the by-value rule applies to it.
+- **No new note for the root case.** When the config's bytes run only the steps at the root, the line under "Why each ran" says why: `changed: firescale.config.json` for a root project, and `firescale.config.json changed, and these steps can read every file of the repo, the config among them` otherwise. The note "…so the change runs no project" is said only when nothing at all can read the file.
+- **The cache format is 2.** The first run after the upgrade runs every step.
+- **`--affected` reads the base commit's config with `git show`**, never by running code. With no base it compares with the last commit; an untracked or new config is compared with the defaults.
+- **A note says when a config change runs nothing**: `firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs no project.`
+- **The note of ADR 0043 changed its words** and is said only when a setting every key holds changed: `A setting of the firescale config that every step's result can depend on changed since the last run, ...`.
+- **One existing test changed on purpose in the first version**: `step-cache.test.ts` "says once when a change to the config means no kept pass applies" wrote `"failOnSkipped": false` (the default) and expected every step to run again. It pinned the whole-file rule. After the review it changed again (see above): its steps are the root's own, so they do run again, but the note is not said until `verify.ci` is turned off.
+- `check --affected` is untouched: every rule still reads a change of the config (ADR 0056, bug 1). The rule-result cache is untouched.
+- The worktree was made from an old commit (M23). The branch was created from `b43a548` (0.5.0, `origin/main`) instead, since the brief is about 0.5.0. It is now rebased on `6d75588`, with no conflict.
+
+**Seen changes**
+
+- After a time limit is lowered, a step of a project below the root that passed under the old limit is served from the cache. It is not run again to see whether it now times out. Test: "never keeps a step that a limit stopped, and serves a kept pass after the limit is lowered". A step at the repo root runs again, as after any edit of the config.
+- After only `verify.baseInstall` changes, a failing step of a project below the root whose files are the same on the base is `pre-existing` with no base run. Before, any config change forced one base run. For a step at the repo root it still does.
+- Compared with 0.5.0, a change to the config's bytes alone runs only the steps at the repo root, not every project.
+
+**Known limits**
+
+- A command of a project below the root that reads `firescale.config.json` itself, by a path that leaves its folder, is not run again when only an "out" setting or the file's layout changes: a test that asserts the file's text, or a step that runs `fscale verify --dry-run` on the repo. A step at the repo root is run again.
+- A rule that reads every file (`core/no-secrets-in-source`) reads the config's text too. A step of a project below the root that runs `fscale check` inside is not run again for a secret typed into a setting that is in no key; verify's own `check` step runs fresh every time and reports it.
+- `Firescale.config.json` with another letter case, on a disk that ignores case, keeps the whole-file rule. Read from the code, not run.
+- Windows was run here this time (Windows 11): the Rust tests pass. The Vitest files that start `fscale verify` did not finish inside the 30 s test limit on this machine while two other builds ran (see "Found while fixing"), so what the changed tests assert was also replayed by scripts with no time limit; every replay printed what the test expects. macOS and Linux were not run. What the code depends on there: `git show <commit>:./firescale.config.json` (the same call the tamper guard makes) and `git ls-tree --name-only -z <commit> -- <names>`, both with forward slashes; a byte order mark and CRLF in the committed config are covered by a unit test. The scope test (`Scope::holds_root`) compares repo-relative paths that are already forward-slash, so it is the same on every system.
+- The time-limit test waits on a 2 s script with 1 s limits, five runs in all. On this machine under load one `fscale verify` took 15 to 60 s, so this test and others can pass the 30 s test limit here.
+
+**Found while fixing, not fixed**
+
+- Read from the code, not run: with a base, the base run executes the working tree's commands in the base worktree (`blame::compare` takes each step's command from the head's report, ADR 0037). So a step that fails only because the config gave it a failing command would fail on the base too and be labelled `pre-existing`. This was so before this change and is not changed by it. I found no tamper finding for a `verify.<step>` command in the firescale config (the tamper code names that file only to read its policy).
+- On this machine every `pnpm` call rewrites `pnpm-lock.yaml`: it adds `@pnpm/exe` 12.18.0 under `packageManagerDependencies`. I restored the file each time and did not commit it.
+- Seen in a unit test fixture: a folder with only a `requirements.txt` and no `.py` file is not a project of the graph. Named under `verify.projects`, its key then covers the whole repo, so it counts as "at the repo root" for this rule. That is the safe side.
+- With the machine at 73 to 99 % CPU from other builds and the virus scanner, `fscale check` on a four-file repo took 9 to 13 s and one `fscale verify` 5 to 60 s (debug build). The first `fscale verify` on the course fixture took 28 s with this branch and 33 s with the binary of the main checkout, so a test with two verify runs passes the 30 s limit under that load, on main too. An unchanged test of main ("runs no step again on a second run with no change, and says so") timed out the same way. I did not raise the limit.
+- The full Vitest run was stopped before it ended, on the coordinator's word: 37 of 52 files had reported failures, all seen ones by the 30 s limit, files this branch does not touch among them (`doctor`, `scaffold`, `agent-runner`). Timed-out tests also wrote stray snapshot entries; they were discarded. CI is the gate for the Vitest suite.
+- Twice the linker could not open a test binary (`LNK1104`) right after another run; the next try worked. Something on the machine holds the file for a moment.
+
+**Not reproduced**
+
+- Nothing. Both reports and both review findings were reproduced.
+
 ## Audit bug fixes (run of 2026-11-15)
 
 The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. For each: a test that failed because of the bug, then the smallest fix. None of the audit's shared pieces was built. Choices are in ADR 0056.
