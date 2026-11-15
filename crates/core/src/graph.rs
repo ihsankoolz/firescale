@@ -1706,10 +1706,11 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
     affected_except(graph, changed, &[])
 }
 
-/// [`affected`], leaving `settled` out of the walk: changed files whose
-/// effect the caller works out itself. `verify --affected` does so for
-/// `firescale.config.json`, which it compares setting by setting
-/// ([`crate::configkey`], ADR 0058). They still count as changed files.
+/// [`affected`], with `settled` files taken as files of the repo root's
+/// project only, when there is one: they never affect every project, and
+/// are never inert. `verify --affected` does so for `firescale.config.json`,
+/// whose settings it compares one by one ([`crate::configkey`], ADR 0058);
+/// as a file, only a step run in the repo root can read it.
 #[must_use]
 pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Affected {
     let files = match changed {
@@ -1742,6 +1743,9 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
     let mut everything: Option<String> = None;
     for file in files {
         if settled.contains(&file.as_str()) {
+            for root in projects.iter().filter(|node| node.path == ".") {
+                direct.entry(root.id.clone()).or_default().push(file);
+            }
             continue;
         }
         if let Some(reason) = widening_reason(file) {

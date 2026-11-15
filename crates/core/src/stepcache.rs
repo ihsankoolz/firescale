@@ -477,11 +477,13 @@ fn owners(graph: Option<&Graph>) -> Vec<String> {
 
 /// True when the scope's key holds `path`.
 fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
-    // The JSON config is in no key as a file: the settings that can change
-    // a step's result are in its key by value (ADR 0058). A
+    // The JSON config is a file only for a unit whose folders hold the repo
+    // root, where a step may read it as one (`prettier --check .`). For
+    // every other unit the settings that can change a step's result are in
+    // its key by value, and the file is not (ADR 0058). A
     // `firescale.config.ts` is code and stays a file like any other.
     if path == crate::config::JSON_CONFIG {
-        return false;
+        return reads_root(scope);
     }
     if scope.folders.iter().any(|folder| inside(path, folder)) {
         return true;
@@ -501,6 +503,13 @@ fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
         return false;
     }
     scope.above.contains(parent(path)) || (scope.unowned && unowned)
+}
+
+/// True when the scope holds the repo root's folder, so its steps can read
+/// `firescale.config.json` as a file.
+#[must_use]
+pub fn reads_root(scope: &Scope) -> bool {
+    scope.folders.contains(".")
 }
 
 /// The digest of the files a scope covers, or why it cannot be made.
@@ -1507,9 +1516,11 @@ impl<'a> StepCache<'a> {
         if self.key(folder, kind, step, command, dir).is_err() {
             return false;
         }
-        // The config is in the key by value, not as a file. When it differs
-        // from the base's, the step is the same only if that difference was
-        // worked out and does not reach it (ADR 0058).
+        // For a unit that does not hold the repo root, the config is in the
+        // key by value, not as a file. When it differs from the base's, the
+        // step is the same only if that difference was worked out and does
+        // not reach it (ADR 0058). A unit that holds the root has the file
+        // in its key, so the check of the changed files below answers.
         if changed.contains(crate::config::JSON_CONFIG)
             && self
                 .base_config

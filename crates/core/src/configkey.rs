@@ -132,7 +132,15 @@ fn shared_parts(config: &VerifyConfig) -> BTreeMap<String, String> {
     match serde_json::from_str::<Value>(other_settings) {
         Ok(Value::Object(other)) => {
             for (key, value) in other {
-                parts.insert(key, value.to_string());
+                // A key this version does not know gets a name no resolved
+                // setting has, so one called `verify.ci` cannot take the
+                // place of the real `verify.ci`.
+                let name = if key == "packs" || key == "rules" {
+                    key
+                } else {
+                    format!("{key} (an unknown key)")
+                };
+                parts.insert(name, value.to_string());
             }
         }
         // Not made from a config's value (a `VerifyConfig` built in code).
@@ -286,8 +294,44 @@ impl ConfigEffect {
 }
 
 /// The note of an affected run whose config changed in nothing that can
-/// change a step's result.
-pub const NOTHING_TO_RUN_NOTE: &str = "firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs no project.";
+/// change a step's result, when no unit of the plan can read the file.
+pub const NOTHING_TO_RUN_NOTE: &str = "firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), and no step runs in the folder that holds it, so the change runs no project.";
+
+/// The same, when the repo root's own steps or a project at the root can
+/// read the file.
+pub const ONLY_READERS_RUN_NOTE: &str = "firescale.config.json changed only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs only the steps that run in the folder that holds it: they can read it as a file.";
+
+/// Marks the units of an affected plan whose steps can read
+/// `firescale.config.json` as a file: those whose key holds every file of
+/// the repo root (the root's own steps, a project at the root, a folder
+/// the graph cannot place) and those whose inputs are not known. For them
+/// a change of the file's bytes is a change, whatever the settings say
+/// (ADR 0058). Returns true when the plan has such a unit.
+pub fn mark_file_readers(plan: &mut VerifyPlan, graph: &crate::graph::Graph) -> bool {
+    let Some(affected) = plan.affected.as_mut() else {
+        return false;
+    };
+    let mut any = false;
+    for unit in &mut affected.units {
+        let reads = crate::stepcache::unit_scope(
+            Some(graph),
+            unit.project.as_deref(),
+            unit.kind.as_deref(),
+        )
+        .map_or(true, |scope| crate::stepcache::reads_root(&scope));
+        if !reads {
+            continue;
+        }
+        any = true;
+        if !unit.affected {
+            unit.affected = true;
+            unit.reason = format!(
+                "{JSON_CONFIG} changed, and these steps can read every file of the repo, the config among them"
+            );
+        }
+    }
+    any
+}
 
 /// The steps of `now` that the config change reaches: one with a command
 /// that it did not have, with that exact text, in `before`, and one that
@@ -939,7 +983,7 @@ mod tests {
         let effect = effect_between(&base, &head, |_| VerifyPlan::default(), &plan);
         assert_eq!(
             effect.everything.as_deref(),
-            Some("a setting of firescale.config.json that every step's result can depend on changed (future)")
+            Some("a setting of firescale.config.json that every step's result can depend on changed (future (an unknown key))")
         );
     }
 

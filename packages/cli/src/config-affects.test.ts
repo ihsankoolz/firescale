@@ -25,7 +25,7 @@ const EVERY_PROJECT = [
 const NOTHING_RAN = 'verify: OK (affected only) - 0 of 6 projects ran, 6 not affected';
 
 const ONLY_OUT_SETTINGS =
-  "note: firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs no project.";
+  "note: firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), and no step runs in the folder that holds it, so the change runs no project.";
 
 /** The projects whose steps ran, from the stand-ins' log. */
 function projectsIn(calls: string[]): string[] {
@@ -284,7 +284,7 @@ describe('what a config change affects (ADR 0058)', () => {
       ],
       [
         '{ "future": true }\n',
-        "a setting of firescale.config.json that every step's result can depend on changed (future)",
+        "a setting of firescale.config.json that every step's result can depend on changed (future (an unknown key))",
       ],
       [
         '{ not json\n',

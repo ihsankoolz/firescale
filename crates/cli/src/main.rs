@@ -1026,8 +1026,18 @@ fn verify_plan(
     limit_to_affected(&mut plan, facts, &graph, &set, base);
     if let Some(effect) = &config_effect {
         effect.mark(&mut plan);
+        // As a file, the config is read only where a step runs in the
+        // folder that holds it.
+        let readers = configkey::mark_file_readers(&mut plan, &graph);
         if effect.is_empty() {
-            notes.push(configkey::NOTHING_TO_RUN_NOTE.to_owned());
+            notes.push(
+                if readers {
+                    configkey::ONLY_READERS_RUN_NOTE
+                } else {
+                    configkey::NOTHING_TO_RUN_NOTE
+                }
+                .to_owned(),
+            );
         }
     }
     if let Some(affected) = plan.affected.as_mut() {
