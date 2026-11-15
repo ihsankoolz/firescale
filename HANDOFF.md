@@ -8,8 +8,8 @@ Run of 2026-11-15 (started 01:30 UTC): the bugs of the ponytail audit (`docs/rev
 
 - **Pull request 1, stop hook, setup and secrets (bugs 1, 2, 3):** merged as [#49](https://github.com/ihsankoolz/firescale/pull/49), green on Linux, macOS and Windows.
 - **Pull request 2, cache inputs and blame (bugs 4, 9, 10, 12, 13, 17):** merged as [#50](https://github.com/ihsankoolz/firescale/pull/50), green on the three systems. One part of bug 10 (`agent-skills` and `firescale.config.ts`) could not be reproduced and was not changed.
-- **Pull request 3, tamper guard and agent runner (bugs 5, 7, 8):** in progress.
-- **Pull request 4, writes and packaging (bugs 6, 11, 14, 20):** not started.
+- **Pull request 3, tamper guard and agent runner (bugs 5, 7, 8):** merged as [#51](https://github.com/ihsankoolz/firescale/pull/51), green on the three systems.
+- **Pull request 4, writes and packaging (bugs 6, 11, 14, 20):** in progress.
 - **Pull request 5, version 0.5.0:** not started. No tag is pushed; the owner tags (`RELEASING.md`).
 - **On hold:** M36 Swift, M37 .NET, M38 Android and M39 Flutter, until the owner says so. So are the audit's parts A, B and C and its other items and bugs (15, 16, 18, 19, 21 to 30).
 - **Branch:** every pull request of the run is pushed to `claude/eager-bell-etp97a`; after each merge the branch restarts from `main`.
