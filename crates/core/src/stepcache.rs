@@ -2386,6 +2386,126 @@ mod tests {
         assert!(!same(&all, "lint", &config));
     }
 
+    /// After the second review: git does not list a config it ignores, so
+    /// its bytes were in no key and a kept pass of a root step outlived a
+    /// change of them.
+    #[test]
+    fn a_config_that_git_ignores_is_a_file_of_a_key_that_holds_the_repo_root() {
+        let machine = NoTools;
+        let fixture = Fixture::new(
+            &[
+                (".gitignore", "firescale.config.json\n"),
+                ("api/requirements.txt", "fastapi\n"),
+                ("api/main.py", "app = None\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                ("firescale.config.json", "{}\n"),
+            ],
+            Track::Only(&[
+                ".gitignore",
+                "api/requirements.txt",
+                "api/main.py",
+                "web/package.json",
+            ]),
+        )
+        .unwrap();
+        let root = fixture.root();
+        let ignored = run_git(root, &["check-ignore", "-q", "firescale.config.json"]).unwrap();
+        assert_eq!(ignored.code, 0, "git does not ignore the config");
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let cache = || cache_over(root, Some(graph.clone()), &machine, "");
+        let project = || {
+            cache()
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let root_steps = || {
+            cache()
+                .key(None, None, "test", "node -e 0", root)
+                .unwrap()
+                .key
+        };
+        let (first, first_root) = (project(), root_steps());
+        // Other bytes: another key for the root's own steps, which can read
+        // the file; the same key for a project below the root.
+        fs::write(root.join("firescale.config.json"), "{}").unwrap();
+        let changed_root = root_steps();
+        assert_ne!(changed_root, first_root);
+        assert_eq!(project(), first);
+        fs::remove_file(root.join("firescale.config.json")).unwrap();
+        assert_ne!(root_steps(), changed_root);
+        assert_ne!(root_steps(), first_root);
+        assert_eq!(project(), first);
+
+        // The base commit has no copy of an ignored config, so a root step
+        // is not the same on the base while the file is there, though no
+        // list of changed files names it.
+        let nothing = BTreeSet::new();
+        let same_at_root = |cache: &StepCache<'_>| {
+            cache.same_on_base(None, None, "test", "node -e 0", root, &nothing)
+        };
+        let same_below = |cache: &StepCache<'_>| {
+            cache.same_on_base(
+                Some("api"),
+                Some("python"),
+                "test",
+                "node -e 0",
+                &api,
+                &nothing,
+            )
+        };
+        assert!(same_at_root(&cache()));
+        fs::write(root.join("firescale.config.json"), "{}\n").unwrap();
+        assert!(!same_at_root(&cache()));
+        assert!(same_below(&cache()));
+    }
+
+    /// After the second review: what the config's difference reaches is
+    /// asked whether or not the list of changed files names the config (an
+    /// ignored one is never in it).
+    #[test]
+    fn a_config_change_that_no_list_names_still_reaches_the_base_comparison() {
+        use crate::configkey::ConfigEffect;
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let cache = || cache_over(root, Some(graph.clone()), &machine, "");
+        let nothing = BTreeSet::new();
+        let same = |cache: &StepCache<'_>, step: &str| {
+            cache.same_on_base(
+                Some("api"),
+                Some("python"),
+                step,
+                "node -e 0",
+                &api,
+                &nothing,
+            )
+        };
+        let mut effect = ConfigEffect::default();
+        effect.units.insert(
+            (Some("api".to_owned()), Some("python".to_owned())),
+            vec!["test".to_owned()],
+        );
+        let one = cache().with_base_config(effect);
+        assert!(!same(&one, "test"));
+        assert!(same(&one, "lint"));
+        let all = cache().with_base_config(ConfigEffect {
+            everything: Some("verify.ci".to_owned()),
+            ..ConfigEffect::default()
+        });
+        assert!(!same(&all, "lint"));
+        // Worked out, and it reaches nothing: the same.
+        assert!(same(
+            &cache().with_base_config(ConfigEffect::default()),
+            "test"
+        ));
+    }
+
     #[test]
     fn a_stale_entry_is_not_served() {
         let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();

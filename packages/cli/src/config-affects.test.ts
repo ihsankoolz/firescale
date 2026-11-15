@@ -324,6 +324,43 @@ describe('what a config change affects (ADR 0058)', () => {
     expect(projectsIn(renamed.calls)).toEqual(EVERY_PROJECT);
     expect(renamed.stdout).toContain('the firescale config firescale.config.ts changed');
   });
+
+  // The owner's case again, with the config in .gitignore: git lists it
+  // nowhere, and it is still compared with the defaults, setting by setting.
+  it('runs no project for a git-ignored config that only sets two test timeouts', async () => {
+    const { verify, config } = await courseProject({
+      '.gitignore': 'generated/\nfirescale.config.json\n',
+    });
+    await config({
+      verify: {
+        projects: {
+          'backend/ledger_service': { test: { timeout: '2h' } },
+          frontend: { test: { timeout: '30m' } },
+        },
+      },
+    });
+    // (--base: with no changed file at all, --affected has nothing to
+    // compare with and runs every project.)
+    const affected = await verify('--affected', '--base', 'HEAD');
+    expect(affected.code).toBe(EXIT_OK);
+    expect(affected.headline).toBe(NOTHING_RAN);
+    expect(affected.calls).toEqual([]);
+  });
+
+  // Renamed from .json to .ts: every project runs, so the note that the
+  // change runs no project must not be said.
+  it('does not say that the change runs no project after a rename from .json to .ts', async () => {
+    const { repo, verify } = await courseProject({
+      'firescale.config.json': '{ "verify": { "timeout": "1h" } }\n',
+    });
+    await rm(path.join(repo.root, 'firescale.config.json'));
+    await repo.write('firescale.config.ts', 'export default { verify: { timeout: "1h" } };\n');
+    const renamed = await verify('--affected');
+    expect(renamed.stdout).toContain('6 of 6 projects ran');
+    expect(projectsIn(renamed.calls)).toEqual(EVERY_PROJECT);
+    expect(renamed.stdout).not.toContain(ONLY_OUT_SETTINGS);
+    expect(renamed.stdout).not.toContain('runs no project');
+  });
 });
 
 // The owner's second report: an untracked image.png at the root was not
@@ -516,5 +553,142 @@ describe('a step that can read the config as a file', () => {
     );
     expect(affected.stdout).toContain('  in web: not affected');
     expect(affected.stdout).not.toContain('runs no project');
+  });
+
+  // After the second review: git lists no file it ignores. So an ignored
+  // config was a file of no key, and was in no list of changed files: its
+  // settings were not compared under --affected and in the stop hook.
+  describe('when git ignores the config', () => {
+    const IGNORES = '.firescale/\nfirescale.config.json\n';
+    const ROOT_LINT = { verify: { lint: 'node lint.js', typecheck: false, test: false } };
+    const FORMATTED = `${JSON.stringify(ROOT_LINT, null, 2)}\n`;
+    const NOT_FORMATTED = JSON.stringify(ROOT_LINT);
+    const IGNORED_CONFIG_CHANGED =
+      "  the repo root's own steps: firescale.config.json, which git ignores, changed since the last run that passed, and these steps can read every file of the repo, the config among them";
+    const stopHook = (root: string) =>
+      runCli(
+        ['hooks', 'run', '--agent', 'claude'],
+        root,
+        {},
+        { input: JSON.stringify({ session_id: 'ignored-config', stop_hook_active: false }) },
+      );
+
+    it("runs the repo root's own steps again in a full run for a change of the bytes of an ignored config", async () => {
+      const { repo, verify } = await branchRepo({ '.gitignore': IGNORES });
+      await repo.write('firescale.config.json', FORMATTED);
+      expect((await verify()).headline).toBe('verify: OK');
+      await repo.write('firescale.config.json', NOT_FORMATTED);
+      const full = await verify();
+      expect(full.stdout).not.toContain('from the cache');
+      // New: the base commit has no copy of an ignored config.
+      expect(full.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+    });
+
+    /**
+     * A repo whose root lint reads the ignored config, with a changed file
+     * that runs nothing: --affected has a change to measure, and the config
+     * is the only thing that can run a step.
+     */
+    const rootLint = async () => {
+      const made = await branchRepo({ '.gitignore': IGNORES });
+      await made.repo.write('firescale.config.json', FORMATTED);
+      await made.repo.write('notes.md', 'a note\n');
+      return made;
+    };
+
+    it("runs the repo root's own steps once under --affected for an ignored config that no run has seen, and not again", async () => {
+      const { verify } = await rootLint();
+      // Nothing is known of an earlier run: the safe side, once.
+      const once = await verify('--affected');
+      expect(once.headline).toBe('verify: OK (affected only) - 1 of 1 project ran');
+      expect(once.stdout).toContain(IGNORED_CONFIG_CHANGED);
+      // The same bytes as that passing run saw: nothing runs.
+      const same = await verify('--affected');
+      expect(same.headline).toBe('verify: OK (affected only) - 0 of 1 project ran, 1 not affected');
+    });
+
+    it("runs the repo root's own steps under --affected when an ignored config is not as the last passing run saw it", async () => {
+      const { repo, verify } = await rootLint();
+      expect((await verify()).headline).toBe('verify: OK');
+      await repo.write('firescale.config.json', NOT_FORMATTED);
+      const affected = await verify('--affected');
+      expect(affected.headline).toMatch(/^verify: FAILED at lint \(new\)/);
+      expect(affected.stdout).toContain(IGNORED_CONFIG_CHANGED);
+    });
+
+    it('blocks the stop hook when an ignored config is not as the last passing run saw it', async () => {
+      const { repo, root, verify } = await rootLint();
+      expect((await verify()).headline).toBe('verify: OK');
+      await repo.write('firescale.config.json', NOT_FORMATTED);
+      const hook = await stopHook(root);
+      expect(hook.code).toBe(EXIT_BLOCK);
+      expect(hook.stderr).toContain('lint');
+    });
+
+    /** Two projects below the root; `web` has a check that fails when the root has a config. */
+    const twoProjects = () => {
+      const pkg = (name: string) =>
+        `${JSON.stringify({ name, private: true, scripts: { test: 'node t.js' } })}\n`;
+      return branchRepo({
+        '.gitignore': IGNORES,
+        'api/package.json': pkg('api'),
+        'api/t.js': '\n',
+        'web/package.json': pkg('web'),
+        'web/t.js': '\n',
+        'web/no-config.js':
+          "process.exit(require('fs').existsSync('../firescale.config.json') ? 1 : 0);\n",
+      });
+    };
+
+    const WEB_COMMAND = JSON.stringify({
+      verify: { projects: { web: { test: 'node no-config.js' } } },
+    });
+
+    it('runs the project whose command an ignored config changes under --affected', async () => {
+      const { repo, verify } = await twoProjects();
+      await repo.write('api/t.js', '// changed\n');
+      await repo.write('firescale.config.json', WEB_COMMAND);
+      const affected = await verify('--affected');
+      expect(affected.stdout).toContain('2 of 2 projects ran');
+      expect(affected.stdout).toContain(
+        '  web: firescale.config.json changes what its test step runs',
+      );
+      expect(affected.headline).toMatch(/^verify: FAILED at test in web \(new\)/);
+    });
+
+    it('blocks the stop hook when an ignored config gives a project a command that fails', async () => {
+      const { repo, root } = await twoProjects();
+      await repo.write('api/t.js', '// changed\n');
+      await repo.write('firescale.config.json', WEB_COMMAND);
+      const hook = await stopHook(root);
+      expect(hook.code).toBe(EXIT_BLOCK);
+      expect(hook.stderr).toContain('test');
+    });
+
+    for (const [setting, name] of [
+      [{ ci: false }, 'verify.ci'],
+      [{ failOnSkipped: true }, 'verify.failOnSkipped'],
+    ] as const) {
+      it(`runs every project under --affected when an ignored config changes ${name}`, async () => {
+        const { repo, verify } = await twoProjects();
+        await repo.write('api/t.js', '// changed\n');
+        await repo.write('firescale.config.json', JSON.stringify({ verify: setting }));
+        const affected = await verify('--affected');
+        expect(affected.stdout).toContain('2 of 2 projects ran');
+        expect(affected.stdout).toContain(
+          `a setting of firescale.config.json that every step's result can depend on changed (${name})`,
+        );
+      });
+    }
+
+    it('runs no project under --affected for an ignored config that only sets a time limit', async () => {
+      const { repo, verify } = await twoProjects();
+      await repo.write('api/t.js', '// changed\n');
+      await repo.write('firescale.config.json', JSON.stringify({ verify: { timeout: '2h' } }));
+      const limit = await verify('--affected');
+      expect(limit.stdout).toContain('1 of 2 projects ran, 1 not affected');
+      expect(limit.stdout).toContain('  in web: not affected');
+      expect(limit.stdout).not.toContain('runs no project');
+    });
   });
 });

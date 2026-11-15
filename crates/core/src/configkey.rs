@@ -1043,6 +1043,92 @@ mod tests {
         }
     }
 
+    /// After the second review: a config that git ignores is in no list of
+    /// changed files, so its settings were never compared under
+    /// `--affected` and in the stop hook.
+    #[test]
+    fn a_config_that_git_ignores_is_compared_though_no_list_names_it() {
+        use crate::affected::{changed_files, Changed};
+        use crate::config::load_verify_config;
+        use crate::testing::{Fixture, Track};
+        let package = |name: &str| {
+            format!("{{\"name\":\"{name}\",\"scripts\":{{\"test\":\"node t.js\"}}}}\n")
+        };
+        let fixture = Fixture::new(
+            &[
+                (".gitignore", "firescale.config.json\n"),
+                ("api/package.json", &package("api")),
+                ("api/t.js", "\n"),
+                ("web/package.json", &package("web")),
+                ("web/t.js", "\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        git(root, &["init", "--quiet", "--initial-branch=main"]);
+        commit(root, "two projects");
+        fs::write(root.join("api").join("t.js"), "// changed\n").unwrap();
+        let effect_of = |config: &str| {
+            fs::write(root.join(JSON_CONFIG), config).unwrap();
+            let changed = changed_files(root, None).unwrap();
+            // Git lists the other file only: it ignores the config.
+            assert_eq!(
+                changed,
+                Changed::Files(BTreeSet::from(["api/t.js".to_owned()]))
+            );
+            let facts = detect_facts(root).unwrap();
+            let head = load_verify_config(root).unwrap();
+            let plan = plan_verify(root, &facts, &head, true, None);
+            effect_for_affected(root, None, &changed, &facts, &head, &plan)
+        };
+
+        // A command of one project: that project's step is reached.
+        let effect = effect_of(
+            r#"{ "verify": { "projects": { "web": { "test": "node -e process.exit(1)" } } } }"#,
+        )
+        .expect("the ignored config is compared with the defaults");
+        assert_eq!(effect.everything, None);
+        assert_eq!(
+            effect.units,
+            BTreeMap::from([(
+                (Some("web".to_owned()), Some("node".to_owned())),
+                vec!["test".to_owned()]
+            )])
+        );
+        // A setting every step shares: every project.
+        for (config, name) in [
+            (r#"{ "verify": { "ci": false } }"#, "verify.ci"),
+            (
+                r#"{ "verify": { "failOnSkipped": true } }"#,
+                "verify.failOnSkipped",
+            ),
+        ] {
+            let effect = effect_of(config).expect(name);
+            let reason = effect.everything.expect(name);
+            assert!(reason.contains(&format!("({name})")), "{reason}");
+        }
+        // Only time limits: compared, and nothing is reached.
+        let effect = effect_of(r#"{ "verify": { "test": { "timeout": "2h" } } }"#)
+            .expect("the ignored config is compared with the defaults");
+        assert!(effect.is_empty(), "{effect:?}");
+
+        // A `firescale.config.ts` that did not change keeps the whole-file
+        // rule: nothing is compared, and it does not count as unreadable.
+        fs::remove_file(root.join(JSON_CONFIG)).unwrap();
+        fs::write(root.join(TS_CONFIG), "export default {};\n").unwrap();
+        commit(root, "a ts config");
+        fs::write(root.join("api").join("t.js"), "// changed again\n").unwrap();
+        let changed = changed_files(root, None).unwrap();
+        let facts = detect_facts(root).unwrap();
+        let head = settings(&json!({}));
+        let plan = plan_verify(root, &facts, &head, true, None);
+        assert_eq!(
+            effect_for_affected(root, None, &changed, &facts, &head, &plan),
+            None
+        );
+    }
+
     /// After the review: a step whose key holds the repo root can read the
     /// config as a file, so a change of its bytes runs that step's unit.
     #[test]
