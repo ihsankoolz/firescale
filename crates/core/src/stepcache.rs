@@ -2152,6 +2152,155 @@ mod tests {
         assert!(lookup(fixture.root(), "k").is_none());
     }
 
+    fn pass(key: &str) -> Entry {
+        Entry {
+            format: FORMAT,
+            key: key.to_owned(),
+            step: "test".to_owned(),
+            project: None,
+            command: "true".to_owned(),
+            duration_ms: 1,
+            ran_at: now_secs(),
+            detail: String::new(),
+            tests: None,
+            output_digest: None,
+            shared_from: None,
+        }
+    }
+
+    /// The names in a folder, sorted.
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_ignore_file_is_never_written_through_a_symlink() {
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep.txt"), "kept\n").unwrap();
+        fs::create_dir_all(root.join(".firescale")).unwrap();
+        let ignore = root.join(".firescale").join(".gitignore");
+        // A link to a file that does not exist yet.
+        std::os::unix::fs::symlink(outside.path().join("new.txt"), &ignore).unwrap();
+        store(root, &pass("k")).unwrap();
+        assert_eq!(names_in(outside.path()), ["keep.txt"]);
+        assert!(lookup(root, "k").is_some());
+        // A link to a file that is there.
+        fs::remove_file(&ignore).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("keep.txt"), &ignore).unwrap();
+        store(root, &pass("k2")).unwrap();
+        assert_eq!(names_in(outside.path()), ["keep.txt"]);
+        assert_eq!(
+            fs::read_to_string(outside.path().join("keep.txt")).unwrap(),
+            "kept\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pass_is_never_stored_through_a_symlinked_folder() {
+        // `.firescale` itself, then `.firescale/steps`, is a link out of the repo.
+        for linked in [".firescale", ".firescale/steps"] {
+            let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+            let root = fixture.root();
+            let outside = tempfile::tempdir().unwrap();
+            fs::write(outside.path().join("keep.txt"), "kept\n").unwrap();
+            let link = abs(root, linked);
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+            let stored = store(root, &pass("k"));
+            ignore_firescale_folder(root);
+            assert_eq!(names_in(outside.path()), ["keep.txt"], "{linked}");
+            assert!(stored.is_err(), "{linked}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_cache_folder_is_never_read_or_cleaned() {
+        for linked in [".firescale", ".firescale/steps"] {
+            let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+            let root = fixture.root();
+            // A real cache elsewhere, with a pass and an old file in it.
+            let other = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+            store(other.root(), &pass("k")).unwrap();
+            let target = if linked == ".firescale" {
+                other.root().join(".firescale")
+            } else {
+                cache_dir(other.root())
+            };
+            let old = cache_dir(other.root()).join("old.txt");
+            fs::write(&old, "kept\n").unwrap();
+            let link = abs(root, linked);
+            fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            // A hit is touched: never a file outside the repo.
+            let entry = cache_dir(other.root()).join("k.json");
+            let earlier = SystemTime::now() - Duration::from_secs(3600);
+            fs::OpenOptions::new()
+                .append(true)
+                .open(&entry)
+                .unwrap()
+                .set_modified(earlier)
+                .unwrap();
+            let before = fs::metadata(&entry).unwrap().modified().unwrap();
+            let _ = lookup(root, "k");
+            let after = fs::metadata(&entry).unwrap().modified().unwrap();
+            assert_eq!(
+                before, after,
+                "{linked}: a file outside the repo was touched"
+            );
+            // Far enough ahead that every file is past the age limit.
+            let later = SystemTime::now() + MAX_AGE + MAX_AGE;
+            clean_with(root, MAX_AGE, MAX_ENTRIES, later);
+            assert!(
+                old.exists(),
+                "{linked}: a file outside the repo was removed"
+            );
+            assert!(lookup(other.root(), "k").is_some(), "{linked}");
+            assert!(lookup(root, "k").is_none(), "{linked}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_config_digest_is_never_written_through_a_symlink() {
+        let machine = NoTools;
+        let settings = CacheSettings {
+            version: "0.0.0",
+            read: true,
+            sets_ci: true,
+            machine: &machine,
+            read_env: &|_| None,
+        };
+        // The digest file is a link to a file that does not exist yet.
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep.txt"), "kept\n").unwrap();
+        fs::create_dir_all(root.join(".firescale")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("new.txt"),
+            root.join(".firescale").join("step-cache-config.digest"),
+        )
+        .unwrap();
+        let _ = StepCache::new(root, None, &settings).config_note();
+        assert_eq!(names_in(outside.path()), ["keep.txt"]);
+        // `.firescale` itself is a link out of the repo.
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        std::os::unix::fs::symlink(outside.path(), root.join(".firescale")).unwrap();
+        let _ = StepCache::new(root, None, &settings).config_note();
+        assert_eq!(names_in(outside.path()), ["keep.txt"]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_launcher_with_no_shebang_line_gives_its_version() {
