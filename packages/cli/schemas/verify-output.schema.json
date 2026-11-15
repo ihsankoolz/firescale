@@ -16,12 +16,13 @@
     "failOnSkipped",
     "steps",
     "skipped",
+    "notRun",
     "scope"
   ],
   "properties": {
     "schemaVersion": {
-      "description": "Version of this format. Changes only on a breaking change.",
-      "const": 6
+      "description": "Version of this format. Changes only on a breaking change. Version 7 added the step status over-budget, a step's lastKnownMs and lastKnownFinished, and the report's budgetMs and notRun (ADR 0057).",
+      "const": 7
     },
     "version": {
       "description": "The firescale version that produced the report.",
@@ -32,7 +33,7 @@
       "type": "boolean"
     },
     "result": {
-      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found. failed: a step failed, or steps were skipped while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up. stopped: verify was stopped by Ctrl+C or a termination signal before every step finished; the steps that finished are reported. pre-existing: nothing failed that the change introduced; every failure also fails on the base commit the same way, or is flaky (ADR 0037, 0039); exit code 0.",
+      "description": "ok: every step ran and passed. partial: nothing failed, but at least one step was skipped because no command was found, or was not started because it is known to take longer than --budget (see notRun). failed: a step failed, or steps were skipped or left out by --budget while verify.failOnSkipped is on. setup-needed: nothing failed in the code, but at least one step could not run because the environment is not set up. stopped: verify was stopped by Ctrl+C or a termination signal before every step finished; the steps that finished are reported. pre-existing: nothing failed that the change introduced; every failure also fails on the base commit the same way, or is flaky (ADR 0037, 0039); exit code 0.",
       "enum": ["ok", "partial", "failed", "setup-needed", "stopped", "pre-existing"]
     },
     "runner": {
@@ -124,7 +125,7 @@
             ]
           },
           "status": {
-            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it. not-affected: --affected found that no change reaches the step's project, so it was not run (ADR 0032); not the same as skipped.",
+            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it. not-affected: --affected found that no change reaches the step's project, so it was not run (ADR 0032); not the same as skipped. over-budget: the step was not started, because it took longer than --budget when it last ran, or ran at least that long without finishing (ADR 0057); this run says nothing about it, and it is never a pass.",
             "enum": [
               "passed",
               "failed",
@@ -134,7 +135,8 @@
               "skipped",
               "not-run",
               "off",
-              "not-affected"
+              "not-affected",
+              "over-budget"
             ]
           },
           "command": {
@@ -203,6 +205,15 @@
             "items": {
               "type": "string"
             }
+          },
+          "lastKnownMs": {
+            "description": "For a step whose status is over-budget: how long it took the last time it ran, or how long it ran at least when lastKnownFinished is false (ADR 0057).",
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastKnownFinished": {
+            "description": "With lastKnownMs: false when that run did not finish (it was stopped or timed out), so the step takes at least that long.",
+            "type": "boolean"
           },
           "notCached": {
             "description": "For a step that passed now: why its pass was not kept for the next run, or could not be looked up in the step cache (ADR 0043).",
@@ -290,6 +301,42 @@
           },
           "reason": {
             "type": "string"
+          }
+        }
+      }
+    },
+    "budgetMs": {
+      "description": "The --budget of the run, in milliseconds (ADR 0057). Absent without --budget.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "notRun": {
+      "description": "Every step that was not started because it is known to take longer than --budget; its status in steps is over-budget. The count of such steps is the length of this list. Empty without --budget. A run with one is never ok: its result is partial, or failed.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["step", "reason", "lastKnownMs", "lastKnownFinished"],
+        "properties": {
+          "step": {
+            "enum": ["lint", "typecheck", "test"]
+          },
+          "project": {
+            "description": "Folder of the project. Absent for the repo root.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was not started, with the budget and its last known time, for example: over the budget of 30m: it took 1h 40m when it last ran.",
+            "type": "string"
+          },
+          "lastKnownMs": {
+            "description": "How long it took the last time it ran, or how long it ran at least.",
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastKnownFinished": {
+            "description": "False when that run did not finish (it was stopped or timed out).",
+            "type": "boolean"
           }
         }
       }

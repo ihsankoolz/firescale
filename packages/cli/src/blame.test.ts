@@ -120,7 +120,7 @@ describe('blame-aware verify', () => {
     expect(result.stdout).toMatch(/ {2}test +FAILED +\[pre-existing\] node test\.js \(exit 1\)/);
     expect(result.stdout).toMatch(/Pre-existing: test fails on the base commit [0-9a-f]{7} too/);
     const json = await report((await runCli(['verify', '--json'], root)).stdout);
-    expect(json.schemaVersion).toBe(6);
+    expect(json.schemaVersion).toBe(7);
     expect(json.result).toBe('pre-existing');
     expect(json.ok).toBe(true);
     expect(step(json, 'test').label).toBe('pre-existing');

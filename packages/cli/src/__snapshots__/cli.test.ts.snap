@@ -55,6 +55,9 @@ Options:
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
+  --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
+                   took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is
+                   reported as NOT RUN, and the run is PARTIAL, never OK
   --shared-cache <dir>
                    verify, in GitHub Actions only: use step results that CI on the
                    default branch kept in <dir>, and keep them there on a push to it
