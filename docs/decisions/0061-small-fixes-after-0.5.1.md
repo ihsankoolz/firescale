@@ -45,7 +45,7 @@ ADR 0027 marks `.cursor/hooks.json` "confirmed (official examples)", from Cursor
 
 ### 5. The schema's description of `tamper` names every language the guard reads
 
-It said "JS/TS, Python and Rust". It now lists all eleven. A test builds the list from the code's own `Language` type with no catch-all, so a new language does not compile until it is listed and then fails until the schema names it.
+It said "JS/TS, Python and Rust". It now lists all eleven. A test checks every language of its list against the description. A `match` over the code's own `Language` type with no catch-all stops the test from compiling when a language is added, which sends whoever adds one to the list; it does not force the new row itself.
 
 ### 6. An entry file that is a link is a miss
 
@@ -64,6 +64,7 @@ Blame's own reason (it copies bytes) is weaker for doctor, which reads names onl
 
 - A name then found nowhere is a PROBLEM that names the link: `svc/.env is a symbolic link, so it was not read.`, with the next step `replace svc/.env with a real file that sets ..., or set the variables in your shell`.
 - When every name is set in the environment or in a real env file, the text is as before and the link is not mentioned.
+- When a real env file sits beside the example, the next step is still to add the name to that file. The link above is named in the detail, and the person is not told to replace it: it may be shared on purpose. (A review of the diff found the first version telling them to.)
 - **One visible cost:** a project whose `.env` is a link on purpose (a shared file, or a git worktree that points at the main checkout) and whose variables are set nowhere else now gets PROBLEM and exit 1 from `fscale doctor`, where it got `ok`. The project's own tools still follow the link.
 
 ## Consequences
@@ -75,6 +76,11 @@ Blame's own reason (it copies bytes) is weaker for doctor, which reads names onl
 - `fscale doctor` can fail where it passed, for a linked env file.
 
 ## Not done
+
+- Two files under `.firescale` are still read through a link, each for a comparison only: `.firescale/step-cache-config.digest` (it decides whether the "every step runs again" note is said; the write refuses a link) and the stop hook's counter `.firescale/hooks/<session>.json` (a planted high count lets the agent stop, as writing the real file would). A review of the diff found both; neither serves a result.
+- "Is it a link" and "read it" are two steps. A process that swaps the file between them is not guarded against; a planted repo is.
+- With `--json`, any error after a stop was asked for is reported as `interrupted before the check finished`, also one that came after the check. The plain text already said the same.
+- `fscale hooks install --budget 3` is refused with the stop hook's message, though it is not the stop hook.
 
 - A linked `.env.example` is still read by doctor.
 - The temporary file of each store is written with a plain write; a link planted under that exact name (it holds the process id) would be written through.
