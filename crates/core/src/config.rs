@@ -306,6 +306,14 @@ pub fn resolve_config<'a>(
             ))
         })?,
     };
+    // A glob that does not compile would protect nothing (guardrail 7).
+    for glob in &protected_paths {
+        if let Some(why) = crate::agentrun::glob_error(glob) {
+            return Err(Error::user(format!(
+                "{name}: \"protectedPaths\" holds \"{glob}\", which is not a valid glob ({why}) and would protect nothing. Fix the glob, for example \"infra/**\"."
+            )));
+        }
+    }
 
     let verify = parse_verify(name, object.get("verify"))?;
     let agent = check_agent(name, object.get("agent"))?;

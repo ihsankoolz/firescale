@@ -554,6 +554,18 @@ pub fn matches_any(path: &str, globs: &[String]) -> bool {
     builder.build().is_ok_and(|set| set.is_match(&path))
 }
 
+/// Why `glob` does not compile as [`matches_any`] compiles it, or `None`
+/// for a glob the guards can use. A glob that does not compile names no
+/// path: as a protected path it would protect nothing.
+#[must_use]
+pub fn glob_error(glob: &str) -> Option<String> {
+    globset::GlobBuilder::new(&normalise(glob))
+        .literal_separator(true)
+        .build()
+        .err()
+        .map(|error| error.kind().to_string())
+}
+
 /// Why a run's diff is rejected (guardrail 7), or `None`.
 #[must_use]
 pub fn diff_guard(
@@ -999,6 +1011,31 @@ mod tests {
             mode: "120000".to_owned(),
         }];
         assert!(diff_guard(&link, &all, &[]).is_some_and(|why| why.contains("link")));
+    }
+
+    #[test]
+    fn a_glob_that_does_not_compile_is_named_with_the_reason() {
+        for glob in [
+            "secrets/[",
+            "src/{app,lib.js",
+            "SRC\\{app,lib.js",
+            "a/[z-a]",
+        ] {
+            assert!(glob_error(glob).is_some(), "{glob}");
+            // What the guards did with it before it was a config error.
+            assert!(!matches_any("secrets/[", &[glob.to_owned()]), "{glob}");
+        }
+        assert_eq!(
+            glob_error("secrets/[").as_deref(),
+            Some("unclosed character class; missing ']'")
+        );
+        for glob in ["infra/**", "infra\\**", "src/{app,lib}.js", "app/[[]id]/**"] {
+            assert_eq!(glob_error(glob), None, "{glob}");
+        }
+        // The runner's own lists compile: none is dropped.
+        for glob in SECRET_PATHS.iter().chain(&PROTECTED_PATHS) {
+            assert_eq!(glob_error(glob), None, "{glob}");
+        }
     }
 
     #[test]

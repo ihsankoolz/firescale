@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use firescale_core::agentrun::{
-    append_ledger, diff_guard, now_utc, repo_limits, staged_changes, Adapter, AgentResult,
-    LedgerEntry, Policy, ProgramAdapter, RepoState, Request, RunWorktree,
+    append_ledger, diff_guard, glob_error, now_utc, repo_limits, staged_changes, Adapter,
+    AgentResult, LedgerEntry, Policy, ProgramAdapter, RepoState, Request, RunWorktree,
 };
 use firescale_core::blame::BaseCommit;
 use firescale_core::check::run_check;
@@ -179,6 +179,14 @@ pub(crate) fn fix_with_agent(root: &Path, args: &Args, agent_name: &str) -> Resu
         return Err(Error::user(format!(
             "the repo's own agent settings let no agent edit files ({why}); an agent run never has wider permissions than they give."
         )));
+    }
+    // A path rule that does not compile would protect nothing.
+    for glob in &limits_of_repo.denied_paths {
+        if let Some(why) = glob_error(glob) {
+            return Err(Error::user(format!(
+                "the repo's own agent settings deny the path \"{glob}\" (permissions.deny or permissions.ask in .claude/settings.json or .claude/settings.local.json), which is not a valid glob ({why}): the run could not protect it. Fix the glob in that rule, then run again."
+            )));
+        }
     }
     // Codex's `exec` takes no list of tools, commands or paths to deny
     // (ADR 0048): where the repo's own settings deny something, a Codex run
