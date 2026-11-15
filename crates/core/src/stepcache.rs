@@ -38,7 +38,7 @@ use crate::walk::{walk_entries, EntryKind};
 
 /// Bumped when the entry format or the key recipe changes, so old entries
 /// are never read.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// The folder of the step cache, relative to the repo root.
 pub const STEP_CACHE_DIR: [&str; 2] = [".firescale", "steps"];
@@ -109,6 +109,10 @@ pub struct Snapshot {
     /// When it was taken. A hash is reused only for a file last changed
     /// well before this (git's "racily clean" rule).
     taken: Option<SystemTime>,
+    /// True when `firescale.config.json` is on disk and git did not list
+    /// it, because it ignores it: the file is among `files` all the same,
+    /// read from disk, and no commit has a copy of it (ADR 0058).
+    config_unlisted: bool,
 }
 
 fn abs(root: &Path, rel: &str) -> PathBuf {
@@ -188,7 +192,12 @@ fn read_state(path: &Path) -> (FileState, Option<Stamp>) {
 
 /// The files git lists for the working tree: tracked files and untracked
 /// files it does not ignore. Outside git, every file and link the walk finds.
-fn list_files(root: &Path) -> Result<Vec<String>, String> {
+///
+/// One ignored file is added: `firescale.config.json`. A step whose key
+/// holds the repo root can read it as a file whether git ignores it or not,
+/// so its bytes must be in that key ([`covers`], ADR 0058). The second
+/// value says that it was added.
+fn list_files(root: &Path) -> Result<(Vec<String>, bool), String> {
     let top = run_git(root, &["rev-parse", "--show-toplevel"])
         .ok()
         .filter(|out| out.code == 0)
@@ -202,6 +211,7 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
                     .map(|(path, _)| path)
                     .collect()
             })
+            .map(|files| (files, false))
             .map_err(|error| error.message().to_owned());
     };
     let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
@@ -241,7 +251,13 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
         .map(|path| path.replace('\\', "/").trim_end_matches('/').to_owned())
         .collect();
     files.retain(|path| !path.starts_with(".firescale/") && !path.starts_with(".git/"));
-    Ok(files.into_iter().collect())
+    let config = crate::config::JSON_CONFIG;
+    let config_unlisted =
+        !files.contains(config) && fs::symlink_metadata(root.join(config)).is_ok();
+    if config_unlisted {
+        files.insert(config.to_owned());
+    }
+    Ok((files.into_iter().collect(), config_unlisted))
 }
 
 /// Files changed within this long before a snapshot are hashed again, as
@@ -261,13 +277,14 @@ impl Snapshot {
     #[must_use]
     pub fn capture_reusing(root: &Path, earlier: Option<&Self>) -> Self {
         let taken = SystemTime::now();
-        let paths = match list_files(root) {
-            Ok(paths) => paths,
+        let (paths, config_unlisted) = match list_files(root) {
+            Ok(listed) => listed,
             Err(problem) => {
                 return Self {
                     files: BTreeMap::new(),
                     problem: Some(problem),
                     taken: Some(taken),
+                    config_unlisted: false,
                 }
             }
         };
@@ -323,12 +340,14 @@ impl Snapshot {
                 files: BTreeMap::new(),
                 problem: Some("the files could not all be hashed".to_owned()),
                 taken: Some(taken),
+                config_unlisted,
             };
         }
         Self {
             files: hashed.into_iter().collect(),
             problem: None,
             taken: Some(taken),
+            config_unlisted,
         }
     }
 
@@ -374,6 +393,15 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// True when the scope holds the repo root's folder: the root's own
+    /// steps, a project at the root, a folder the graph cannot place and a
+    /// project that uses one of those. Its steps can read
+    /// `firescale.config.json` as a file (ADR 0058).
+    #[must_use]
+    pub fn holds_root(&self) -> bool {
+        self.folders.contains(".")
+    }
+
     fn whole_repo() -> Self {
         Self {
             folders: BTreeSet::from([".".to_owned()]),
@@ -477,6 +505,14 @@ fn owners(graph: Option<&Graph>) -> Vec<String> {
 
 /// True when the scope's key holds `path`.
 fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
+    // The JSON config is a file only for a unit whose folders hold the repo
+    // root, where a step may read it as one (`prettier --check .`). For
+    // every other unit the settings that can change a step's result are in
+    // its key by value, and the file is not (ADR 0058). A
+    // `firescale.config.ts` is code and stays a file like any other.
+    if path == crate::config::JSON_CONFIG {
+        return scope.holds_root();
+    }
     if scope.folders.iter().any(|folder| inside(path, folder)) {
         return true;
     }
@@ -811,6 +847,9 @@ pub struct StepInputs<'a> {
     pub dir: &'a Path,
     /// True when verify sets `CI=1` for the command.
     pub sets_ci: bool,
+    /// The config settings every step's result can depend on
+    /// ([`crate::configkey::shared_settings`], ADR 0058).
+    pub settings: &'a str,
 }
 
 /// The values of the allowlisted variables, as one hash. `None` is unset.
@@ -872,6 +911,7 @@ pub fn step_key(
         )
         .as_bytes(),
     );
+    hasher.update(format!("config\0{}\n", inputs.settings).as_bytes());
     hasher.update(format!("env\0{}\n", environment_digest(read_env)).as_bytes());
     hasher.update(
         format!(
@@ -1102,6 +1142,47 @@ pub fn ignore_firescale_folder(root: &Path) {
     }
 }
 
+/// Where the digest of an ignored `firescale.config.json` is kept, as the
+/// last verify run that passed saw the file.
+fn ignored_config_record(root: &Path) -> PathBuf {
+    root.join(".firescale").join("ignored-config.digest")
+}
+
+/// True when `digest`, of a `firescale.config.json` that git ignores
+/// ([`crate::configkey::ignored_config`]), is not the one the last verify
+/// run that passed wrote down ([`remember_ignored_config`]), or when no run
+/// wrote one down. No commit has a copy of an ignored file, so this record
+/// is what `verify --affected` compares its bytes with (ADR 0058).
+#[must_use]
+pub fn ignored_config_changed(root: &Path, digest: &str) -> bool {
+    let file = ignored_config_record(root);
+    if is_symlink(&root.join(".firescale")) || is_symlink(&file) {
+        return true;
+    }
+    fs::read_to_string(file).map_or(true, |before| before.trim() != digest)
+}
+
+/// Writes down the digest of the ignored `firescale.config.json` that a
+/// verify run saw. Call it only after a run in which nothing failed: every
+/// step that can read the file then passed with these bytes, or was left
+/// out because the record already held them. Never through a symlink.
+pub fn remember_ignored_config(root: &Path, digest: &str) {
+    let file = ignored_config_record(root);
+    if is_symlink(&root.join(".firescale"))
+        || is_symlink(&file)
+        || !file
+            .parent()
+            .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
+    {
+        return;
+    }
+    ignore_firescale_folder(root);
+    if fs::read_to_string(&file).is_ok_and(|before| before.trim() == digest) {
+        return;
+    }
+    let _ = fs::write(&file, digest);
+}
+
 /// Removes entries older than [`MAX_AGE`], and the least recently used
 /// beyond [`MAX_ENTRIES`]. Runs at the end of a verify run that stored
 /// something, so the folder never needs a command of its own.
@@ -1178,6 +1259,11 @@ pub struct StepCache<'a> {
     version: String,
     read: bool,
     sets_ci: bool,
+    /// The config settings every step's result can depend on (ADR 0058).
+    settings: String,
+    /// What the config's difference from the base commit's reaches, when
+    /// it was worked out ([`Self::with_base_config`]).
+    base_config: Option<crate::configkey::ConfigEffect>,
     graph: Option<Graph>,
     /// The latest snapshot of the working tree. Each step takes a new one
     /// before it is keyed (reusing the hashes of files whose size and time
@@ -1214,6 +1300,9 @@ pub struct CacheSettings<'a> {
     pub read: bool,
     /// True when verify sets `CI=1` for the commands.
     pub sets_ci: bool,
+    /// The config settings every step's result can depend on
+    /// ([`crate::configkey::shared_settings`]): a line of every key.
+    pub settings: &'a str,
     pub machine: &'a (dyn Machine + Sync),
     pub read_env: &'a (dyn Fn(&str) -> Option<String> + Sync),
 }
@@ -1238,6 +1327,8 @@ impl<'a> StepCache<'a> {
             version: settings.version.to_owned(),
             read: settings.read,
             sets_ci: settings.sets_ci,
+            settings: settings.settings.to_owned(),
+            base_config: None,
             digests: UnitDigests::new(graph.as_ref()),
             graph,
             snapshot: std::sync::Mutex::new(Snapshot::capture(root)),
@@ -1263,6 +1354,15 @@ impl<'a> StepCache<'a> {
     ) -> Self {
         self.salt = salt;
         self.shared = shared;
+        self
+    }
+
+    /// Says what the difference between the base commit's config and the
+    /// loaded one reaches, so a step it does not reach can still count as
+    /// having the same inputs on the base ([`Self::same_on_base`], ADR 0058).
+    #[must_use]
+    pub fn with_base_config(mut self, effect: crate::configkey::ConfigEffect) -> Self {
+        self.base_config = Some(effect);
         self
     }
 
@@ -1352,6 +1452,7 @@ impl<'a> StepCache<'a> {
                 command,
                 dir,
                 sets_ci: self.sets_ci,
+                settings: &self.settings,
             },
             &files,
             &self.tools,
@@ -1477,6 +1578,22 @@ impl<'a> StepCache<'a> {
         if self.key(folder, kind, step, command, dir).is_err() {
             return false;
         }
+        // For a unit that does not hold the repo root, the config is in the
+        // key by value, not as a file. The step is the same only if the
+        // config's difference from the base's does not reach it (ADR 0058).
+        // That difference, when it was worked out, answers whether or not
+        // `changed` names the config: git lists a config it ignores
+        // nowhere. When it was not worked out, a config among the changed
+        // files is a difference. A unit that holds the root has the file
+        // in its key, so the check of the changed files below answers too.
+        let config = crate::config::JSON_CONFIG;
+        let reached = match &self.base_config {
+            Some(effect) => effect.reaches(folder, kind, step),
+            None => changed.contains(config),
+        };
+        if reached {
+            return false;
+        }
         let snapshot = self
             .snapshot
             .lock()
@@ -1486,6 +1603,11 @@ impl<'a> StepCache<'a> {
             return false;
         };
         let owned = &self.digests.owned;
+        // A config that git ignores is in no commit, so it differs from the
+        // base for every unit whose key holds it as a file.
+        if snapshot.config_unlisted && covers(&scope, owned, config) {
+            return false;
+        }
         !changed.iter().any(|path| covers(&scope, owned, path))
     }
 
@@ -1545,6 +1667,7 @@ impl<'a> StepCache<'a> {
                 command,
                 dir,
                 sets_ci: self.sets_ci,
+                settings: &self.settings,
             },
             &files,
             &self.tools,
@@ -1656,22 +1779,18 @@ impl<'a> StepCache<'a> {
             .push(line);
     }
 
-    /// One line when the firescale config changed since the last run that
-    /// used this cache: the config is in every step's key (a file at the
-    /// repo root), so no kept pass applies any more (ADR 0043). Said once,
-    /// on the first run after the change; the config's digest is kept in
+    /// One line when a config setting that is in every step's key changed
+    /// since the last run that used this cache, so no kept pass applies any
+    /// more (ADR 0043, ADR 0058). Said once, on the first run after the
+    /// change; a digest of those settings (and of a `firescale.config.ts`,
+    /// which is in every key as a file) is kept in
     /// `.firescale/step-cache-config.digest`, beside the cache's folder.
     #[must_use]
     pub fn config_note(&self) -> Option<String> {
         let mut hasher = blake3::Hasher::new();
-        let mut names = Vec::new();
-        for name in [crate::config::JSON_CONFIG, crate::config::TS_CONFIG] {
-            if let Ok(bytes) = fs::read(self.root.join(name)) {
-                hasher.update(name.as_bytes());
-                hasher.update(b"\0");
-                hasher.update(&bytes);
-                names.push(name);
-            }
+        hasher.update(format!("settings\0{}\n", self.settings).as_bytes());
+        if let Ok(bytes) = fs::read(self.root.join(crate::config::TS_CONFIG)) {
+            hasher.update(&bytes);
         }
         let digest = hasher.finalize().to_hex().to_string();
         let dir = cache_dir(&self.root);
@@ -1697,11 +1816,8 @@ impl<'a> StepCache<'a> {
             ignore_firescale_folder(&self.root);
             let _ = fs::write(&file, &digest);
         }
-        let name = names.first().copied().unwrap_or(crate::config::JSON_CONFIG);
         (before.is_some() && had_passes).then(|| {
-            format!(
-                "{name} changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time."
-            )
+            "A setting of the firescale config that every step's result can depend on changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.".to_owned()
         })
     }
 
@@ -1798,6 +1914,7 @@ mod tests {
                 command: "node -e 0",
                 dir: &dir,
                 sets_ci: true,
+                settings: "",
             },
             &files,
             &tools,
@@ -1917,6 +2034,7 @@ mod tests {
             version: "1.0.0",
             read: true,
             sets_ci: true,
+            settings: "",
             machine: this_machine(),
             read_env,
         };
@@ -1942,6 +2060,7 @@ mod tests {
             )]),
             problem: None,
             taken: None,
+            config_unlisted: false,
         };
         let reason = UnitDigests::new(None)
             .digest(&snapshot, &Scope::whole_repo())
@@ -1951,6 +2070,7 @@ mod tests {
             files: BTreeMap::new(),
             problem: Some("git ls-files failed".to_owned()),
             taken: None,
+            config_unlisted: false,
         };
         assert!(UnitDigests::new(None)
             .digest(&unlisted, &Scope::whole_repo())
@@ -1979,6 +2099,7 @@ mod tests {
                     command: "node -e 0",
                     dir: root,
                     sets_ci: true,
+                    settings: "",
                 },
                 &files,
                 &tools,
@@ -2160,6 +2281,301 @@ mod tests {
         assert!(!uses_history("pnpm test"));
     }
 
+    /// A cache over `root` whose every key holds `settings` (ADR 0058).
+    fn cache_over<'a>(
+        root: &Path,
+        graph: Option<Graph>,
+        machine: &'a NoTools,
+        settings: &'a str,
+    ) -> StepCache<'a> {
+        StepCache::new(
+            root,
+            graph,
+            &CacheSettings {
+                version: "0.0.0",
+                read: true,
+                sets_ci: true,
+                settings,
+                machine,
+                read_env: &|_| None,
+            },
+        )
+    }
+
+    /// Two projects in folders below the root, and no project at the root.
+    fn two_projects_below_the_root() -> Fixture {
+        Fixture::new(
+            &[
+                ("api/requirements.txt", "fastapi\n"),
+                ("api/main.py", "app = None\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                ("firescale.config.json", "{}\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_json_config_is_a_file_only_in_the_key_of_a_unit_that_holds_the_repo_root() {
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        // A project in a folder below the root, and the root's own steps.
+        let project = |settings: &str| {
+            cache_over(root, Some(graph.clone()), &machine, settings)
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let root_steps = |settings: &str| {
+            cache_over(root, Some(graph.clone()), &machine, settings)
+                .key(None, None, "test", "node -e 0", root)
+                .unwrap()
+                .key
+        };
+        let (first, first_root) = (project("one"), root_steps("one"));
+        // Other bytes, the same settings: the same key for the project. The
+        // root's own steps can read the file (`prettier --check .`), so
+        // their key holds its bytes.
+        fs::write(
+            root.join("firescale.config.json"),
+            "{ \"verify\": { \"timeout\": \"2h\" } }\n",
+        )
+        .unwrap();
+        assert_eq!(project("one"), first);
+        let changed_root = root_steps("one");
+        assert_ne!(changed_root, first_root);
+        fs::remove_file(root.join("firescale.config.json")).unwrap();
+        assert_eq!(project("one"), first);
+        assert_ne!(root_steps("one"), changed_root);
+        // Other settings: another key, for both.
+        assert_ne!(project("two"), first);
+        assert_ne!(root_steps("two"), root_steps("one"));
+        // Only the root's own config: one in a folder below is a file.
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("firescale.config.json"), "{}\n").unwrap();
+        let nested = project("one");
+        assert_ne!(nested, first);
+        // A TypeScript config is code: its bytes stay in every key.
+        fs::write(root.join("firescale.config.ts"), "export default {};\n").unwrap();
+        let with_ts = project("one");
+        assert_ne!(with_ts, nested);
+        fs::write(
+            root.join("firescale.config.ts"),
+            "export default { verify: { timeout: '2h' } };\n",
+        )
+        .unwrap();
+        assert_ne!(project("one"), with_ts);
+    }
+
+    #[test]
+    fn the_json_config_is_a_file_in_the_key_of_a_project_at_the_repo_root() {
+        let machine = NoTools;
+        let fixture = Fixture::new(
+            &[
+                ("package.json", "{\"name\":\"app\"}\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                ("firescale.config.json", "{}\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let key = |folder: &str| {
+            let dir = abs(root, folder);
+            cache_over(root, Some(graph.clone()), &machine, "")
+                .key(Some(folder), Some("node"), "lint", "node -e 0", &dir)
+                .unwrap()
+                .key
+        };
+        let (at_root, below) = (key("."), key("web"));
+        fs::write(root.join("firescale.config.json"), "{ }\n").unwrap();
+        assert_ne!(key("."), at_root);
+        assert_eq!(key("web"), below);
+    }
+
+    #[test]
+    fn a_changed_config_is_the_same_on_the_base_only_for_steps_it_does_not_reach() {
+        use crate::configkey::ConfigEffect;
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let cache = || cache_over(root, Some(graph.clone()), &machine, "");
+        let unit = (Some("api".to_owned()), Some("python".to_owned()));
+        let config: BTreeSet<String> = BTreeSet::from(["firescale.config.json".to_owned()]);
+        // A step of a project in a folder below the root.
+        let same = |cache: &StepCache<'_>, step: &str, changed: &BTreeSet<String>| {
+            cache.same_on_base(
+                Some("api"),
+                Some("python"),
+                step,
+                "node -e 0",
+                &api,
+                changed,
+            )
+        };
+        // A step of the repo root's own.
+        let same_at_root = |cache: &StepCache<'_>, changed: &BTreeSet<String>| {
+            cache.same_on_base(None, None, "test", "node -e 0", root, changed)
+        };
+        // Not worked out: a changed config is a difference, as before.
+        let unknown = cache();
+        assert!(same(&unknown, "test", &BTreeSet::new()));
+        assert!(!same(&unknown, "test", &config));
+        // Worked out, and it reaches nothing: the same.
+        let nothing = cache().with_base_config(ConfigEffect::default());
+        assert!(same(&nothing, "test", &config));
+        // Not for the root's own steps: the config is a file of their key,
+        // so a change of its bytes reaches them whatever the settings say.
+        assert!(same_at_root(&nothing, &BTreeSet::new()));
+        assert!(!same_at_root(&nothing, &config));
+        // Another changed file the key holds is still a difference.
+        let mut more = config.clone();
+        more.insert("api/main.py".to_owned());
+        assert!(!same(&nothing, "test", &more));
+        // It reaches one step: only the others are the same.
+        let mut effect = ConfigEffect::default();
+        effect.units.insert(unit, vec!["test".to_owned()]);
+        let one = cache().with_base_config(effect);
+        assert!(!same(&one, "test", &config));
+        assert!(same(&one, "lint", &config));
+        // It reaches every step.
+        let all = cache().with_base_config(ConfigEffect {
+            everything: Some("verify.ci".to_owned()),
+            ..ConfigEffect::default()
+        });
+        assert!(!same(&all, "lint", &config));
+    }
+
+    /// After the second review: git does not list a config it ignores, so
+    /// its bytes were in no key and a kept pass of a root step outlived a
+    /// change of them.
+    #[test]
+    fn a_config_that_git_ignores_is_a_file_of_a_key_that_holds_the_repo_root() {
+        let machine = NoTools;
+        let fixture = Fixture::new(
+            &[
+                (".gitignore", "firescale.config.json\n"),
+                ("api/requirements.txt", "fastapi\n"),
+                ("api/main.py", "app = None\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                ("firescale.config.json", "{}\n"),
+            ],
+            Track::Only(&[
+                ".gitignore",
+                "api/requirements.txt",
+                "api/main.py",
+                "web/package.json",
+            ]),
+        )
+        .unwrap();
+        let root = fixture.root();
+        let ignored = run_git(root, &["check-ignore", "-q", "firescale.config.json"]).unwrap();
+        assert_eq!(ignored.code, 0, "git does not ignore the config");
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let cache = || cache_over(root, Some(graph.clone()), &machine, "");
+        let project = || {
+            cache()
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let root_steps = || {
+            cache()
+                .key(None, None, "test", "node -e 0", root)
+                .unwrap()
+                .key
+        };
+        let (first, first_root) = (project(), root_steps());
+        // Other bytes: another key for the root's own steps, which can read
+        // the file; the same key for a project below the root.
+        fs::write(root.join("firescale.config.json"), "{}").unwrap();
+        let changed_root = root_steps();
+        assert_ne!(changed_root, first_root);
+        assert_eq!(project(), first);
+        fs::remove_file(root.join("firescale.config.json")).unwrap();
+        assert_ne!(root_steps(), changed_root);
+        assert_ne!(root_steps(), first_root);
+        assert_eq!(project(), first);
+
+        // The base commit has no copy of an ignored config, so a root step
+        // is not the same on the base while the file is there, though no
+        // list of changed files names it.
+        let nothing = BTreeSet::new();
+        let same_at_root = |cache: &StepCache<'_>| {
+            cache.same_on_base(None, None, "test", "node -e 0", root, &nothing)
+        };
+        let same_below = |cache: &StepCache<'_>| {
+            cache.same_on_base(
+                Some("api"),
+                Some("python"),
+                "test",
+                "node -e 0",
+                &api,
+                &nothing,
+            )
+        };
+        assert!(same_at_root(&cache()));
+        fs::write(root.join("firescale.config.json"), "{}\n").unwrap();
+        assert!(!same_at_root(&cache()));
+        assert!(same_below(&cache()));
+    }
+
+    /// After the second review: what the config's difference reaches is
+    /// asked whether or not the list of changed files names the config (an
+    /// ignored one is never in it).
+    #[test]
+    fn a_config_change_that_no_list_names_still_reaches_the_base_comparison() {
+        use crate::configkey::ConfigEffect;
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let cache = || cache_over(root, Some(graph.clone()), &machine, "");
+        let nothing = BTreeSet::new();
+        let same = |cache: &StepCache<'_>, step: &str| {
+            cache.same_on_base(
+                Some("api"),
+                Some("python"),
+                step,
+                "node -e 0",
+                &api,
+                &nothing,
+            )
+        };
+        let mut effect = ConfigEffect::default();
+        effect.units.insert(
+            (Some("api".to_owned()), Some("python".to_owned())),
+            vec!["test".to_owned()],
+        );
+        let one = cache().with_base_config(effect);
+        assert!(!same(&one, "test"));
+        assert!(same(&one, "lint"));
+        let all = cache().with_base_config(ConfigEffect {
+            everything: Some("verify.ci".to_owned()),
+            ..ConfigEffect::default()
+        });
+        assert!(!same(&all, "lint"));
+        // Worked out, and it reaches nothing: the same.
+        assert!(same(
+            &cache().with_base_config(ConfigEffect::default()),
+            "test"
+        ));
+    }
+
     #[test]
     fn a_stale_entry_is_not_served() {
         let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
@@ -2307,6 +2723,7 @@ mod tests {
             version: "0.0.0",
             read: true,
             sets_ci: true,
+            settings: "",
             machine: &machine,
             read_env: &|_| None,
         };

@@ -154,18 +154,39 @@ async function github(
 
 const WORKFLOW = 'name: CI\non: [pull_request, push]\njobs: {}\n';
 
-/** A committed repo on main whose one test step logs each run. */
-async function sharedRepo() {
+/**
+ * A committed repo on main whose one test step logs each run. The step is
+ * the repo root's own, or, with `project`, that of the project in that
+ * folder below the root.
+ */
+async function sharedRepo(project?: string) {
   const outside = await fixtures.create({ files: {}, track: 'no-git' });
   const log = path.join(outside.root, 'runs.log');
+  const script = `require('fs').appendFileSync(${JSON.stringify(log)}, 'test\\n'); console.log('ok');\n`;
+  const own: Record<string, string> = project
+    ? {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: {
+            lint: false,
+            typecheck: false,
+            projects: { [project]: { test: 'node test.js' } },
+          },
+        }),
+        [`${project}/package.json`]: `${JSON.stringify({ name: project, private: true })}\n`,
+        [`${project}/test.js`]: script,
+      }
+    : {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: { lint: false, typecheck: false, test: 'node test.js' },
+        }),
+        'test.js': script,
+      };
   const repo = await fixtures.create({
     files: {
-      'firescale.config.json': JSON.stringify({
-        packs: ['core'],
-        verify: { lint: false, typecheck: false, test: 'node test.js' },
-      }),
+      ...own,
       '.gitignore': '.firescale/\n',
-      'test.js': `require('fs').appendFileSync(${JSON.stringify(log)}, 'test\\n'); console.log('ok');\n`,
       'src.txt': 'one\n',
       '.github/workflows/ci.yml': WORKFLOW,
     },
@@ -242,6 +263,64 @@ describe('the shared cache of CI', () => {
     expect(human.stdout).toMatch(
       /from the shared cache of CI \(kept by the default branch at [0-9a-f]{7}\)/,
     );
+  });
+
+  // ADR 0058: for a project in a folder below the root, the record's key
+  // holds the config's settings by value. (The step is a project's, not the
+  // root's own: a step at the root can read the config as a file; see the
+  // next test.)
+  it('serves a record to a pull request that changes a time limit, and not to one that changes a setting every step shares', async () => {
+    const { root, runs, freshRunner } = await sharedRepo('app');
+    const push = await github(root, 'push', 'refs/heads/main');
+    await verifyJson(root, push);
+    expect(await runs()).toBe(1);
+    const pull = await github(root, 'pull_request', 'refs/pull/7/merge');
+    const config = (test: unknown, verify: Record<string, unknown> = {}) =>
+      writeFile(
+        path.join(root, 'firescale.config.json'),
+        JSON.stringify({
+          packs: ['core'],
+          verify: { lint: false, typecheck: false, projects: { app: { test } }, ...verify },
+        }),
+      );
+    await freshRunner();
+    await config({ command: 'node test.js', timeout: '3h' }, { timeout: '2h' });
+    const hit = await verifyJson(root, pull);
+    expect(await runs()).toBe(1);
+    expect(testStep(hit)?.cache?.sharedFrom).toBe(push.GITHUB_SHA);
+    for (const verify of [
+      { stopAfterErrors: 25 },
+      { ci: false },
+      { stopWhenServiceDown: false },
+      { failOnSkipped: true },
+    ]) {
+      await freshRunner();
+      await config('node test.js', verify);
+      const before = await runs();
+      const miss = await verifyJson(root, pull);
+      expect(await runs(), JSON.stringify(verify)).toBe(before + 1);
+      expect(testStep(miss)?.cache).toBeUndefined();
+    }
+  });
+
+  // After the review of ADR 0058: the repo root's own steps can read the
+  // config as a file, so its bytes are in their key.
+  it("serves no record to a step of the repo root's own after a change of the config's bytes only", async () => {
+    const { root, runs, freshRunner } = await sharedRepo();
+    await verifyJson(root, await github(root, 'push', 'refs/heads/main'));
+    expect(await runs()).toBe(1);
+    const pull = await github(root, 'pull_request', 'refs/pull/7/merge');
+    await freshRunner();
+    await writeFile(
+      path.join(root, 'firescale.config.json'),
+      JSON.stringify({
+        packs: ['core'],
+        verify: { lint: false, typecheck: false, test: 'node test.js', timeout: '2h' },
+      }),
+    );
+    const miss = await verifyJson(root, pull);
+    expect(await runs()).toBe(2);
+    expect(testStep(miss)?.cache).toBeUndefined();
   });
 
   it('uses a record only when the whole key matches', async () => {

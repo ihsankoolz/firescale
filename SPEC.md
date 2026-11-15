@@ -194,7 +194,7 @@ Each agent sits behind an adapter interface. Exact CLI flags must be confirmed a
 
 - `fscale verify --affected [--base <ref>]` runs lint, typecheck and test only for the projects a change can affect: the owners of the changed files and every project that depends on them in the project graph (§9). The others are reported as `not affected`, which is not the same as skipped.
 - The headline says how many projects ran out of how many. An affected run never reads as a plain OK for the whole repo.
-- When unsure, more is affected, never less. A changed file that no project owns, a root lockfile, a CI workflow, a Compose file or the firescale config affects every project. A dynamic Python import counts as depending on every other Python project, with a warning. With no base and a clean tree there is nothing to compare, so everything is affected, with a note.
+- When unsure, more is affected, never less. A changed file that no project owns, a root lockfile, a CI workflow, a Compose file or a `firescale.config.ts` affects every project. A changed `firescale.config.json` affects every project only when a setting changed that every step's result can depend on; otherwise it affects the steps whose command it changes, and, as a file, the repo root's own steps and a root project, which can read it (ADR 0058). A dynamic Python import counts as depending on every other Python project, with a warning. With no base and a clean tree there is nothing to compare, so everything is affected, with a note.
 - The stop hook runs a full verify until blame-aware verify changes it (M21).
 
 ### The step cache (M18, M22)

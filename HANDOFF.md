@@ -6,13 +6,13 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 **A run is in progress (2026-11-15, started 09:50 UTC, paused 11:25 UTC, taken up again the same day): 0.5.1, fixes after running 0.5.0 on the course project.** Five pull requests, each merged on green:
 
-1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Reviewed, the review's findings fixed. Merged with this pull request.**
-2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Built on branch `pr2-config-affects`, the two review findings fixed; waiting for its second review and its pull request. Not merged.**
+1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). **Merged, [#56](https://github.com/ihsankoolz/firescale/pull/56).**
+2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). **Reviewed twice, the findings fixed. Merged with this pull request.**
 3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). **Merged, [#54](https://github.com/ihsankoolz/firescale/pull/54).**
 4. Leftovers from "Found while fixing" (ADR 0060). **Merged, [#55](https://github.com/ihsankoolz/firescale/pull/55).**
 5. Version 0.5.1 and docs. **Not started.**
 
-If this run stopped early: `git log main` shows which pull requests merged; unmerged work is on the branch `pr2-config-affects`, and small fixes found on the way are on `small-fixes-cli` and `small-fixes-links` (to merge only after the version is 0.5.1). Do not start M36 or the project-type table.
+If this run stopped early: `git log main` shows which pull requests merged. Small fixes found on the way are on the branch `small-fixes-cli` (to merge only after the version is 0.5.1). Do not start M36 or the project-type table.
 
 Before this run: the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
 
