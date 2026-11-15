@@ -143,6 +143,12 @@ pub struct VerifyConfig {
     /// used: the tamper guard reads its policy from the base commit's config
     /// (ADR 0042).
     pub tamper: Option<crate::tamper::TamperPolicy>,
+    /// The settings outside `verify` that every step's key holds (ADR
+    /// 0058): the raw config without `$schema`, `protectedPaths`, `agent`
+    /// and `verify`, as JSON with sorted keys
+    /// ([`crate::configkey::other_settings`]). Empty when the settings were
+    /// not read from a config's value.
+    pub other_settings: String,
 }
 
 impl VerifyConfig {

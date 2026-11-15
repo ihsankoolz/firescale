@@ -12,6 +12,7 @@ pub mod cache;
 pub mod check;
 pub mod cmake;
 pub mod config;
+pub mod configkey;
 pub mod diff;
 pub mod doctor;
 pub mod ecosystems;

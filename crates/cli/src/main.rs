@@ -16,8 +16,9 @@ use firescale_core::blame::{
 };
 use firescale_core::check::run_check;
 use firescale_core::config::{
-    find_root, load_config, load_verify_config, ConfiguredRule, RuleSource,
+    find_root, load_config, load_verify_config, ConfiguredRule, RuleSource, JSON_CONFIG,
 };
+use firescale_core::configkey;
 use firescale_core::diff::unified_diff;
 use firescale_core::doctor::{format_doctor_human, format_doctor_json, run_doctor, ThisMachine};
 use firescale_core::explain::{explain_rule, find_rule};
@@ -25,7 +26,9 @@ use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json}
 use firescale_core::fixloop::{
     plan_order, run_fix_loop, LoopFailure, LoopReport, LoopRule, MAX_PASSES,
 };
-use firescale_core::graph::{affected, build_graph, format_graph_human, format_graph_json, Graph};
+use firescale_core::graph::{
+    affected, affected_except, build_graph, format_graph_human, format_graph_json, Graph,
+};
 use firescale_core::hooks::{
     block_summary, decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent,
     AGENTS,
@@ -968,7 +971,21 @@ fn verify_plan(
         None => changed_files(root, base)?,
     };
     let graph = build_graph(root, facts);
-    let mut set = affected(&graph, &changed);
+    // A changed firescale.config.json is compared with the base's, setting
+    // by setting, instead of counting as a file that affects everything
+    // (ADR 0058).
+    let config_effect =
+        configkey::effect_for_affected(root, base, &changed, facts, verify_config, &plan);
+    let mut set = match &config_effect {
+        Some(effect) => {
+            let mut set = affected_except(&graph, &changed, &[JSON_CONFIG]);
+            if set.everything.is_none() {
+                set.everything.clone_from(&effect.everything);
+            }
+            set
+        }
+        None => affected(&graph, &changed),
+    };
     let mut notes = Vec::new();
     match &changed {
         Changed::Everything => notes.push(
@@ -1007,6 +1024,12 @@ fn verify_plan(
         ));
     }
     limit_to_affected(&mut plan, facts, &graph, &set, base);
+    if let Some(effect) = &config_effect {
+        effect.mark(&mut plan);
+        if effect.is_empty() {
+            notes.push(configkey::NOTHING_TO_RUN_NOTE.to_owned());
+        }
+    }
     if let Some(affected) = plan.affected.as_mut() {
         affected.notes = notes;
     }
@@ -1171,6 +1194,7 @@ fn verify_report(
         }
         (None, _) => None,
     };
+    let shared_settings = configkey::shared_settings(&verify_config);
     let cache = StepCache::new(
         root,
         graph,
@@ -1178,12 +1202,28 @@ fn verify_report(
             version: version(),
             read: !args.no_cache,
             sets_ci: !verify_config.no_ci_variable,
+            settings: &shared_settings,
             machine: firescale_core::stepcache::this_machine(),
             read_env: &read_env,
         },
     )
     .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
-    // A config change alters every key: say so once (ADR 0043).
+    // What the config's difference from the base commit's reaches, so that
+    // a step it does not reach can count as the same on the base (ADR 0058).
+    let cache = match &base {
+        BaseChoice::Compare(base) => cache.with_base_config(configkey::effect_since(
+            root,
+            &base.commit,
+            &facts,
+            &verify_config,
+            &plan,
+            args.affected,
+            args.base.as_deref(),
+        )),
+        BaseChoice::Nothing(_) => cache,
+    };
+    // A change to a setting that every key holds: say so once (ADR 0043,
+    // ADR 0058).
     let config_note = cache.config_note().filter(|_| !args.no_cache);
     let options = RunOptions {
         stop: &STOP,

@@ -179,7 +179,7 @@ describe('what a config change affects (ADR 0058)', () => {
     });
     const affected = await verify('--affected');
     expect(affected.headline).toBe(
-      'verify: OK (affected only) - 1 of 6 projects ran, 5 not affected',
+      'verify: PARTIAL (affected only) - 1 of 6 projects ran, 5 not affected; 2 of 4 steps ran, 2 skipped',
     );
     expect(affected.calls).toEqual(['python -m pytest -q in ledger_service']);
     expect(affected.stdout).toContain(
@@ -217,10 +217,14 @@ describe('what a config change affects (ADR 0058)', () => {
     // Turned on again, measured from a commit where they were off.
     await commitAll(repo.root, 'ledger and the frontend lint are off');
     await config({ verify: { timeout: '2h' } });
+    // (Their steps pass from the cache: these are the keys of the first run.)
     const on = await verify('--affected');
-    expect(projectsIn(on.calls)).toEqual(['frontend', 'ledger_service']);
+    expect(on.headline).toMatch(
+      /^verify: PARTIAL \(affected only\) - 2 of 6 projects ran, 4 not affected; /,
+    );
+    expect(on.calls).toEqual([]);
     expect(on.stdout).toContain(
-      '  backend/ledger_service: firescale.config.json changes what its lint, typecheck and test steps run',
+      '  backend/ledger_service: firescale.config.json changes what its test step runs',
     );
     expect(on.stdout).toContain(
       '  frontend: firescale.config.json changes what its lint step runs',
@@ -259,8 +263,13 @@ describe('what a config change affects (ADR 0058)', () => {
 
     // Removed: the defaults are compared with what the base had.
     await rm(path.join(repo.root, 'firescale.config.json'));
+    // (Its steps pass from the cache: these are the keys of the first run.)
     const removed = await verify('--affected');
-    expect(projectsIn(removed.calls)).toEqual(EVERY_PROJECT);
+    expect(removed.stdout).toContain('6 of 6 projects ran');
+    expect(removed.stdout).toContain(
+      "a setting of firescale.config.json that every step's result can depend on changed (verify.ci)",
+    );
+    expect(removed.calls).toEqual([]);
     await commitAll(repo.root, 'no config');
     await config({ verify: { idleTimeout: '20m' } });
     expect((await verify('--affected')).headline).toBe(NOTHING_RAN);

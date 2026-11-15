@@ -38,7 +38,7 @@ use crate::walk::{walk_entries, EntryKind};
 
 /// Bumped when the entry format or the key recipe changes, so old entries
 /// are never read.
-const FORMAT: u32 = 1;
+const FORMAT: u32 = 2;
 
 /// The folder of the step cache, relative to the repo root.
 pub const STEP_CACHE_DIR: [&str; 2] = [".firescale", "steps"];
@@ -477,6 +477,12 @@ fn owners(graph: Option<&Graph>) -> Vec<String> {
 
 /// True when the scope's key holds `path`.
 fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
+    // The JSON config is in no key as a file: the settings that can change
+    // a step's result are in its key by value (ADR 0058). A
+    // `firescale.config.ts` is code and stays a file like any other.
+    if path == crate::config::JSON_CONFIG {
+        return false;
+    }
     if scope.folders.iter().any(|folder| inside(path, folder)) {
         return true;
     }
@@ -811,6 +817,9 @@ pub struct StepInputs<'a> {
     pub dir: &'a Path,
     /// True when verify sets `CI=1` for the command.
     pub sets_ci: bool,
+    /// The config settings every step's result can depend on
+    /// ([`crate::configkey::shared_settings`], ADR 0058).
+    pub settings: &'a str,
 }
 
 /// The values of the allowlisted variables, as one hash. `None` is unset.
@@ -872,6 +881,7 @@ pub fn step_key(
         )
         .as_bytes(),
     );
+    hasher.update(format!("config\0{}\n", inputs.settings).as_bytes());
     hasher.update(format!("env\0{}\n", environment_digest(read_env)).as_bytes());
     hasher.update(
         format!(
@@ -1178,6 +1188,11 @@ pub struct StepCache<'a> {
     version: String,
     read: bool,
     sets_ci: bool,
+    /// The config settings every step's result can depend on (ADR 0058).
+    settings: String,
+    /// What the config's difference from the base commit's reaches, when
+    /// it was worked out ([`Self::with_base_config`]).
+    base_config: Option<crate::configkey::ConfigEffect>,
     graph: Option<Graph>,
     /// The latest snapshot of the working tree. Each step takes a new one
     /// before it is keyed (reusing the hashes of files whose size and time
@@ -1214,6 +1229,9 @@ pub struct CacheSettings<'a> {
     pub read: bool,
     /// True when verify sets `CI=1` for the commands.
     pub sets_ci: bool,
+    /// The config settings every step's result can depend on
+    /// ([`crate::configkey::shared_settings`]): a line of every key.
+    pub settings: &'a str,
     pub machine: &'a (dyn Machine + Sync),
     pub read_env: &'a (dyn Fn(&str) -> Option<String> + Sync),
 }
@@ -1238,6 +1256,8 @@ impl<'a> StepCache<'a> {
             version: settings.version.to_owned(),
             read: settings.read,
             sets_ci: settings.sets_ci,
+            settings: settings.settings.to_owned(),
+            base_config: None,
             digests: UnitDigests::new(graph.as_ref()),
             graph,
             snapshot: std::sync::Mutex::new(Snapshot::capture(root)),
@@ -1263,6 +1283,15 @@ impl<'a> StepCache<'a> {
     ) -> Self {
         self.salt = salt;
         self.shared = shared;
+        self
+    }
+
+    /// Says what the difference between the base commit's config and the
+    /// loaded one reaches, so a step it does not reach can still count as
+    /// having the same inputs on the base ([`Self::same_on_base`], ADR 0058).
+    #[must_use]
+    pub fn with_base_config(mut self, effect: crate::configkey::ConfigEffect) -> Self {
+        self.base_config = Some(effect);
         self
     }
 
@@ -1352,6 +1381,7 @@ impl<'a> StepCache<'a> {
                 command,
                 dir,
                 sets_ci: self.sets_ci,
+                settings: &self.settings,
             },
             &files,
             &self.tools,
@@ -1477,6 +1507,17 @@ impl<'a> StepCache<'a> {
         if self.key(folder, kind, step, command, dir).is_err() {
             return false;
         }
+        // The config is in the key by value, not as a file. When it differs
+        // from the base's, the step is the same only if that difference was
+        // worked out and does not reach it (ADR 0058).
+        if changed.contains(crate::config::JSON_CONFIG)
+            && self
+                .base_config
+                .as_ref()
+                .is_none_or(|effect| effect.reaches(folder, kind, step))
+        {
+            return false;
+        }
         let snapshot = self
             .snapshot
             .lock()
@@ -1545,6 +1586,7 @@ impl<'a> StepCache<'a> {
                 command,
                 dir,
                 sets_ci: self.sets_ci,
+                settings: &self.settings,
             },
             &files,
             &self.tools,
@@ -1656,22 +1698,18 @@ impl<'a> StepCache<'a> {
             .push(line);
     }
 
-    /// One line when the firescale config changed since the last run that
-    /// used this cache: the config is in every step's key (a file at the
-    /// repo root), so no kept pass applies any more (ADR 0043). Said once,
-    /// on the first run after the change; the config's digest is kept in
+    /// One line when a config setting that is in every step's key changed
+    /// since the last run that used this cache, so no kept pass applies any
+    /// more (ADR 0043, ADR 0058). Said once, on the first run after the
+    /// change; a digest of those settings (and of a `firescale.config.ts`,
+    /// which is in every key as a file) is kept in
     /// `.firescale/step-cache-config.digest`, beside the cache's folder.
     #[must_use]
     pub fn config_note(&self) -> Option<String> {
         let mut hasher = blake3::Hasher::new();
-        let mut names = Vec::new();
-        for name in [crate::config::JSON_CONFIG, crate::config::TS_CONFIG] {
-            if let Ok(bytes) = fs::read(self.root.join(name)) {
-                hasher.update(name.as_bytes());
-                hasher.update(b"\0");
-                hasher.update(&bytes);
-                names.push(name);
-            }
+        hasher.update(format!("settings\0{}\n", self.settings).as_bytes());
+        if let Ok(bytes) = fs::read(self.root.join(crate::config::TS_CONFIG)) {
+            hasher.update(&bytes);
         }
         let digest = hasher.finalize().to_hex().to_string();
         let dir = cache_dir(&self.root);
@@ -1697,11 +1735,8 @@ impl<'a> StepCache<'a> {
             ignore_firescale_folder(&self.root);
             let _ = fs::write(&file, &digest);
         }
-        let name = names.first().copied().unwrap_or(crate::config::JSON_CONFIG);
         (before.is_some() && had_passes).then(|| {
-            format!(
-                "{name} changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time."
-            )
+            "A setting of the firescale config that every step's result can depend on changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.".to_owned()
         })
     }
 
@@ -1798,6 +1833,7 @@ mod tests {
                 command: "node -e 0",
                 dir: &dir,
                 sets_ci: true,
+                settings: "",
             },
             &files,
             &tools,
@@ -1917,6 +1953,7 @@ mod tests {
             version: "1.0.0",
             read: true,
             sets_ci: true,
+            settings: "",
             machine: this_machine(),
             read_env,
         };
@@ -1979,6 +2016,7 @@ mod tests {
                     command: "node -e 0",
                     dir: root,
                     sets_ci: true,
+                    settings: "",
                 },
                 &files,
                 &tools,
@@ -2307,6 +2345,7 @@ mod tests {
             version: "0.0.0",
             read: true,
             sets_ci: true,
+            settings: "",
             machine: &machine,
             read_env: &|_| None,
         };
