@@ -3295,11 +3295,14 @@ fn scoped_headline(report: &VerifyReport) -> String {
     let whole = whole_headline(report);
     match (report.result, whole.as_str()) {
         (VerifyResult::Ok, _) => format!("verify: OK (affected only) - {counts}"),
-        (VerifyResult::Partial, _) => {
-            format!(
-                "verify: PARTIAL (affected only) - {counts}; {}",
-                ran_part(report)
-            )
+        (VerifyResult::Partial, whole) => {
+            // What the whole headline says after `PARTIAL - `: the steps
+            // that ran, then the failures that do not block (pre-existing,
+            // flaky), which a scoped run names too (ADR 0057).
+            let said = whole
+                .strip_prefix("verify: PARTIAL - ")
+                .map_or_else(|| ran_part(report), str::to_owned);
+            format!("verify: PARTIAL (affected only) - {counts}; {said}")
         }
         _ => format!("{whole} (affected only: {counts})"),
     }
@@ -4750,9 +4753,10 @@ mod tests {
             );
         }
         // With nothing labelled the headline is as it was.
-        report.steps[2].label = None;
-        report.steps[2].status = StepStatus::Passed;
-        settle(&mut report, false);
+        let affected = report.affected.take();
+        let (_fixture, mut report) =
+            over_budget_report(false, Planned::Command("echo fine".to_owned()));
+        report.affected = affected;
         assert!(format_verify_human(&report).starts_with("verify: PARTIAL (affected only) - 1 of 2 projects ran, 1 not affected; 3 of 4 steps ran, 1 not run (over the --budget of 30m)\n"));
     }
 
