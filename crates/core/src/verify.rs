@@ -25,6 +25,7 @@ use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT
 use crate::runs::{RunRecord, RunningStep};
 use crate::setup::{locked_install, refused_service, service_down, setup_problem, SetupProblem};
 use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
+use crate::steptimes::{Outcome, StepTimes};
 
 /// Version of the `fscale verify --json` format.
 pub const VERIFY_SCHEMA_VERSION: u32 = 6;
@@ -1851,6 +1852,10 @@ pub struct RunOptions<'a> {
     pub deadline: Option<Instant>,
     /// True for the steps of the base run, which get `FSCALE_BASE_RUN=1`.
     pub base_run: bool,
+    /// How long each step took the last time (ADR 0057): read to announce
+    /// a slow step, written when a step ends. `None`: nothing is read or
+    /// kept, as for the base run and a rerun.
+    pub times: Option<&'a StepTimes>,
 }
 
 /// Never set: the stop flag of a run that cannot be stopped from outside.
@@ -1871,6 +1876,7 @@ impl RunOptions<'_> {
             every_step: false,
             deadline: None,
             base_run: false,
+            times: None,
         }
     }
 
@@ -1930,6 +1936,13 @@ fn run_step(
     // A step that keeps printing runs on; one that goes quiet for this
     // long is stopped (ADR 0043).
     let idle = options.config.idle_for(project, name);
+    // A step that was slow the last time is announced (ADR 0057).
+    let known = options
+        .times
+        .and_then(|times| times.last(project, name, command));
+    if let Some(warning) = known.and_then(|known| known.warning()) {
+        options.say(&format!("{place}: {warning}"));
+    }
     options.say(&format!("{place}: started: {command}"));
     let mut shell = shell(command);
     shell.current_dir(&dir);
@@ -2054,6 +2067,17 @@ fn run_step(
     }
     let duration_ms = u64::try_from(finished.duration.as_millis()).unwrap_or(u64::MAX);
     let took = format_duration(finished.duration);
+    // How long it took is kept for the next run (ADR 0057).
+    if let Some(times) = options.times {
+        let outcome = match finished.ending {
+            Ending::Exited(Some(0)) => Some(Outcome::Passed),
+            Ending::Exited(_) => Some(Outcome::Failed),
+            Ending::TimedOut | Ending::Stopped | Ending::GaveUp => None,
+        };
+        if let Some(outcome) = outcome {
+            times.record(project, name, command, finished.duration, outcome);
+        }
+    }
     let mut report = StepReport {
         name: name.to_owned(),
         project: project.map(str::to_owned),
@@ -2597,6 +2621,7 @@ pub(crate) fn run_again(
         every_step: true,
         deadline,
         base_run: false,
+        times: None,
     };
     let unit = Unit {
         root,
@@ -2631,6 +2656,7 @@ pub(crate) fn run_base_step(
         every_step: true,
         deadline,
         base_run: true,
+        times: None,
     };
     let unit = Unit {
         root,

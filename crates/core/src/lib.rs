@@ -41,6 +41,7 @@ pub mod services;
 pub mod setup;
 pub mod sharedcache;
 pub mod stepcache;
+pub mod steptimes;
 pub mod tamper;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
