@@ -14,36 +14,60 @@ pub(crate) const BEGIN: &str = "<!-- BEGIN firescale";
 pub(crate) const END: &str = "<!-- END firescale -->";
 
 /// What `fscale facts` reads to work out the commands, as cache inputs of
-/// the rules whose output lists them.
-pub(crate) const FACTS_INPUTS: [&str; 28] = [
+/// the rules whose output lists them. Written by hand: when facts starts to
+/// read another file to decide a command, add it here, to the test below
+/// and to `facts-inputs-cache.test.ts`.
+pub(crate) const FACTS_INPUTS: [&str; 44] = [
     "package.json",
     "**/package.json",
     "pnpm-workspace.yaml",
-    "pnpm-lock.yaml",
-    "package-lock.json",
-    "yarn.lock",
-    "bun.lock",
-    "bun.lockb",
+    // A lockfile names the package manager of the project it is in.
+    "**/pnpm-lock.yaml",
+    "**/package-lock.json",
+    "**/yarn.lock",
+    "**/bun.lock",
+    "**/bun.lockb",
     "nx.json",
     "turbo.json",
     "**/pyproject.toml",
-    "**/requirements*.txt",
+    // Also `dev-requirements.txt` and `test-requirements.txt`.
+    "**/*requirements*.txt",
     "**/requirements/*.txt",
     "**/setup.py",
     "**/setup.cfg",
     "**/Pipfile",
     "**/pytest.ini",
+    "**/conftest.py",
     "**/tox.ini",
     "**/uv.lock",
     "**/poetry.lock",
+    // Beside a requirements.txt, these make a folder a Python project.
+    "**/manage.py",
+    "**/alembic.ini",
     "**/Cargo.toml",
     "**/go.mod",
     "**/tsconfig.json",
     "**/vitest.config.*",
+    "**/vitest.workspace.*",
     "**/jest.config.*",
     "**/eslint.config.*",
+    "**/.eslintrc*",
+    "**/biome.json*",
+    "**/.oxlintrc.json*",
+    "**/oxlintrc.json*",
+    "**/oxlint.config.*",
     "**/ruff.toml",
+    "**/.ruff.toml",
     "**/mypy.ini",
+    "**/.mypy.ini",
+    // The Maven and Gradle wrappers: `./mvnw` in place of `mvn`.
+    "**/mvnw",
+    "**/mvnw.cmd",
+    "**/gradlew",
+    "**/gradlew.bat",
+    // Facts does not look for projects in a folder that .gitignore names,
+    // also when git still tracks the files in it.
+    "**/.gitignore",
 ];
 
 /// Where a managed block is in a text.
