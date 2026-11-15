@@ -14,36 +14,60 @@ pub(crate) const BEGIN: &str = "<!-- BEGIN firescale";
 pub(crate) const END: &str = "<!-- END firescale -->";
 
 /// What `fscale facts` reads to work out the commands, as cache inputs of
-/// the rules whose output lists them.
-pub(crate) const FACTS_INPUTS: [&str; 28] = [
+/// the rules whose output lists them. Written by hand: when facts starts to
+/// read another file to decide a command, add it here, to the test below
+/// and to `facts-inputs-cache.test.ts`.
+pub(crate) const FACTS_INPUTS: [&str; 44] = [
     "package.json",
     "**/package.json",
     "pnpm-workspace.yaml",
-    "pnpm-lock.yaml",
-    "package-lock.json",
-    "yarn.lock",
-    "bun.lock",
-    "bun.lockb",
+    // A lockfile names the package manager of the project it is in.
+    "**/pnpm-lock.yaml",
+    "**/package-lock.json",
+    "**/yarn.lock",
+    "**/bun.lock",
+    "**/bun.lockb",
     "nx.json",
     "turbo.json",
     "**/pyproject.toml",
-    "**/requirements*.txt",
+    // Also `dev-requirements.txt` and `test-requirements.txt`.
+    "**/*requirements*.txt",
     "**/requirements/*.txt",
     "**/setup.py",
     "**/setup.cfg",
     "**/Pipfile",
     "**/pytest.ini",
+    "**/conftest.py",
     "**/tox.ini",
     "**/uv.lock",
     "**/poetry.lock",
+    // Beside a requirements.txt, these make a folder a Python project.
+    "**/manage.py",
+    "**/alembic.ini",
     "**/Cargo.toml",
     "**/go.mod",
     "**/tsconfig.json",
     "**/vitest.config.*",
+    "**/vitest.workspace.*",
     "**/jest.config.*",
     "**/eslint.config.*",
+    "**/.eslintrc*",
+    "**/biome.json*",
+    "**/.oxlintrc.json*",
+    "**/oxlintrc.json*",
+    "**/oxlint.config.*",
     "**/ruff.toml",
+    "**/.ruff.toml",
     "**/mypy.ini",
+    "**/.mypy.ini",
+    // The Maven and Gradle wrappers: `./mvnw` in place of `mvn`.
+    "**/mvnw",
+    "**/mvnw.cmd",
+    "**/gradlew",
+    "**/gradlew.bat",
+    // Facts does not look for projects in a folder that .gitignore names,
+    // also when git still tracks the files in it.
+    "**/.gitignore",
 ];
 
 /// Where a managed block is in a text.
@@ -373,5 +397,72 @@ mod tests {
         assert!(imports_agents_md("See @AGENTS.md for commands.\n"));
         assert!(!imports_agents_md("```\n@AGENTS.md\n```\n"));
         assert!(!imports_agents_md("email me@AGENTS.md.example\n"));
+    }
+
+    // Every file `fscale facts` reads to decide a command, at the root and
+    // in a project below it. A file missing here leaves a cached pass in
+    // place when the commands changed.
+    #[test]
+    fn the_rules_that_list_commands_read_every_file_that_decides_one() {
+        use firescale_core::cache::input_matcher;
+        use firescale_core::rule::BuiltinRule;
+
+        let rules = [
+            crate::agent_ready::agents_md::AgentsMdExists.meta(),
+            crate::agent_ready::agent_permissions::AgentPermissions.meta(),
+        ];
+        for meta in rules {
+            let matcher = input_matcher(&meta.id, &meta.inputs).unwrap();
+            for name in [
+                // The Maven and Gradle wrappers.
+                "mvnw",
+                "mvnw.cmd",
+                "gradlew",
+                "gradlew.bat",
+                // Tool config files of a Node project.
+                ".oxlintrc.json",
+                "oxlintrc.json",
+                "oxlint.config.ts",
+                "biome.json",
+                "biome.jsonc",
+                ".eslintrc",
+                ".eslintrc.json",
+                ".eslintrc.cjs",
+                "eslint.config.mjs",
+                "vitest.workspace.ts",
+                "vitest.config.ts",
+                "jest.config.js",
+                // Lockfiles name a project's package manager.
+                "pnpm-lock.yaml",
+                "package-lock.json",
+                "yarn.lock",
+                "bun.lock",
+                "bun.lockb",
+                "uv.lock",
+                "poetry.lock",
+                // .gitignore decides which folders are searched.
+                ".gitignore",
+                // Python.
+                "conftest.py",
+                "manage.py",
+                "alembic.ini",
+                "ruff.toml",
+                ".ruff.toml",
+                "mypy.ini",
+                ".mypy.ini",
+                "requirements.txt",
+                "requirements-dev.txt",
+                "dev-requirements.txt",
+                "test-requirements.txt",
+            ] {
+                for file in [name.to_owned(), format!("services/api/{name}")] {
+                    assert!(matcher.is_match(&file), "{}: {file}", meta.id);
+                }
+            }
+            // Not every file is an input.
+            for file in ["src/main.py", "web/src/index.ts", "docs/notes.txt"] {
+                assert!(!matcher.is_match(file), "{}: {file}", meta.id);
+            }
+        }
     }
 }

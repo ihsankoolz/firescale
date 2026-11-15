@@ -48,6 +48,21 @@ fn the_pack_has_six_rules_with_fixes_and_skills() {
     }
 }
 
+#[test]
+fn every_rule_reads_what_decides_where_the_pack_applies() {
+    // The pack applies by what package.json says (`applies`), so the cache
+    // key of each rule covers it, or a cached run hides findings once
+    // `next` is added.
+    for rule in rules() {
+        let meta = rule.meta();
+        assert!(
+            meta.inputs.iter().any(|input| input == "package.json"),
+            "{} lacks package.json",
+            meta.id
+        );
+    }
+}
+
 mod passing_repo {
     use super::*;
 

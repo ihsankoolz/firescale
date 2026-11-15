@@ -347,4 +347,32 @@ describe('the stop hook does not let a broken change through (review of M21)', (
     expect(json.notes?.join('\n')).toContain('it stopped at its first failure');
     expect(result.code).toBe(1);
   });
+
+  it('sees --bail in the script of a package.json that starts with a byte order mark', async () => {
+    // Jest-format output. The script, not the command, names the runner and
+    // --bail: both are lost when package.json cannot be read (ADR 0039).
+    const failing = [
+      "console.log('FAIL src/math.test.js');",
+      "console.log('  \u25cf math \u203a adds');",
+      "console.log('Tests:       1 failed, 1 total');",
+      'process.exit(1);',
+      '',
+    ].join('\n');
+    const { root, write } = await repoWith(failing);
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    config.verify.test = 'npm test';
+    await write('firescale.config.json', JSON.stringify(config));
+    await write('jest.js', failing);
+    const manifest = { name: 'web', private: true, scripts: { test: 'node jest.js --bail' } };
+    await write('package.json', '\uFEFF' + JSON.stringify(manifest));
+    await commitAll(root, 'stops at the first failure');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    await write('state.cfg', 'a change\n');
+    const result = await runCli(['verify', '--json'], root);
+    const json = JSON.parse(result.stdout) as Report & { notes?: string[] };
+    expect(step(json, 'test').status).toBe('failed');
+    expect(step(json, 'test').label).toBeUndefined();
+    expect(json.notes?.join('\n')).toContain('it stopped at its first failure');
+    expect(result.code).toBe(1);
+  });
 });

@@ -278,6 +278,10 @@ pub(crate) fn inputs(own: &[&str]) -> Vec<String> {
             "package.json".to_owned(),
             "Cargo.toml".to_owned(),
             "Package.swift".to_owned(),
+            // The rest of what `root_is_cmake` reads: a node-gyp addon's
+            // binding.gyp, and whether a SwiftPM `Sources/` folder exists.
+            "binding.gyp".to_owned(),
+            "Sources/**".to_owned(),
         ])
         .chain(
             C_CODE

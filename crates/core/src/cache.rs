@@ -193,7 +193,9 @@ impl Cache {
         fs::create_dir_all(&self.dir).map_err(failed)?;
         if let Some(parent) = self.dir.parent() {
             let ignore = parent.join(".gitignore");
-            if !ignore.exists() {
+            // Not `exists()`: that is false for a dangling symbolic link,
+            // and writing would then create the file the link points at.
+            if ignore.symlink_metadata().is_err() {
                 fs::write(
                     ignore,
                     "# Created by firescale. Nothing in this folder should be committed.\n*\n",

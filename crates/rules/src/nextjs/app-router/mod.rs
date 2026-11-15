@@ -66,10 +66,17 @@ impl BuiltinRule for AppRouter {
             description:
                 "The App Router has a root layout; a new app gets app/layout.tsx and app/page.tsx."
                     .to_owned(),
-            inputs: ["app/**", "src/app/**", "pages/**", "src/pages/**"]
-                .iter()
-                .map(|glob| (*glob).to_owned())
-                .collect(),
+            // package.json decides whether the pack applies.
+            inputs: [
+                "app/**",
+                "src/app/**",
+                "pages/**",
+                "src/pages/**",
+                "package.json",
+            ]
+            .iter()
+            .map(|glob| (*glob).to_owned())
+            .collect(),
             has_fix: true,
             after: vec![super::package_json::ID.to_owned()],
         }

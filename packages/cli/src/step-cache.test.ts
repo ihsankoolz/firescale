@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { Ajv } from 'ajv';
@@ -420,4 +420,47 @@ describe('the step cache keys a step on the files as they are when it starts', (
     expect(after.stderr).toContain('cache: miss test in b; not stored, because it did not pass');
     expect(after.code).toBe(EXIT_VIOLATIONS);
   });
+});
+
+describe('the step cache stays inside the repo', () => {
+  // Making a symlink needs a privilege on Windows.
+  it.skipIf(process.platform === 'win32')(
+    'creates no file where a committed .firescale/.gitignore symlink points',
+    async () => {
+      const { repo, ran } = await loggingRepo();
+      const outside = await fixtures.create({ files: {}, track: 'no-git' });
+      const target = path.join(outside.root, 'planted.txt');
+      await mkdir(path.join(repo.root, '.firescale'));
+      await symlink(target, path.join(repo.root, '.firescale', '.gitignore'));
+      await repo.track(['.firescale/.gitignore']);
+
+      // With --no-cache the passes are still stored, and the check's own
+      // cache, which writes the same ignore file, is off: only the step
+      // cache writes here.
+      const result = await runCli(['verify', '--no-cache'], repo.root, {});
+      expect(result.code).toBe(EXIT_OK);
+      expect(await ran()).toEqual(['lint', 'typecheck', 'test']);
+      expect(await readdir(outside.root)).toEqual([]);
+      // The passes are kept, in the repo's own folder.
+      const kept = await readdir(path.join(repo.root, '.firescale', 'steps'));
+      expect(kept.filter((name) => name.endsWith('.json'))).toHaveLength(3);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'creates no file there either when the check stores its own results',
+    async () => {
+      const { repo } = await loggingRepo();
+      const outside = await fixtures.create({ files: {}, track: 'no-git' });
+      const target = path.join(outside.root, 'planted.txt');
+      await mkdir(path.join(repo.root, '.firescale'));
+      await symlink(target, path.join(repo.root, '.firescale', '.gitignore'));
+      await repo.track(['.firescale/.gitignore']);
+
+      // A plain verify: the check's result cache writes the same ignore file.
+      const result = await runCli(['verify'], repo.root, {});
+      expect(result.code).toBe(EXIT_OK);
+      expect(await readdir(outside.root)).toEqual([]);
+    },
+  );
 });

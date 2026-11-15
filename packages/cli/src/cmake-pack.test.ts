@@ -115,3 +115,42 @@ describe('fscale adopt --dry-run with the cmake pack', () => {
     expect(await snapshot(repo.root)).toEqual(before);
   });
 });
+
+describe('fscale check result cache with the cmake pack', () => {
+  async function ids(root: string, ...args: string[]): Promise<string[]> {
+    const result = await runCli(['check', '--json', ...args], root);
+    const found = (JSON.parse(result.stdout) as { diagnostics: Diagnostic[] }).diagnostics;
+    return found.map((d) => d.ruleId).sort();
+  }
+
+  const PROJECT = {
+    'firescale.config.json': JSON.stringify({ packs: ['cmake'] }),
+    'CMakeLists.txt': 'project(x LANGUAGES CXX)\nadd_executable(x main.cpp)\n',
+    'main.cpp': 'int main() {}\n',
+  };
+
+  // A binding.gyp makes the CMake build a Node addon's (node-gyp), which is
+  // not the pack's: every rule's cached result depends on it.
+  it('goes quiet once a binding.gyp makes the build a Node addon', async () => {
+    const repo = await fixtures.create({ files: PROJECT });
+    // This run fills the cache.
+    expect(await ids(repo.root)).toEqual(['cmake/lists', 'cmake/standard', 'cmake/tests']);
+
+    await repo.write('binding.gyp', "{ 'targets': [{ 'target_name': 'x' }] }\n");
+    expect(await ids(repo.root, '--no-cache')).toEqual([]);
+    expect(await ids(repo.root)).toEqual([]);
+  });
+
+  // With a Package.swift beside it, a SwiftPM Sources/ folder makes the
+  // repo a Swift package that also builds with CMake.
+  it('goes quiet once a Sources folder makes the repo a Swift package', async () => {
+    const repo = await fixtures.create({
+      files: { ...PROJECT, 'Package.swift': '// swift-tools-version:6.0\n' },
+    });
+    expect(await ids(repo.root)).toEqual(['cmake/lists', 'cmake/standard', 'cmake/tests']);
+
+    await repo.write('Sources/x/module.modulemap', 'module x {}\n');
+    expect(await ids(repo.root, '--no-cache')).toEqual([]);
+    expect(await ids(repo.root)).toEqual([]);
+  });
+});

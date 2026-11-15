@@ -33,7 +33,12 @@ impl BuiltinRule for NextConfig {
             description:
                 "A Next.js config file (next.config.ts, .mjs, .js or .cjs) is at the root."
                     .to_owned(),
-            inputs: NAMES.iter().map(|name| (*name).to_owned()).collect(),
+            // package.json decides whether the pack applies.
+            inputs: NAMES
+                .iter()
+                .chain(&["package.json"])
+                .map(|name| (*name).to_owned())
+                .collect(),
             has_fix: true,
             after: vec![super::package_json::ID.to_owned()],
         }
