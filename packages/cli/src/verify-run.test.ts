@@ -556,6 +556,29 @@ describe('progress', () => {
     );
   });
 
+  it('never shows a password or a user name from the output in the heartbeat', async () => {
+    // ADR 0035: the same hiding as the error lines of a report.
+    const repo = await repoWith(
+      { lint: false, typecheck: false, test: nodeScript('login.js') },
+      {
+        'login.js': [
+          "console.log('connecting to postgres://app:pa/ss@host/db with password=hunter2');",
+          'console.log(\'FATAL: password authentication failed for user "app"\');',
+          'setTimeout(() => {}, 1500);',
+          '',
+        ].join('\n'),
+      },
+    );
+    const result = await runCli(['verify', '--progress'], repo.root, {
+      FSCALE_HEARTBEAT_MS: '700',
+    });
+    expect(result.stderr).toMatch(
+      /\[verify\] test: still running after \d.*; last output: FATAL: password authentication failed for user "\*\*\*"\r?\n/,
+    );
+    const heartbeats = result.stderr.split(/\r?\n/).filter((line) => line.includes('last output:'));
+    expect(heartbeats.join('\n')).not.toMatch(/hunter2|pa\/ss|"app"|app:/);
+  });
+
   it('is quiet when stderr is not a terminal, unless --progress is given', async () => {
     const repo = await repoWith({ lint: 'echo lint-ran', typecheck: false, test: false });
     const quiet = await runCli(['verify'], repo.root);

@@ -607,6 +607,42 @@ mod tests {
     }
 
     #[test]
+    fn a_password_setting_in_the_output_is_shown_without_its_value() {
+        let activity = fed("node x.js", &["connecting with password=hunter2 to db\n"]);
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(!shown.contains("hunter2"), "{shown}");
+        assert_eq!(shown, "last output: connecting with password=*** to db");
+    }
+
+    #[test]
+    fn a_failed_login_in_the_output_is_shown_without_the_user_name() {
+        let activity = fed(
+            "node x.js",
+            &["FATAL: password authentication failed for user \"app\"\n"],
+        );
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(!shown.contains("app"), "{shown}");
+        assert_eq!(
+            shown,
+            "last output: FATAL: password authentication failed for user \"***\""
+        );
+    }
+
+    #[test]
+    fn a_connection_string_whose_password_has_a_slash_is_shown_without_it() {
+        let activity = fed(
+            "node x.js",
+            &["connecting to postgres://app:pa/ss@host/db\n"],
+        );
+        let shown = activity.heartbeat().unwrap_or_default();
+        assert!(
+            !shown.contains("pa/ss") && !shown.contains("app"),
+            "{shown}"
+        );
+        assert_eq!(shown, "last output: connecting to postgres://***@host/db");
+    }
+
+    #[test]
     fn a_line_with_words_is_shown_as_it_is() {
         let activity = fed("node slow.js", &["working\n"]);
         assert_eq!(
