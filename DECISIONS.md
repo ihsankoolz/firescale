@@ -81,6 +81,8 @@ The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. 
 
 The version is 0.5.0 in `Cargo.toml`, `Cargo.lock` and every `package.json` (`node scripts/bump-version.mjs 0.5.0`). No tag was pushed. One snapshot changed with it: the generated `tamper-guard.yml` pins `firescale@0.5.0`.
 
+**A slow test to fix.** In this pull request's first CI run, on Windows only, `verify.test.ts` "rejects a project folder that does not exist, and a malformed projects section" hit its 30-second limit (30,110 ms). The pull request changes no code, and the same test passed on Windows in the four pull requests before it. The test builds seven fixture repos and starts `fscale verify` seven times, and the test after it took 12 seconds in the same run. Windows CI was run once more, as agreed for `scaffold.test.ts`, which did not time out in this run. The test was not changed.
+
 **Found while writing this, not fixed:** `packages/cli/schemas/verify-output.schema.json` lists five tamper kinds; the code can emit six more (`coverage-lowered`, `ci-weakened`, `no-verify`, `rule-disabled`, `snapshot-changed`, `expected-changed`), so `verify --json` output holding one of those does not validate against the shipped schema.
 
 ## 0.5.0 on the course project: what you should see change
