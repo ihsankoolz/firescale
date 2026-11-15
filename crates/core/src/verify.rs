@@ -3229,6 +3229,8 @@ pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> Verif
             output_digest: None,
             not_cached: None,
             estimate: None,
+            last_known_ms: None,
+            last_known_finished: None,
         }],
         skipped: Vec::new(),
         warnings: Vec::new(),
@@ -3238,6 +3240,8 @@ pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> Verif
         cache: None,
         base: None,
         tamper: None,
+        budget_ms: None,
+        not_run: Vec::new(),
     };
     settle(&mut report, true);
     report
@@ -5795,6 +5799,7 @@ mod tests {
     }}
   ],
   "skipped": [],
+  "notRun": [],
   "scope": "all"
 }}
 "#
