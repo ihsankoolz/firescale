@@ -3,11 +3,21 @@
 // stopped or timed out, and `--budget` leaves out steps slower than a time.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
+import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BIN, EXIT_OK, EXIT_VIOLATIONS, HOST, runCli } from './test-helpers.js';
+import {
+  BIN,
+  commitAll,
+  EXIT_OK,
+  EXIT_USAGE,
+  EXIT_VIOLATIONS,
+  HOST,
+  runCli,
+} from './test-helpers.js';
 
 const fixtures = fixtureSet();
 const started: ChildProcess[] = [];
@@ -292,5 +302,283 @@ describe('a step that did not finish leaves how long it ran', () => {
     expect(kept.map((r) => [r.step, r.finished, r.durationMs])).toEqual([
       ['test', true, 100 * MINUTE],
     ]);
+  });
+});
+
+const SCHEMA = new URL('../schemas/verify-output.schema.json', import.meta.url);
+
+interface BudgetStep {
+  name: string;
+  project?: string;
+  status: string;
+  detail: string;
+  label?: string;
+  base?: unknown;
+  cache?: unknown;
+  lastKnownMs?: number;
+  lastKnownFinished?: boolean;
+}
+
+interface BudgetReport {
+  schemaVersion: number;
+  ok: boolean;
+  result: string;
+  stepsTotal: number;
+  stepsRun: number;
+  budgetMs?: number;
+  steps: BudgetStep[];
+  notRun: {
+    step: string;
+    project?: string;
+    reason: string;
+    lastKnownMs: number;
+    lastKnownFinished: boolean;
+  }[];
+}
+
+/** Parses verify's JSON and checks it against the shipped schema. */
+async function budgetReport(json: string): Promise<BudgetReport> {
+  const schema = JSON.parse(await readFile(SCHEMA, 'utf8')) as object;
+  const check = new Ajv({ strict: true }).compile(schema);
+  const data: unknown = JSON.parse(json);
+  check(data);
+  expect(check.errors ?? []).toEqual([]);
+  return data as BudgetReport;
+}
+
+/** Writes the kept times of a repo, as an earlier run would have. */
+async function seedTimes(root: string, steps: Omit<TimeRecord, 'ranAt'>[]): Promise<void> {
+  await mkdir(path.join(root, '.firescale'), { recursive: true });
+  const file: TimesFile = { format: 1, steps: steps.map((step) => ({ ...step, ranAt: 1 })) };
+  await writeFile(timesPath(root), JSON.stringify(file));
+}
+
+/** A step that appends its name to `ran.log` in the repo root, then passes. */
+function logs(name: string, log = 'ran.log'): string {
+  return `require('fs').appendFileSync(${JSON.stringify(log)}, '${name}\\n');\n`;
+}
+
+async function ran(root: string): Promise<string[]> {
+  return (await readFile(path.join(root, 'ran.log'), 'utf8').catch(() => ''))
+    .split(/\r?\n/)
+    .filter(Boolean);
+}
+
+/** The first line of the summary. */
+function headline(stdout: string): string {
+  return stdout.split(/\r?\n/)[0] ?? '';
+}
+
+describe('verify --budget leaves out the steps that are known to take longer', () => {
+  const verify = { lint: nodeScript('lint.js'), typecheck: false, test: nodeScript('test.js') };
+  const files = {
+    '.gitignore': 'ran.log\n',
+    'lint.js': logs('lint'),
+    'test.js': logs('test'),
+  };
+  const slowTest = (finished: boolean, minutes: number) => [
+    { step: 'lint', command: nodeScript('lint.js'), durationMs: 2 * MINUTE, finished: true },
+    { step: 'test', command: nodeScript('test.js'), durationMs: minutes * MINUTE, finished },
+  ];
+
+  it('does not start a step over the budget, says NOT RUN with its last time, and never reads OK', async () => {
+    const repo = await repoWith(verify, files);
+    await seedTimes(repo.root, slowTest(true, 100));
+    const result = await runCli(['verify', '--budget', '30m', '--progress'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_OK);
+    expect(headline(result.stdout)).toBe(
+      'verify: PARTIAL - 2 of 3 steps ran, 1 not run (over the --budget of 30m)',
+    );
+    expect(result.stdout).toContain(
+      '  test       NOT RUN  over the budget of 30m: it took 1h 40m when it last ran\n',
+    );
+    expect(result.stdout).toContain(
+      `\nNot run: test was not started, because it took 1h 40m when it last ran and the budget is 30m (--budget). This run says nothing about it. To run it: ${nodeScript('test.js')}, or run fscale verify without --budget.\n`,
+    );
+    expect(result.stdout).not.toMatch(/verify: OK/);
+    // Lint is under the budget and ran; the test command was never started.
+    expect(await ran(repo.root)).toEqual(['lint']);
+    const lines = progressLines(result.stderr);
+    expect(lines).toContain(
+      'test: NOT RUN: it took 1h 40m when it last ran, and the budget is 30m (--budget)',
+    );
+    expect(lines.some((line) => line.startsWith('test: started'))).toBe(false);
+    // Its last known time is kept as it was.
+    const kept = (await readTimes(repo.root)).steps.find((r) => r.step === 'test');
+    expect([kept?.durationMs, kept?.finished]).toEqual([100 * MINUTE, true]);
+
+    // Nothing about it went into a cache: without the budget it runs.
+    const whole = await runCli(['verify'], repo.root, NOT_CI);
+    expect(whole.code).toBe(EXIT_OK);
+    expect(headline(whole.stdout)).toBe(
+      'verify: OK (1 of 3 steps passed from the cache, not run now)',
+    );
+    expect(await ran(repo.root)).toEqual(['lint', 'test']);
+  });
+
+  it('says the same in JSON: the status, the reason, the last known time and the count', async () => {
+    const repo = await repoWith(verify, files);
+    await seedTimes(repo.root, slowTest(false, 93));
+    const result = await runCli(['verify', '--budget=1h', '--json'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_OK);
+    const report = await budgetReport(result.stdout);
+    expect(report.schemaVersion).toBe(7);
+    expect([report.result, report.ok]).toEqual(['partial', true]);
+    expect([report.stepsTotal, report.stepsRun]).toEqual([3, 2]);
+    expect(report.budgetMs).toBe(60 * MINUTE);
+    const reason =
+      'over the budget of 1h: it ran at least 1h 33m when it last ran and did not finish';
+    expect(report.notRun).toEqual([
+      { step: 'test', reason, lastKnownMs: 93 * MINUTE, lastKnownFinished: false },
+    ]);
+    const test = report.steps.find((step) => step.name === 'test');
+    expect(test?.status).toBe('over-budget');
+    expect(test?.detail).toBe(reason);
+    expect([test?.lastKnownMs, test?.lastKnownFinished]).toEqual([93 * MINUTE, false]);
+    expect(test?.cache).toBeUndefined();
+    expect(await ran(repo.root)).toEqual(['lint']);
+    // A run without --budget has an empty list and no budget.
+    const whole = await budgetReport(
+      (await runCli(['verify', '--json'], repo.root, NOT_CI)).stdout,
+    );
+    expect([whole.result, whole.notRun, whole.budgetMs]).toEqual(['ok', [], undefined]);
+  });
+
+  it('runs a step with no known time, and a step whose time is within the budget', async () => {
+    const repo = await repoWith(verify, files);
+    // Nothing is known about lint; the test took exactly the budget.
+    await seedTimes(repo.root, slowTest(true, 30).slice(1));
+    const result = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_OK);
+    expect(headline(result.stdout)).toBe('verify: OK');
+    expect(await ran(repo.root)).toEqual(['lint', 'test']);
+  });
+
+  it('takes a pass from the cache instead of leaving the step out', async () => {
+    const repo = await repoWith(verify, files);
+    expect((await runCli(['verify'], repo.root, NOT_CI)).code).toBe(EXIT_OK);
+    await setTime(repo.root, 'test', { durationMs: 100 * MINUTE });
+    const result = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_OK);
+    expect(headline(result.stdout)).toBe(
+      'verify: OK (2 of 3 steps passed from the cache, not run now)',
+    );
+  });
+
+  it('counts skipped steps and steps that were not run apart, in a project too', async () => {
+    const repo = await repoWith(
+      {
+        lint: false,
+        typecheck: false,
+        test: false,
+        projects: { 'backend/api': { lint: nodeScript('lint.js'), test: nodeScript('test.js') } },
+      },
+      {
+        'backend/api/lint.js': logs('lint', '../../ran.log'),
+        'backend/api/test.js': logs('test', '../../ran.log'),
+        'backend/api/pyproject.toml': '[project]\nname = "api"\n',
+        '.gitignore': 'ran.log\n',
+      },
+    );
+    await seedTimes(repo.root, [
+      {
+        project: 'backend/api',
+        step: 'test',
+        command: nodeScript('test.js'),
+        durationMs: 100 * MINUTE,
+        finished: true,
+      },
+    ]);
+    const result = await runCli(['verify', '--budget', '45m'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_OK);
+    // The project is Python and has no type checker: that step is skipped.
+    expect(headline(result.stdout)).toBe(
+      'verify: PARTIAL - 2 of 4 steps ran, 1 skipped, 1 not run (over the --budget of 45m)',
+    );
+    expect(result.stdout).toContain(
+      '    test       NOT RUN  over the budget of 45m: it took 1h 40m when it last ran\n',
+    );
+    expect(result.stdout).toContain(
+      `\nNot run: test in backend/api was not started, because it took 1h 40m when it last ran and the budget is 45m (--budget). This run says nothing about it. To run it in backend/api: ${nodeScript('test.js')}, or run fscale verify without --budget.\n`,
+    );
+    expect(await ran(repo.root)).toEqual(['lint']);
+  });
+
+  it('names the step that was not run beside a failure, and still fails', async () => {
+    const repo = await repoWith(verify, { ...files, 'lint.js': 'process.exit(1);\n' });
+    await seedTimes(repo.root, slowTest(true, 100).slice(1));
+    const result = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(headline(result.stdout)).toBe(
+      'verify: FAILED at lint; 1 step not run (over the --budget of 30m)',
+    );
+  });
+
+  it('fails when verify.failOnSkipped is on: a run that left a step out is not a pass there', async () => {
+    const repo = await repoWith({ ...verify, failOnSkipped: true }, files);
+    await seedTimes(repo.root, slowTest(true, 100));
+    const result = await runCli(['verify', '--budget', '30m', '--json'], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = await budgetReport(result.stdout);
+    expect([report.result, report.ok]).toEqual(['failed', false]);
+    const human = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
+    expect(headline(human.stdout)).toBe(
+      'verify: FAILED - 1 of 3 steps not run (over the --budget of 30m), and verify.failOnSkipped is on',
+    );
+  });
+
+  it('never labels a step that was not run, and never lets the run read OK, with a base to compare with', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({ packs: ['core'], verify }),
+        '.gitignore': '.firescale/\nran.log\n',
+        // Lint fails on the base and on the head; the test fails on the base.
+        'lint.js': 'process.exit(1);\n',
+        'test.js': 'process.exit(1);\n',
+        'note.txt': 'base\n',
+      },
+      track: 'no-git',
+    });
+    expect((await runGit(repo.root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+    await commitAll(repo.root, 'base');
+    expect((await runGit(repo.root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    await writeFile(path.join(repo.root, 'note.txt'), 'changed\n');
+    await seedTimes(repo.root, slowTest(true, 100).slice(1));
+    const result = await runCli(['verify', '--budget', '30m', '--json'], repo.root, NOT_CI);
+    const report = await budgetReport(result.stdout);
+    const lint = report.steps.find((step) => step.name === 'lint');
+    const test = report.steps.find((step) => step.name === 'test');
+    // The pre-existing lint failure does not block, but the run is partial.
+    expect(lint?.label).toBe('pre-existing');
+    expect([test?.status, test?.label, test?.base]).toEqual(['over-budget', undefined, undefined]);
+    expect([report.result, report.ok]).toEqual(['partial', true]);
+    const human = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
+    expect(headline(human.stdout)).toMatch(
+      /^verify: PARTIAL - 2 of 3 steps ran, 1 not run \(over the --budget of 30m\); pre-existing \(fails on the base commit [0-9a-f]{7} too\): lint$/,
+    );
+  });
+
+  it.each([
+    ['soon', 'got "soon"'],
+    ['0', 'got "0"'],
+    ['0m', 'got "0m"'],
+    ['1.5h', 'got "1.5h"'],
+  ])('rejects the budget %s and says what a time looks like', async (value, got) => {
+    const repo = await repoWith(verify, files);
+    const result = await runCli(['verify', `--budget=${value}`], repo.root, NOT_CI);
+    expect(result.code).toBe(EXIT_USAGE);
+    expect(result.stderr).toContain(
+      `--budget needs a time longer than zero, such as "30m", "90s" or "1h 30m", or a number of seconds; ${got}.`,
+    );
+    expect(await ran(repo.root)).toEqual([]);
+  });
+
+  it('accepts a plain number of seconds, as the time limits in the config do', async () => {
+    const repo = await repoWith(verify, files);
+    await seedTimes(repo.root, slowTest(true, 100));
+    const result = await runCli(['verify', '--budget', '3600'], repo.root, NOT_CI);
+    expect(headline(result.stdout)).toBe(
+      'verify: PARTIAL - 2 of 3 steps ran, 1 not run (over the --budget of 1h)',
+    );
   });
 });
