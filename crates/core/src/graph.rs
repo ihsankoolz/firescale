@@ -1703,6 +1703,15 @@ fn changed_reason(files: &[&String]) -> String {
 /// build or a test ([`cannot_affect_builds`], [`is_document_or_media`]).
 #[must_use]
 pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
+    affected_except(graph, changed, &[])
+}
+
+/// [`affected`], leaving `settled` out of the walk: changed files whose
+/// effect the caller works out itself. `verify --affected` does so for
+/// `firescale.config.json`, which it compares setting by setting
+/// ([`crate::configkey`], ADR 0058). They still count as changed files.
+#[must_use]
+pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Affected {
     let files = match changed {
         Changed::Everything => {
             return Affected {
@@ -1728,10 +1737,16 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
         .filter(|node| node.node_type == NodeType::Project)
         .collect();
     let mut direct: BTreeMap<String, Vec<&String>> = BTreeMap::new();
+    // Once a file affects everything, the walk goes on only to list the
+    // inert files, so the note names them whatever else changed (ADR 0058).
+    let mut everything: Option<String> = None;
     for file in files {
+        if settled.contains(&file.as_str()) {
+            continue;
+        }
         if let Some(reason) = widening_reason(file) {
-            result.everything = Some(reason);
-            return result;
+            everything.get_or_insert(reason);
+            continue;
         }
         let deepest = projects
             .iter()
@@ -1784,16 +1799,18 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
         }
         if unowned && !media {
             if roots.is_empty() {
-                result.everything = Some(format!("{file} belongs to no project"));
-                return result;
+                everything.get_or_insert_with(|| format!("{file} belongs to no project"));
+                continue;
             }
             if !file.contains('/') {
                 // Settings that projects below may read (ruff.toml,
                 // tsconfig.base.json, .prettierrc) live at the repo root.
-                result.everything = Some(format!(
-                    "{file} is at the repo root, where settings every project may read are kept"
-                ));
-                return result;
+                everything.get_or_insert_with(|| {
+                    format!(
+                        "{file} is at the repo root, where settings every project may read are kept"
+                    )
+                });
+                continue;
             }
         }
         if deepest.is_none() {
@@ -1804,6 +1821,10 @@ pub fn affected(graph: &Graph, changed: &Changed) -> Affected {
         for holder in holders {
             direct.entry(holder).or_default().push(file);
         }
+    }
+    if everything.is_some() {
+        result.everything = everything;
+        return result;
     }
     let mut queue: VecDeque<String> = VecDeque::new();
     for (id, changed_here) in direct {
