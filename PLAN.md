@@ -782,7 +782,7 @@ Decisions in ADR 0055: five rules; a starter of `CMakeLists.txt` (CMake 3.20, C+
 
 ## M36 to M39 — on hold
 
-Swift (M36), .NET (M37), Android (M38) and Flutter (M39) are not started and are on hold until the owner says so (2026-11-15). Before them came a run of bug fixes from the audit of 2026-11-14 (`docs/reviews/ponytail-audit.md`; ADR 0056) and the 0.5.0 version, then the 0.5.1 fixes from running 0.5.0 on the course project (ADR 0057 to 0060: slow steps and `verify --budget`, what a config change affects, stopped runs and doctor, leftovers) and the 0.5.1 version. No milestone was started in either run.
+Swift (M36), .NET (M37), Android (M38) and Flutter (M39) are not started and are on hold until the owner says so (2026-11-15). Before them came a run of bug fixes from the audit of 2026-11-14 (`docs/reviews/ponytail-audit.md`; ADR 0056) and the 0.5.0 version, then the 0.5.1 fixes from running 0.5.0 on the course project (ADR 0057 to 0060: slow steps and `verify --budget`, what a config change affects, stopped runs and doctor, leftovers; ADR 0061: seven small fixes found on the way) and the 0.5.1 version. No milestone was started in either run.
 
 ---
 
