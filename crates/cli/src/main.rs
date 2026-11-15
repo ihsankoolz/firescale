@@ -42,6 +42,7 @@ use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
 use firescale_core::sharedcache::{CiRun, SharedCache};
 use firescale_core::stepcache::{CacheSettings, StepCache};
+use firescale_core::steptimes::StepTimes;
 use firescale_core::tamper;
 use firescale_core::verify::add_tamper;
 use firescale_core::verify::{
@@ -1185,6 +1186,7 @@ fn verify_report(
     .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
     // A config change alters every key: say so once (ADR 0043).
     let config_note = cache.config_note().filter(|_| !args.no_cache);
+    let times = StepTimes::new(root);
     let options = RunOptions {
         stop: &STOP,
         progress: progress.as_ref(),
@@ -1196,6 +1198,7 @@ fn verify_report(
         every_step: matches!(base, BaseChoice::Compare(_)),
         deadline: None,
         base_run: false,
+        times: Some(&times),
     };
     let mut verify = run_verify_with(root, version(), check, &plan, &options)?;
     match &base {
