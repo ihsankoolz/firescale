@@ -14,7 +14,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 After it comes one pull request of small fixes found on the way (branch `small-fixes-cli`, ADR 0061). If `git log main` does not show it, it is still on that branch. Do not start M36 or the project-type table.
 
-- **Version:** 0.5.1 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.1` tag exists, and no `v0.5.0` tag either**; the owner pushes a tag when ready (`RELEASING.md`). npm's latest is 0.4.0 (tag `v0.4.0`, commit `7e13ee3`, which is before M24), so the next release is the first with M24 to M35, the audit fixes and the 0.5.1 fixes.
+- **Version:** 0.5.1 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.1` tag exists**; the owner pushes it when ready (`RELEASING.md`). 0.5.0 is released: the tag `v0.5.0` is on commit `b43a548` (2026-11-15) and it is npm's latest, so 0.5.1 will be the first release with the fixes of this run.
 - **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run.
 - **Verify's JSON is schema version 7** (`notRun`, `budgetMs`, the step status `over-budget`).
 - **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
