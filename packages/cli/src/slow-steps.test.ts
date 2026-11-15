@@ -586,3 +586,59 @@ describe('verify --budget leaves out the steps that are known to take longer', (
     );
   });
 });
+
+describe('--budget is refused where a partial run must not pass for a whole one', () => {
+  const verify = { lint: false, typecheck: false, test: nodeScript('test.js') };
+  const files = { '.gitignore': 'ran.log\n', 'test.js': logs('test') };
+  const NEXT_STEP =
+    'Run fscale verify without --budget there; to bound a slow step in CI, set its time limit in the firescale config (verify.<step>.timeout).';
+
+  it.each([
+    [{ CI: 'true', GITHUB_ACTIONS: undefined }, 'CI is set in the environment'],
+    [{ CI: '1', GITHUB_ACTIONS: undefined }, 'CI is set in the environment'],
+    [{ CI: undefined, GITHUB_ACTIONS: 'true' }, 'GITHUB_ACTIONS is true in the environment'],
+  ])('in CI (%o): says why, and what to do, and runs nothing', async (env, why) => {
+    const repo = await repoWith(verify, files);
+    for (const extra of [[], ['--json'], ['--dry-run']]) {
+      const result = await runCli(['verify', '--budget', '30m', ...extra], repo.root, env);
+      expect(result.code).toBe(EXIT_USAGE);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain(
+        `fscale: --budget cannot be used in CI (${why}): it leaves slow steps out, so the run would pass without them. ${NEXT_STEP}\n`,
+      );
+    }
+    expect(await ran(repo.root)).toEqual([]);
+    // Without the flag, CI runs every step as before.
+    const whole = await runCli(['verify'], repo.root, env);
+    expect(whole.code).toBe(EXIT_OK);
+    expect(await ran(repo.root)).toEqual(['test']);
+  });
+
+  it('is not taken for CI by an empty CI variable', async () => {
+    const repo = await repoWith(verify, files);
+    const result = await runCli(['verify', '--budget', '30m'], repo.root, {
+      CI: '',
+      GITHUB_ACTIONS: undefined,
+    });
+    expect(result.code).toBe(EXIT_OK);
+    expect(await ran(repo.root)).toEqual(['test']);
+  });
+
+  it('in the stop hook: says why, and what to do, and runs nothing', async () => {
+    const repo = await repoWith(verify, files);
+    const result = await runCli(
+      ['hooks', 'run', '--agent', 'claude', '--budget', '30m'],
+      repo.root,
+      NOT_CI,
+    );
+    // A stop hook never exits with 2 for its own errors: Claude Code and
+    // Codex read that as "do not stop", and a broken hook must not trap an
+    // agent (as for every other error of `hooks run`).
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(
+      'fscale: --budget cannot be used in the stop hook: it leaves slow steps out, so an agent could stop without them having run. Remove --budget from the hook command (fscale hooks run --agent <name>); a person can still run fscale verify --budget <time> by hand.\n',
+    );
+    expect(await ran(repo.root)).toEqual([]);
+  });
+});
