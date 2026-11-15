@@ -1690,4 +1690,39 @@ test src/lib.rs - f (line 10) ... FAILED
             Some("old_style".to_owned())
         );
     }
+
+    #[test]
+    fn a_package_json_that_starts_with_a_bom_still_gives_its_script() {
+        // Editors on Windows save a UTF-8 byte order mark. Without the
+        // script, the runner and the fail-fast mark are both missed, and a
+        // run stopped by --bail could be called pre-existing (ADR 0039).
+        for (script, runner) in [
+            ("jest --bail", TestRunner::Jest),
+            ("jest --bail=1", TestRunner::Jest),
+            ("vitest run --bail 1", TestRunner::Vitest),
+            ("pytest -x", TestRunner::Pytest),
+            ("pytest --exitfirst", TestRunner::Pytest),
+            ("pytest --maxfail=1", TestRunner::Pytest),
+        ] {
+            let json = serde_json::json!({ "name": "web", "scripts": { "test": script } });
+            let plain = tempfile::tempdir().unwrap();
+            std::fs::write(plain.path().join("package.json"), json.to_string()).unwrap();
+            let with_bom = tempfile::tempdir().unwrap();
+            std::fs::write(
+                with_bom.path().join("package.json"),
+                format!("\u{feff}{json}"),
+            )
+            .unwrap();
+            for command in ["npm test", "pnpm run test"] {
+                let found = script_text(with_bom.path(), command);
+                assert_eq!(found.as_deref(), Some(script), "{command}");
+                assert_eq!(found, script_text(plain.path(), command), "{command}");
+                assert_eq!(TestRunner::of(command, found.as_deref()), Some(runner));
+                assert!(
+                    stopped_at_first_failure(runner, command, found.as_deref(), ""),
+                    "{command} running {script}"
+                );
+            }
+        }
+    }
 }
