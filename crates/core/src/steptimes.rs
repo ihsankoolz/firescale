@@ -833,6 +833,37 @@ mod tests {
         assert!(!lock.exists());
     }
 
+    /// Another program (a virus scanner, an editor, Python's `open()`) has
+    /// the file open without sharing delete for 300 ms, so nothing can be
+    /// renamed over it for that long.
+    #[cfg(windows)]
+    #[test]
+    fn a_pass_is_kept_when_another_program_holds_the_file_for_a_moment() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (temp, times) = times();
+        times.record(None, "test", "t", HOUR, Outcome::Passed);
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, but not FILE_SHARE_DELETE.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1 | 2)
+            .open(temp.path().join(".firescale").join(STEP_TIMES_FILE))
+            .unwrap();
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(held);
+        });
+        // The step now passes in 40 s: the truth about it.
+        times.record(None, "test", "t", Duration::from_secs(40), Outcome::Passed);
+        holder.join().unwrap();
+        assert_eq!(
+            times.last(None, "test", "t"),
+            Ok(Some(Known {
+                duration: Duration::from_secs(40),
+                finished: true
+            }))
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_lock_is_not_written_through_a_symbolic_link() {
