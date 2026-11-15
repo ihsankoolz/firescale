@@ -65,7 +65,7 @@ A fresh subagent tried to break the runner with the stand-in agent and reproduce
 - The push guard is a git setting in the environment: an agent with a shell could unset it. The policy denies the shell, and the runner itself never pushes.
 - **A process the agent detaches** (`setsid`, a daemon) outlives the run's process tree: it can change files or refs after every check has passed. Stopping it would need a cgroup or a job object around the whole run; not done.
 - Other files in `.git` (`info/exclude`, reflogs) are not compared; files changed in your checkout are reported, not put back.
-- The `agent` limits are read from `firescale.config.json` only, not from a `firescale.config.ts`.
+- The `agent` limits are read from `firescale.config.json` only, not from a `firescale.config.ts`. (No longer true: ADR 0056, bug 7.)
 - The cost limit is checked after the run, on what the agent reports; an agent that does not report cost is held only by the turn and time limits.
 - Tags are compared by name before and after; a tag created and deleted inside the run, or a ref other than a tag, is not seen.
 - Re-check runs the whole of verify against `HEAD` in the worktree, so a run costs a verify; the worktree has no installed dependencies unless the repo's `verify.baseInstall` provides them (ADR 0037).

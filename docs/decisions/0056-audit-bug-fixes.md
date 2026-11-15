@@ -1,6 +1,6 @@
 # 0056 — Fixes for the bugs of the ponytail audit
 
-Status: accepted (2026-11-15, for 0.5.0). Refines ADR 0034 and 0039 (what `--affected` and the stop hook keep) and ADR 0035 (what a progress line may show).
+Status: accepted (2026-11-15, for 0.5.0). Refines ADR 0034 and 0039 (what `--affected` and the stop hook keep), ADR 0035 (what a progress line may show) and ADR 0047 (where the agent limits and protected paths come from).
 
 ## Context
 
@@ -87,6 +87,26 @@ The rule-result cache wrote the same ignore file with the same mistake (`Cache::
 
 **Found, not fixed** (not on the owner's list): with `.firescale` itself a link, the rule-result cache (`cache.rs`), the base-result store (`blame.rs`), the run records (`runs.rs`) and a shared cache folder under it (`sharedcache.rs`) still create folders and write through it. Those were read, not tested. With a linked digest file whose target differs, the "config changed" note can print on every run.
 
+### Bug 5: a lone `assertThat(x)` in Kotlin cannot fail
+
+The Kotlin reader of the tamper guard now has the rule the Java reader has: an `assertThat` with one argument and nothing chained, or whose last argument is Hamcrest's `anything()`, is not counted as an assertion. So `assertThat(total()).isEqualTo(3)` cut down to `assertThat(total())` is reported as `assertion-removed`. The rule was written into `kotlin.rs`; Kotlin was not merged into Java's pieces (audit item 9), and bug 18 was left alone. The labelled corpus gained two Kotlin cases (460 cases, none missed, no false finding).
+
+### Bug 7: the agent limits come from the loaded config
+
+`fix --agent` read `maxTurns`, `maxCostUsd` and `timeoutSeconds` again from `firescale.config.json`, so a `firescale.config.ts` got the defaults (30 turns, $2, 900 s). The config check now hands back the three numbers it validates (`ResolvedConfig.agent`), and the run uses those. This corrects a line under "Known limits" in ADR 0047.
+
+The two clamps still differ and were both kept, so nothing changes for a JSON config: the config accepts any value of 1 or more, and the run caps turns at 1,000 and time at 86,400 s.
+
+### Bug 8: a protected glob that does not compile is an error; a finding's file is a path
+
+- **`protectedPaths`.** A glob that does not compile was dropped, and the paths it was meant to protect were open to the agent. It is now a config error (exit 2) for every command that loads the config, `fscale check` included, from a JSON or a TS config. The glob is compiled for the check exactly as it is for matching.
+- **The repo's Claude Code settings.** The runner also takes `Edit(…)`, `Write(…)` and `Read(…)` rules under `deny` and `ask` in `.claude/settings.json` and `.claude/settings.local.json` as protected paths. One that does not compile now stops `fix --agent` before any worktree or agent is started. It is not a `fscale check` error: that file is not firescale's config.
+- **The files a finding names.** They were compiled as globs, so a finding on `app/[id]/page.tsx` allowed `app/i/page.tsx` and refused the real file. They now go through `globset::escape` and match only themselves.
+
+Two one-line helpers were added to `agentrun.rs` for this (`glob_error`, `literal_glob`), because the CLI crate does not depend on globset. No dependency was added.
+
+**Left as it was:** a rule's `inputs` that does not compile is still dropped from the set the agent may change, which fails safe (it allows less).
+
 ## Consequences
 
 - The stop hook blocks on a stale `AGENTS.md`, a missing permission or any other repo-level finding that the change itself caused.
@@ -95,3 +115,5 @@ The rule-result cache wrote the same ignore file with the same mistake (`Cache::
 - Adding `next` to a `package.json`, a Spock test to a Maven project, a `binding.gyp` to a CMake project or `mvnw` to a Maven project ends the cached result that the file makes wrong.
 - `agents-md` and `agent-permissions` miss the cache more often (any `.gitignore` or requirements list ends their cached pass). That costs time only.
 - A repo whose `.firescale` or `.firescale/steps` is a symbolic link gets no step cache.
+- A config with a mistyped `protectedPaths` glob stops every command until it is fixed. Before, it ran with that path unprotected.
+- `fix --agent` in a repo whose Claude Code settings hold a path rule globset cannot compile is refused, where before it ran without that protection.
