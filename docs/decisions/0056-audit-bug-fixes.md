@@ -47,8 +47,49 @@ The test `nx_and_turbo_take_precedence_and_honour_affected` asserted `npx turbo 
 
 The progress line's own `redact` knew only `scheme://user:password@` and stopped at the first `/`. The heartbeat now calls the existing `verify::hide_secrets` (ADR 0035), and `redact`, which had no other caller, is removed. No new redactor was written. The file name a known test runner's markers belong to (`(in tests/test_a.py)`) goes through `hide_secrets` too: a line that is only a connection string was read as that file name. `Activity::recent()` still returns lines as printed; its callers only search them for a refused service and print nothing from them.
 
+### Bugs 4, 12 and 13: the missing cache inputs, added by hand
+
+The rule-result cache serves a rule's last result until a file matching its `inputs` changes. Three packs decided "is this repo mine" from files their rules did not list:
+
+- **nextjs** (bug 4): `gitignore`, `next-config` and `app-router` now list `package.json`, which `applies()` reads.
+- **maven** (bug 12): `entry` and `tests` now list `src/**/*.groovy`. Kotlin and Scala were already covered through the pack's other-stack inputs.
+- **cmake** (bug 13): every rule now lists `binding.gyp`, and also `Sources/**`: the pack reads whether a `Sources/` folder exists to tell a Swift package from a CMake project, and a test showed the same stale result for it. An empty `Sources/` folder still cannot be seen, since the cache key is built from files.
+
+No `inputs` helper and no project-type table was built (audit items 24 and 26, part C).
+
+### Bug 10: the files that decide a command are inputs of `agents-md` and `agent-permissions`
+
+`FACTS_INPUTS` grew from 28 globs to 44, by hand. Each added glob has an end-to-end case that showed a cached pass where an uncached run reported a finding:
+
+- the Maven and Gradle wrappers (`mvnw`, `mvnw.cmd`, `gradlew`, `gradlew.bat`);
+- Node tool configs (`.oxlintrc.json`, `oxlint.config.*`, `biome.json`, `.eslintrc*`, `vitest.workspace.*`);
+- lockfiles below the root;
+- `conftest.py`, `manage.py`, `alembic.ini`, `.ruff.toml`, `.mypy.ini`, and requirements lists named `dev-requirements.txt` and the like;
+- every `.gitignore`, since facts skips a folder that one names even when git still tracks its files.
+
+This goes beyond the nine names of the audit's entry: the others sit in the same tables of `facts.rs` and `ecosystems.rs` and failed the same way. The list is still kept by hand, so it can fall behind again; the test `the_rules_that_list_commands_read_every_file_that_decides_one` pins what is there.
+
+**Not reproduced:** the entry's related point, that `agent-skills` lists only `firescale.config.json` though it reads `firescale.config.ts`. No state was found where a cached pass survives: both files together stop with a usage error before any rule runs, and swapping one for the other removes a matched input, which changes the key. No code was changed for it.
+
+**Still not inputs** (facts reads them; no test was written, so nothing was added): any `*.py` beside a `requirements.txt`; files a requirements list pulls in with `-r` under another name; `.swiftlint.yml` and `.swift-format`; `cmake/lint.cmake`, `conanfile.*` and `vcpkg.json`; Xcode's shared schemes; whether a Dart `test/` folder exists.
+
+Since bug 1's fix, these inputs also decide what the stop hook keeps: a change to `mvnw`, a nested lockfile or a `.gitignore` keeps a stale-`AGENTS.md` finding under `--affected`.
+
+### Bug 9: a `package.json` that starts with a byte order mark is read
+
+`pertest::script_text` now strips the mark before parsing, as the repo's other readers do, in place. With the mark, the runner and its `--bail` were not found, and a failure of a run that stopped at its first failure was labelled `pre-existing`, which ADR 0039 forbids. The end-to-end test runs the real `npm`, because the case needs a package manager that itself accepts the mark.
+
+### Bug 17: the step cache never reads, writes or cleans through a symbolic link
+
+A committed `.firescale/.gitignore` that is a dangling link made the step cache create a file outside the repo. Tests showed the same for the config digest file, and, with `.firescale` or `.firescale/steps` itself a link, for storing a pass, touching an entry on lookup and removing old entries. All get the check `hooks.rs` already makes, written in place: a linked cache is refused, never followed, and verify says "the folder is a symbolic link; replace it with a real folder". No shared writer was built (audit item 72).
+
+**Found, not fixed** (not on the owner's list): the rule-result cache has the same hole. `Cache::put` in `cache.rs` writes `.firescale/.gitignore` without the check, so `fscale check` with a dangling link there still creates the outside file. The base-result store in `blame.rs`, and `runs.rs` and `sharedcache.rs`, create folders and write without a link check; those were read, not tested.
+
 ## Consequences
 
 - The stop hook blocks on a stale `AGENTS.md`, a missing permission or any other repo-level finding that the change itself caused.
 - A fresh clone of an Nx or Turborepo repo that uses npm gets `SETUP NEEDED`, never a download.
 - `hide_secrets` is now the one place that decides what output may be shown. It hides `password=`, `pwd=` and `passwd=` values; `token=` and `secret=` are still shown, in the report as in the heartbeat.
+- Adding `next` to a `package.json`, a Spock test to a Maven project, a `binding.gyp` to a CMake project or `mvnw` to a Maven project ends the cached result that the file makes wrong.
+- `agents-md` and `agent-permissions` miss the cache more often (any `.gitignore` or requirements list ends their cached pass). That costs time only.
+- A repo whose `.firescale` or `.firescale/steps` is a symbolic link gets no step cache.

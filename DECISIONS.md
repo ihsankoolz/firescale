@@ -22,6 +22,28 @@ The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. 
 
 **Known limits, not fixed here:** a finding inside an unaffected project, caused by a change elsewhere, is still dropped by `--affected` (needs audit item 23); `bunx` can still fetch a missing nx or turbo; `token=` and `secret=` values are not hidden by `hide_secrets`.
 
+**Pull request 2: cache inputs and blame**
+
+- **Bug 4, fixed.** Failing tests first: `every_rule_reads_what_decides_where_the_pack_applies` (nextjs: "nextjs/app-router lacks package.json") and `reports the app once package.json depends on next, not the cached "no finding"` (nextjs-pack.test.ts). Fix: `package.json` in the inputs of the three rules.
+- **Bug 12, fixed.** Failing tests first: `the_rules_that_count_jvm_files_read_every_extension_they_count` and two in maven-pack.test.ts (a Spock test, a Groovy class). Fix: `src/**/*.groovy` in `entry` and `tests`.
+- **Bug 13, fixed.** Failing tests first: the cmake pack's `every_rule_reads_what_decides_where_the_pack_applies` with `binding.gyp` and `Sources/**` added, and two in cmake-pack.test.ts. Fix: both globs in the pack's inputs.
+- **Bug 10, fixed in part, not reproduced in part.** Failing tests first: 23 end-to-end cases in the new `facts-inputs-cache.test.ts` (cached run `[]`, uncached run the finding) and `the_rules_that_list_commands_read_every_file_that_decides_one`. Fix: 16 globs added or widened in `FACTS_INPUTS`, by hand. **Not reproduced:** `agent-skills` and `firescale.config.ts`. Tried: both config files together (a usage error before any rule runs); swapping JSON for TS (the key changes, same result cached and uncached); no config (the rule does not run). No code changed for it.
+- **Bug 9, fixed.** Failing tests first: `a_package_json_that_starts_with_a_bom_still_gives_its_script` (pertest.rs) and `sees --bail in the script of a package.json that starts with a byte order mark` (stop-hook-blame.test.ts: "expected 'pre-existing' to be undefined"). Fix: strip the mark in `script_text`.
+- **Bug 17, fixed.** Failing tests first: four in stepcache.rs (a file created, touched or removed outside the repo) and `creates no file where a committed .firescale/.gitignore symlink points` (step-cache.test.ts). Fix: the step cache refuses a linked `.firescale`, `.firescale/steps`, ignore file or digest file.
+
+**Decided on your behalf** (ADR 0056):
+
+- Bug 13 also got `Sources/**`, and bug 10 got the siblings of the audit's nine names (`mvnw.cmd`, `gradlew.bat`, `alembic.ini`, `.ruff.toml`, `.mypy.ini`, `dev-requirements.txt` and others): each failed its own test the same way.
+- Bug 17 covers every step-cache path a test showed reaching outside the repo (store, lookup, clean, the digest file), not only the ignore file. A linked cache folder is refused, as `hooks.rs` does, not followed when it stays inside the repo.
+- Bug 9's end-to-end test runs the real `npm`.
+
+**Found while fixing, not fixed (not on your list):**
+
+- **The rule-result cache writes `.firescale/.gitignore` through a symlink too** (`cache.rs` `Cache::put`): `fscale check` with a dangling link there creates the outside file. Seen by running it. The base-result store (`blame.rs`), `runs.rs` and `sharedcache.rs` have no link check either; read, not tested.
+- Files facts reads that are still not cache inputs of `agents-md` and `agent-permissions`: listed in ADR 0056, "Still not inputs".
+- A `bail` set in a Jest or Vitest config file is not seen as fail-fast; only the flag in the command or the package script is.
+- `stackkit::CODE` has no `groovy`, so a Groovy-only repo does not count as having code for "another stack".
+
 ## Review of the long run
 
 M25 to M30, built on 2026-11-14 between 00:59 and about 05:00 UTC, one pull request each, merged on green on Linux, macOS and Windows. The version is still 0.4.0; no tag was pushed. Three lines per milestone: what was built, what you must decide, what you must test by hand.
