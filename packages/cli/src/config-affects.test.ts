@@ -350,3 +350,40 @@ describe('the note that names inert files', () => {
     );
   });
 });
+
+// Why a time limit is in no key (ADR 0058): a step it stops is never kept,
+// and a pass kept under another limit is still true of the code.
+describe('time limits and the step cache', () => {
+  it('never keeps a step that a limit stopped, and serves a kept pass after the limit is lowered', async () => {
+    const repo = await fixtures.create({
+      files: { 'slow.js': "setTimeout(() => console.log('done'), 2000);\n" },
+    });
+    const limits = (limit: Record<string, string>) =>
+      repo.write(
+        'firescale.config.json',
+        JSON.stringify({
+          verify: { lint: false, typecheck: false, test: 'node slow.js', ...limit },
+        }),
+      );
+    for (const limit of ['timeout', 'idleTimeout']) {
+      await limits({ [limit]: '1s' });
+      const stopped = await runCli(['verify'], repo.root, {});
+      expect(stopped.stdout).toMatch(/ {2}test +TIMED OUT /);
+      expect(stopped.stdout).not.toContain('from the cache');
+    }
+    // A longer limit: the step was not kept as anything, so it runs.
+    await limits({ timeout: '1m', idleTimeout: '1m' });
+    const passed = await runCli(['verify'], repo.root, {});
+    expect(passed.code).toBe(EXIT_OK);
+    expect(passed.stdout.split('\n')[0]).toBe('verify: OK');
+    // The limits lowered again: the pass is served, not run to time out.
+    for (const limit of ['timeout', 'idleTimeout']) {
+      await limits({ [limit]: '1s' });
+      const served = await runCli(['verify'], repo.root, {});
+      expect(served.code).toBe(EXIT_OK);
+      expect(served.stdout.split('\n')[0]).toBe(
+        'verify: OK (1 of 2 steps passed from the cache, not run now)',
+      );
+    }
+  });
+});
