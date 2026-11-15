@@ -800,6 +800,34 @@ REDIS_PORT=6390
         );
     }
 
+    // Making a symbolic link to a file needs a privilege on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn a_local_env_file_that_is_a_symlink_is_not_read() {
+        let outside = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            outside.path().join("planted.env"),
+            "LINKED_DB_URL=postgresql://u:p@localhost:5999/x
+",
+        )
+        .expect("write");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        std::fs::write(
+            root.join(".env.local"),
+            "OWN_DB_URL=postgresql://u:p@localhost:5433/test
+",
+        )
+        .expect("write");
+        std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env"))
+            .expect("symlink");
+        let found: Vec<(u16, String)> = services_with_local_env(root, &[root.to_path_buf()])
+            .into_iter()
+            .map(|service| (service.port, service.source))
+            .collect();
+        assert_eq!(found, vec![(5433, ".env.local (OWN_DB_URL)".to_owned())]);
+    }
+
     #[test]
     fn verify_does_not_read_local_env_files() {
         let dir = tempfile::tempdir().expect("tempdir");

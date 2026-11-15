@@ -1,7 +1,7 @@
 // `fscale doctor`: is this machine ready for the repo? (SPEC §17, ADR 0026)
 // The tools doctor asks for their versions are stand-ins on a PATH the test
 // controls, so the results are the same on every machine.
-import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
@@ -469,6 +469,46 @@ describe('doctor and env files in the folders above a project', () => {
     );
     expect(result.code).toBe(EXIT_VIOLATIONS);
   });
+
+  // Making a symlink to a file needs a privilege on Windows.
+  it.skipIf(WINDOWS)(
+    'reads no env file through a symbolic link, says which file, and never prints a value',
+    async () => {
+      // Made-up names and values, in a file outside the repo.
+      const outside = await fixtures.create({
+        files: {
+          'planted.env':
+            'LINKED_KEY=linked-secret-159\nLINKED_DB_URL=postgresql://u:linked-pw-753@localhost:5999/linked_db\n',
+        },
+        track: 'no-git',
+      });
+      const repo = await fixtures.create({
+        files: {
+          'svc/.env.example': 'LINKED_KEY=\n',
+          'svc/requirements.txt': '',
+          'svc/main.py': '',
+        },
+      });
+      await symlink(path.join(outside.root, 'planted.env'), path.join(repo.root, 'svc', '.env'));
+      const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+      await writeVersionTools(tools, {});
+      const human = await runCli(['doctor'], repo.root, toolPath(tools));
+      const json = await runCli(['doctor', '--json'], repo.root, toolPath(tools));
+      // The name in the linked file does not count as set.
+      expect(human.stdout).toContain(
+        '  PROBLEM  svc/.env.example: 1 of 1 variables are not set in the environment: LINKED_KEY. svc/.env is a symbolic link, so it was not read.\n           next: replace svc/.env with a real file that sets LINKED_KEY, or set the variables in your shell (see svc/.env.example for what each one is)\n',
+      );
+      expect(human.code).toBe(EXIT_VIOLATIONS);
+      // The database it names is not checked either.
+      const report = await validate(json.stdout);
+      expect(report.checks.filter((check) => check.section === 'services')).toEqual([]);
+      for (const out of [human, json]) {
+        for (const secret of ['linked-secret-159', 'linked-pw-753', 'linked_db']) {
+          expect(out.stdout + out.stderr, secret).not.toContain(secret);
+        }
+      }
+    },
+  );
 
   it('never reads a .env above the firescale root', async () => {
     // The firescale root is `repo/`, inside the fixture's own temp folder;

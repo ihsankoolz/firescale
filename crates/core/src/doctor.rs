@@ -2005,6 +2005,116 @@ mod tests {
         assert_eq!(names.into_iter().collect::<Vec<_>>(), ["A", "B", "C"]);
     }
 
+    /// A machine with no variable set and no service listening.
+    #[cfg(unix)]
+    struct Bare;
+    #[cfg(unix)]
+    impl Machine for Bare {
+        fn run(&self, _: &Path, _: &str, _: &[&str]) -> Option<String> {
+            None
+        }
+        fn env_set(&self, _: &str) -> bool {
+            false
+        }
+        fn listening(&self, _: &str, _: u16) -> bool {
+            false
+        }
+    }
+
+    // Making a symbolic link to a file needs a privilege on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn an_env_file_that_is_a_symlink_is_not_read_and_the_check_says_so() {
+        // Made-up names and values, in a file outside the repo.
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(
+            outside.path().join("planted.env"),
+            "LINKED_NAME=made-up-value-135
+LINKED_DB_URL=postgresql://u:made-up-pw@localhost:5999/x
+",
+        )
+        .unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        fs::write(
+            root.join(".env.example"),
+            "LINKED_NAME=
+",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env")).unwrap();
+        let report = run_doctor(root, &RepoFacts::default(), &Bare);
+        let found: Vec<(&str, &str, Status, &str, Option<&str>)> = report
+            .checks
+            .iter()
+            .filter(|check| matches!(check.section, "env" | "services"))
+            .map(|check| {
+                (
+                    check.section,
+                    check.subject.as_str(),
+                    check.status,
+                    check.detail.as_str(),
+                    check.fix.as_deref(),
+                )
+            })
+            .collect();
+        // The name in the linked file does not count as set, and the
+        // database it names is not checked.
+        assert_eq!(
+            found,
+            [(
+                "env",
+                ".env.example",
+                Status::Problem,
+                "1 of 1 variables are not set in the environment: LINKED_NAME. .env is a symbolic link, so it was not read.",
+                Some("replace .env with a real file that sets LINKED_NAME, or set the variables in your shell (see .env.example for what each one is)"),
+            )]
+        );
+        let text = format_doctor_human(&report) + &format_doctor_json(&report);
+        assert!(!text.contains("made-up"), "{text}");
+
+        // Two links: both are named. A real file beside them is still read.
+        std::os::unix::fs::symlink(outside.path().join("planted.env"), root.join(".env.local"))
+            .unwrap();
+        fs::create_dir_all(root.join("svc")).unwrap();
+        fs::write(
+            root.join("svc").join(".env.example"),
+            "LINKED_NAME=
+SVC_OWN=
+",
+        )
+        .unwrap();
+        fs::write(
+            root.join("svc").join(".env"),
+            "SVC_OWN=made-up-own-246
+",
+        )
+        .unwrap();
+        let facts = RepoFacts {
+            projects: vec![crate::facts::Project {
+                root: "svc".to_owned(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let report = run_doctor(root, &facts, &Bare);
+        let check = report
+            .checks
+            .iter()
+            .find(|check| check.subject == "svc/.env.example")
+            .unwrap();
+        assert_eq!(
+            check.detail,
+            "1 of 2 variables are not set in the environment or svc/.env: LINKED_NAME. .env, .env.local are symbolic links, so they were not read."
+        );
+        assert_eq!(
+            check.fix.as_deref(),
+            Some("replace one of .env, .env.local with a real file that sets LINKED_NAME, or set the variables in your shell (see svc/.env.example for what each one is)")
+        );
+        let text = format_doctor_human(&report) + &format_doctor_json(&report);
+        assert!(!text.contains("made-up"), "{text}");
+    }
+
     #[test]
     fn python_names_and_versions_compare_like_pip() {
         assert_eq!(
