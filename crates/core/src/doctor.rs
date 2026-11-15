@@ -2131,7 +2131,9 @@ mod tests {
         );
         assert_eq!(
             check.fix.as_deref(),
-            Some("replace one of .env, .env.local with a real file that sets LINKED_NAME, or set the variables in your shell (see svc/.env.example for what each one is)")
+            // A real env file beside the example is where the name goes: the
+            // links above may be shared on purpose, and are only named.
+            Some("add LINKED_NAME to svc/.env (see svc/.env.example for what each one is)")
         );
         let text = format_doctor_human(&report) + &format_doctor_json(&report);
         assert!(!text.contains("made-up"), "{text}");
