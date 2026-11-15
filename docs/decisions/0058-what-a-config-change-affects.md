@@ -1,0 +1,169 @@
+# 0058 — What a change to the firescale config affects
+
+Status: accepted (2026-11-15, for 0.5.1). Narrows one rule of ADR 0031 and ADR 0032 (the firescale config affects every project), one of ADR 0036 (the config is a root file, so it is in every step's key) and the note of ADR 0043 (a config change alters every key). ADR 0034, ADR 0037, ADR 0041 and ADR 0056 are unchanged in what they decide; this ADR says how each meets the new rule.
+
+## Context
+
+The owner ran 0.5.0 on the course project on Windows: six projects, one whose tests take 1 h 40 min. The repo had an untracked `firescale.config.json` that set two test timeouts and nothing else. `verify --affected` ran all six projects, and every step's cache key changed.
+
+Two rules did that:
+
+- `graph::widening_reason` (ADR 0032): a changed `firescale.config.*` at the root affects every project.
+- `stepcache::covers` (ADR 0036): the config is a file at the root that no project owns, so its bytes are in every step's key.
+
+Both treat the config as a file. But firescale is the only reader of most of it, and it knows what each setting does. A time limit cannot make a step pass or fail differently; a command can.
+
+## Decision
+
+### The rule
+
+A step is affected by a config change, and its cache key changes, only when a setting changed that can change its result. A step's result here means: whether it passes, its per-test results, the label blame-aware verify gives it, and anything a cache stores about it (the local step cache, the shared CI cache, the base-result store, the `fixed` pairing).
+
+Settings are compared by **value, as this version resolves them**, not by the bytes of the file. So reordering keys, adding white space, or writing a default out in full (`"failOnSkipped": false`) changes nothing.
+
+When unsure, a setting stays in the key.
+
+### Every setting, and its side
+
+"In" means: a change of its resolved value changes the key of the steps named, and marks them affected under `--affected`. "Out" means it does neither.
+
+| Setting                                                                                    | Side                                                             | Steps                                       | Why                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$schema`                                                                                  | out                                                              |                                             | Only editors read it.                                                                                                                                                                                                                                |
+| `packs`                                                                                    | in                                                               | all                                         | A step's command may run firescale itself on the repo (`"lint": "fscale check && eslint ."`; this repo's own tests run the built binary). The packs decide what that inner run reports. Unsure, so kept.                                             |
+| `rules.<id>` (the status form)                                                             | in                                                               | all                                         | As `packs`.                                                                                                                                                                                                                                          |
+| `rules.<id>.status`                                                                        | in                                                               | all                                         | As `packs`.                                                                                                                                                                                                                                          |
+| `rules.<id>.options`                                                                       | in                                                               | all                                         | As `packs`.                                                                                                                                                                                                                                          |
+| `protectedPaths`                                                                           | out                                                              |                                             | Read only by `fscale fix --agent`, to refuse an agent's edits. A value that is not valid stops every command with exit 2 before any step runs.                                                                                                       |
+| `agent.maxTurns`                                                                           | out                                                              |                                             | A budget of `fscale fix --agent`.                                                                                                                                                                                                                    |
+| `agent.maxCostUsd`                                                                         | out                                                              |                                             | A budget of `fscale fix --agent`.                                                                                                                                                                                                                    |
+| `agent.timeoutSeconds`                                                                     | out                                                              |                                             | A time limit of `fscale fix --agent`.                                                                                                                                                                                                                |
+| `verify.lint`, `verify.typecheck`, `verify.test` as a command, and `verify.<step>.command` | in                                                               | that step, at the root and in every project | The command is what runs. A root command also takes that step away from every project (ADR 0020), so those projects' own steps are gone and the root's step is new.                                                                                  |
+| `verify.<step>: false`                                                                     | in                                                               | that step, at the root and in every project | On or off. A step that is turned on is new, so it runs. A step that is turned off has nothing to run and no key.                                                                                                                                     |
+| `verify.<step>.timeout`                                                                    | out                                                              |                                             | A time limit. See "Why a time limit is out".                                                                                                                                                                                                         |
+| `verify.timeout`                                                                           | out                                                              |                                             | A time limit.                                                                                                                                                                                                                                        |
+| `verify.idleTimeout`                                                                       | out                                                              |                                             | A time limit.                                                                                                                                                                                                                                        |
+| `verify.ci`                                                                                | in                                                               | all                                         | It decides whether the commands get `CI=1`, which changes what many tools do (ADR 0024). Already in the key as `ci=`.                                                                                                                                |
+| `verify.failOnSkipped`                                                                     | in                                                               | all                                         | It turns a partial run into a failed one. Under `--affected` a skipped step of a project that does not run is not counted, so a run that did not widen would report OK where a full run fails.                                                       |
+| `verify.stopWhenServiceDown`                                                               | in                                                               | all                                         | It decides whether a step is stopped early. A step stopped early can be reported `failed` (every test errored and no first error names the environment), and a base run keeps a `failed` result in the base store. So it can change a stored result. |
+| `verify.stopAfterErrors`                                                                   | in                                                               | all                                         | As `stopWhenServiceDown`: the same early stop, with the same `failed` outcome.                                                                                                                                                                       |
+| `verify.labelFixed`                                                                        | out                                                              |                                             | It decides whether passing steps are also judged on the base. The label is worked out again in every run from base results whose own key does not hold it; no step's pass or failure depends on it.                                                  |
+| `verify.baseBudget`                                                                        | out                                                              |                                             | A budget. A base step it stops is `over-budget` or `timed out`, and neither is kept (`blame::keep` keeps only `passed` and `failed`).                                                                                                                |
+| `verify.baseInstall`                                                                       | out of a head step's key; **in** the base store's key, as before | base results                                | It changes what the base worktree holds, so it is part of `environment` in `StepCache::base_key` (ADR 0037). That is unchanged. It never runs on the head.                                                                                           |
+| `verify.tamper` (`policy`, `testPaths`, `allow`, with `path` and `kinds`)                  | out                                                              |                                             | The tamper guard reads its policy from the base commit's config (ADR 0042), runs in every run and is never cached. It judges the diff, not a step.                                                                                                   |
+| `verify.projects.<folder>: false`                                                          | in                                                               | the steps of that project                   | On or off.                                                                                                                                                                                                                                           |
+| `verify.projects.<folder>.<step>` as a command or `false`, and `.command`                  | in                                                               | that step of that project                   | Its command, or on or off.                                                                                                                                                                                                                           |
+| `verify.projects.<folder>.timeout`                                                         | out                                                              |                                             | A time limit.                                                                                                                                                                                                                                        |
+| `verify.projects.<folder>.<step>.timeout`                                                  | out                                                              |                                             | A time limit.                                                                                                                                                                                                                                        |
+| any setting this version does not know                                                     | in                                                               | all                                         | See "A config this version cannot read".                                                                                                                                                                                                             |
+
+### The mechanism
+
+Three values are made from the config after it is loaded (`crates/core/src/configkey.rs`):
+
+1. **The plan.** `plan_verify` already turns the step and project settings into one command, or `off`, per step. A step's command is in its key (ADR 0036), so a changed command is a changed key with no new code.
+2. **The other settings** (`VerifyConfig::other_settings`): a digest of the raw config value with the top-level keys `$schema`, `protectedPaths`, `agent` and `verify` taken out, and the keys of every object sorted. It is made by taking out what is known, so `packs`, `rules` and any top-level key added later are in it without anyone listing them.
+3. **The settings every step shares** (`configkey::shared_settings`): a digest of the other settings and the resolved values of `verify.ci`, `verify.failOnSkipped`, `verify.stopWhenServiceDown` and `verify.stopAfterErrors`. It is a new line of every step's key.
+
+`firescale.config.json` itself is no longer one of the files of any key (`stepcache::covers`). The key recipe changed, so the cache format is 2 and passes kept by 0.5.0 are not read.
+
+The function that makes the shared digest takes `VerifyConfig` apart field by field with no `..`, so a new field does not compile until someone puts it on a side. A unit test walks the table above, changes each setting, and checks the side it lands on.
+
+### `verify --affected` and the stop hook
+
+`--affected` compares the commit it measures from (the merge base with `--base`, or `HEAD` when there is none) with the working tree. When `firescale.config.json` is among the changed files, firescale reads the config **at that commit** (`git show <commit>:./firescale.config.json`) and compares it with the loaded one:
+
+- The shared settings differ: every project is affected, as before. The reason names the config.
+- Otherwise the two plans are made from the same facts, once with each config. A project (or the root) is affected when one of its steps has a command now that it did not have, with that exact text, at the base.
+- Otherwise the config change affects nothing. A note says so, so nobody wonders why nothing ran.
+
+The config file is then no longer "a file no project owns": it is left out of the graph's walk, and counts neither as a widening file nor as an inert one.
+
+The stop hook is `verify --affected` from the base commit, so the same holds there.
+
+| The config is...                                                       | What happens                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **added**, tracked or **untracked**                                    | The base has none, so the base's settings are the defaults (the same as an empty `{}`). The new config is compared with the defaults, setting by setting. A new config that only sets time limits affects nothing. |
+| **removed**                                                            | The working tree's settings are the defaults; the base's are read from the commit.                                                                                                                                 |
+| **changed**                                                            | Compared setting by setting.                                                                                                                                                                                       |
+| **renamed between `.json` and `.ts`**                                  | A `.ts` file is among the changed files, so every project is affected (below).                                                                                                                                     |
+| **not valid JSON, or not a valid config, in the working tree**         | Unchanged: every command that loads the config stops with exit 2 before any step.                                                                                                                                  |
+| **not valid JSON, or not a config this version can read, at the base** | Every project is affected. The reason says the base's config could not be read.                                                                                                                                    |
+| **of a newer shape**                                                   | See below.                                                                                                                                                                                                         |
+
+### A config this version cannot read
+
+`resolve_config` refuses a key it does not know, at every level, so a working tree whose config has such a key runs no step at all. The base commit's config may still have one: a teammate on a newer firescale wrote it, or this checkout rolled firescale back. Then:
+
+- an unknown key inside `verify`, or a value `verify` cannot parse, makes the base's config unreadable: every project is affected;
+- an unknown top-level key is part of the base's other settings, which then differ from the working tree's: every project is affected.
+
+Either way an unknown setting counts as "in, all".
+
+### A `firescale.config.ts`
+
+A TypeScript config is code. It can read the environment, the clock or other files, and firescale cannot run the base commit's copy without checking that commit out. So the whole-file rule stays for it:
+
+- its bytes stay in every step's key, as a root file no project owns;
+- a change to it (or to any other root file named `firescale.config.*` that is not the `.json`) affects every project.
+
+The shared settings digest is also made from the value the `.ts` config resolved to, so a value it computes differently from one run to the next (from an environment variable, say) changes the keys too. `verify --dry-run` still refuses a `.ts` config (ADR 0032).
+
+### The base run of blame-aware verify, and the base store
+
+The base run executes the **working tree's plan and settings** in a worktree of the base commit (ADR 0037); the base's config file is only a file there.
+
+- **Same inputs** (`StepCache::same_on_base`): a step's head result is its base result when no file its key holds differs. The config is no longer such a file. So when `firescale.config.json` is among the files changed since the base, the step counts as the same only if the config comparison above (against the blame base, the same merge base) says no setting of that step changed. If the comparison was not made, the step does not count as the same. This keeps what 0.5.0 did for every change that matters, and adds the shortcut only for the "out" settings.
+- **The base store's key** (`StepCache::base_key`) is the step's key (with the shared settings line, since the base step runs under the working tree's settings), the base commit, `environment` (links or `baseInstall`, env files) and the base's files. The base's config blob is no longer among those files; the commit id, which fixes it, still is.
+- **The `fixed` pairing** (`blame::fixed_key`) is made from the base key and the head key, so it follows both.
+
+### The shared CI cache
+
+A record of the shared cache vouches for "this key passed on the default branch" (ADR 0041). It uses the same key, so the question is the same: can two runs with one key give different results? The key now misses the "out" settings only. A pull request that changes a time limit reads the default branch's records, which is the point. The workflow file stays in every key in CI (`CiRun::key_salt`), unchanged.
+
+### `fscale check`
+
+- **The rule-result cache** (`crates/core/src/cache.rs`) does not share this mechanism: it keys a rule on the files its `inputs` name, its options and its status. It is not touched.
+- **`check --affected`** (`affected::narrow_report`): ADR 0056, bug 1, made every rule read a change of the firescale config, because a config change can turn any rule on. That is about findings, not steps, and it stays: it is not loosened here. The cost is small (a kept finding, never a 100-minute test run), and loosening it needs the same per-setting comparison for rules, which nobody asked for.
+
+### Why a time limit is out
+
+A limit (`verify.timeout`, `verify.idleTimeout`, a step's or a project's `timeout`, `verify.baseBudget`) can only end a step early. What a step that was ended early becomes, in `verify::run_step`:
+
+- `timed out`, or `setup needed` when a short second run names the environment. Never `passed`, never `failed`.
+
+What each store keeps:
+
+- the local step cache and the shared cache: only `passed` (`cached_or_run`, `StepCache::remember`);
+- the base store: only `passed` and `failed` (`blame::keep`); a base step stopped by its limit is `timed out`, or `over-budget` when the budget ended it;
+- the `fixed` pairing: the same `keep`.
+
+So no limit can put a result into a store that a different limit would not also have put there, had the step finished. A longer limit lets a step finish that timed out before; that step was never stored, so it runs. A shorter limit may time out a step that passed before; its kept pass is still true of the code, and is served. That is the one seen change: **after a limit is lowered, a step that passed under the old limit is still served from the cache** rather than run again to see whether it now times out.
+
+The limits are not passed to the commands: `verify::environment` sets `NO_COLOR`, `FORCE_COLOR`, `PYTHONUNBUFFERED`, `CI` and, on the base, `FSCALE_BASE_RUN`, and nothing from the limits.
+
+### The note about a changed config
+
+ADR 0043's note (`firescale.config.json changed since the last run, and it is part of every step's cache key ...`) is now said only when the shared settings changed since the last run, since only then does every key change. `.firescale/step-cache-config.digest` holds the shared settings digest (and the bytes of a `.ts` config), not the file's digest.
+
+### The list of inert files stopped at the first widening file
+
+Found through the owner's second report (an untracked `image.png` at the root was not listed as a file that cannot affect a build). `graph::affected` returned as soon as one file widened the run to every project, so files sorted after it were never looked at: with an untracked `firescale.config.json`, `image.png` comes later in the list and was never named. The walk now goes on to the end and lists every inert file, whatever else changed. Which projects run is unchanged.
+
+## What was tried against it
+
+Each "out" setting, with the change tried and where the code answers it. Filled in after the code; see "After the code" below.
+
+## Consequences
+
+- A config that only sets time limits or budgets, tracked or not, runs no project under `--affected` and in the stop hook, and changes no cache key.
+- Writing a default out in full, or reformatting the config, changes nothing either.
+- Turning a rule on, or adding a pack, still runs every step once. That is the price of "unsure, so kept".
+- Passes kept by 0.5.0 are not read by 0.5.1 (format 2): the first run after the upgrade runs every step.
+- A step that passed is served from the cache after a time limit is lowered.
+- One test changed on purpose: `step-cache.test.ts` "says once when a change to the config means no kept pass applies" wrote `"failOnSkipped": false`, which is the default, and expected every step to run again. It now turns `verify.ci` off, which is a real change.
+
+**Known limits**
+
+- A command that reads `firescale.config.json` itself for an "out" setting (a test that asserts the file's text, or a step that runs `fscale verify --dry-run` on its own repo and compares the output) is not run again when only that setting changes. No rule of firescale can see that a test opens a file by its path; ADR 0034 accepts the same for a root `README.md`.
+- A custom pack's files and the modules a `.ts` config imports are files of the repo, keyed by ADR 0036's rules like any other. Nothing changes for them.
