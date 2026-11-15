@@ -77,11 +77,12 @@ exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
   },
   "failOnSkipped": false,
   "failedStep": "test",
+  "notRun": [],
   "ok": false,
   "rerun": "node test.js",
   "result": "failed",
   "runner": "config",
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "scope": "all",
   "skipped": [],
   "steps": [
@@ -202,13 +203,14 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
     "savedMs": 0,
   },
   "failOnSkipped": false,
+  "notRun": [],
   "notes": [
     "no virtual environment was found for backend/audit_service, backend/auth_service, backend/ledger_service, backend/market_service, backend/realtime_service, so their Python commands use python from the PATH. To use one, create it in the project's folder (python -m venv .venv) or activate it.",
   ],
   "ok": true,
   "result": "partial",
   "runner": "projects",
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "scope": "all",
   "skipped": [
     {

@@ -247,6 +247,13 @@ describe('stopping verify stops every process it started', () => {
       expect(stdout).not.toContain('FAILED');
       expect(stdout).toContain('Stopped: verify was interrupted');
       expect(await readFile(`${output}.err`, 'utf8')).toContain('[verify] test: STOPPED after');
+      // How long the stopped step ran is kept for the next run (ADR 0057).
+      const times = JSON.parse(
+        await readFile(path.join(repo.root, '.firescale', 'step-times.json'), 'utf8'),
+      ) as { steps: { step: string; finished: boolean; durationMs: number }[] };
+      const kept = times.steps.find((record) => record.step === 'test');
+      expect(kept?.finished).toBe(false);
+      expect(kept?.durationMs).toBeGreaterThan(0);
       await expectTreeGone(pids, 3);
     },
   );
@@ -351,7 +358,7 @@ describe('time limits', () => {
 
     const json = await runCli(['verify', '--json'], repo.root);
     const report = JSON.parse(json.stdout) as Report;
-    expect(report.schemaVersion).toBe(6);
+    expect(report.schemaVersion).toBe(7);
     expect(report.result).toBe('failed');
     const step = report.steps.find((s) => s.project === 'backend/slow');
     expect(step?.status).toBe('timed-out');
@@ -434,15 +441,47 @@ describe('time limits follow progress (ADR 0043)', () => {
     expect(test?.status).toBe('timed-out');
     expect(test?.timeoutKey).toBe('verify.idleTimeout');
     expect(test?.timeoutMs).toBe(2000);
-    expect(test?.detail).toMatch(
-      /\(no new output for 2s, stopped after \S+; 25% done, about .+? left at this pace\)$/,
-    );
+    // It printed 25% in its first moments and nothing after. Until ADR 0057
+    // this said "about 6s left at this pace": three times the two seconds
+    // it had sat silent, a pace it never had. The time left is now worked
+    // out from when the percent was printed, and none is given once the
+    // step has sat past it.
+    expect(test?.detail).toMatch(/\(no new output for 2s, stopped after \S+; 25% done\)$/);
     const human = await runCli(['verify'], repo.root);
     expect(human.stdout).toMatch(
-      /Timed out: test printed nothing new for 2s, so it was stopped with every process it started\. It was 25% done, about .+? left at this pace\./,
+      /Timed out: test printed nothing new for 2s, so it was stopped with every process it started\. It was 25% done\.\r?\n/,
     );
     expect(human.stdout).toContain(
       'If it is only slow, raise verify.idleTimeout in your firescale config.',
+    );
+  });
+
+  it('gives only the percent, never a time left, for a step the idle limit stopped, whenever the percent was printed', async () => {
+    const repo = await repoWith(
+      {
+        idleTimeout: '2s',
+        timeout: '60s',
+        lint: false,
+        typecheck: false,
+        test: nodeScript('late.js'),
+      },
+      {
+        // The percent comes 900 ms in, then nothing. Worked out from then,
+        // the whole run would take 3.6 s, and the step is stopped 2.9 s in:
+        // "about 0.7s left" for a step that went silent means nothing.
+        'late.js':
+          "console.log('==== test session starts ====');\nsetTimeout(() => console.log('tests/test_a.py .. [ 25%]'), 900);\nsetTimeout(() => {}, 60000);\n",
+      },
+    );
+    const result = await runCli(['verify', '--json'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as Report & { steps: (Step & { detail: string })[] };
+    const test = report.steps.find((step) => step.name === 'test');
+    expect(test?.timeoutKey).toBe('verify.idleTimeout');
+    expect(test?.detail).toMatch(/\(no new output for 2s, stopped after \S+; 25% done\)$/);
+    const human = await runCli(['verify'], repo.root);
+    expect(human.stdout).toMatch(
+      /Timed out: test printed nothing new for 2s, so it was stopped with every process it started\. It was 25% done\.\r?\n/,
     );
   });
 

@@ -8,7 +8,7 @@ use std::env;
 use std::io::{IsTerminal, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use firescale_core::affected::{changed_files, narrow_report, Changed, RanRule};
 use firescale_core::blame::{
@@ -42,6 +42,7 @@ use firescale_core::scratch::Scratch;
 use firescale_core::select::{select_rules, Selection};
 use firescale_core::sharedcache::{CiRun, SharedCache};
 use firescale_core::stepcache::{CacheSettings, StepCache};
+use firescale_core::steptimes::StepTimes;
 use firescale_core::tamper;
 use firescale_core::verify::add_tamper;
 use firescale_core::verify::{
@@ -112,6 +113,9 @@ Options:
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: fscale)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
+  --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
+                   took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is
+                   reported as NOT RUN, and the run is PARTIAL, never OK
   --shared-cache <dir>
                    verify, in GitHub Actions only: use step results that CI on the
                    default branch kept in <dir>, and keep them there on a push to it
@@ -149,6 +153,8 @@ struct Args {
     /// `--progress` (true) or `--no-progress` (false).
     progress: Option<bool>,
     jobs: Option<String>,
+    /// `--budget <time>`: verify leaves out steps known to take longer.
+    budget: Option<String>,
     shared_cache: Option<String>,
     /// `--pr-base`: the base from GitHub's pull request event (ADR 0045).
     pr_base: bool,
@@ -218,7 +224,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 }
             }
             "--rules" | "--cwd" | "--base" | "--agent" | "--bin" | "--packs" | "--jobs"
-            | "--shared-cache" | "--head" | "--approvals" | "--rule" => {
+            | "--shared-cache" | "--head" | "--approvals" | "--rule" | "--budget" => {
                 let value = match inline.or_else(|| argv.next()) {
                     Some(value) if arg.contains('=') || !value.starts_with('-') => value,
                     Some(value) => {
@@ -235,6 +241,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                     "--bin" => args.bin = Some(value),
                     "--packs" => args.packs = Some(value),
                     "--jobs" => args.jobs = Some(value),
+                    "--budget" => args.budget = Some(value),
                     "--shared-cache" => args.shared_cache = Some(value),
                     "--head" => args.head = Some(value),
                     "--approvals" => args.approvals = Some(value),
@@ -948,6 +955,65 @@ fn jobs(args: &Args) -> Result<usize> {
     }
 }
 
+/// The value of `--budget`: a time as the config's time limits are written
+/// (`30m`, `90s`, `1h 30m`), or a number of seconds; longer than zero.
+fn budget(args: &Args) -> Result<Option<Duration>> {
+    let Some(value) = &args.budget else {
+        return Ok(None);
+    };
+    let text = value.trim();
+    let seconds = if !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()) {
+        text.parse::<u64>().ok()
+    } else {
+        firescale_core::config::time_text_seconds(text)
+    };
+    match seconds {
+        Some(seconds) if seconds > 0 => Ok(Some(Duration::from_secs(seconds))),
+        _ => Err(Error::usage(format!(
+            "--budget needs a time longer than zero, such as \"30m\", \"90s\" or \"1h 30m\", or a number of seconds; got \"{value}\"."
+        ))),
+    }
+}
+
+/// Why this is a CI run, if it is one: `GITHUB_ACTIONS` is `true` (what the
+/// shared cache of CI goes by, ADR 0041), or `CI` is set and not empty (what
+/// verify's own commands go by, ADR 0024).
+fn ci_run(read: &dyn Fn(&str) -> Option<String>) -> Option<&'static str> {
+    if read("GITHUB_ACTIONS").as_deref() == Some("true") {
+        Some("GITHUB_ACTIONS is true in the environment")
+    } else if read("CI").is_some_and(|value| !value.is_empty()) {
+        Some("CI is set in the environment")
+    } else {
+        None
+    }
+}
+
+/// `--budget` leaves steps out, so it is refused where a run stands for the
+/// whole repo: in CI, where a partial run would pass (exit code 0) for a
+/// whole one (ADR 0057). The stop hook refuses it in `hooks`.
+fn refuse_budget_in_ci(args: &Args, read: &dyn Fn(&str) -> Option<String>) -> Result<()> {
+    match ci_run(read).filter(|_| args.budget.is_some()) {
+        Some(why) => {
+            // `CI=false` and `CI=0` are how people say "not CI" on their
+            // own machine, and they count as CI here: say how to get out.
+            let own_machine = read("CI")
+                .filter(|value| {
+                    read("GITHUB_ACTIONS").as_deref() != Some("true")
+                        && (value.eq_ignore_ascii_case("false") || value == "0")
+                })
+                .map_or_else(String::new, |value| {
+                    format!(
+                        " CI is \"{value}\" here, and any value that is not empty counts as CI: on your own machine, unset CI."
+                    )
+                });
+            Err(Error::usage(format!(
+                "--budget cannot be used in CI ({why}): it leaves slow steps out, so the run would pass without them. Run fscale verify without --budget there; to bound a slow step in CI, set its time limit in the firescale config (verify.<step>.timeout).{own_machine}"
+            )))
+        }
+        None => Ok(()),
+    }
+}
+
 /// The commands verify will run. With `--affected`, the units that no change
 /// reaches are marked, using the project graph (ADR 0032). `changed` is
 /// computed here when the caller has not done so already.
@@ -1062,6 +1128,7 @@ fn verify_report(
     }
     let args = &hook_args;
     let jobs = jobs(args)?;
+    let budget = budget(args)?;
     // Ctrl+C and termination signals stop the commands, not fscale at once.
     install_stop_handler();
     let progress = progress.then(Progress::stderr);
@@ -1185,6 +1252,7 @@ fn verify_report(
     .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
     // A config change alters every key: say so once (ADR 0043).
     let config_note = cache.config_note().filter(|_| !args.no_cache);
+    let times = StepTimes::new(root);
     let options = RunOptions {
         stop: &STOP,
         progress: progress.as_ref(),
@@ -1196,6 +1264,8 @@ fn verify_report(
         every_step: matches!(base, BaseChoice::Compare(_)),
         deadline: None,
         base_run: false,
+        times: Some(&times),
+        budget,
     };
     let mut verify = run_verify_with(root, version(), check, &plan, &options)?;
     match &base {
@@ -1473,6 +1543,9 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
             "verify judges the working tree; --head is for `fscale tamper`.",
         ));
     }
+    // Before anything runs, the dry run included.
+    refuse_budget_in_ci(args, &|name| env::var(name).ok())?;
+    budget(args)?;
     let resolved = with_pr_base(root, args)?;
     let args = &resolved;
     if args.dry_run {
@@ -1527,6 +1600,13 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
 
 /// `fscale hooks install` and `fscale hooks run`.
 fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
+    // The stop hook decides whether an agent may stop: a run that leaves
+    // slow steps out must not decide that (ADR 0057).
+    if args.budget.is_some() {
+        return Err(Error::usage(
+            "--budget cannot be used in the stop hook: it leaves slow steps out, so an agent could stop without them having run. Remove --budget from the hook command (fscale hooks run --agent <name>); a person can still run fscale verify --budget <time> by hand.",
+        ));
+    }
     match rest {
         [action] if action == "install" => {
             let agents: Vec<Agent> = match (&args.agent, args.all) {
@@ -1790,7 +1870,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize, parse_args, Args};
+    use super::{ci_run, normalize, parse_args, refuse_budget_in_ci, Args};
     use std::path::Path;
 
     fn parse(argv: &[&str]) -> Result<Args, String> {
@@ -1851,6 +1931,35 @@ mod tests {
             parse(&["check", "--rules=-x"]).unwrap().rules.as_deref(),
             Some("-x")
         );
+    }
+
+    #[test]
+    fn a_ci_run_is_known_by_github_actions_or_a_ci_variable_that_is_not_empty() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        assert_eq!(ci_run(&env(&[])), None);
+        assert_eq!(ci_run(&env(&[("CI", "")])), None);
+        assert_eq!(ci_run(&env(&[("GITHUB_ACTIONS", "false")])), None);
+        assert_eq!(
+            ci_run(&env(&[("CI", "true")])),
+            Some("CI is set in the environment")
+        );
+        assert_eq!(
+            ci_run(&env(&[("CI", "1"), ("GITHUB_ACTIONS", "true")])),
+            Some("GITHUB_ACTIONS is true in the environment")
+        );
+        // Only with the flag is a CI run refused.
+        let with = parse(&["verify", "--budget", "30m"]).unwrap();
+        let without = parse(&["verify"]).unwrap();
+        assert!(refuse_budget_in_ci(&with, &env(&[("CI", "true")])).is_err());
+        assert!(refuse_budget_in_ci(&without, &env(&[("CI", "true")])).is_ok());
+        assert!(refuse_budget_in_ci(&with, &env(&[])).is_ok());
     }
 
     #[test]

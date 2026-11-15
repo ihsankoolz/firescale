@@ -339,6 +339,37 @@ pub fn resolve_config<'a>(
     })
 }
 
+/// The seconds of a time written as text, such as `90s`, `10m`, `1h` or
+/// `1h 30m`. `None` for anything else. The form of the config's time
+/// limits, also read by `verify --budget` (ADR 0057).
+#[must_use]
+pub fn time_text_seconds(text: &str) -> Option<u64> {
+    let mut total: u64 = 0;
+    let mut digits = String::new();
+    let mut any = false;
+    for c in text.trim().chars() {
+        match c {
+            '0'..='9' => digits.push(c),
+            ' ' if digits.is_empty() => {}
+            'h' | 'm' | 's' if !digits.is_empty() => {
+                let amount: u64 = digits.parse().ok()?;
+                let unit = match c {
+                    'h' => 3600,
+                    'm' => 60,
+                    _ => 1,
+                };
+                total = amount
+                    .checked_mul(unit)
+                    .and_then(|part| total.checked_add(part))?;
+                digits.clear();
+                any = true;
+            }
+            _ => return None,
+        }
+    }
+    (digits.is_empty() && any).then_some(total)
+}
+
 /// Reads a time limit: a number of seconds, a text such as `"90s"`,
 /// `"10m"`, `"1h"` or `"1h 30m"`, or `false` for no limit.
 fn parse_limit(name: &str, key: &str, value: &Value) -> Result<Limit> {
@@ -350,36 +381,7 @@ fn parse_limit(name: &str, key: &str, value: &Value) -> Result<Limit> {
     let seconds = match value {
         Value::Bool(false) => return Ok(Limit::Off),
         Value::Number(number) => number.as_u64().ok_or_else(bad)?,
-        Value::String(text) => {
-            let mut total: u64 = 0;
-            let mut digits = String::new();
-            let mut any = false;
-            for c in text.trim().chars() {
-                match c {
-                    '0'..='9' => digits.push(c),
-                    ' ' if digits.is_empty() => {}
-                    'h' | 'm' | 's' if !digits.is_empty() => {
-                        let amount: u64 = digits.parse().map_err(|_| bad())?;
-                        let unit = match c {
-                            'h' => 3600,
-                            'm' => 60,
-                            _ => 1,
-                        };
-                        total = amount
-                            .checked_mul(unit)
-                            .and_then(|part| total.checked_add(part))
-                            .ok_or_else(bad)?;
-                        digits.clear();
-                        any = true;
-                    }
-                    _ => return Err(bad()),
-                }
-            }
-            if !digits.is_empty() || !any {
-                return Err(bad());
-            }
-            total
-        }
+        Value::String(text) => time_text_seconds(text).ok_or_else(bad)?,
         _ => return Err(bad()),
     };
     if seconds == 0 {
