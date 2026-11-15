@@ -2429,9 +2429,16 @@ fn run_step(
                 )
             };
             report.status = StepStatus::TimedOut;
-            report.estimate = finished
-                .pace
-                .map(|pace| progress_estimate(finished.duration, pace));
+            // A step the idle limit stopped went silent: how far it got is
+            // worth saying, a time left "at this pace" is not, since it had
+            // no pace any more (ADR 0057).
+            report.estimate = finished.pace.map(|pace| {
+                if finished.silent {
+                    format!("{}% done", pace.percent)
+                } else {
+                    progress_estimate(finished.duration, pace)
+                }
+            });
             let estimate = report
                 .estimate
                 .as_ref()
