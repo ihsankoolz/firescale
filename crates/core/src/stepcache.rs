@@ -2198,6 +2198,102 @@ mod tests {
         assert!(!uses_history("pnpm test"));
     }
 
+    /// A cache over `root` whose every key holds `settings` (ADR 0058).
+    fn cache_with<'a>(root: &Path, machine: &'a NoTools, settings: &'a str) -> StepCache<'a> {
+        StepCache::new(
+            root,
+            None,
+            &CacheSettings {
+                version: "0.0.0",
+                read: true,
+                sets_ci: true,
+                settings,
+                machine,
+                read_env: &|_| None,
+            },
+        )
+    }
+
+    #[test]
+    fn the_json_config_is_in_no_key_as_a_file_but_its_shared_settings_are() {
+        let machine = NoTools;
+        let fixture = Fixture::new(
+            &[("a.py", "x = 1\n"), ("firescale.config.json", "{}\n")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let key = |settings: &str| {
+            cache_with(root, &machine, settings)
+                .key(None, None, "test", "node -e 0", root)
+                .unwrap()
+                .key
+        };
+        let first = key("one");
+        // Other bytes, the same settings: the same key, also for the repo
+        // root's own steps, whose key holds every file of the repo.
+        fs::write(
+            root.join("firescale.config.json"),
+            "{ \"verify\": { \"timeout\": \"2h\" } }\n",
+        )
+        .unwrap();
+        assert_eq!(key("one"), first);
+        fs::remove_file(root.join("firescale.config.json")).unwrap();
+        assert_eq!(key("one"), first);
+        // Other settings: another key.
+        assert_ne!(key("two"), first);
+        // Only the root's own config: one in a folder below is a file.
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/firescale.config.json"), "{}\n").unwrap();
+        let nested = key("one");
+        assert_ne!(nested, first);
+        // A TypeScript config is code: its bytes stay in every key.
+        fs::write(root.join("firescale.config.ts"), "export default {};\n").unwrap();
+        let with_ts = key("one");
+        assert_ne!(with_ts, nested);
+        fs::write(
+            root.join("firescale.config.ts"),
+            "export default { verify: { timeout: '2h' } };\n",
+        )
+        .unwrap();
+        assert_ne!(key("one"), with_ts);
+    }
+
+    #[test]
+    fn a_changed_config_is_the_same_on_the_base_only_for_steps_it_does_not_reach() {
+        use crate::configkey::ConfigEffect;
+        let machine = NoTools;
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        let config: BTreeSet<String> = BTreeSet::from(["firescale.config.json".to_owned()]);
+        let same = |cache: &StepCache<'_>, step: &str, changed: &BTreeSet<String>| {
+            cache.same_on_base(None, None, step, "node -e 0", root, changed)
+        };
+        // Not worked out: a changed config is a difference, as before.
+        let unknown = cache_with(root, &machine, "");
+        assert!(same(&unknown, "test", &BTreeSet::new()));
+        assert!(!same(&unknown, "test", &config));
+        // Worked out, and it reaches nothing: the same.
+        let nothing = cache_with(root, &machine, "").with_base_config(ConfigEffect::default());
+        assert!(same(&nothing, "test", &config));
+        // Another changed file the key holds is still a difference.
+        let mut more = config.clone();
+        more.insert("a.py".to_owned());
+        assert!(!same(&nothing, "test", &more));
+        // It reaches one step: only the others are the same.
+        let mut effect = ConfigEffect::default();
+        effect.units.insert((None, None), vec!["test".to_owned()]);
+        let one = cache_with(root, &machine, "").with_base_config(effect);
+        assert!(!same(&one, "test", &config));
+        assert!(same(&one, "lint", &config));
+        // It reaches every step.
+        let all = cache_with(root, &machine, "").with_base_config(ConfigEffect {
+            everything: Some("verify.ci".to_owned()),
+            ..ConfigEffect::default()
+        });
+        assert!(!same(&all, "lint", &config));
+    }
+
     #[test]
     fn a_stale_entry_is_not_served() {
         let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();

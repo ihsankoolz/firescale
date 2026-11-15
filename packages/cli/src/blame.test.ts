@@ -212,6 +212,41 @@ describe('blame-aware verify', () => {
     expect(step(third, 'test').base?.source).toBe('ran');
   });
 
+  // ADR 0058: the config is compared with the base's by value. The base
+  // run executes the head's settings, so a step whose settings did not
+  // change has the same inputs on both.
+  it('counts a step as the same on the base after a config change that cannot reach it, and runs the base after one that can', async () => {
+    const { root, runs, write } = await blameRepo('ok', 'fail');
+    const baseRuns = async () => (await runs()).filter((run) => run.startsWith('base '));
+    const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
+    // Only time limits and a budget differ from the base commit.
+    config.verify.timeout = '2h';
+    config.verify.baseBudget = '4m';
+    config.verify.test = { command: 'node test.js', timeout: '3h' };
+    await write('firescale.config.json', JSON.stringify(config));
+    const limits = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(limits, 'test').label).toBe('pre-existing');
+    expect(step(limits, 'test').base?.source).toBe('same-inputs');
+    expect(await baseRuns()).toEqual([]);
+
+    // A setting every step shares differs: the base runs, as it did
+    // before for any config change.
+    config.verify.stopAfterErrors = 25;
+    await write('firescale.config.json', JSON.stringify(config));
+    const shared = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(shared, 'test').base?.source).toBe('ran');
+    expect(await baseRuns()).toEqual(['base test']);
+
+    // The step's own command differs: its base runs; lint, which the
+    // change does not reach, would still be the same.
+    delete config.verify.stopAfterErrors;
+    config.verify.test = 'node  test.js';
+    await write('firescale.config.json', JSON.stringify(config));
+    const command = await report((await runCli(['verify', '--json'], root)).stdout);
+    expect(step(command, 'test').base?.source).toBe('ran');
+    expect(await baseRuns()).toEqual(['base test', 'base test']);
+  });
+
   it("does not judge the base with the head's dependencies after a lockfile change", async () => {
     const { root, runs, write } = await blameRepo('ok', 'fail');
     await write('package-lock.json', '{"lockfileVersion":3,"packages":{}}\n');

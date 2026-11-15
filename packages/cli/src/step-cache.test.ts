@@ -242,7 +242,10 @@ describe('the step cache', () => {
     expect(await stepCalls(log)).toEqual(['npm test in ' + path.basename(repo.root)]);
   });
 
-  it('says once when a change to the config means no kept pass applies (ADR 0043)', async () => {
+  // ADR 0058 changed what this test writes: it wrote `failOnSkipped: false`,
+  // which is the default, and expected every step to run again. A default
+  // written out in full is no change now; turning `ci` off is one.
+  it('says once when a change to the config means no kept pass applies (ADR 0043, ADR 0058)', async () => {
     const { repo, ran } = await loggingRepo();
     await runCli(['verify'], repo.root, {});
     const same = await runCli(['verify'], repo.root, {});
@@ -250,11 +253,18 @@ describe('the step cache', () => {
     const config = JSON.parse(
       await readFile(path.join(repo.root, 'firescale.config.json'), 'utf8'),
     );
+    const note =
+      "A setting of the firescale config that every step's result can depend on changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.";
+    // The default, written out, and a time limit: no key changes.
     config.verify.failOnSkipped = false;
+    config.verify.timeout = '2h';
+    await repo.write('firescale.config.json', JSON.stringify(config));
+    const unchanged = await runCli(['verify'], repo.root, {});
+    expect(unchanged.stdout).not.toContain(note);
+    expect(await ran()).toHaveLength(3);
+    config.verify.ci = false;
     await repo.write('firescale.config.json', JSON.stringify(config));
     const changed = await runCli(['verify'], repo.root, {});
-    const note =
-      "firescale.config.json changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.";
     expect(changed.stdout.split(note)).toHaveLength(2);
     expect(await ran()).toHaveLength(6);
     const after = await runCli(['verify'], repo.root, {});

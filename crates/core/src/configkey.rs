@@ -242,7 +242,7 @@ pub struct ConfigEffect {
     /// step shares changed, or the base's config cannot be read.
     pub everything: Option<String>,
     /// Otherwise: the units with a step whose command is new or changed,
-    /// and those steps.
+    /// or that is no longer off, and those steps.
     pub units: BTreeMap<UnitId, Vec<String>>,
 }
 
@@ -289,15 +289,30 @@ impl ConfigEffect {
 /// change a step's result.
 pub const NOTHING_TO_RUN_NOTE: &str = "firescale.config.json changed, but only in settings that cannot change a step's result (time limits, budgets and the like), so the change runs no project.";
 
-fn commands(steps: &[(String, Planned)]) -> impl Iterator<Item = (&str, &str)> {
-    steps.iter().filter_map(|(name, planned)| match planned {
-        Planned::Command(command) => Some((name.as_str(), command.as_str())),
-        _ => None,
-    })
-}
-
-fn has_command(steps: Option<&[(String, Planned)]>, step: &str, command: &str) -> bool {
-    steps.is_some_and(|steps| commands(steps).any(|found| found == (step, command)))
+/// The steps of `now` that the config change reaches: one with a command
+/// that it did not have, with that exact text, in `before`, and one that
+/// is now skipped for want of a command and was not before (it was off).
+/// A skipped step runs nothing, but the run must count it: it makes the
+/// run partial, or failed with `verify.failOnSkipped`.
+fn reached(now: &[(String, Planned)], before: Option<&[(String, Planned)]>) -> Vec<String> {
+    now.iter()
+        .filter(|(step, planned)| {
+            let old = before.and_then(|steps| {
+                steps
+                    .iter()
+                    .find(|(name, _)| name == step)
+                    .map(|(_, planned)| planned)
+            });
+            match planned {
+                Planned::Command(command) => {
+                    !matches!(old, Some(Planned::Command(other)) if other == command)
+                }
+                Planned::Skipped(_) => !matches!(old, Some(Planned::Skipped(_))),
+                Planned::NotNeeded(_) => false,
+            }
+        })
+        .map(|(step, _)| step.clone())
+        .collect()
 }
 
 /// What the difference between the config of a base commit and the loaded
@@ -339,22 +354,17 @@ pub fn effect_between(
     }
     let old = base_plan(base);
     let mut units: BTreeMap<UnitId, Vec<String>> = BTreeMap::new();
-    for (step, command) in commands(&plan.steps) {
-        if !has_command(Some(&old.steps), step, command) {
-            units.entry((None, None)).or_default().push(step.to_owned());
-        }
+    let root_steps = reached(&plan.steps, Some(&old.steps));
+    if !root_steps.is_empty() {
+        units.insert((None, None), root_steps);
     }
     for project in &plan.projects {
         let same_unit =
             |other: &&ProjectPlan| other.root == project.root && other.kind == project.kind;
         let before = old.projects.iter().find(same_unit);
-        for (step, command) in commands(&project.steps) {
-            if !has_command(before.map(|plan| plan.steps.as_slice()), step, command) {
-                units
-                    .entry((Some(project.root.clone()), project.kind.clone()))
-                    .or_default()
-                    .push(step.to_owned());
-            }
+        let steps = reached(&project.steps, before.map(|plan| plan.steps.as_slice()));
+        if !steps.is_empty() {
+            units.insert((Some(project.root.clone()), project.kind.clone()), steps);
         }
     }
     ConfigEffect {
@@ -410,6 +420,8 @@ pub fn effect_for_affected(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde_json::json;
 
     use super::*;
@@ -589,7 +601,7 @@ mod tests {
                 "verify.projects.<folder>: false",
                 project(json!(false)),
                 json!({}),
-                Side::InSteps(&[(LEDGER, "test")]),
+                Side::InSteps(&[(LEDGER, "lint"), (LEDGER, "typecheck"), (LEDGER, "test")]),
             ),
             (
                 "verify.projects.<folder>.<step>",
@@ -608,6 +620,14 @@ mod tests {
                 project(json!({ "test": false })),
                 json!({}),
                 Side::InSteps(&[(LEDGER, "test")]),
+            ),
+            // No linter was found for this project: with the step no longer
+            // off, it is skipped, which a run must report.
+            (
+                "verify.projects.<folder>.<step>: false, with no command found",
+                project(json!({ "lint": false })),
+                json!({}),
+                Side::InSteps(&[(LEDGER, "lint")]),
             ),
             (
                 "verify.projects.<folder>.timeout",
@@ -733,6 +753,7 @@ mod tests {
             "verify.projects.<folder>.<step>",
             "verify.projects.<folder>.<step>.command",
             "verify.projects.<folder>.<step>: false",
+            "verify.projects.<folder>.<step>: false, with no command found",
             // timeout, idle_timeout, label_fixed, step_timeouts
             "verify.timeout",
             "verify.idleTimeout",
@@ -799,6 +820,87 @@ mod tests {
                 format!("verify.{key}")
             };
             assert!(rows.contains(&row.as_str()), "no row for verify.{key}");
+        }
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let mut full = vec![
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.autocrlf=false",
+        ];
+        full.extend_from_slice(args);
+        let out = run_git(root, &full).unwrap();
+        assert_eq!(out.code, 0, "git {args:?}: {}", out.stderr);
+    }
+
+    fn commit(root: &Path, message: &str) {
+        git(root, &["add", "--all"]);
+        git(root, &["commit", "--quiet", "--no-verify", "-m", message]);
+    }
+
+    #[test]
+    fn the_config_of_a_commit_is_read_with_git_from_the_firescale_root() {
+        use crate::testing::{Fixture, Track};
+        // The firescale root is a folder inside a larger git repo, and the
+        // repo's own root has another config that must not be read.
+        let fixture = Fixture::new(
+            &[
+                (
+                    "firescale.config.json",
+                    "{ \"verify\": { \"ci\": false } }\n",
+                ),
+                ("service/a.py", "x = 1\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let top = fixture.root();
+        let root = top.join("service");
+        git(top, &["init", "--quiet", "--initial-branch=main"]);
+        commit(top, "no config in service");
+        let defaults = BaseConfig::Settings(Box::new(settings(&json!({}))));
+        assert_eq!(base_config(&root, "HEAD"), defaults);
+
+        // With a byte order mark and CRLF line ends, as an editor on
+        // Windows may write it.
+        fs::write(
+            root.join(JSON_CONFIG),
+            "\u{feff}{\r\n  \"verify\": { \"timeout\": \"2h\", \"failOnSkipped\": true }\r\n}\r\n",
+        )
+        .unwrap();
+        commit(top, "a config");
+        let BaseConfig::Settings(read) = base_config(&root, "HEAD") else {
+            panic!("the committed config was not read");
+        };
+        assert!(read.fail_on_skipped);
+        assert!(!read.no_ci_variable);
+        // The commit before still has none, whatever the working tree holds.
+        assert_eq!(base_config(&root, "HEAD~1"), defaults);
+        assert_eq!(
+            comparison_commit(&root, None),
+            comparison_commit(&root, Some("HEAD"))
+        );
+        assert!(comparison_commit(&root, Some("no-such-ref")).is_none());
+
+        // A TypeScript config is never run for this, and a commit git does
+        // not know gives no settings.
+        fs::remove_file(root.join(JSON_CONFIG)).unwrap();
+        fs::write(root.join(TS_CONFIG), "export default {};\n").unwrap();
+        commit(top, "a ts config");
+        for (commit, why) in [
+            ("HEAD", "it is a firescale.config.ts"),
+            ("no-such-ref", "git could not list the files of that commit"),
+        ] {
+            match base_config(&root, commit) {
+                BaseConfig::Unreadable(reason) => assert!(reason.contains(why), "{reason}"),
+                BaseConfig::Settings(_) => panic!("{commit} gave settings"),
+            }
         }
     }
 
