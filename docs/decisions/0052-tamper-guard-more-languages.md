@@ -95,7 +95,7 @@ Left as they are, and why:
 - **Swift's statement form of `XCTExpectFailure("…")`** (not the closure form) is not read; only a non-strict one lets a test pass.
 - **A test renamed and skipped while a skipped test is deleted** offsets in the net count (shared code since ADR 0046, not this milestone's).
 - **When a renamed and skipped test is reported, the finding may name a new test** instead, since neither id existed on the base. The finding still blocks; a skip needs no approval, so no approval can be given for the wrong name.
-- **Kotlin's AssertJ `assertThat(x)` with nothing chained** is still counted (Java's is not).
+- **Kotlin's AssertJ `assertThat(x)` with nothing chained** is still counted (Java's is not). (No longer true: ADR 0056, bug 5.)
 
 ## Not checked, and limits
 

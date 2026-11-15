@@ -105,7 +105,7 @@ The two clamps still differ and were both kept, so nothing changes for a JSON co
 
 Two one-line helpers were added to `agentrun.rs` for this (`glob_error`, `literal_glob`), because the CLI crate does not depend on globset. No dependency was added.
 
-**Left as it was:** a rule's `inputs` that does not compile is still dropped from the set the agent may change, which fails safe (it allows less).
+**Left as it was:** a rule's `inputs` that does not compile is still dropped from the set the agent may change, which fails safe (it allows less). A `protectedPaths` glob that compiles but can match no path (`./infra/**`, `/infra/**`, a bare `infra`) is still accepted and protects nothing; the owner's rule covers globs that do not compile.
 
 ## Consequences
 

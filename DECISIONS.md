@@ -58,7 +58,7 @@ The bugs of `docs/reviews/ponytail-audit.md` you asked for: 1 to 14, 17 and 20. 
 - Bug 8: a path rule in `.claude/settings.json` that does not compile also stops `fix --agent`, because the runner uses those rules as protected paths and dropped them the same way. It is a refusal of that command, not a `fscale check` error.
 - One existing test changed, to a stricter one: `checks_the_agent_limits` now asserts the values returned.
 
-**Found while fixing, not fixed:** a rule's `inputs` glob that does not compile is still dropped from what the agent may change (fails safe); Claude Code's rule syntax is not globset's, so a rule Claude Code accepts but globset cannot compile now stops `fix --agent`.
+**Found while fixing, not fixed:** **a `protectedPaths` glob that compiles but can match no path (`./infra/**`, `/infra/**`, a bare `infra`) is accepted and protects nothing**; a rule's `inputs` glob that does not compile is still dropped from what the agent may change (fails safe); Claude Code's rule syntax is not globset's, so a rule Claude Code accepts but globset cannot compile now stops `fix --agent`.
 
 ## Review of the long run
 

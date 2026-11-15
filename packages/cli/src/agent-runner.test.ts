@@ -571,6 +571,8 @@ describe('fscale fix --agent: the guardrails of SPEC §7', () => {
         : [
             ['*', 'x'],
             ['?', 'x'],
+            // A control: `!` is not special in a glob here, so this one
+            // passed before the fix too.
             ['!x', 'x'],
           ]),
     ])('a violation in the folder %s', (folder, other) => {
