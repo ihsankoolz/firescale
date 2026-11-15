@@ -441,12 +441,15 @@ describe('time limits follow progress (ADR 0043)', () => {
     expect(test?.status).toBe('timed-out');
     expect(test?.timeoutKey).toBe('verify.idleTimeout');
     expect(test?.timeoutMs).toBe(2000);
-    expect(test?.detail).toMatch(
-      /\(no new output for 2s, stopped after \S+; 25% done, about .+? left at this pace\)$/,
-    );
+    // It printed 25% in its first moments and nothing after. Until ADR 0057
+    // this said "about 6s left at this pace": three times the two seconds
+    // it had sat silent, a pace it never had. The time left is now worked
+    // out from when the percent was printed, and none is given once the
+    // step has sat past it.
+    expect(test?.detail).toMatch(/\(no new output for 2s, stopped after \S+; 25% done\)$/);
     const human = await runCli(['verify'], repo.root);
     expect(human.stdout).toMatch(
-      /Timed out: test printed nothing new for 2s, so it was stopped with every process it started\. It was 25% done, about .+? left at this pace\./,
+      /Timed out: test printed nothing new for 2s, so it was stopped with every process it started\. It was 25% done\.\r?\n/,
     );
     expect(human.stdout).toContain(
       'If it is only slow, raise verify.idleTimeout in your firescale config.',

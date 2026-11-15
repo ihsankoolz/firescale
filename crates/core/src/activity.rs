@@ -410,17 +410,36 @@ pub fn time_left(elapsed: std::time::Duration, percent: u8) -> Option<std::time:
     Some(elapsed.mul_f64((1.0 - done) / done))
 }
 
+/// The percent done a step printed, and how long it had run when that
+/// percent first showed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pace {
+    pub percent: u8,
+    pub since: std::time::Duration,
+}
+
 /// About how long a step has left, when it printed `percent` done at
-/// `since` and has now run for `elapsed`.
+/// `since` and has now run for `elapsed` (ADR 0057).
+///
+/// The whole run is worked out once, from the moment the percent was
+/// printed, when it was exact: `since * 100 / percent`. What is left is
+/// that, less the time so far. So while the percent stands still (pytest
+/// prints it when a test file is done, and a slow file can take minutes)
+/// the time left goes down with the clock, where [`time_left`] on the time
+/// so far makes it climb until the next percent, and then drop.
+///
+/// `None` before 1%, at 100%, and once the percent has stood still past
+/// the whole time worked out from it: the pace it gave no longer holds.
 #[must_use]
 pub fn time_left_since(
     elapsed: std::time::Duration,
     percent: u8,
     since: std::time::Duration,
 ) -> Option<std::time::Duration> {
-    // The time the percent was printed at is not used yet.
-    let _ = since;
-    time_left(elapsed, percent)
+    let left_then = time_left(since, percent)?;
+    (since + left_then)
+        .checked_sub(elapsed)
+        .filter(|left| !left.is_zero())
 }
 
 #[cfg(test)]
