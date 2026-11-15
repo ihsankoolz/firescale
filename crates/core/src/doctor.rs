@@ -1640,7 +1640,16 @@ impl Doctor<'_> {
             } else {
                 format!(", and there is no {target}")
             };
-            let fix = if let [link] = links.as_slice() {
+            // A real env file beside the example comes first: the missing
+            // names go there, and a link above (which may be shared on
+            // purpose) is only named in the detail.
+            let fix = if beside > 0 {
+                format!(
+                    "add {} to {} (see {example} for what each one is)",
+                    list(&missing),
+                    files[0].0
+                )
+            } else if let [link] = links.as_slice() {
                 format!(
                     "replace {link} with a real file that sets {}, or set the variables in your shell (see {example} for what each one is)",
                     list(&missing)
@@ -1650,12 +1659,6 @@ impl Doctor<'_> {
                     "replace one of {} with a real file that sets {}, or set the variables in your shell (see {example} for what each one is)",
                     links.join(", "),
                     list(&missing)
-                )
-            } else if beside > 0 {
-                format!(
-                    "add {} to {} (see {example} for what each one is)",
-                    list(&missing),
-                    files[0].0
                 )
             } else if files.is_empty() {
                 format!("copy {example} to {target} and fill in the values (or set the variables in your shell)")
