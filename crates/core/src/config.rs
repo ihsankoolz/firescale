@@ -956,6 +956,16 @@ mod tests {
                 json!({ "protectedPaths": "x" }),
                 "\"protectedPaths\" must be a list".into(),
             ),
+            (
+                "a protectedPaths glob that does not compile",
+                json!({ "protectedPaths": ["infra/**", "secrets/["] }),
+                "\"protectedPaths\" holds \"secrets/[\", which is not a valid glob (unclosed character class; missing ']') and would protect nothing. Fix the glob".into(),
+            ),
+            (
+                "a protectedPaths glob with a brace left open, written with a backslash",
+                json!({ "protectedPaths": ["src\\{app,lib.js"] }),
+                "\"protectedPaths\" holds \"src\\{app,lib.js\", which is not a valid glob".into(),
+            ),
         ];
         for (name, raw, message) in cases {
             let error = rejection(&raw);
