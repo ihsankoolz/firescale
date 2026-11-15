@@ -96,3 +96,38 @@ describe('fscale adopt --dry-run with the nextjs pack', () => {
     expect(await snapshot(repo.root)).toEqual(before);
   });
 });
+
+describe('fscale check result cache with the nextjs pack', () => {
+  // The pack applies by what package.json says, so every rule's cached
+  // result depends on it (as the supabase pack's does since M29).
+  it('reports the app once package.json depends on next, not the cached "no finding"', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({ packs: ['nextjs'] }),
+        'package.json': JSON.stringify({ name: 'shop', private: true }),
+      },
+    });
+    const ids = async (...args: string[]) => {
+      const result = await runCli(['check', '--json', ...args], repo.root);
+      const found = (JSON.parse(result.stdout) as { diagnostics: Diagnostic[] }).diagnostics;
+      return found.map((d) => d.ruleId).sort();
+    };
+    // Not a Next.js app yet: only nextjs/package-json speaks. This run
+    // fills the cache.
+    expect(await ids()).toEqual(['nextjs/package-json']);
+
+    await repo.write(
+      'package.json',
+      JSON.stringify({
+        name: 'shop',
+        private: true,
+        dependencies: { next: '16.4.6', react: '19.3.1', 'react-dom': '19.3.1' },
+      }),
+    );
+    const cached = await ids();
+    expect(cached).toEqual(
+      expect.arrayContaining(['nextjs/app-router', 'nextjs/gitignore', 'nextjs/next-config']),
+    );
+    expect(cached).toEqual(await ids('--no-cache'));
+  });
+});
