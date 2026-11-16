@@ -7,7 +7,7 @@ description: Fixes violations of the firescale rule core/env-example by listing 
 
 ## What this rule enforces and why
 
-If tracked source code reads an environment variable, a `.env.example` at or above the reading file lists it. The rule scans `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, `.rs`, `.go` and `.rb` files (not `node_modules`, `dist`, `build`, `target`, `vendor` or `.git`) for reads such as `process.env.NAME`, `import.meta.env.NAME`, `os.environ["NAME"]`, `os.getenv("NAME")`, `env::var("NAME")`, `os.Getenv("NAME")` and `ENV["NAME"]`. Only upper-case names count.
+If tracked source code reads an environment variable, a `.env.example` at or above the reading file lists it. The rule scans `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.py`, `.rs`, `.go` and `.rb` files (not `node_modules`, `dist`, `build`, `target`, `vendor` or `.git`) for reads such as `process.env.NAME`, `import.meta.env.NAME`, `os.environ["NAME"]`, `os.getenv("NAME")`, `env::var("NAME")`, `os.Getenv("NAME")` and `ENV["NAME"]`. Only upper-case names count. Vite sets `MODE`, `DEV`, `PROD`, `SSR` and `BASE_URL` on `import.meta.env` itself, so a read of one of them through `import.meta.env` is not asked for; through `process.env` it is.
 
 Without an example file, a new developer finds out which variables are needed only when the app crashes.
 
