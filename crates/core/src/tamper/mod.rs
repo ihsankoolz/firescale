@@ -2722,4 +2722,222 @@ mod tests {
             );
         }
     }
+    /// The findings of the guard on a git repo whose base commit holds
+    /// `base` and whose working tree holds `head`, as `Kind path:line what`.
+    fn guarded(base: &[(&str, &str)], head: &[(&str, &str)]) -> Vec<String> {
+        use std::process::Command;
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path();
+        let write = |files: &[(&str, &str)]| {
+            for (path, text) in files {
+                let file = root.join(path);
+                std::fs::create_dir_all(file.parent().expect("a folder")).expect("mkdir");
+                std::fs::write(file, text).expect("write");
+            }
+        };
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(root)
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        write(base);
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "--no-verify", "-m", "base"]);
+        let commit = git(&["rev-parse", "HEAD"]);
+        for (path, _) in base {
+            std::fs::remove_file(root.join(path)).expect("remove");
+        }
+        write(head);
+        let changed: BTreeSet<String> = base
+            .iter()
+            .chain(head)
+            .map(|(path, _)| (*path).to_owned())
+            .collect();
+        let base = BaseCommit {
+            reference: "main".to_owned(),
+            commit,
+        };
+        guard(root, &base, &changed)
+            .findings
+            .into_iter()
+            .map(|f| format!("{:?} {}:{} {}", f.kind, f.file, f.line, f.what))
+            .collect()
+    }
+
+    #[test]
+    fn a_test_moved_or_split_to_another_file_is_not_a_rename_of_a_test_left_behind() {
+        let get_user = "def test_get_user():\n    resp = get(\"/users/1\")\n    assert resp.status_code == 200\n    assert resp.json()[\"name\"] == \"alice\"\n";
+        let health =
+            "def test_health():\n    resp = get(\"/health\")\n    assert resp.status_code == 200\n";
+        assert_eq!(
+            guarded(
+                &[("tests/test_api.py", get_user)],
+                &[
+                    ("tests/test_api.py", health),
+                    ("tests/test_users.py", get_user)
+                ]
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_totals.py",
+                    "def test_totals():\n    assert f() == 1\n    assert g() == 2\n"
+                )],
+                &[
+                    (
+                        "tests/test_totals.py",
+                        "def test_total_f():\n    assert f() == 1\n"
+                    ),
+                    (
+                        "tests/test_total_g.py",
+                        "def test_total_g():\n    assert g() == 2\n"
+                    )
+                ]
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_value_changed_in_tests_merged_or_split_is_an_expected_change() {
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_math.py",
+                    "def test_adds():\n    assert g() == 2\n\n\ndef test_sums():\n    assert f() == 1\n"
+                )],
+                &[(
+                    "tests/test_math.py",
+                    "def test_adds_and_sums():\n    assert g() == 2\n    assert f() == 5\n\n\ndef test_empty():\n    assert h() == 0\n"
+                )]
+            ),
+            vec!["ExpectedChanged tests/test_math.py:3 assert f() == 5 (on the base: assert f() == 1, line 6)"]
+        );
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_totals.py",
+                    "def test_totals():\n    assert f() == 1\n    assert g() == 2\n"
+                )],
+                &[(
+                    "tests/test_totals.py",
+                    "def test_totals_a():\n    assert g() == 2\n\n\ndef test_totals_b():\n    assert f() == 5\n"
+                )]
+            ),
+            vec!["ExpectedChanged tests/test_totals.py:6 assert f() == 5 (on the base: assert f() == 1, line 2)"]
+        );
+    }
+
+    #[test]
+    fn an_assertion_a_renamed_test_lost_is_named_once() {
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_x.py",
+                    "def test_old():\n    assert x() == 1, \"one\"\n    assert y() == 2\n"
+                )],
+                &[(
+                    "tests/test_x.py",
+                    "def test_new():\n    assert x() == 1, \"two\"\n"
+                )]
+            ),
+            vec!["AssertionRemoved tests/test_x.py:3 assert y() == 2 (in test_old, renamed test_new)"]
+        );
+    }
+
+    /// Changes whose value sits where a message could be: each must stay a
+    /// finding (ADR 0063: when unsure, a value). (path, base, head).
+    const VALUES_NOT_MESSAGES: [(&str, &str, &str); 8] = [
+        (
+            "calc/calc_test.go",
+            "package calc\n\nimport (\n\t\"testing\"\n\n\t\"gotest.tools/v3/assert\"\n)\n\nfunc TestRun(t *testing.T) {\n\terr := Run()\n\tassert.Error(t, err, \"boom\")\n}\n",
+            "package calc\n\nimport (\n\t\"testing\"\n\n\t\"gotest.tools/v3/assert\"\n)\n\nfunc TestRun(t *testing.T) {\n\terr := Run()\n\tassert.Error(t, err, \"bang\")\n}\n",
+        ),
+        (
+            "tests/Names.Tests/NamesTests.cs",
+            "using FluentAssertions;\nusing Xunit;\n\npublic class NamesTests\n{\n    [Fact]\n    public void Lists()\n    {\n        Names().Should().BeEquivalentTo(\"alice\", \"bob\");\n    }\n}\n",
+            "using FluentAssertions;\nusing Xunit;\n\npublic class NamesTests\n{\n    [Fact]\n    public void Lists()\n    {\n        Names().Should().BeEquivalentTo(\"alice\", \"carol\");\n    }\n}\n",
+        ),
+        (
+            "tests/rows.rs",
+            "#[test]\nfn reads_a_row() {\n    let row = first_row();\n    assert_eq!(row.get::<_, String>(0).unwrap(), \"alice\");\n}\n",
+            "#[test]\nfn reads_a_row() {\n    let row = first_row();\n    assert_eq!(row.get::<_, String>(0).unwrap(), \"bob\");\n}\n",
+        ),
+        (
+            "src/test/java/UserTest.java",
+            "import static org.junit.Assert.assertEquals;\n\nimport org.junit.Test;\n\npublic class UserTest {\n    @Test\n    public void name() {\n        assertEquals(\"name\", user.getName(), \"alice\");\n    }\n}\n",
+            "import static org.junit.Assert.assertEquals;\n\nimport org.junit.Test;\n\npublic class UserTest {\n    @Test\n    public void name() {\n        assertEquals(\"name\", user.getName(), \"bob\");\n    }\n}\n",
+        ),
+        (
+            "Tests/CalcTests/CalcTests.swift",
+            "import XCTest\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        guard add(1, 1) == 2 else {\n            XCTFail(\"want 2\")\n            return\n        }\n    }\n}\n",
+            "import XCTest\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        guard add(1, 1) == 3 else {\n            XCTFail(\"want 3\")\n            return\n        }\n    }\n}\n",
+        ),
+        (
+            "calc/switch_test.go",
+            "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tgot := Add(1, 2)\n\tswitch {\n\tcase got != 3:\n\t\tt.Errorf(\"want 3\")\n\t}\n}\n",
+            "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tgot := Add(1, 2)\n\tswitch {\n\tcase got != 4:\n\t\tt.Errorf(\"want 4\")\n\t}\n}\n",
+        ),
+        (
+            "tests/test_match.py",
+            "import pytest\n\n\ndef test_adds():\n    match add(1, 1):\n        case 2:\n            pass\n        case _:\n            pytest.fail(\"want 2\")\n",
+            "import pytest\n\n\ndef test_adds():\n    match add(1, 1):\n        case 3:\n            pass\n        case _:\n            pytest.fail(\"want 3\")\n",
+        ),
+        (
+            "src/switch.test.ts",
+            "import assert from \"node:assert\";\n\nit(\"adds\", () => {\n  switch (add(1, 1)) {\n    case 2:\n      break;\n    default:\n      assert.fail(\"want 2\");\n  }\n});\n",
+            "import assert from \"node:assert\";\n\nit(\"adds\", () => {\n  switch (add(1, 1)) {\n    case 3:\n      break;\n    default:\n      assert.fail(\"want 3\");\n  }\n});\n",
+        ),
+    ];
+
+    #[test]
+    fn a_value_where_a_message_could_be_is_still_an_expected_change() {
+        let missed: Vec<&str> = VALUES_NOT_MESSAGES
+            .iter()
+            .filter(|(path, base, head)| changed(path, base, head).len() != 1)
+            .map(|(path, _, _)| *path)
+            .collect();
+        assert_eq!(missed, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_junit_4_message_and_a_swift_guard_message_are_not_expected_values() {
+        let junit4 = |message: &str| {
+            format!("import static org.junit.Assert.assertEquals;\n\nimport org.junit.Test;\n\npublic class UserTest {{\n    @Test\n    public void name() {{\n        assertEquals(\"{message}\", \"alice\", user.getName());\n    }}\n}}\n")
+        };
+        assert_eq!(
+            changed(
+                "src/test/java/UserTest.java",
+                &junit4("name"),
+                &junit4("the name")
+            ),
+            Vec::<String>::new()
+        );
+        let guard = |message: &str| {
+            format!("import XCTest\n\nfinal class CalcTests: XCTestCase {{\n    func testAdds() {{\n        guard add(1, 1) == 2 else {{\n            XCTFail(\"{message}\")\n            return\n        }}\n    }}\n}}\n")
+        };
+        assert_eq!(
+            changed(
+                "Tests/CalcTests/CalcTests.swift",
+                &guard("want 2"),
+                &guard("wanted 2")
+            ),
+            Vec::<String>::new()
+        );
+    }
 }
