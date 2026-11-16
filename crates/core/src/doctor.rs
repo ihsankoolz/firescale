@@ -1308,7 +1308,7 @@ impl Doctor<'_> {
                 Some(folder),
                 subject,
                 Status::Ok,
-                format!("{} in {source} installed", packages_are(wanted.len())),
+                packages_installed(wanted.len(), &source),
                 None,
             );
             return;
@@ -1750,12 +1750,13 @@ impl Doctor<'_> {
     }
 }
 
-/// `all 12 packages are`, `the 1 package is`.
-fn packages_are(count: usize) -> String {
+/// `all 12 packages in requirements.txt are installed`, `the 1 package in
+/// requirements.txt is installed`.
+fn packages_installed(count: usize, source: &str) -> String {
     if count == 1 {
-        "the 1 package is".to_owned()
+        format!("the 1 package in {source} is installed")
     } else {
-        format!("all {count} packages are")
+        format!("all {count} packages in {source} are installed")
     }
 }
 

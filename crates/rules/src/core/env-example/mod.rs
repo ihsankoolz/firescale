@@ -92,6 +92,12 @@ const QUOTED_PATTERNS: [&str; 18] = [
     "os.environ.setdefault(\"",
 ];
 
+/// Names Vite sets on `import.meta.env` itself ("Built-in Constants" in
+/// Vite's "Env Variables and Modes"). No env file sets them, so a read through
+/// `import.meta.env` never asks for them. Through `process.env` they are
+/// ordinary names.
+const VITE_BUILT_INS: [&str; 5] = ["MODE", "BASE_URL", "PROD", "DEV", "SSR"];
+
 pub struct EnvExample;
 
 fn is_ident(c: char) -> bool {
@@ -142,7 +148,11 @@ fn names_in_line(line: &str) -> Vec<&str> {
                     continue;
                 }
                 if let Some(name) = parse_name(&line[start..], quoted) {
-                    found.push(name);
+                    let vite_built_in =
+                        pattern.starts_with("import.meta.env") && VITE_BUILT_INS.contains(&name);
+                    if !vite_built_in {
+                        found.push(name);
+                    }
                 }
                 from = start;
             }

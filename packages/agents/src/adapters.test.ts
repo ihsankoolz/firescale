@@ -149,7 +149,12 @@ describe('the Codex adapter', () => {
 
 describe('what each adapter says is unverified', () => {
   it('names every flag not confirmed from the agent itself', () => {
-    expect(claude.unverified.join(' ')).toContain('total_cost_usd');
     expect(codex.unverified.join(' ')).toContain('--sandbox workspace-write');
+  });
+
+  it('says nothing for Claude Code, whose result fields a real run confirmed', () => {
+    // ADR 0048: the owner's run of Claude Code 2.1.325 on 2026-11-16 read
+    // total_cost_usd, num_turns, is_error and subtype as the adapter expects.
+    expect(claude.unverified).toEqual([]);
   });
 });

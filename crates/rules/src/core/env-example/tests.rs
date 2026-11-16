@@ -1159,3 +1159,51 @@ mod test_runner_config {
         assert_eq!(found[0].severity, None);
     }
 }
+
+/// Finding 7 of the 0.5.1 run on the course project: Vite sets `MODE`,
+/// `DEV`, `PROD`, `SSR` and `BASE_URL` on `import.meta.env` itself (vite.dev,
+/// "Env Variables and Modes", "Built-in Constants"); no env file sets them.
+mod vite_built_in_constants {
+    use super::*;
+
+    /// The line the report quotes, from `frontend/src/main.tsx:8`.
+    const MAIN_TSX: &str = "import React from 'react';\nimport ReactDOM from 'react-dom/client';\nimport App from './App';\n\n// Mock mode needs no backend.\n// See the README.\n\nconst IS_MOCK_MODE = import.meta.env.MODE === 'mock'\n";
+
+    #[test]
+    fn the_report_line_asks_for_nothing() {
+        let f = repo(&[("frontend/src/main.tsx", MAIN_TSX)]);
+        let found = check(&f);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn none_of_the_five_names_is_asked_for_in_either_form() {
+        let f = repo(&[(
+            "frontend/src/env.ts",
+            "export const a = import.meta.env.MODE;\nexport const b = import.meta.env.DEV;\nexport const c = import.meta.env.PROD;\nexport const d = import.meta.env.SSR;\nexport const e = import.meta.env.BASE_URL;\nexport const f = import.meta.env['MODE'];\nexport const g = import.meta.env[\"BASE_URL\"];\n",
+        )]);
+        let found = check(&f);
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn the_same_names_through_process_env_and_other_vite_names_are_still_asked_for() {
+        let f = repo(&[
+            (
+                "server/main.js",
+                "const mode = process.env.MODE;\nconst base = process.env['BASE_URL'];\n",
+            ),
+            (
+                "frontend/src/api.ts",
+                "export const url = import.meta.env.VITE_EXAMPLE_URL;\nexport const modeName = import.meta.env.MODE_NAME;\n",
+            ),
+            (".env.example", ""),
+        ]);
+        let mut names: Vec<String> = check(&f)
+            .iter()
+            .map(|d| d.message.split(' ').next().unwrap_or("").to_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["BASE_URL", "MODE", "MODE_NAME", "VITE_EXAMPLE_URL"]);
+    }
+}

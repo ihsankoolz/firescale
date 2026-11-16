@@ -1,6 +1,6 @@
 # 0048 — Agent adapters and `fscale ledger`
 
-Status: accepted (2026-11-14, M28). Builds on ADR 0047 (the guarded runner and its protocol) and ADR 0008 (Rust core, TypeScript for adapters).
+Status: accepted (2026-11-14, M28); updated 2026-11-16 (0.5.2) with the owner's manual check of Claude Code. Builds on ADR 0047 (the guarded runner and its protocol) and ADR 0008 (Rust core, TypeScript for adapters).
 
 ## Context
 
@@ -40,7 +40,12 @@ Confirmed from Claude Code's documentation (code.claude.com: CLI reference, head
 
 The result: `total_cost_usd` becomes the ledger's `costUsd`, `num_turns` its `turns`; the run is ok when the exit code is 0, `is_error` is false and `subtype` is `success`.
 
-**Unverified**: those four fields. The docs list them for the Agent SDK's result message, not for `claude -p --output-format json`. If they differ, a run that worked reads as failed (safe) and its cost is missing.
+**Confirmed by a real run** (2026-11-16): those four fields. The docs list them for the Agent SDK's result message, not for `claude -p --output-format json`, so they were first marked unverified. The owner's run of 2026-11-16 on Windows 11, with Claude Code 2.1.325 (the native `claude.exe`, signed in with claude.ai), recorded in `docs/reviews/cs464-0.5.1.md` ("The agent fixer by hand" and finding 10), read them as the adapter expects:
+
+- A pass gave the ledger `"costUsd":0.0699442,"turns":5`: `total_cost_usd` and `num_turns` were read, and the run counted as ok, so `is_error` was `false` and `subtype` was `success`.
+- A run with `agent.maxTurns: 1` gave `"reason":"agent-error"` and `Claude Code ended with error_max_turns`: `subtype` was read on a failure.
+
+So a Claude Code run no longer prints an unverified line. What a failed run puts in `is_error` was not seen on its own: that run failed on its subtype, which the adapter checks too. The run with a limit of 1 recorded `"turns":2`. That is the number Claude Code reported; the adapter passes it on unchanged, and nothing was changed for it.
 
 ### Codex
 
@@ -56,13 +61,13 @@ The run: `codex exec --json --ephemeral --ignore-user-config --skip-git-repo-che
 - **Every Codex run prints a warning** in its output, that its reads and commands are not limited.
 - The guardrails that rely on "the policy denies the shell" (ADR 0047's push guard and detached processes) do not hold for Codex.
 
-The unverified items are printed under `Agent:` in the output of every `fscale fix --agent` run, from the adapter's `--version` answer, and listed in docs/fix.md.
+The unverified items are printed under `Agent:` in the output of every `fscale fix --agent` run of an adapter that has any (since 2026-11-16 only Codex), from the adapter's `--version` answer, and listed in docs/fix.md.
 
 ### Tests: stand-ins for the agents' own CLIs
 
 `crates/testkit/src/fake_cli.rs` (`fscale-fake-cli`) is copied onto the PATH as `claude` or `codex`. It logs its arguments, standard input and working folder, prints a canned answer, makes canned edits and exits with a chosen code. `packages/agents/src/adapters.test.ts` pins every argument of both adapters and their result parsing; `packages/cli/src/agent-adapters.test.ts` runs `fscale fix --agent claude|codex` end to end with the stand-ins: the exact arguments, the prompt on standard input, the worktree as working folder, the cost in the ledger and in `fscale ledger`, a failed run keeping its reported cost, pre-flight failures, and the adapters found beside the binary.
 
-**Tests never leave the stand-in off the PATH.** A first version of the "not installed" test removed it, and on the build machine the real `claude` (installed next to `node`) was found and ran one real `claude -p` on a fixture repo. The test now uses a stand-in whose `--version` fails. That accidental run passed every guardrail and its result parsed as a success, which suggests the unverified fields are right for 2.1.325, but it used an earlier flag set (`--setting-sources user` in place of `--restricted`) and its output was not kept, so it counts as a hint, not as the manual test.
+**Tests never leave the stand-in off the PATH.** A first version of the "not installed" test removed it, and on the build machine the real `claude` (installed next to `node`) was found and ran one real `claude -p` on a fixture repo. The test now uses a stand-in whose `--version` fails. That accidental run passed every guardrail and its result parsed as a success, which suggested the result fields were right for 2.1.325, but it used an earlier flag set (`--setting-sources user` in place of `--restricted`) and its output was not kept, so it counted as a hint, not as the manual test. The owner's manual test of 2026-11-16 later confirmed the fields (see "Claude Code" above and "Manual checks").
 
 ### `fscale ledger`
 
@@ -72,11 +77,13 @@ The unverified items are printed under `Agent:` in the output of every `fscale f
 
 On a machine with each agent installed and signed in, in a scratch repo with one real violation (for example `core/env-example`: code reads an env var `.env.example` lacks):
 
-1. **Claude Code**: `fscale fix --agent claude --rule core/env-example`. Expect PASSED, one commit on `fscale/fix/…`, a ledger line with `costUsd` and `turns`, and `fscale ledger` showing the cost. If it says FAILED with `agent-error`, look at `claude -p --output-format json` output by hand: are `total_cost_usd`, `num_turns`, `is_error`, `subtype` its field names?
-2. **Claude Code limits**: in the same repo, set `agent.maxTurns` to 1 and run again; expect a failed run (`agent-error` or `over-budget`). Add `.claude/settings.json` with a `hooks` entry that writes a file; expect the file not to appear (hooks off).
-3. **Codex**: `fscale fix --agent codex --rule core/env-example`. If Codex rejects `--sandbox workspace-write` or the `-c` key, the run fails with `agent-error`: check `codex exec --help` and send the right spelling.
-4. **Codex sandbox**: confirm from Codex's docs that `workspace-write` with network off is what `exec` uses, and that `--ignore-user-config` keeps MCP servers out.
-5. **Windows**: a `claude` or `codex` installed by npm is a `.cmd` file, which Node does not start without a shell. The adapters start the program by name, so they need the `.exe` (Claude Code's native installer); with only a `.cmd` on the PATH, the pre-flight says so by name. Confirm, or tell me to start the `.cmd`'s script with Node.
+Status after the owner's run of 2026-11-16 (Windows 11, Claude Code 2.1.325, firescale 0.5.1 from npm; `docs/reviews/cs464-0.5.1.md`, "The agent fixer by hand"): checks 1 and 2 done, 3 and 4 not done (Codex is not installed there), 5 done in part.
+
+1. [x] **Claude Code** (done 2026-11-16: PASSED in 44 s, one commit on `fscale/fix/…`, ledger `"costUsd":0.0699442,"turns":5`, `fscale ledger` showed `cost $0.07`): `fscale fix --agent claude --rule core/env-example`. Expect PASSED, one commit on `fscale/fix/…`, a ledger line with `costUsd` and `turns`, and `fscale ledger` showing the cost. If it says FAILED with `agent-error`, look at `claude -p --output-format json` output by hand: are `total_cost_usd`, `num_turns`, `is_error`, `subtype` its field names?
+2. [x] **Claude Code limits** (done 2026-11-16: FAILED with `agent-error`, `Claude Code ended with error_max_turns`; neither hook file appeared, and the same hook command run by hand did write its file): in the same repo, set `agent.maxTurns` to 1 and run again; expect a failed run (`agent-error` or `over-budget`). Add `.claude/settings.json` with a `hooks` entry that writes a file; expect the file not to appear (hooks off).
+3. [ ] **Codex** (not done: Codex is not installed on the owner's machine): `fscale fix --agent codex --rule core/env-example`. If Codex rejects `--sandbox workspace-write` or the `-c` key, the run fails with `agent-error`: check `codex exec --help` and send the right spelling.
+4. [ ] **Codex sandbox** (not done, as 3): confirm from Codex's docs that `workspace-write` with network off is what `exec` uses, and that `--ignore-user-config` keeps MCP servers out.
+5. [ ] **Windows** (done in part, 2026-11-16: the native `claude.exe` in `~/.local/bin` was started by the adapter; an npm-installed `claude.cmd` was not tried, nor Codex): a `claude` or `codex` installed by npm is a `.cmd` file, which Node does not start without a shell. The adapters start the program by name, so they need the `.exe` (Claude Code's native installer); with only a `.cmd` on the PATH, the pre-flight says so by name. Confirm, or tell me to start the `.cmd`'s script with Node.
 
 ## After the review
 
