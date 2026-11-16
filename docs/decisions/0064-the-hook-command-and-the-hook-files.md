@@ -124,7 +124,7 @@ The first version of this ADR said no wrapper was possible at all. That was too 
 - **The file itself** is a file of a unit whose folders hold it (`stepcache::covers`, checked before the hook-file rule): the repo root's own steps, a project at the root, a folder the graph cannot place, and a project that depends on a node of the graph that holds it (the shared node `.claude` of fixture `fixA`). For every other unit only the part outside the hook entries is in the key.
 - **Blame-aware verify** (`same_on_base`): a changed hook file is a difference for every unit, whatever changed in it, so a failure is never labelled `pre-existing` from the files alone; the base run decides. It costs a base run of the failing steps on a branch that edits a hook file. The base result's key holds the base's hook files for every unit.
 - **`verify --affected` and the stop hook** (`hooks::hook_file_changes`, `verify_plan` in `crates/cli/src/main.rs`): each changed hook file is compared with the base commit (the merge base with `--base`, else `HEAD`), outside its hook entries:
-  - changed outside them, or no base to compare with: every project runs, with the reason `.claude/settings.json changed outside its hook entries, and what is there reaches every step (Claude Code gives its env to every command it starts)`;
+  - changed outside them, or no base to compare with: every project runs, with the reason `.claude/settings.json changed outside the stop hook entry firescale writes, and what is there reaches every step (Claude Code gives its env to every command it starts, and another hook can set that env)`;
   - changed only inside them, and a node of the graph holds it: a changed file of that node, as any other (`web` runs, `api` does not);
   - changed only inside them, and no node holds it: settled, as before: a changed file of the repo root project only, never "belongs to no project", and `configkey::mark_file_readers` runs every other unit whose scope holds the root, or a note says nothing at the root reads it: `3 changed files (.claude/settings.json and 2 more) are agent hook files, which only a step that can read every file of the repo could read, and no such step runs here, so they run nothing; the check still covers them.`
 
@@ -158,7 +158,8 @@ Decided on the owner's behalf:
 - **Only forward.** A pin newer than the fscale that runs is left as it is: a teammate's older fscale must not move the repo back.
 - **Whatever packs are on.** `agent-ready/verify-hook` is not in the `core` pack that `adopt` turns on, so a rule fix would never reach the course project's hooks; the move is a step of `sync` itself, before the rules run.
 - **Unsure means unchanged.** A file that is not JSON, a hook file that is a symbolic link, and a command whose exact text also stands elsewhere in the file (another hook running the same text) are left as they are.
-- `hooks install` still never changes a command that is installed; it says which version the hook runs.
+- `hooks install` still never changes a command that is installed; it says which version the hook runs. A hook firescale 0.5.1 or older wrote (`fscale hooks run --agent <name>`, `npx firescale ...`) is not a pin: it is not started, and `hooks install` and doctor say how to replace it.
+- **Known limits.** `sync --check` works on a scratch copy of the repo, which holds no git-ignored file and, on Windows without the right to make links, holds a symbolic link as a plain file: for a git-ignored hook file `--check` says nothing and `sync` moves the pin; for a linked one `--check` reports a move that `sync` does not make.
 
 ## Consequences
 
