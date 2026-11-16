@@ -104,6 +104,80 @@ pub fn pinned_version(prefix: &str) -> Option<&str> {
     fits.then_some(version)
 }
 
+/// True when version `a` comes before version `b`: `major.minor.patch`
+/// compared as numbers, and a pre-release (`0.5.2-rc.1`) before its
+/// release. A version that does not read as one is never older.
+fn older(a: &str, b: &str) -> bool {
+    fn parts(version: &str) -> Option<([u64; 3], bool)> {
+        let version = version.split('+').next()?;
+        let (core, pre) = match version.split_once('-') {
+            Some((core, _)) => (core, true),
+            None => (version, false),
+        };
+        let mut numbers = core.split('.').map(|part| part.parse::<u64>().ok());
+        let triple = [numbers.next()??, numbers.next()??, numbers.next()??];
+        numbers.next().is_none().then_some((triple, pre))
+    }
+    match (parts(a), parts(b)) {
+        (Some((a, a_pre)), Some((b, b_pre))) => a < b || (a == b && a_pre && !b_pre),
+        _ => false,
+    }
+}
+
+/// A pin firescale wrote that `fscale sync` moves: the old version and
+/// what it becomes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovedPin {
+    pub from: String,
+    pub to: String,
+}
+
+/// The agent's hook file `text` with the version of every stop hook
+/// command firescale wrote with an older pin moved to this version, and
+/// the pins moved. A command is moved only when it is exactly
+/// `npx --yes firescale@<older> hooks run --agent <name>`: anything else in
+/// the file, another command included, stays byte for byte. A newer pin is
+/// left as it is (a teammate's older fscale never moves it back), and so is
+/// a command whose text also stands somewhere else in the file than in
+/// the stop hooks. `None` when nothing moves (owner's decision on ADR 0064).
+#[must_use]
+pub fn move_pins(text: &str, agent: Agent) -> Option<(String, Vec<MovedPin>)> {
+    let value = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok()?;
+    let suffix = format!(" hooks run --agent {}", agent.name());
+    let this = crate::version();
+    let mut out = text.to_owned();
+    let mut moved: Vec<MovedPin> = Vec::new();
+    let commands = stop_commands(&value, agent);
+    let mut done: Vec<&str> = Vec::new();
+    for command in commands.iter().copied() {
+        if done.contains(&command) {
+            continue;
+        }
+        done.push(command);
+        let Some(version) = command
+            .strip_suffix(suffix.as_str())
+            .and_then(pinned_version)
+        else {
+            continue;
+        };
+        if !older(version, this) {
+            continue;
+        }
+        let quoted = serde_json::to_string(command).ok()?;
+        let in_stop = commands.iter().filter(|other| **other == command).count();
+        if out.matches(quoted.as_str()).count() != in_stop {
+            continue;
+        }
+        let new = serde_json::to_string(&hook_command(&pinned_npx(), agent)).ok()?;
+        out = out.replace(quoted.as_str(), &new);
+        moved.push(MovedPin {
+            from: version.to_owned(),
+            to: this.to_owned(),
+        });
+    }
+    (!moved.is_empty()).then_some((out, moved))
+}
+
 /// What `fscale doctor` starts for a pin: npx with `--no`, which runs
 /// firescale only when it is installed or already in npx's cache, and
 /// never downloads it (second review of ADR 0064).
@@ -1843,5 +1917,57 @@ mod tests {
             crate::verify::format_verify_human(&report)
         );
         assert!(!block_summary(&report).contains("SETUP"));
+    }
+
+    #[test]
+    fn older_compares_versions_as_numbers() {
+        assert!(older("0.5.0", "0.5.2"));
+        assert!(older("0.9.9", "0.10.0"));
+        assert!(older("0.5.2-rc.1", "0.5.2"));
+        assert!(!older("0.5.2", "0.5.2"));
+        assert!(!older("99.0.0", "0.5.2"));
+        assert!(!older("0.5", "0.5.2"));
+        assert!(!older("latest", "0.5.2"));
+    }
+
+    #[test]
+    fn sync_moves_only_an_older_pin_firescale_wrote() {
+        let old = "npx --yes firescale@0.0.1 hooks run --agent claude";
+        let text = format!(
+            "{{\n  \"hooks\": {{\n    \"Stop\": [{{ \"hooks\": [\n      {{ \"type\": \"command\", \"command\": \"{old}\" }},\n      {{ \"type\": \"command\", \"command\": \"{old} --budget 60\" }},\n      {{ \"type\": \"command\", \"command\": \"npx firescale hooks run --agent claude\" }}\n    ] }}]\n  }}\n}}\n"
+        );
+        let (after, moved) = move_pins(&text, Agent::Claude).unwrap();
+        let new = hook_command(&pinned_npx(), Agent::Claude);
+        assert_eq!(
+            after,
+            text.replacen(&format!("\"{old}\""), &format!("\"{new}\""), 1)
+        );
+        assert_eq!(
+            moved,
+            [MovedPin {
+                from: "0.0.1".to_owned(),
+                to: crate::version().to_owned()
+            }]
+        );
+        // Nothing more to move once it is this version.
+        assert_eq!(move_pins(&after, Agent::Claude), None);
+    }
+
+    #[test]
+    fn sync_leaves_a_newer_pin_another_agent_s_and_a_command_found_elsewhere() {
+        let newer = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"npx --yes firescale@99.0.0 hooks run --agent claude"}]}]}}"#;
+        assert_eq!(move_pins(newer, Agent::Claude), None);
+        let codex_in_claude = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"npx --yes firescale@0.0.1 hooks run --agent codex"}]}]}}"#;
+        assert_eq!(move_pins(codex_in_claude, Agent::Claude), None);
+        // The same text in another hook: a person decides.
+        let elsewhere = r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"npx --yes firescale@0.0.1 hooks run --agent claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"npx --yes firescale@0.0.1 hooks run --agent claude"}]}]}}"#;
+        assert_eq!(move_pins(elsewhere, Agent::Claude), None);
+        let cursor = r#"{"version":1,"hooks":{"stop":[{"command":"npx --yes firescale@0.0.1 hooks run --agent cursor"}]}}"#;
+        let (after, _) = move_pins(cursor, Agent::Cursor).unwrap();
+        assert!(after.contains(&format!(
+            "firescale@{} hooks run --agent cursor",
+            crate::version()
+        )));
+        assert_eq!(move_pins("{ nope", Agent::Cursor), None);
     }
 }
