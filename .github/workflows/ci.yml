@@ -86,7 +86,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The same steps as the linux job. Keep the two lists identical.
+      # The same steps as the linux job, and the temp folder step. Keep the
+      # two lists identical.
       # Reads the pinned pnpm version from `packageManager` in package.json.
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
@@ -114,6 +115,16 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      # The checkout is on D:, the runner's work drive, but the temp folder is
+      # on C:, the slower system drive. The tests write their fixture repos,
+      # verify's base runs and Rust's temp files there (ADR 0066).
+      - name: Temp folder on the work drive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
 
       - name: Test
         run: pnpm test
