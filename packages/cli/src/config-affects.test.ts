@@ -14,8 +14,9 @@ const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
 
 // Tests that start verify four or five times on the six-project course
-// fixture. On the Windows runner they took 12.8 to 26.1 s, and 28.5, 30.0 and
-// 30.2 s (a timeout) in one slow run, against 1.5 to 3 s on Linux (ADR 0066).
+// fixture. In five Windows runs they took 12.8 to 30.0 s when they passed
+// (30.0 s in run 43759663089) and once hit the 30 s limit (30.2 s, run
+// 43794639420 attempt 1), against 1.5 to 3 s on Linux (ADR 0066).
 const SEVERAL_RUNS = 60_000;
 
 const EVERY_PROJECT = [
