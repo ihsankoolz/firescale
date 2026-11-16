@@ -3381,4 +3381,38 @@ mod tests {
             vec!["AssertionRemoved tests/test_trade.py:5 assert upstream.calls == 1 (in test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service, renamed test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy)"]
         );
     }
+
+    #[test]
+    fn only_a_compared_value_around_a_fail_call_is_an_expected_value() {
+        // Review of pull request 66, (b2): every literal of the `if` around
+        // a fail call was taken for an expected value. 0.5.1 gave nothing
+        // for these.
+        let go = |condition: &str| {
+            format!("package srv\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestServe(t *testing.T) {{\n\tif {condition} {{\n\t\tt.Fatal(\"bad\")\n\t}}\n}}\n")
+        };
+        let path = "srv/serve_test.go";
+        assert_eq!(
+            changed(
+                path,
+                &go("!waitFor(t, ready, 5*time.Second)"),
+                &go("!waitFor(t, ready, 10*time.Second)")
+            ),
+            Vec::<String>::new()
+        );
+        // A compared value is one.
+        assert_eq!(changed(path, &go("got != 3"), &go("got != 4")).len(), 1);
+        // black writes a string with other quotes: the same value.
+        let python = |condition: &str| {
+            format!("import pytest\n\n\ndef test_status():\n    status = fetch()\n    if {condition}:\n        pytest.fail(\"bad\")\n")
+        };
+        let path = "tests/test_status.py";
+        assert_eq!(
+            changed(path, &python("status != 'ok'"), &python("status != \"ok\"")),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            changed(path, &python("status != 'ok'"), &python("status != 'okay'")).len(),
+            1
+        );
+    }
 }
