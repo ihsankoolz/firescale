@@ -2585,4 +2585,88 @@ mod tests {
             1
         );
     }
+    /// One test file per language with a message `MSG` in each assertion
+    /// that has one, and a value to change: (path, source, value, other
+    /// value).
+    const MESSAGE_CASES: [(&str, &str, &str, &str); 9] = [
+        (
+            "calc/calc_test.go",
+            "package calc\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestAdd(t *testing.T) {\n\tgot := Add(1, 2)\n\tif got != 3 {\n\t\tt.Errorf(\"Add(1, 2) = %d: MSG\", got)\n\t}\n\tassert.Equal(t, 3, Add(2, 1), \"MSG\")\n\tassert.Equalf(t, 4, Add(2, 2), \"MSG %d\", 4)\n}\n",
+            "got != 3",
+            "got != 4",
+        ),
+        (
+            "src/test/java/CalcTest.java",
+            "import static org.junit.jupiter.api.Assertions.*;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nimport org.junit.jupiter.api.Test;\n\nclass CalcTest {\n    @Test\n    void adds() {\n        assertEquals(3, Calc.add(1, 2), \"MSG\");\n        assertTrue(Calc.add(0, 0) == 0, \"MSG\");\n        assertThat(Calc.add(2, 2)).as(\"MSG\").isEqualTo(4);\n        if (Calc.add(1, 1) != 2) {\n            fail(\"MSG\");\n        }\n        assert Calc.add(3, 3) == 6 : \"MSG\";\n    }\n}\n",
+            "isEqualTo(4)",
+            "isEqualTo(5)",
+        ),
+        (
+            "src/test/kotlin/CalcTest.kt",
+            "import kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertEquals(3, add(1, 2), \"MSG\")\n        assertTrue(add(0, 0) == 0, message = \"MSG\")\n    }\n}\n",
+            "assertEquals(3,",
+            "assertEquals(4,",
+        ),
+        (
+            "Tests/CalcTests/CalcTests.swift",
+            "import XCTest\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3, \"MSG\")\n        XCTAssertTrue(add(0, 0) == 0, \"MSG\")\n        if add(1, 1) != 2 {\n            XCTFail(\"MSG\")\n        }\n    }\n}\n",
+            "add(1, 2), 3",
+            "add(1, 2), 4",
+        ),
+        (
+            "test/calc_test.dart",
+            "import 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), equals(3), reason: 'MSG');\n    if (add(1, 1) != 2) {\n      fail('MSG');\n    }\n  });\n}\n",
+            "equals(3)",
+            "equals(4)",
+        ),
+        (
+            "tests/Calc.Tests/CalcTests.cs",
+            "using FluentAssertions;\nusing NUnit.Framework;\n\npublic class CalcTests\n{\n    [Test]\n    public void Adds()\n    {\n        Assert.AreEqual(3, Calc.Add(1, 2), \"MSG\");\n        Assert.That(Calc.Add(2, 2), Is.EqualTo(4), \"MSG\");\n        Assert.IsTrue(Calc.Add(0, 0) == 0, \"MSG\");\n        Calc.Add(3, 3).Should().Be(6, \"MSG\");\n    }\n}\n",
+            "Be(6,",
+            "Be(7,",
+        ),
+        (
+            "test/test_calc.c",
+            "#include \"unity.h\"\n#include \"calc.h\"\n\nvoid test_adds(void) {\n    TEST_ASSERT_EQUAL_INT_MESSAGE(3, add(1, 2), \"MSG\");\n    if (add(1, 1) != 2) {\n        TEST_FAIL_MESSAGE(\"MSG\");\n    }\n}\n",
+            "add(1, 1) != 2",
+            "add(1, 1) != 3",
+        ),
+        (
+            "tests/test_calc.py",
+            "import pytest\n\n\ndef test_adds():\n    if add(1, 1) != 2:\n        pytest.fail(\"MSG\")\n",
+            "!= 2",
+            "!= 3",
+        ),
+        (
+            "src/calc.test.ts",
+            "import assert from \"node:assert\";\n\nit(\"adds\", () => {\n  if (add(1, 1) !== 2) {\n    assert.fail(\"MSG\");\n  }\n});\n",
+            "!== 2",
+            "!== 3",
+        ),
+    ];
+
+    #[test]
+    fn a_failure_message_is_not_an_expected_value_in_any_language() {
+        for (path, source, value, other) in MESSAGE_CASES {
+            assert_eq!(
+                changed(
+                    path,
+                    &source.replace("MSG", "one"),
+                    &source.replace("MSG", "two")
+                ),
+                Vec::<String>::new(),
+                "{path}: only the message changed"
+            );
+            assert_eq!(
+                changed(
+                    path,
+                    &source.replace("MSG", "one"),
+                    &source.replace("MSG", "one").replace(value, other)
+                )
+                .len(),
+                1,
+                "{path}: {value} became {other}"
+            );
+        }
+    }
 }
