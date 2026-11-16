@@ -1970,4 +1970,65 @@ mod tests {
         )));
         assert_eq!(move_pins("{ nope", Agent::Cursor), None);
     }
+
+    // Review of the final diff, finding 2: any stop entry that held the
+    // text `hooks run --agent <name>` was set aside, an env prefix included.
+    #[test]
+    fn only_firescale_s_own_stop_command_is_set_aside() {
+        let file = |command: &str| {
+            serde_json::to_vec(&json!({
+                "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": command }] }] }
+            }))
+            .unwrap()
+        };
+        let outside = |command: &str| outside_hooks(Agent::Claude, Some(&file(command)));
+        let pinned = hook_command(&pinned_npx(), Agent::Claude);
+        assert_eq!(outside(&pinned), "{}");
+        assert_eq!(outside("fscale hooks run --agent claude"), "{}");
+        assert_eq!(outside("npx --no -- fscale hooks run --agent claude"), "{}");
+        for (before, after) in [
+            (
+                format!("API_MODE=lax {pinned}"),
+                format!("API_MODE=strict {pinned}"),
+            ),
+            (format!("cd web && {pinned}"), format!("cd api && {pinned}")),
+            (
+                "npx --yes firescale@0.5.0 hooks run --agent claude --budget 60".to_owned(),
+                "npx --yes firescale@0.5.0 hooks run --agent claude --budget 90".to_owned(),
+            ),
+        ] {
+            assert_ne!(outside(&before), outside(&after), "{before}");
+        }
+    }
+
+    // Review of the final diff, finding 4: a workspace package's
+    // `node_modules/.bin`, which `pnpm --filter web fscale ...` puts first.
+    #[test]
+    fn a_node_modules_bin_inside_the_repo_is_a_launcher_folder() {
+        let fixture = Fixture::new(&[("web/package.json", "{}\n")], Track::NoGit).unwrap();
+        let root = comparable(fixture.root());
+        let bin = fixture.root().join("web").join("node_modules").join(".bin");
+        assert!(launcher_folder(&bin, &root));
+        assert!(launcher_folder(
+            &fixture.root().join("node_modules").join(".bin"),
+            &root
+        ));
+        // A tool's own folder elsewhere stays.
+        assert!(!launcher_folder(
+            Path::new("/opt/setup-pnpm/node_modules/.bin"),
+            &root
+        ));
+    }
+
+    // Review of the final diff, finding 5: the pin's text was matched as
+    // re-written JSON, so the same text elsewhere could be edited instead.
+    #[test]
+    fn sync_moves_nothing_when_the_stop_command_is_written_another_way() {
+        // In the stop hook, the @ of the pin is written as a JSON escape.
+        let escaped = format!("firescale{}u00400.0.1", char::from(92u8));
+        let text = format!(
+            r#"{{"note":"npx --yes firescale@0.0.1 hooks run --agent claude","hooks":{{"Stop":[{{"hooks":[{{"type":"command","command":"npx --yes {escaped} hooks run --agent claude"}}]}}]}}}}"#
+        );
+        assert_eq!(move_pins(&text, Agent::Claude), None);
+    }
 }

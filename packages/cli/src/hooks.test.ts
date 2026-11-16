@@ -666,6 +666,26 @@ describe('the command the hook starts (ADR 0064)', () => {
     expect(result.stdout).toContain(`\`${old} hooks run --agent claude\``);
   });
 
+  // Review of the final diff, finding 3: firescale 0.5.1 wrote
+  // `fscale hooks run --agent <name>`, which the course project still has.
+  // Nothing rewrites it (sync moves only a pin), so the output must say how
+  // to replace it.
+  it('says how to replace the command firescale 0.5.1 and older wrote', async () => {
+    const repo = await fixtures.create({
+      files: {
+        [HOOK_FILES.claude]: `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'fscale hooks run --agent claude' }] }] } }, null, 2)}\n`,
+      },
+    });
+    const why = `it runs \`fscale hooks run --agent claude\`, the command firescale 0.5.1 and older wrote. It starts only where \`fscale\` is on the PATH, and fscale does not start it to check. To get \`${PINNED} hooks run --agent claude\`, remove that stop hook entry from .claude/settings.json and run \`fscale hooks install --agent claude\`.`;
+    const result = await install(['--agent', 'claude'], repo.root);
+    expect(result.stdout).toContain(`The hook in .claude/settings.json was not started: ${why}`);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const doctor = await runCli(['doctor'], repo.root, await npxOnly());
+    expect(doctor.stdout).toContain(
+      `  warning  .claude/settings.json: the stop hook was not started: ${why}`,
+    );
+  });
+
   // Review of ADR 0064, finding 4 (fixture fixD): the check ran the text
   // before `hooks run --agent <name>` from a hook file already in the repo.
   it('never starts a command from a hook file that it would not write itself', async () => {
@@ -835,6 +855,35 @@ describe('fscale doctor and the agent hooks (ADR 0064)', () => {
       "  warning  .claude/settings.json: the stop hook was not started: it runs this repo's own `fscale` package script, and doctor runs no script of the repo. Check it yourself: `npm run --silent fscale -- --version --json`.",
     );
   });
+
+  // Review of the final diff, finding 1: on Windows, `cmd` looks for a
+  // program in the current folder before the PATH, so a repo that commits
+  // `npx.cmd` at its root ran it from doctor and from the install check.
+  it.skipIf(!WINDOWS)(
+    'never runs a program file the repo holds at its root, from doctor or the install check',
+    async () => {
+      const repo = await fixtures.create({
+        files: {
+          'npx.cmd': '@echo ran> pwned-npx.txt\r\n',
+          [HOOK_FILES.claude]: `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `${PINNED} hooks run --agent claude` }] }] } }, null, 2)}\n`,
+        },
+      });
+      const { dir, log } = await standIns(['npx'], firescaleAnswer(VERSION));
+      // Some shells set this for their own children; a person's usually
+      // does not, and then cmd looks in the current folder first.
+      const env = { ...(await onlyStandIns(dir)), NoDefaultCurrentDirectoryInExePath: undefined };
+      const doctor = await runCli(['doctor'], repo.root, env);
+      expect(existsSync(path.join(repo.root, 'pwned-npx.txt'))).toBe(false);
+      expect(doctor.stdout).toContain('  ok       .claude/settings.json: the stop hook starts');
+      const installed = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root, env);
+      expect(existsSync(path.join(repo.root, 'pwned-npx.txt'))).toBe(false);
+      expect(installed.code).toBe(EXIT_OK);
+      expect((await readFile(log, 'utf8')).trim().split(/\r?\n/)).toEqual([
+        `${NO_DOWNLOAD} --version --json`,
+        `${PINNED} --version --json`,
+      ]);
+    },
+  );
 
   it('never starts a command it would not write, and says so', async () => {
     const command = 'echo ran-from-repo-file > pwned.txt & npx firescale hooks run --agent cursor';
