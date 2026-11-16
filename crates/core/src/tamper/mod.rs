@@ -1419,13 +1419,63 @@ pub fn guard_at(
     let mut head_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     // Assertions that renamed tests lost (ADR 0063).
     let mut lost_in_renames: Vec<Finding> = Vec::new();
+    // What each changed test file holds: its new tests, and how many more
+    // of each check than on the base. A test or a check that went from one
+    // file may be in another (ADR 0063).
+    let own: Vec<(BTreeSet<String>, BTreeMap<String, isize>)> = pairs
+        .iter()
+        .map(|(_, base_file, head_file)| {
+            let ids = |read: &Option<TestFile>| -> BTreeSet<String> {
+                read.iter()
+                    .flat_map(|read| read.tests.iter().map(|test| test.id.clone()))
+                    .collect()
+            };
+            let new_tests: BTreeSet<String> = ids(head_file)
+                .difference(&ids(base_file))
+                .cloned()
+                .collect();
+            let mut more: BTreeMap<String, isize> = BTreeMap::new();
+            for (read, step) in [(head_file, 1isize), (base_file, -1)] {
+                for assertion in read.iter().flat_map(|read| &read.assertions) {
+                    *more.entry(assertion.checked().to_owned()).or_default() += step;
+                }
+            }
+            (new_tests, more)
+        })
+        .collect();
+    let mut all_new: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut all_more: BTreeMap<&str, isize> = BTreeMap::new();
+    for (new_tests, more) in &own {
+        for id in new_tests {
+            *all_new.entry(id.as_str()).or_default() += 1;
+        }
+        for (shape, count) in more {
+            *all_more.entry(shape.as_str()).or_default() += count;
+        }
+    }
     let counts = &mut report.counts;
-    for (file, base_file, head_file) in &pairs {
+    for (index, (file, base_file, head_file)) in pairs.iter().enumerate() {
         let path = &file.path;
-        // The tests this file's change renamed (ADR 0063).
+        let (own_new, own_more) = &own[index];
+        let elsewhere = Elsewhere {
+            new_tests: all_new
+                .iter()
+                .filter(|(id, count)| **count > usize::from(own_new.contains(**id)))
+                .map(|(id, _)| (*id).to_owned())
+                .collect(),
+            more: all_more
+                .iter()
+                .map(|(shape, count)| {
+                    let mine = own_more.get(*shape).copied().unwrap_or(0);
+                    ((*shape).to_owned(), count - mine)
+                })
+                .filter(|(_, count)| *count != 0)
+                .collect(),
+        };
+        // The tests this file's change renamed, merged or split (ADR 0063).
         let renamed = match (base_file, head_file) {
-            (Some(before), Some(after)) => renames(before, after),
-            _ => BTreeMap::new(),
+            (Some(before), Some(after)) => successors(before, after, &elsewhere),
+            _ => Successors::default(),
         };
         // Assertions that changed only in their values, file by file (M26).
         if let (Some(before), Some(after)) = (base_file, head_file) {
@@ -1483,7 +1533,7 @@ pub fn guard_at(
                 let test = test_id(read, assertion);
                 for _ in 0..assertion.weight {
                     base_shapes.push(BaseAssertion {
-                        shape: assertion.shape.clone(),
+                        shape: assertion.checked().to_owned(),
                         text: assertion.text.clone(),
                         file: path.clone(),
                         line: assertion.line,
@@ -1498,7 +1548,14 @@ pub fn guard_at(
                     .filter_map(|index| read.tests.get(*index))
                     .map(|test| test.id.as_str())
                     .collect();
-                lost_in_renames.extend(renamed_losses(path, read, after, &renamed, &excused_ids));
+                lost_in_renames.extend(followed_losses(
+                    path,
+                    read,
+                    after,
+                    &renamed,
+                    &excused_ids,
+                    &elsewhere,
+                ));
             }
         }
         // A file whose every test is skipped on the base and now (the whole
@@ -1545,18 +1602,14 @@ pub fn guard_at(
             if count_assertions {
                 for assertion in &read.assertions {
                     counts.head_assertions += assertion.weight;
-                    let key = (
-                        assertion.shape.clone(),
-                        path.clone(),
-                        test_id(read, assertion),
-                    );
-                    *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
+                    // By what it checks, without its message (ADR 0063).
+                    let checked = assertion.checked().to_owned();
+                    let key = (checked.clone(), path.clone(), test_id(read, assertion));
+                    *head_shapes.entry(checked.clone()).or_default() += assertion.weight;
                     *head_in_test.entry(key.clone()).or_default() += assertion.weight;
                     if !assertion.conditional {
                         head_always += assertion.weight;
-                        *head_always_shapes
-                            .entry(assertion.shape.clone())
-                            .or_default() += assertion.weight;
+                        *head_always_shapes.entry(checked).or_default() += assertion.weight;
                         *head_always_in_test.entry(key).or_default() += assertion.weight;
                     }
                 }
@@ -1730,16 +1783,19 @@ pub fn guard_at(
             }
         }
     }
-    // An assertion a renamed test lost, unless the net count named it.
+    // An assertion a renamed test lost. One the net count named already
+    // (both match by what an assertion checks, without its message) is named
+    // once, with the test it was in.
     for lost in lost_in_renames {
-        let named = findings.iter().any(|finding| {
+        let named = findings.iter_mut().find(|finding| {
             finding.kind == Kind::AssertionRemoved
                 && finding.on_base
                 && finding.file == lost.file
                 && finding.line == lost.line
         });
-        if !named {
-            findings.push(lost);
+        match named {
+            Some(finding) => finding.what = lost.what,
+            None => findings.push(lost),
         }
     }
     // More suppressions of a rule: name the new ones, up to the shortfall
@@ -2016,20 +2072,54 @@ fn test_of<'f>(file: &'f TestFile, assertion: &Assertion) -> &'f str {
 /// following renames; a file rewritten past that follows none.
 const MAX_RENAME_PAIRS: usize = 40_000;
 
-/// The tests of one file that the change renamed: each base test that is
-/// gone, with the new test that shares the most of its assertions once
-/// every literal is masked (ties: the longer common start and end of the
-/// two names). A gone test that shares no assertion with a new test was
-/// not renamed: it went. Before ADR 0063 every gone test was taken for a
-/// rename of every new one, so `assert upstream.calls == 1` of a renamed
-/// test was paired with `assert upstream.calls == 0` of a new, different
-/// one (finding 4 of the 0.5.1 review).
-fn renames(before: &TestFile, after: &TestFile) -> BTreeMap<String, String> {
+/// What the other changed test files say about one file's change: the tests
+/// that are new there, and how many more of each check (with literals as
+/// written, without the message) they hold now than on the base.
+#[derive(Debug, Default)]
+struct Elsewhere {
+    new_tests: BTreeSet<String>,
+    more: BTreeMap<String, isize>,
+}
+
+/// The tests of one file that the change renamed, merged or split, in
+/// groups: the base's tests that are gone and the new tests that follow
+/// them (ADR 0063).
+#[derive(Debug, Default)]
+struct Successors {
+    groups: Vec<(Vec<String>, Vec<String>)>,
+    of_gone: BTreeMap<String, usize>,
+    of_new: BTreeMap<String, usize>,
+}
+
+/// True when one test's name starts with the other's: `test_totals` and
+/// `test_totals_b`, a part split off.
+fn split_names(a: &str, b: &str) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Follows the tests of one file through the change. A gone test that is
+/// new in another changed file moved there and is followed by nothing here.
+/// Each other gone test is followed by the new test that shares the most
+/// of its assertions once every literal is masked (ties: the names most
+/// alike, then the ids): a rename, or with several gone tests that pick
+/// the same one, a merge. A new test that no gone test picked follows the
+/// gone test it shares most with when one name starts with the other: a
+/// part split off (`test_totals` → `test_totals_a`, `test_totals_b`). A
+/// gone test that shares no assertion with a new test was not renamed.
+/// Before ADR 0063 every gone test was taken for a rename of every new one,
+/// so `assert upstream.calls == 1` of a renamed test was paired with
+/// `assert upstream.calls == 0` of a new, different one (finding 4 of the
+/// 0.5.1 review).
+fn successors(before: &TestFile, after: &TestFile, elsewhere: &Elsewhere) -> Successors {
     let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
     let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
-    let gone: Vec<&str> = before_ids.difference(&after_ids).copied().collect();
+    let gone: Vec<&str> = before_ids
+        .difference(&after_ids)
+        .copied()
+        .filter(|id| !elsewhere.new_tests.contains(*id))
+        .collect();
     let new: Vec<&str> = after_ids.difference(&before_ids).copied().collect();
-    let mut out = BTreeMap::new();
+    let mut out = Successors::default();
     if gone.is_empty() || new.is_empty() || gone.len() * new.len() > MAX_RENAME_PAIRS {
         return out;
     }
@@ -2059,39 +2149,79 @@ fn renames(before: &TestFile, after: &TestFile) -> BTreeMap<String, String> {
             .count();
         (start + end).min(a.chars().count().max(b.chars().count()))
     };
-    let mut scored: Vec<(usize, usize, &str, &str)> = Vec::new();
-    for old in &gone {
-        let Some(old_shapes) = had.get(*old) else {
-            continue;
-        };
-        for now in &new {
-            let Some(new_shapes) = has.get(*now) else {
-                continue;
-            };
-            let shared: usize = old_shapes
+    let shared = |old: &str, now: &str| -> usize {
+        match (had.get(old), has.get(now)) {
+            (Some(old_shapes), Some(new_shapes)) => old_shapes
                 .iter()
                 .map(|(shape, count)| (*count).min(new_shapes.get(shape).copied().unwrap_or(0)))
-                .sum();
-            if shared > 0 {
-                scored.push((shared, alike(old, now), old, now));
-            }
+                .sum(),
+            _ => 0,
+        }
+    };
+    // The best of `options` for `id`: most shared, then most alike, then
+    // the first id.
+    let best = |id: &str, options: &[&str], forward: bool| -> Option<String> {
+        options
+            .iter()
+            .map(|other| {
+                let count = if forward {
+                    shared(id, other)
+                } else {
+                    shared(other, id)
+                };
+                (count, alike(id, other), *other)
+            })
+            .filter(|(count, _, _)| *count > 0)
+            .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(b.2.cmp(a.2)))
+            .map(|(_, _, other)| other.to_owned())
+    };
+    let mut edges: Vec<(String, String)> = Vec::new();
+    for old in &gone {
+        if let Some(now) = best(old, &new, true) {
+            edges.push(((*old).to_owned(), now));
         }
     }
-    // Best first; ids break the last ties, so the result does not depend on
-    // the order of the file.
-    scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then(b.1.cmp(&a.1))
-            .then(a.2.cmp(b.2))
-            .then(a.3.cmp(b.3))
-    });
-    let mut taken: BTreeSet<&str> = BTreeSet::new();
-    for (_, _, old, now) in scored {
-        if out.contains_key(old) || taken.contains(now) {
-            continue;
+    let picked: BTreeSet<String> = edges.iter().map(|(_, now)| now.clone()).collect();
+    for now in new.iter().filter(|now| !picked.contains(**now)) {
+        if let Some(old) = best(now, &gone, false).filter(|old| split_names(old, now)) {
+            edges.push((old, (*now).to_owned()));
         }
-        taken.insert(now);
-        out.insert(old.to_owned(), now.to_owned());
+    }
+    // Groups: the tests joined by an edge, through any number of edges.
+    let mut group: BTreeMap<(bool, String), usize> = BTreeMap::new();
+    for (old, now) in &edges {
+        let at_old = group.get(&(false, old.clone())).copied();
+        let at_new = group.get(&(true, now.clone())).copied();
+        let index = match (at_old, at_new) {
+            (Some(a), Some(b)) if a != b => {
+                let (keep, drop) = (a.min(b), a.max(b));
+                for value in group.values_mut() {
+                    if *value == drop {
+                        *value = keep;
+                    }
+                }
+                keep
+            }
+            (Some(a), _) | (None, Some(a)) => a,
+            (None, None) => group.values().max().map_or(0, |m| m + 1),
+        };
+        group.insert((false, old.clone()), index);
+        group.insert((true, now.clone()), index);
+    }
+    let mut numbered: BTreeMap<usize, usize> = BTreeMap::new();
+    for ((is_new, id), index) in &group {
+        let next = numbered.len();
+        let at = *numbered.entry(*index).or_insert(next);
+        if out.groups.len() <= at {
+            out.groups.push((Vec::new(), Vec::new()));
+        }
+        if *is_new {
+            out.groups[at].1.push(id.clone());
+            out.of_new.insert(id.clone(), at);
+        } else {
+            out.groups[at].0.push(id.clone());
+            out.of_gone.insert(id.clone(), at);
+        }
     }
     out
 }
@@ -2099,14 +2229,15 @@ fn renames(before: &TestFile, after: &TestFile) -> BTreeMap<String, String> {
 /// The assertions of one file that the change rewrote in their values only:
 /// gone from the base and new now, with the same shape once every literal
 /// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text), in the
-/// same test or a test and its rename ([`renames`]). The failure message
-/// is left out first ([`Assertion::checked`]): a message that changed is
-/// not an expected value (ADR 0063).
+/// same test or in tests that follow one another ([`successors`]: a rename,
+/// a merge, a split). The failure message is left out first
+/// ([`Assertion::checked`]): a message that changed is not an expected
+/// value (ADR 0063).
 fn expected_changes(
     path: &str,
     before: &TestFile,
     after: &TestFile,
-    renamed: &BTreeMap<String, String>,
+    followed: &Successors,
 ) -> Vec<Finding> {
     let mut left: BTreeMap<&str, usize> = BTreeMap::new();
     for assertion in &after.assertions {
@@ -2131,9 +2262,9 @@ fn expected_changes(
         }
     }
     // Paired only within the same test (found on real history: a new test's
-    // assertion was paired with a deleted test's), or a test and its rename
-    // (found in review, M26). A test that is gone and was not renamed pairs
-    // with nothing.
+    // assertion was paired with a deleted test's), or tests that follow one
+    // another (found in review, M26; ADR 0063). A test that is gone and is
+    // followed by none pairs with nothing.
     let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
     let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
     let gone_ids: Vec<String> = gone
@@ -2143,8 +2274,8 @@ fn expected_changes(
             if id.is_empty() || after_ids.contains(id) {
                 id.to_owned()
             } else {
-                match renamed.get(id) {
-                    Some(now) => format!("\u{0}{now}"),
+                match followed.of_gone.get(id) {
+                    Some(group) => format!("\u{0}{group}"),
                     None => format!("\u{0}\u{0}{id}"),
                 }
             }
@@ -2157,7 +2288,10 @@ fn expected_changes(
             if id.is_empty() || before_ids.contains(id) {
                 id.to_owned()
             } else {
-                format!("\u{0}{id}")
+                match followed.of_new.get(id) {
+                    Some(group) => format!("\u{0}{group}"),
+                    None => format!("\u{0}\u{1}{id}"),
+                }
             }
         })
         .collect();
@@ -2186,36 +2320,36 @@ fn expected_changes(
         .collect()
 }
 
-/// The assertions that a renamed test lost (ADR 0063). Assertions are
-/// counted over the whole change (ADR 0042), so a new test elsewhere hides
-/// one that a renamed test dropped; a test followed through its rename
-/// ([`renames`]) is also compared with itself. Only its shortfall is named,
-/// so an assertion traded for another is not a loss, nor is one rewritten
-/// in its values (`expected-changed`), nor one that moved to another test
-/// of the file. `excused` tests (deleted with their subject) are left out.
-fn renamed_losses(
+/// The assertions that tests followed through a rename, a merge or a split
+/// ([`successors`]) lost (ADR 0063). Assertions are counted over the whole
+/// change (ADR 0042), so a new test elsewhere hides one that a renamed test
+/// dropped; a group of tests that follow one another is also compared with
+/// itself. Only its shortfall is named, so an assertion traded for another
+/// is not a loss, nor is one rewritten in its values (`expected-changed`),
+/// nor one that moved to another test of the file or to another changed
+/// file (more of that check there now than on the base). `excused` tests
+/// (deleted with their subject) are left out.
+fn followed_losses(
     path: &str,
     before: &TestFile,
     after: &TestFile,
-    renamed: &BTreeMap<String, String>,
+    followed: &Successors,
     excused: &BTreeSet<&str>,
+    elsewhere: &Elsewhere,
 ) -> Vec<Finding> {
     let mut found = Vec::new();
-    for (old, now) in renamed {
-        if excused.contains(old.as_str()) {
-            continue;
-        }
-        let had: Vec<&Assertion> = before
-            .assertions
-            .iter()
-            .filter(|a| test_of(before, a) == old)
-            .collect();
-        let mut has: Vec<Option<&Assertion>> = after
-            .assertions
-            .iter()
-            .filter(|a| test_of(after, a) == now)
-            .map(Some)
-            .collect();
+    for (olds, nows) in &followed.groups {
+        let in_old = |a: &&Assertion| {
+            let id = test_of(before, a);
+            olds.iter().any(|old| old == id) && !excused.contains(id)
+        };
+        let in_new = |a: &&Assertion| {
+            let id = test_of(after, a);
+            nows.iter().any(|now| now == id)
+        };
+        let had: Vec<&Assertion> = before.assertions.iter().filter(in_old).collect();
+        let mut has: Vec<Option<&Assertion>> =
+            after.assertions.iter().filter(in_new).map(Some).collect();
         let weight =
             |list: &mut dyn Iterator<Item = &Assertion>| list.map(|a| a.weight).sum::<usize>();
         let mut short = weight(&mut had.iter().copied())
@@ -2246,17 +2380,17 @@ fn renamed_losses(
                 })
             })
             .collect();
-        // Moved to another test of the file: more of that check outside the
-        // test now than outside it on the base.
-        let mut outside: BTreeMap<&str, isize> = BTreeMap::new();
-        for a in after.assertions.iter().filter(|a| test_of(after, a) != now) {
+        // Moved: more of that check outside the group now than outside it
+        // on the base, in this file or in another changed one.
+        let mut outside: BTreeMap<&str, isize> = elsewhere
+            .more
+            .iter()
+            .map(|(shape, more)| (shape.as_str(), *more))
+            .collect();
+        for a in after.assertions.iter().filter(|a| !in_new(a)) {
             *outside.entry(a.checked()).or_default() += 1;
         }
-        for a in before
-            .assertions
-            .iter()
-            .filter(|a| test_of(before, a) != old)
-        {
+        for a in before.assertions.iter().filter(|a| !in_old(a)) {
             *outside.entry(a.checked()).or_default() -= 1;
         }
         let mut named = Vec::new();
@@ -2269,17 +2403,24 @@ fn renamed_losses(
                 _ => named.push(a),
             }
         }
+        let now = nows.join(", ");
         for a in named {
             if short == 0 {
                 break;
             }
             short = short.saturating_sub(a.weight);
+            let old = test_of(before, a);
+            let how = if olds.len() == 1 && nows.len() == 1 {
+                "renamed"
+            } else {
+                "now"
+            };
             found.push(Finding {
                 kind: Kind::AssertionRemoved,
                 file: path.to_owned(),
                 line: a.line,
                 on_base: true,
-                what: format!("{} (in {old}, renamed {now})", a.text),
+                what: format!("{} (in {old}, {how} {now})", a.text),
             });
         }
     }
@@ -2557,10 +2698,15 @@ mod tests {
             read_test_file(base, language),
             read_test_file(head, language),
         );
-        expected_changes(path, &before, &after, &renames(&before, &after))
-            .into_iter()
-            .map(|finding| finding.what)
-            .collect()
+        expected_changes(
+            path,
+            &before,
+            &after,
+            &successors(&before, &after, &Elsewhere::default()),
+        )
+        .into_iter()
+        .map(|finding| finding.what)
+        .collect()
     }
 
     #[test]
