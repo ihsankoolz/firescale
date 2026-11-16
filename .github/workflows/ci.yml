@@ -113,10 +113,13 @@ jobs:
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
-  # The four test jobs share one list of steps (the `&test-steps` anchor),
-  # each with its own name, so a skipped job is reported under the same check
-  # name as a job that ran. A skipped matrix job is not: GitHub reports it
-  # once, under its unexpanded name (`ubuntu-latest / node ${{ matrix.node }}`).
+  # Four test jobs with the same steps, each with its own name, so that a
+  # skipped job is reported under the same check name as a job that ran. A
+  # skipped matrix job is not: GitHub reports it once, under its unexpanded
+  # name (`ubuntu-latest / node ${{ matrix.node }}`). The steps are written out
+  # in each job, not shared through a YAML anchor, because firescale's tamper
+  # guard does not read anchors and would no longer see these commands. Keep
+  # the four lists identical; only NODE_VERSION differs.
   # Each test job runs unless the change is only docs. If the `changes` job
   # failed, its output is empty and they run.
   linux-22:
@@ -130,7 +133,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_VERSION: 22
-    steps: &test-steps
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Reads the pinned pnpm version from `packageManager` in package.json.
@@ -188,7 +191,57 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_VERSION: 24
-    steps: *test-steps
+    # The same steps as the linux-22 job.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Reads the pinned pnpm version from `packageManager` in package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      # Also restores and saves the pnpm store cache.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # Restores and saves the cargo registry and the target folder. The key
+      # names the OS group, as the job ids `linux` and `desktop` did before
+      # ADR 0066, so the caches saved before are still found.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ${{ runner.os == 'Linux' && 'linux' || 'desktop' }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # The checkout is on D:, the runner's work drive, but the temp folder is
+      # on C:, the slower system drive. The tests write their fixture repos,
+      # verify's base runs and Rust's temp files there (ADR 0066).
+      - name: Temp folder on the work drive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: pnpm test
+
+      - name: Smoke test
+        run: pnpm fscale --version
 
   # macOS and Windows minutes cost more than Linux ones, so these run only for
   # pull requests into main and for manual runs, on one Node version.
@@ -199,7 +252,57 @@ jobs:
     runs-on: macos-latest
     env:
       NODE_VERSION: 24
-    steps: *test-steps
+    # The same steps as the linux-22 job.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Reads the pinned pnpm version from `packageManager` in package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      # Also restores and saves the pnpm store cache.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # Restores and saves the cargo registry and the target folder. The key
+      # names the OS group, as the job ids `linux` and `desktop` did before
+      # ADR 0066, so the caches saved before are still found.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ${{ runner.os == 'Linux' && 'linux' || 'desktop' }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # The checkout is on D:, the runner's work drive, but the temp folder is
+      # on C:, the slower system drive. The tests write their fixture repos,
+      # verify's base runs and Rust's temp files there (ADR 0066).
+      - name: Temp folder on the work drive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: pnpm test
+
+      - name: Smoke test
+        run: pnpm fscale --version
 
   windows:
     needs: changes
@@ -208,7 +311,57 @@ jobs:
     runs-on: windows-latest
     env:
       NODE_VERSION: 24
-    steps: *test-steps
+    # The same steps as the linux-22 job.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Reads the pinned pnpm version from `packageManager` in package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      # Also restores and saves the pnpm store cache.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      # Installs the toolchain pinned in rust-toolchain.toml.
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # Restores and saves the cargo registry and the target folder. The key
+      # names the OS group, as the job ids `linux` and `desktop` did before
+      # ADR 0066, so the caches saved before are still found.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: ${{ runner.os == 'Linux' && 'linux' || 'desktop' }}
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # The checkout is on D:, the runner's work drive, but the temp folder is
+      # on C:, the slower system drive. The tests write their fixture repos,
+      # verify's base runs and Rust's temp files there (ADR 0066).
+      - name: Temp folder on the work drive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
+      - name: Test
+        run: pnpm test
+
+      - name: Smoke test
+        run: pnpm fscale --version
 
   docs:
     # A change of docs only still gets the two checks that read those files:
