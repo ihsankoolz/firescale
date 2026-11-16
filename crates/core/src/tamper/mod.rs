@@ -58,6 +58,7 @@ use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
+use tree_sitter::Node;
 
 use crate::blame::BaseCommit;
 use crate::git::run_git;
@@ -362,6 +363,148 @@ pub struct Assertion {
     /// one. Counted, and also counted apart: an assertion made conditional
     /// is a removal (ADR 0052, found in review).
     pub conditional: bool,
+    /// The shape without the failure message, when the assertion has one
+    /// (`assert x == 1, "why"`, `pytest.fail("why")`, `assert_eq!(a, b,
+    /// "why")`): what it checks. Only the expected values of what it checks
+    /// need an approval (ADR 0063).
+    pub checked: Option<String>,
+}
+
+impl Assertion {
+    /// What the assertion checks: its shape without its failure message.
+    #[must_use]
+    pub fn checked(&self) -> &str {
+        self.checked.as_deref().unwrap_or(&self.shape)
+    }
+}
+
+/// `node`'s text without white space and without the parts in `cut`: an
+/// assertion's shape with its failure message left out, or `None` when
+/// nothing is cut.
+pub(super) fn without(node: Node<'_>, src: &[u8], cut: &[Node<'_>]) -> Option<String> {
+    let mut ranges: Vec<(usize, usize)> = cut
+        .iter()
+        .map(|part| (part.start_byte(), part.end_byte()))
+        .filter(|(start, end)| *start >= node.start_byte() && *end <= node.end_byte())
+        .collect();
+    if ranges.is_empty() {
+        return None;
+    }
+    ranges.sort_unstable();
+    let mut kept: Vec<u8> = Vec::new();
+    let mut at = node.start_byte();
+    for (start, end) in ranges {
+        if start > at {
+            kept.extend_from_slice(&src[at..start]);
+        }
+        at = at.max(end);
+    }
+    kept.extend_from_slice(&src[at..node.end_byte()]);
+    Some(String::from_utf8_lossy(&kept).split_whitespace().collect())
+}
+
+/// Which arguments of an assertion call are its failure message, by the
+/// name of what is called (its last name: `assertEqual`, `XCTAssertEqual`),
+/// from each framework's documented signatures (ADR 0063).
+pub(super) struct Messages {
+    /// Calls whose every argument is the message: `fail("why")`.
+    pub all: &'static [&'static str],
+    /// Calls that check this many values first: `assertEqual(first,
+    /// second, msg)` is 2. The message is the first positional argument at
+    /// or after that index that is written as a string, with what follows
+    /// it (the values it is formatted with). An argument that is not a
+    /// string there (a `delta`, a `places`, a comparer) is a value.
+    pub from: &'static [(&'static str, usize)],
+    /// Argument labels that name a message (`msg=`, `reason:`), read only in
+    /// the calls of `all` and `from`.
+    pub labels: &'static [&'static str],
+}
+
+impl Messages {
+    /// The message arguments of a call named `name`, given its arguments in
+    /// order, each with its label if it has one.
+    pub(super) fn of<'t>(
+        &self,
+        name: &str,
+        arguments: &[(Option<&str>, Node<'t>)],
+        src: &[u8],
+    ) -> Vec<Node<'t>> {
+        if self.all.contains(&name) {
+            return arguments.iter().map(|(_, node)| *node).collect();
+        }
+        let Some(from) = self
+            .from
+            .iter()
+            .find(|(called, _)| *called == name)
+            .map(|(_, from)| *from)
+        else {
+            return Vec::new();
+        };
+        let mut positional = 0;
+        let mut message = false;
+        let mut out = Vec::new();
+        for (label, node) in arguments {
+            match label {
+                Some(label) if self.labels.contains(label) => out.push(*node),
+                Some(_) => {}
+                None => {
+                    message = message
+                        || (positional >= from
+                            && string_like(&String::from_utf8_lossy(
+                                &src[node.start_byte()..node.end_byte()],
+                            )));
+                    if message {
+                        out.push(*node);
+                    }
+                    positional += 1;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// True when an expression is written as a string: a literal in any of the
+/// languages' quotes, with a prefix (`f"…"`, `r"…"`, `$"…"`, `@"…"`), or a
+/// concatenation or format that starts with one (`"a: " + x`).
+pub(super) fn string_like(expression: &str) -> bool {
+    let rest = expression.trim_start();
+    // Raw strings take `#`s too: Rust's `r#"…"#`, Swift's `#"…"#`.
+    let rest = rest.trim_start_matches(|c: char| {
+        matches!(
+            c,
+            'f' | 'F' | 'r' | 'R' | 'b' | 'B' | 'u' | 'U' | '$' | '@' | '#'
+        )
+    });
+    rest.starts_with(['"', '\'', '`']) && expression.trim_start().len() - rest.len() <= 4
+}
+
+/// The named arguments of a call's argument list, comments left out, each
+/// with its label when it has one (`msg="…"`, `reason: "…"`, `message =
+/// "…"`, `because: "…"`). Grammars that wrap each argument
+/// (`value_argument`, `argument`) are read through the wrapper.
+pub(super) fn labelled_arguments<'t, 's>(
+    list: Node<'t>,
+    src: &'s [u8],
+) -> Vec<(Option<&'s str>, Node<'t>)> {
+    let mut cursor = list.walk();
+    list.named_children(&mut cursor)
+        .filter(|node| !node.is_extra() && !node.kind().contains("comment"))
+        .map(|node| {
+            let whole = std::str::from_utf8(&src[node.start_byte()..node.end_byte()]).unwrap_or("");
+            // `name=`, `name:` or `name =` before the value, but not `==`
+            // or `::`.
+            let name_end = whole
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(whole.len());
+            let after = whole[name_end..].trim_start();
+            let labelled = name_end > 0
+                && !whole.starts_with(|c: char| c.is_ascii_digit())
+                && (after.starts_with('=') && !after.starts_with("==")
+                    || after.starts_with(':') && !after.starts_with("::"));
+            (labelled.then(|| &whole[..name_end]), node)
+        })
+        .collect()
 }
 
 /// What a test file holds.
@@ -1196,13 +1339,20 @@ pub fn guard_at(
     let mut head_always_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     // The same, by file and test: which one went is named by its test first.
     let mut head_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
+    // Assertions that renamed tests lost (ADR 0063).
+    let mut lost_in_renames: Vec<Finding> = Vec::new();
     let counts = &mut report.counts;
     for (file, base_file, head_file) in &pairs {
         let path = &file.path;
+        // The tests this file's change renamed (ADR 0063).
+        let renamed = match (base_file, head_file) {
+            (Some(before), Some(after)) => renames(before, after),
+            _ => BTreeMap::new(),
+        };
         // Assertions that changed only in their values, file by file (M26).
         if let (Some(before), Some(after)) = (base_file, head_file) {
             if !allows(path, Kind::ExpectedChanged) {
-                approval_findings.extend(expected_changes(path, before, after));
+                approval_findings.extend(expected_changes(path, before, after, &renamed));
             }
         }
         let count_tests = !allows(path, Kind::TestDeleted);
@@ -1263,6 +1413,14 @@ pub fn guard_at(
                         conditional: assertion.conditional,
                     });
                 }
+            }
+            if let (true, Some(after)) = (count_assertions, head_file) {
+                let excused_ids: BTreeSet<&str> = excused_tests
+                    .iter()
+                    .filter_map(|index| read.tests.get(*index))
+                    .map(|test| test.id.as_str())
+                    .collect();
+                lost_in_renames.extend(renamed_losses(path, read, after, &renamed, &excused_ids));
             }
         }
         // A file whose every test is skipped on the base and now (the whole
@@ -1492,6 +1650,18 @@ pub fn guard_at(
                     what: entry.text.clone(),
                 });
             }
+        }
+    }
+    // An assertion a renamed test lost, unless the net count named it.
+    for lost in lost_in_renames {
+        let named = findings.iter().any(|finding| {
+            finding.kind == Kind::AssertionRemoved
+                && finding.on_base
+                && finding.file == lost.file
+                && finding.line == lost.line
+        });
+        if !named {
+            findings.push(lost);
         }
     }
     // More suppressions of a rule: name the new ones, up to the shortfall
@@ -1756,54 +1926,149 @@ fn test_id(file: &TestFile, assertion: &Assertion) -> String {
         .unwrap_or_default()
 }
 
+/// The id of the test an assertion is in, or "" outside any test.
+fn test_of<'f>(file: &'f TestFile, assertion: &Assertion) -> &'f str {
+    assertion
+        .test
+        .and_then(|index| file.tests.get(index))
+        .map_or("", |test| test.id.as_str())
+}
+
+/// At most this many (gone, new) pairs of tests are weighed per file when
+/// following renames; a file rewritten past that follows none.
+const MAX_RENAME_PAIRS: usize = 40_000;
+
+/// The tests of one file that the change renamed: each base test that is
+/// gone, with the new test that shares the most of its assertions once
+/// every literal is masked (ties: the longer common start and end of the
+/// two names). A gone test that shares no assertion with a new test was
+/// not renamed: it went. Before ADR 0063 every gone test was taken for a
+/// rename of every new one, so `assert upstream.calls == 1` of a renamed
+/// test was paired with `assert upstream.calls == 0` of a new, different
+/// one (finding 4 of the 0.5.1 review).
+fn renames(before: &TestFile, after: &TestFile) -> BTreeMap<String, String> {
+    let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
+    let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
+    let gone: Vec<&str> = before_ids.difference(&after_ids).copied().collect();
+    let new: Vec<&str> = after_ids.difference(&before_ids).copied().collect();
+    let mut out = BTreeMap::new();
+    if gone.is_empty() || new.is_empty() || gone.len() * new.len() > MAX_RENAME_PAIRS {
+        return out;
+    }
+    let skeletons = |file: &TestFile, ids: &[&str]| -> BTreeMap<String, BTreeMap<String, usize>> {
+        let mut by_test: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+        for assertion in &file.assertions {
+            let id = test_of(file, assertion);
+            if ids.contains(&id) {
+                *by_test
+                    .entry(id.to_owned())
+                    .or_default()
+                    .entry(approval::skeleton(assertion.checked()))
+                    .or_default() += 1;
+            }
+        }
+        by_test
+    };
+    let had = skeletons(before, &gone);
+    let has = skeletons(after, &new);
+    let alike = |a: &str, b: &str| -> usize {
+        let start = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+        let end = a
+            .chars()
+            .rev()
+            .zip(b.chars().rev())
+            .take_while(|(x, y)| x == y)
+            .count();
+        (start + end).min(a.chars().count().max(b.chars().count()))
+    };
+    let mut scored: Vec<(usize, usize, &str, &str)> = Vec::new();
+    for old in &gone {
+        let Some(old_shapes) = had.get(*old) else {
+            continue;
+        };
+        for now in &new {
+            let Some(new_shapes) = has.get(*now) else {
+                continue;
+            };
+            let shared: usize = old_shapes
+                .iter()
+                .map(|(shape, count)| (*count).min(new_shapes.get(shape).copied().unwrap_or(0)))
+                .sum();
+            if shared > 0 {
+                scored.push((shared, alike(old, now), old, now));
+            }
+        }
+    }
+    // Best first; ids break the last ties, so the result does not depend on
+    // the order of the file.
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(b.1.cmp(&a.1))
+            .then(a.2.cmp(b.2))
+            .then(a.3.cmp(b.3))
+    });
+    let mut taken: BTreeSet<&str> = BTreeSet::new();
+    for (_, _, old, now) in scored {
+        if out.contains_key(old) || taken.contains(now) {
+            continue;
+        }
+        taken.insert(now);
+        out.insert(old.to_owned(), now.to_owned());
+    }
+    out
+}
+
 /// The assertions of one file that the change rewrote in their values only:
 /// gone from the base and new now, with the same shape once every literal
-/// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text).
-fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Finding> {
+/// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text), in the
+/// same test or a test and its rename ([`renames`]). The failure message
+/// is left out first ([`Assertion::checked`]): a message that changed is
+/// not an expected value (ADR 0063).
+fn expected_changes(
+    path: &str,
+    before: &TestFile,
+    after: &TestFile,
+    renamed: &BTreeMap<String, String>,
+) -> Vec<Finding> {
     let mut left: BTreeMap<&str, usize> = BTreeMap::new();
     for assertion in &after.assertions {
-        *left.entry(assertion.shape.as_str()).or_default() += 1;
+        *left.entry(assertion.checked()).or_default() += 1;
     }
     let mut gone: Vec<&Assertion> = Vec::new();
     for assertion in &before.assertions {
-        match left.get_mut(assertion.shape.as_str()) {
+        match left.get_mut(assertion.checked()) {
             Some(count) if *count > 0 => *count -= 1,
             _ => gone.push(assertion),
         }
     }
     let mut had: BTreeMap<&str, usize> = BTreeMap::new();
     for assertion in &before.assertions {
-        *had.entry(assertion.shape.as_str()).or_default() += 1;
+        *had.entry(assertion.checked()).or_default() += 1;
     }
     let mut new: Vec<&Assertion> = Vec::new();
     for assertion in &after.assertions {
-        match had.get_mut(assertion.shape.as_str()) {
+        match had.get_mut(assertion.checked()) {
             Some(count) if *count > 0 => *count -= 1,
             _ => new.push(assertion),
         }
     }
     // Paired only within the same test (found on real history: a new test's
-    // assertion was paired with a deleted test's).
-    let test_of = |file: &TestFile, assertion: &Assertion| -> String {
-        assertion
-            .test
-            .and_then(|index| file.tests.get(index))
-            .map(|test| test.id.clone())
-            .unwrap_or_default()
-    };
-    // A test renamed with its value changed: an assertion of a test that is
-    // gone may pair with one of a test that is new (found in review).
+    // assertion was paired with a deleted test's), or a test and its rename
+    // (found in review, M26). A test that is gone and was not renamed pairs
+    // with nothing.
     let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
     let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
-    const RENAMED: &str = "\u{0}renamed";
     let gone_ids: Vec<String> = gone
         .iter()
         .map(|a| {
             let id = test_of(before, a);
-            if !id.is_empty() && !after_ids.contains(id.as_str()) {
-                RENAMED.to_owned()
+            if id.is_empty() || after_ids.contains(id) {
+                id.to_owned()
             } else {
-                id
+                match renamed.get(id) {
+                    Some(now) => format!("\u{0}{now}"),
+                    None => format!("\u{0}\u{0}{id}"),
+                }
             }
         })
         .collect();
@@ -1811,22 +2076,22 @@ fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Find
         .iter()
         .map(|a| {
             let id = test_of(after, a);
-            if !id.is_empty() && !before_ids.contains(id.as_str()) {
-                RENAMED.to_owned()
+            if id.is_empty() || before_ids.contains(id) {
+                id.to_owned()
             } else {
-                id
+                format!("\u{0}{id}")
             }
         })
         .collect();
     let gone_shapes: Vec<(&str, &str)> = gone
         .iter()
         .zip(&gone_ids)
-        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .map(|(a, id)| (id.as_str(), a.checked()))
         .collect();
     let new_shapes: Vec<(&str, &str)> = new
         .iter()
         .zip(&new_ids)
-        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .map(|(a, id)| (id.as_str(), a.checked()))
         .collect();
     approval::pairs(&gone_shapes, &new_shapes)
         .into_iter()
@@ -1841,6 +2106,106 @@ fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Find
             ),
         })
         .collect()
+}
+
+/// The assertions that a renamed test lost (ADR 0063). Assertions are
+/// counted over the whole change (ADR 0042), so a new test elsewhere hides
+/// one that a renamed test dropped; a test followed through its rename
+/// ([`renames`]) is also compared with itself. Only its shortfall is named,
+/// so an assertion traded for another is not a loss, nor is one rewritten
+/// in its values (`expected-changed`), nor one that moved to another test
+/// of the file. `excused` tests (deleted with their subject) are left out.
+fn renamed_losses(
+    path: &str,
+    before: &TestFile,
+    after: &TestFile,
+    renamed: &BTreeMap<String, String>,
+    excused: &BTreeSet<&str>,
+) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for (old, now) in renamed {
+        if excused.contains(old.as_str()) {
+            continue;
+        }
+        let had: Vec<&Assertion> = before
+            .assertions
+            .iter()
+            .filter(|a| test_of(before, a) == old)
+            .collect();
+        let mut has: Vec<Option<&Assertion>> = after
+            .assertions
+            .iter()
+            .filter(|a| test_of(after, a) == now)
+            .map(Some)
+            .collect();
+        let weight =
+            |list: &mut dyn Iterator<Item = &Assertion>| list.map(|a| a.weight).sum::<usize>();
+        let mut short = weight(&mut had.iter().copied())
+            .saturating_sub(weight(&mut has.iter().flatten().copied()));
+        if short == 0 {
+            continue;
+        }
+        // The same check kept, then the same check with other values.
+        let mut take = |a: &Assertion, same: &dyn Fn(&Assertion, &Assertion) -> bool| -> bool {
+            match has.iter_mut().find(|b| b.is_some_and(|b| same(a, b))) {
+                Some(slot) => {
+                    *slot = None;
+                    true
+                }
+                None => false,
+            }
+        };
+        let unmatched: Vec<&Assertion> = had
+            .iter()
+            .copied()
+            .filter(|a| !take(a, &|a, b| a.checked() == b.checked()))
+            .collect();
+        let lost: Vec<&Assertion> = unmatched
+            .into_iter()
+            .filter(|a| {
+                !take(a, &|a, b| {
+                    approval::skeleton(a.checked()) == approval::skeleton(b.checked())
+                })
+            })
+            .collect();
+        // Moved to another test of the file: more of that check outside the
+        // test now than outside it on the base.
+        let mut outside: BTreeMap<&str, isize> = BTreeMap::new();
+        for a in after.assertions.iter().filter(|a| test_of(after, a) != now) {
+            *outside.entry(a.checked()).or_default() += 1;
+        }
+        for a in before
+            .assertions
+            .iter()
+            .filter(|a| test_of(before, a) != old)
+        {
+            *outside.entry(a.checked()).or_default() -= 1;
+        }
+        let mut named = Vec::new();
+        for a in lost {
+            match outside.get_mut(a.checked()) {
+                Some(more) if *more > 0 => {
+                    *more -= 1;
+                    short = short.saturating_sub(a.weight);
+                }
+                _ => named.push(a),
+            }
+        }
+        for a in named {
+            if short == 0 {
+                break;
+            }
+            short = short.saturating_sub(a.weight);
+            found.push(Finding {
+                kind: Kind::AssertionRemoved,
+                file: path.to_owned(),
+                line: a.line,
+                on_base: true,
+                what: format!("{} (in {old}, renamed {now})", a.text),
+            });
+        }
+    }
+    found
 }
 
 /// A suppression key's tool family, how far it reaches (0: a line or an
@@ -2110,14 +2475,14 @@ mod tests {
     /// of one test file.
     fn changed(path: &str, base: &str, head: &str) -> Vec<String> {
         let language = Language::of(path).expect("a language the guard reads");
-        expected_changes(
-            path,
-            &read_test_file(base, language),
-            &read_test_file(head, language),
-        )
-        .into_iter()
-        .map(|finding| finding.what)
-        .collect()
+        let (before, after) = (
+            read_test_file(base, language),
+            read_test_file(head, language),
+        );
+        expected_changes(path, &before, &after, &renames(&before, &after))
+            .into_iter()
+            .map(|finding| finding.what)
+            .collect()
     }
 
     #[test]

@@ -5,8 +5,61 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
-use super::{Assertion, TestCase, TestFile};
+use super::{labelled_arguments, without, Assertion, Messages, TestCase, TestFile};
 use crate::imports::{js_dialect, js_string, parse, text, walk, JsDialect};
+
+/// The failure messages of JS and TS assertions (ADR 0063): Vitest's and
+/// Chai's `expect(value, message)`, Node's `node:assert` (`assert(value,
+/// message)`, `assert.equal(actual, expected, message)`,
+/// `assert.fail(message)`) and Chai's `assert` methods of the same names.
+const MESSAGES: Messages = Messages {
+    all: &["fail"],
+    from: &[
+        ("expect", 1),
+        ("soft", 1),
+        ("assert", 1),
+        ("ok", 1),
+        ("isTrue", 1),
+        ("isFalse", 1),
+        ("isOk", 1),
+        ("isNotOk", 1),
+        ("isNull", 1),
+        ("isNotNull", 1),
+        ("isUndefined", 1),
+        ("isDefined", 1),
+        ("exists", 1),
+        ("notExists", 1),
+        ("equal", 2),
+        ("notEqual", 2),
+        ("strictEqual", 2),
+        ("notStrictEqual", 2),
+        ("deepEqual", 2),
+        ("notDeepEqual", 2),
+        ("deepStrictEqual", 2),
+        ("notDeepStrictEqual", 2),
+        ("match", 2),
+        ("doesNotMatch", 2),
+        ("include", 2),
+        ("notInclude", 2),
+        ("lengthOf", 2),
+    ],
+    labels: &[],
+};
+
+/// The failure message of the call that opens an assertion: the
+/// arguments [`MESSAGES`] names.
+fn message_parts<'t>(call: Node<'t>, function: Node<'_>, src: &[u8]) -> Vec<Node<'t>> {
+    let name = match function.kind() {
+        "identifier" => text(function, src),
+        "member_expression" => function
+            .child_by_field_name("property")
+            .map_or("", |property| text(property, src)),
+        _ => return Vec::new(),
+    };
+    call.child_by_field_name("arguments")
+        .map(|list| MESSAGES.of(name, &labelled_arguments(list, src), src))
+        .unwrap_or_default()
+}
 
 const TEST_NAMES: [&str; 5] = ["it", "test", "xit", "xtest", "fit"];
 const SUITE_NAMES: [&str; 6] = [
@@ -444,6 +497,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
                     .join(" "),
                 test: inside.and_then(|block| block.test),
                 conditional: false,
+                checked: without(whole, src, &message_parts(node, function, src)),
                 weight: inside.map_or(1, |block| block.weight),
             });
             return true;

@@ -957,6 +957,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .map_or(1, |test| test.weight),
                     test,
                     conditional,
+                    checked: None,
                 });
                 true
             }
