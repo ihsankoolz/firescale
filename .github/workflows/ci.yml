@@ -114,9 +114,12 @@ jobs:
           echo "code=$code" >> "$GITHUB_OUTPUT"
 
   # Four test jobs with the same steps, each with its own name, so that a
-  # skipped job is reported under the same check name as a job that ran. A
-  # skipped matrix job is not: GitHub reports it once, under its unexpanded
-  # name (`ubuntu-latest / node ${{ matrix.node }}`). The steps are written out
+  # job skipped because the change is only docs is reported under the same
+  # check name as a job that ran. A skipped matrix job is not: GitHub reports
+  # it once, under its unexpanded name (`ubuntu-latest / node ${{ matrix.node }}`).
+  # A job skipped because of the event (macOS and Windows on a push, Linux on
+  # a pull request from this repository) gets another name, so that its
+  # skipped check never shares a name with the real one on the same commit. The steps are written out
   # in each job, not shared through a YAML anchor, because firescale's tamper
   # guard does not read anchors and would no longer see these commands. Keep
   # the four lists identical; only NODE_VERSION differs.
@@ -129,7 +132,7 @@ jobs:
     # Linux covers both supported Node versions.
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
-    name: ubuntu-latest / node 22
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && 'ubuntu node 22 (runs in the push run)' || 'ubuntu-latest / node 22' }}
     runs-on: ubuntu-latest
     env:
       NODE_VERSION: 22
@@ -187,7 +190,7 @@ jobs:
   linux-24:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
-    name: ubuntu-latest / node 24
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && 'ubuntu node 24 (runs in the push run)' || 'ubuntu-latest / node 24' }}
     runs-on: ubuntu-latest
     env:
       NODE_VERSION: 24
@@ -248,7 +251,7 @@ jobs:
   macos:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && github.event_name != 'push' }}
-    name: macos-latest / node 24
+    name: ${{ github.event_name == 'push' && 'macos node 24 (pull requests only)' || 'macos-latest / node 24' }}
     runs-on: macos-latest
     env:
       NODE_VERSION: 24
@@ -307,7 +310,7 @@ jobs:
   windows:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && github.event_name != 'push' }}
-    name: windows-latest / node 24
+    name: ${{ github.event_name == 'push' && 'windows node 24 (pull requests only)' || 'windows-latest / node 24' }}
     runs-on: windows-latest
     env:
       NODE_VERSION: 24
@@ -370,7 +373,7 @@ jobs:
     # the push, like the linux jobs.
     needs: changes
     if: ${{ needs.changes.outputs.code == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
-    name: docs only
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && 'docs (runs in the push run)' || 'docs only' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
