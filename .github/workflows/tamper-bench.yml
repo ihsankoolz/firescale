@@ -1,0 +1,247 @@
+name: Tamper bench
+
+# The tamper guard on real history, for two versions of fscale (ADR 0067).
+# Started by hand only. It builds fscale from `before` and `after`, clones
+# each repo of bench/tamper-history.json and bench/tamper-history-m32.json
+# at the head recorded there (read-only: nothing of theirs is installed or
+# run), and runs bench/tamper-history.mjs of `after` with both binaries over
+# the same commits. One job per repo, on Linux. Each uploads its two JSON
+# Lines files; label and compare them with bench/tamper-history-report.mjs.
+on:
+  workflow_dispatch:
+    inputs:
+      before:
+        description: 'Ref to build the "before" fscale from'
+        required: true
+        default: main
+      after:
+        description: 'Ref to build the "after" fscale from (its bench scripts are used for both)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.side }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        side: [before, after]
+    steps:
+      # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.side == 'before' && inputs.before || inputs.after }}
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build release binary
+        run: cargo build --release -p firescale-cli
+
+      - name: Name the binary after its ref
+        env:
+          SIDE: ${{ matrix.side }}
+        run: |
+          mkdir -p out
+          cp target/release/fscale "out/fscale-$SIDE"
+          git rev-parse HEAD > "out/fscale-$SIDE.commit"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fscale-${{ matrix.side }}
+          path: out/
+          retention-days: 14
+
+  history:
+    needs: build
+    name: history / ${{ matrix.repo }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # From bench/tamper-history.json (M26: 150 commits) and
+      # bench/tamper-history-m32.json (M32: 125 commits, --all-parents for
+      # the repos that merge branches), at the heads recorded there, so the
+      # commits are the ones already labelled.
+      matrix:
+        include:
+          - {
+              repo: BurntSushi/ripgrep,
+              language: rs,
+              commits: 150,
+              head: 178cc027e283fd965cb72d0a7395b219eada170c,
+              all: false,
+            }
+          - {
+              repo: axios/axios,
+              language: js,
+              commits: 150,
+              head: 4ee8d46fc463770b8f5da718d5449a5b027b2c08,
+              all: false,
+            }
+          - {
+              repo: clap-rs/clap,
+              language: rs,
+              commits: 150,
+              head: db30b39a55c188763666268447050a0dacba3bf0,
+              all: false,
+            }
+          - {
+              repo: encode/httpx,
+              language: py,
+              commits: 150,
+              head: b5addb64f0161ff6bfe94c124ef76f6a1fba5254,
+              all: false,
+            }
+          - {
+              repo: expressjs/express,
+              language: js,
+              commits: 150,
+              head: 43fca52d28a422c8be48fd489cbd4f2d6152bab6,
+              all: false,
+            }
+          - {
+              repo: honojs/hono,
+              language: ts,
+              commits: 150,
+              head: f6fbaf0299c48eea9e656e03e2ffe7ac755e8823,
+              all: false,
+            }
+          - {
+              repo: ihsankoolz/firescale,
+              language: this,
+              commits: 150,
+              head: 18bdbe7a04f94bc7820112791eacc785d553a901,
+              all: false,
+            }
+          - {
+              repo: pallets/flask,
+              language: py,
+              commits: 150,
+              head: bfc8f983871dcadf0492578d9ab72d951b34c19c,
+              all: false,
+            }
+          - {
+              repo: sindresorhus/ky,
+              language: ts,
+              commits: 150,
+              head: 3541888878c4d303a8bc2ad61815f4e048f55a5d,
+              all: false,
+            }
+          - {
+              repo: Alamofire/Alamofire,
+              language: swift,
+              commits: 125,
+              head: dea4bab91767a971d6e112bc955c6a82295589b7,
+              all: false,
+            }
+          - {
+              repo: DaveGamble/cJSON,
+              language: c,
+              commits: 125,
+              head: 6d9f2443ab071f86e5d9b43025a40929ec41c46c,
+              all: true,
+            }
+          - {
+              repo: Humanizr/Humanizer,
+              language: cs,
+              commits: 125,
+              head: 4574b93883bf48e3f0f3bca73297054537317ab2,
+              all: true,
+            }
+          - {
+              repo: apache/commons-lang,
+              language: java,
+              commits: 125,
+              head: 9368465e7575810c45acd9d2e6f805cd002f4ff8,
+              all: true,
+            }
+          - {
+              repo: dart-lang/http,
+              language: dart,
+              commits: 125,
+              head: 2bac218a1115a58addd140d7a7eaabf803d57631,
+              all: false,
+            }
+          - {
+              repo: fmtlib/fmt,
+              language: cpp,
+              commits: 125,
+              head: 4229eb5820af49bf797641168624c8a754a1a4eb,
+              all: false,
+            }
+          - {
+              repo: spf13/cobra,
+              language: go,
+              commits: 125,
+              head: adbc8813901bba65827259daa8e22ff94ec1f30e,
+              all: true,
+            }
+          - {
+              repo: square/okhttp,
+              language: kotlin,
+              commits: 125,
+              head: 58ca23340fc974ad0a5d411e167f1dc9f6f0886a,
+              all: false,
+            }
+    steps:
+      # The bench scripts of `after`, used with both binaries.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.after }}
+          path: firescale
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: fscale-*
+          path: bin
+          merge-multiple: true
+
+      - name: Clone the repo at its recorded head (shallow, read-only)
+        env:
+          REPO: ${{ matrix.repo }}
+          HEAD_SHA: ${{ matrix.head }}
+          ALL: ${{ matrix.all }}
+          COMMITS: ${{ matrix.commits }}
+        run: |
+          chmod +x bin/fscale-before bin/fscale-after
+          # Enough history for the commits and their parents; merges of
+          # --all-parents repos need more generations.
+          depth=$((COMMITS + 2))
+          if [ "$ALL" = true ]; then depth=$((COMMITS * 4)); fi
+          git init --quiet repo
+          git -C repo fetch --quiet --depth "$depth" "https://github.com/$REPO.git" "$HEAD_SHA"
+          git -C repo update-ref refs/heads/bench FETCH_HEAD
+          git -C repo symbolic-ref HEAD refs/heads/bench
+
+      - name: Run the guard over the history with both binaries
+        env:
+          REPO: ${{ matrix.repo }}
+          LANGUAGE: ${{ matrix.language }}
+          COMMITS: ${{ matrix.commits }}
+          ALL: ${{ matrix.all }}
+        run: |
+          mkdir -p out
+          slug=$(printf '%s' "$REPO" | tr '/' '_')
+          extra=()
+          if [ "$ALL" = true ]; then extra=(--all-parents); fi
+          for side in before after; do
+            node firescale/bench/tamper-history.mjs --bin "bin/fscale-$side" --repo repo \
+              --name "$REPO" --language "$LANGUAGE" --commits "$COMMITS" \
+              --out "out/$slug.$side.jsonl" "${extra[@]}"
+          done
+          cp bin/fscale-before.commit bin/fscale-after.commit out/
+          echo "SLUG=$slug" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: history-${{ env.SLUG }}
+          path: out/
+          retention-days: 30
