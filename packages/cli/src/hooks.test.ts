@@ -686,6 +686,68 @@ describe('the command the hook starts (ADR 0064)', () => {
   });
 });
 
+// The owner's decision on ADR 0064: an installed pin is not left behind on
+// an upgrade. `sync` moves the version of a stop hook command firescale
+// wrote (`npx --yes firescale@<old> hooks run --agent <name>`, exactly),
+// says so, and changes no other command.
+describe('fscale sync and the pin of a stop hook firescale wrote (ADR 0064)', () => {
+  it('moves an older pin firescale wrote to this version, says so, and changes no other command', async () => {
+    const old = 'npx --yes firescale@0.5.0';
+    const claude = `${JSON.stringify(
+      {
+        env: { TZ: 'UTC' },
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                { type: 'command', command: `${old} hooks run --agent claude` },
+                { type: 'command', command: `${old} hooks run --agent claude --budget 60` },
+                { type: 'command', command: 'echo stopped' },
+              ],
+            },
+          ],
+        },
+      },
+      null,
+      4,
+    )}\n`;
+    const codex = `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'npx firescale hooks run --agent codex' }] }] } }, null, 2)}\n`;
+    const cursor = `${JSON.stringify({ version: 1, hooks: { stop: [{ command: 'npx --yes firescale@99.0.0 hooks run --agent cursor' }] } }, null, 2)}\n`;
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({ packs: [] }),
+        [HOOK_FILES.claude]: claude,
+        [HOOK_FILES.codex]: codex,
+        [HOOK_FILES.cursor]: cursor,
+      },
+    });
+    const note = `.claude/settings.json: the stop hook firescale wrote ran firescale 0.5.0 (\`${old}\`); sync moves its pin to firescale ${VERSION}. sync changes no other command.`;
+
+    const check = await runCli(['sync', '--check'], repo.root);
+    expect(check.stdout).toContain(note);
+    expect(check.stdout).toContain('would edit .claude/settings.json');
+    expect(check.code).toBe(EXIT_VIOLATIONS);
+    expect(await read(repo.root, HOOK_FILES.claude)).toBe(claude);
+
+    const sync = await runCli(['sync'], repo.root);
+    expect(sync.stdout).toContain(note);
+    expect(sync.stdout).toContain('edited .claude/settings.json');
+    expect(sync.code).toBe(EXIT_OK);
+    expect(await read(repo.root, HOOK_FILES.claude)).toBe(
+      claude.replace(
+        `"${old} hooks run --agent claude"`,
+        `"npx --yes firescale@${VERSION} hooks run --agent claude"`,
+      ),
+    );
+    expect(await read(repo.root, HOOK_FILES.codex)).toBe(codex);
+    expect(await read(repo.root, HOOK_FILES.cursor)).toBe(cursor);
+
+    const again = await runCli(['sync', '--check'], repo.root);
+    expect(again.stdout).not.toContain('sync moves its pin');
+    expect(again.code).toBe(EXIT_OK);
+  });
+});
+
 // Review of ADR 0064, finding 7: the check after installing runs on the
 // installer's machine only. `fscale doctor` starts each hook the same way,
 // on whichever machine it runs.
