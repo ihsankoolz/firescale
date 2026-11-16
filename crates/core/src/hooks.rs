@@ -672,10 +672,30 @@ mod tests {
             ..crate::facts::RepoFacts::default()
         };
         let script = json!({ "scripts": { "fscale": "fscale" } });
-        assert_eq!(fscale_command(&facts(None), None), "npx firescale");
+        // No fscale of the repo's own: this version, pinned, so a release
+        // does not change every teammate's hook (review of ADR 0064).
+        let pinned = format!("npx --yes firescale@{}", crate::version());
+        assert_eq!(fscale_command(&facts(None), None), pinned);
         assert_eq!(
             fscale_command(&facts(Some("pnpm")), Some(&json!({ "name": "app" }))),
-            "npx firescale"
+            pinned
+        );
+        // firescale among the repo's dependencies: the one it installs.
+        let installed = json!({ "devDependencies": { "firescale": "^0.5.0" } });
+        for (manager, command) in [
+            (Some("pnpm"), "pnpm exec fscale"),
+            (Some("yarn"), "yarn --silent fscale"),
+            (Some("bun"), "bun run --silent fscale"),
+            (None, "npx --no fscale"),
+        ] {
+            assert_eq!(fscale_command(&facts(manager), Some(&installed)), command);
+        }
+        assert_eq!(
+            fscale_command(
+                &facts(None),
+                Some(&json!({ "dependencies": { "firescale": "0.5.1" } }))
+            ),
+            "npx --no fscale"
         );
         assert_eq!(
             fscale_command(&facts(Some("pnpm")), Some(&script)),

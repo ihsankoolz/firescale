@@ -2421,6 +2421,124 @@ mod tests {
         assert_ne!(project(), before);
     }
 
+    /// Review of ADR 0064, finding 1 (fixture fixA): `web`'s test reads
+    /// `.claude/settings.json` by its path, so the graph has a shared node
+    /// `.claude` that `web` depends on.
+    fn a_project_reads_the_hook_file() -> Fixture {
+        Fixture::new(
+            &[
+                ("api/package.json", "{\"name\":\"api\"}\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                (
+                    "web/test.js",
+                    "const settings = require('../.claude/settings.json');\n",
+                ),
+                (".claude/settings.json", "{}\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_hook_file_is_a_file_of_every_unit_whose_folders_hold_it() {
+        let machine = NoTools;
+        let fixture = a_project_reads_the_hook_file();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let key = |folder: &str| {
+            cache_over(root, Some(graph.clone()), &machine, "")
+                .key(
+                    Some(folder),
+                    Some("node"),
+                    "test",
+                    "node test.js",
+                    &abs(root, folder),
+                )
+                .unwrap()
+                .key
+        };
+        let (web, api) = (key("web"), key("api"));
+        // A change inside the hook entries only: `web` reads the file, so
+        // its key changes; `api` does not read it.
+        fixture
+            .write(
+                ".claude/settings.json",
+                "{ \"hooks\": { \"Stop\": [ { \"hooks\": [] } ] } }\n",
+            )
+            .unwrap();
+        assert_ne!(key("web"), web);
+        assert_eq!(key("api"), api);
+        // And the base run never takes its head result for the base's.
+        let changed = BTreeSet::from([".claude/settings.json".to_owned()]);
+        let cache = cache_over(root, Some(graph.clone()), &machine, "");
+        assert!(!cache.same_on_base(
+            Some("web"),
+            Some("node"),
+            "test",
+            "node test.js",
+            &abs(root, "web"),
+            &changed
+        ));
+        // Nor for a project that does not read it (review of ADR 0064: a
+        // changed hook file is a difference for every unit).
+        assert!(!cache.same_on_base(
+            Some("api"),
+            Some("node"),
+            "test",
+            "node test.js",
+            &abs(root, "api"),
+            &changed
+        ));
+    }
+
+    #[test]
+    fn what_is_outside_the_hook_entries_is_in_every_key_by_value() {
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let project = || {
+            cache_over(root, Some(graph.clone()), &machine, "")
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let none = project();
+        for file in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".cursor/hooks.json",
+        ] {
+            // Only hook entries: as if there were no file.
+            fixture.write(file, "{\"hooks\":{\"Stop\":[]}}\n").unwrap();
+            assert_eq!(project(), none, "{file}");
+            // Anything else in it (Claude Code gives `env` to every command
+            // it starts): in every key, by value.
+            fixture
+                .write(file, "{\"env\":{\"A\":\"1\"},\"hooks\":{}}\n")
+                .unwrap();
+            let with_env = project();
+            assert_ne!(with_env, none, "{file}");
+            // By value: the order of the keys and the spacing do not count.
+            fixture
+                .write(file, "{\n  \"hooks\": {\"Stop\": []},\n  \"env\": {\"A\": \"1\"}\n}\n")
+                .unwrap();
+            assert_eq!(project(), with_env, "{file}");
+            // A file that is not JSON counts whole, as any other file.
+            fixture.write(file, "{ not json\n").unwrap();
+            let broken = project();
+            assert_ne!(broken, none, "{file}");
+            fixture.write(file, "{ not json either\n").unwrap();
+            assert_ne!(project(), broken, "{file}");
+            std::fs::remove_file(abs(root, file)).unwrap();
+            assert_eq!(project(), none, "{file}");
+        }
+    }
+
     #[test]
     fn the_json_config_is_a_file_only_in_the_key_of_a_unit_that_holds_the_repo_root() {
         let machine = NoTools;
