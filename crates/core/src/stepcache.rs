@@ -355,7 +355,7 @@ impl Snapshot {
             .map(|agent| {
                 let file = agent.config_file();
                 let bytes = fs::read(abs(root, file)).ok();
-                (file, crate::hooks::outside_hooks(bytes.as_deref()))
+                (file, crate::hooks::outside_hooks(*agent, bytes.as_deref()))
             })
             .collect();
         Self {
