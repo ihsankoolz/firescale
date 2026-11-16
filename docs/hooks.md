@@ -23,12 +23,14 @@ Installing never rewrites a file that has something in it. The hook goes in as n
 The hook command is `<bin> hooks run --agent <name>`. A command you pass with `--bin` is written as it is. Without `--bin`, the repo decides, never the PATH of the machine you install from, so every teammate's agent runs the same command (ADR 0064):
 
 - the repo's own `fscale` package script, when the root `package.json` has one: `pnpm --silent fscale`, `yarn --silent fscale`, `bun run --silent fscale` or `npm run --silent fscale --`;
-- otherwise the firescale the repo installs, when the root `package.json` lists `firescale` in `devDependencies` or `dependencies`: `pnpm exec fscale`, `yarn --silent fscale`, `bun run --silent fscale` or `npx --no fscale` (never a download);
+- otherwise the firescale the repo installs, when the root `package.json` lists `firescale` in `devDependencies` or `dependencies`: `pnpm exec fscale`, `yarn --silent fscale`, `bun run --silent fscale` or `npx --no -- fscale` (never a download; `--` ends npx's own options, since npm 10 takes the `--version` of `npx --no fscale --version` for itself and prints npm's version);
 - otherwise `npx --yes firescale@<version>`, with the version of the fscale that wrote it. The pin means a release of firescale does not change every teammate's hook, nor empty every cache key, until someone runs a newer fscale on purpose. Not `npx fscale`: that npm name belongs to another package.
 
 This is the command the `agent-ready/verify-hook` fix and the AGENTS.md block use too. For the fastest hook, point `--bin` at the native binary (see [install.md](install.md)), or at `fscale` where every machine has it on the PATH.
 
-An installed hook is not rewritten when you upgrade firescale: a hook counts as installed whatever command comes before `hooks run --agent <name>`. The check below and `fscale doctor` say when the command answers another version than the fscale you run.
+An installed hook is not rewritten when you upgrade firescale: a hook counts as installed whatever command comes before `hooks run --agent <name>`. A pin an older firescale wrote (`npx --yes firescale@0.5.0`) is still firescale's own command: the check below and `fscale doctor` start it, take the plain version that firescale 0.5.1 and older print for `--version --json`, and say that the agent runs that version, as a note, not a failure. `hooks install` then names the command each file keeps.
+
+**A new pin before its release is published.** Run from a build whose version is not on npm yet (a release being prepared), `hooks install` writes a pin npx cannot resolve, so the check says the hook cannot start until that version is published. After the release, it starts.
 
 ### The check after installing
 
@@ -37,12 +39,12 @@ After writing the files, `hooks install` starts each command the hook files hold
 Before it starts anything, it says on stderr what it runs, and:
 
 - that it may download firescale from the npm registry, for `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx` and `bun x` (not with `npx --no`);
-- that it runs the fscale in the repo's `node_modules`, for `pnpm exec fscale` and `npx --no fscale`;
+- that it runs the fscale in the repo's `node_modules`, for `pnpm exec fscale` and `npx --no -- fscale`;
 - that it runs the repo's own `fscale` package script, for a package script.
 
-It leaves out of the PATH it gives the command every folder inside a `node_modules` (`node_modules/.bin`, npx's `_npx/<hash>/node_modules/.bin`), and says which: a package manager puts them first while it runs fscale (`npx firescale hooks install`, `pnpm fscale hooks install`), and an agent does not have them. Without this, `--bin fscale` "started" through `node_modules/.bin/fscale` and nowhere else.
+It leaves out of the PATH it gives the command the folders a package manager puts first while it runs fscale (`npx firescale hooks install`, `pnpm fscale hooks install`), and says which: `node_modules/.bin` of the repo root or of a folder above it, npx's `_npx/<hash>/node_modules/.bin`, the download folders of `pnpm dlx`, `yarn dlx` and `bunx`, and `node-gyp-bin`. An agent does not have them. Without this, `--bin fscale` "started" through `node_modules/.bin/fscale` and nowhere else. Any other folder inside a `node_modules` stays: `pnpm/action-setup` puts pnpm itself in `~/setup-pnpm/node_modules/.bin`, which is on the PATH an agent has too.
 
-It starts only a command fscale writes itself: the one this run writes (the default or `--bin`) and the repo's default. A hook file that already holds another command before `hooks run --agent <name>` is text from the repo, and starting it would run that text on your machine. That command is printed, not started: `The hook in .cursor/hooks.json was not started: it runs ...`, with the command to run yourself once you have read it. The exit code is then 1.
+It starts only a command fscale writes itself: the one this run writes (the default or `--bin`), the repo's default, and a pin any release wrote (`npx --yes firescale@<version>`). A hook file that already holds another command before `hooks run --agent <name>` is text from the repo, and starting it would run that text on your machine. That command is printed, not started: `The hook in .cursor/hooks.json was not started: it runs ...`, with the command to run yourself once you have read it. The exit code is then 1.
 
 ```
 installed         .claude/settings.json
@@ -59,7 +61,13 @@ The check is close to what an agent does, not the same: Claude Code runs the com
 
 ### `fscale doctor` checks it on any machine
 
-The check above runs on the machine that installs the hook. `fscale doctor` starts the stop hook of each hook file the same way, on whichever machine runs it, in a section `Agent hooks` (`hooks` in `--json`): `ok` when it answers this firescale, `warning` when it answers another version, `PROBLEM` (exit 1) when it cannot start. It starts only the command fscale would write in the repo; any other command is a `warning` that says it was not started, with the command to run yourself. Each distinct command is started once.
+The check above runs on the machine that installs the hook. `fscale doctor` checks the stop hook of each hook file on whichever machine runs it, in a section `Agent hooks` (`hooks` in `--json`), but it runs no script of the repo and downloads nothing:
+
+- a pin, `npx --yes firescale@<version>`, is started as `npx --no -- firescale@<version>`, which runs firescale only when it is installed or already in npx's cache. When npx would have to download it, a `warning` says it is not downloaded yet: the agent's first stop downloads it, which needs the network;
+- a command that runs the repo's own `fscale` package script (the repo's `package.json` has one) is not started: a `warning` gives the command to run yourself;
+- the fscale the repo installs (`pnpm exec fscale`, `npx --no -- fscale`, ...) is started as it is.
+
+It is `ok` when it answers this firescale, a `warning` when it answers another version, and a `PROBLEM` (exit 1) when it cannot start. Any command fscale does not write is a `warning` that says it was not started, with the command to run yourself. Each distinct command is started once.
 
 ## When the hook cannot start
 

@@ -97,11 +97,18 @@ Each one is **reachable** or **not reachable**. **Reachable means only that some
 
 ### Agent hooks
 
-The stop hook in each agent hook file at the repo root (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), started the way `fscale hooks install` checks it after writing (see [hooks.md](hooks.md)): `<command> --version --json` in the repo root, through `cmd /D /S /C` or `sh -c`, with stdin closed, without the PATH folders inside a `node_modules`, and with `CLAUDE_PROJECT_DIR` set for Claude Code's file. Before it starts one, doctor says on stderr what it runs and whether npx may download firescale. Each distinct command is started once.
+The stop hook in each agent hook file at the repo root (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), started the way `fscale hooks install` checks it after writing (see [hooks.md](hooks.md)): `<command> --version --json` in the repo root, through `cmd /D /S /C` or `sh -c`, with stdin closed, without the PATH folders a package manager put there for its own run, and with `CLAUDE_PROJECT_DIR` set for Claude Code's file. Before it starts one, doctor says on stderr what it runs. Each distinct command is started once.
+
+Doctor runs no script of the repo and downloads nothing here either:
+
+- **A pin** (`npx --yes firescale@<version>`, the default where the repo has no fscale of its own) is started as `npx --no -- firescale@<version>`: npx runs firescale only when it is installed or already in its cache. When it is not, the check is a **warning**, `firescale <version> is not downloaded yet, and doctor downloads nothing`: the agent's first stop downloads it, which needs the network.
+- **The repo's own `fscale` package script** is never started, whatever runs it (`pnpm --silent fscale`, `npm run --silent fscale --`, ...): a **warning** gives the command to run yourself.
+- **The fscale the repo installs** (`pnpm exec fscale`, `npx --no -- fscale`, `yarn --silent fscale`, `bun run --silent fscale`, when the repo has no `fscale` script) is started as it is.
 
 - **ok** when it answers this firescale; **warning** when it answers another version, the one the agent runs.
 - **problem** when it cannot start, exits with an error or answers something that is not firescale's answer: the agent would stop without verify having run.
 - **warning** for a command that is not the one fscale writes in this repo: it is text from the repo, so doctor prints it and does not start it.
+- **warning** for a pin not downloaded yet, and for the repo's own package script, as above.
 
 The check runs on whichever machine runs doctor, so a teammate whose machine cannot start the hook finds out, not only the person who installed it (ADR 0064).
 
