@@ -312,53 +312,74 @@ const BANDIT_ONE_WORD: [&str; 13] = [
 ];
 
 /// A Bandit test after `nosec`: an id (`B602`) or a test's name
-/// (`assert_used`, `pickle`). Bandit ignores any other word, and a `nosec`
-/// that names no test it knows turns every test off.
+/// (`assert_used`, `xml_bad_cElementTree`, `pickle`). Bandit reads every
+/// word of its list (`(?:(B\d+|[a-z\d_]+),?)+`, case ignored), logs one it
+/// does not know and goes on, and a `nosec` that names no test it knows
+/// turns every test off.
 fn bandit_code(word: &str) -> bool {
     let id = word
-        .strip_prefix('B')
+        .strip_prefix(['B', 'b'])
         .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()));
     let name = word.contains('_')
-        && word.starts_with(|c: char| c.is_ascii_lowercase())
-        && word
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        && word.starts_with(|c: char| c.is_ascii_alphabetic())
+        && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     id || name || BANDIT_ONE_WORD.contains(&word)
 }
 
+/// Every word of a list, split at commas and white space, that `is_code`
+/// takes: the tool reads on past a word that is no code (pylint, bandit),
+/// so a code after a comment's word is still one (ADR 0063).
+fn every_code(list: &str, is_code: fn(&str) -> bool) -> Vec<String> {
+    list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty() && is_code(word))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// pylint's message names and checker (group) names of one word; every
+/// other message name holds a `-` (`unused-import`).
+const PYLINT_ONE_WORD: [&str; 19] = [
+    "all",
+    "basic",
+    "classes",
+    "design",
+    "exceptions",
+    "fixme",
+    "format",
+    "imports",
+    "logging",
+    "miscellaneous",
+    "newstyle",
+    "refactoring",
+    "similarities",
+    "spelling",
+    "stdlib",
+    "string",
+    "threading",
+    "typecheck",
+    "variables",
+];
+
 /// A pylint message, group or category: a message id (`C0114`), a
-/// category letter (`C`), or a name (`unused-import`, `typecheck`, `all`).
+/// category letter (`C`), a name with `-` or `_` (`unused-import`), or one of
+/// [`PYLINT_ONE_WORD`] (`fixme`, `typecheck`, `all`). A word of prose is none
+/// of these, so the words of a comment after the list are left out.
 fn pylint_code(word: &str) -> bool {
     let id = word.starts_with(['C', 'R', 'W', 'E', 'F', 'I'])
         && word[1..].chars().all(|c| c.is_ascii_digit());
     let name = word.starts_with(|c: char| c.is_ascii_lowercase())
+        && word.contains(['-', '_'])
         && word
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
-    id || name
+    id || name || PYLINT_ONE_WORD.contains(&word)
 }
 
-/// The messages of `# pylint: disable=a, b`. A pylint name looks like a
-/// word of prose (`fixme`, `typecheck`), so the list goes on only after a
-/// comma: a code followed by white space and another word ends it, and so
-/// do `;` and the first word that is no message.
+/// The messages of `# pylint: disable=a, b`: every word shaped like one, up to
+/// a `;`, where pylint's own reader stops. pylint reads every word of the
+/// list, so `disable=unused-import unused-variable` is two (ADR 0063).
 fn pylint_codes(list: &str) -> Vec<String> {
-    let list = list.split(';').next().unwrap_or_default();
-    let mut out = Vec::new();
-    for item in list.split(',') {
-        let mut words = item.split_whitespace();
-        let Some(first) = words.next() else {
-            continue;
-        };
-        if !pylint_code(first) {
-            break;
-        }
-        out.push(first.to_owned());
-        if words.next().is_some() {
-            break;
-        }
-    }
-    out
+    every_code(list.split(';').next().unwrap_or_default(), pylint_code)
 }
 
 /// The suppressions a Python comment holds. A comment may hold several,
@@ -424,7 +445,7 @@ fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
         } else if let Some(rest) = directive(part, "nosec") {
             // Bandit also reads `# nosec: B101`.
             let rest = rest.trim_start().strip_prefix(':').unwrap_or(rest);
-            keys.extend(keyed("nosec", codes(rest, bandit_code)));
+            keys.extend(keyed("nosec", every_code(rest, bandit_code)));
         }
     }
     keys
