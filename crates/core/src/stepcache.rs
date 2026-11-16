@@ -1810,7 +1810,13 @@ impl<'a> StepCache<'a> {
             .root
             .join(".firescale")
             .join("step-cache-config.digest");
-        let before = fs::read_to_string(&file).ok();
+        // Nothing is read or written through a link (ADR 0060, ADR 0061).
+        let linked = is_symlink(&self.root.join(".firescale")) || is_symlink(&file);
+        let before = if linked {
+            None
+        } else {
+            fs::read_to_string(&file).ok()
+        };
         if before.as_deref() == Some(record.as_str()) {
             return None;
         }
@@ -1819,8 +1825,7 @@ impl<'a> StepCache<'a> {
                 .filter_map(Result::ok)
                 .any(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
         });
-        if !is_symlink(&self.root.join(".firescale"))
-            && !is_symlink(&file)
+        if !linked
             && file
                 .parent()
                 .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
@@ -1836,11 +1841,20 @@ impl<'a> StepCache<'a> {
                 .map(str::trim)
         };
         let (old_version, old_settings) = match line("version ") {
-            Some(version) => (version, line("settings ").unwrap_or_default()),
+            Some(version) if !version.is_empty() => {
+                (version, line("settings ").unwrap_or_default())
+            }
+            // A file that holds no record (empty, cut short, or not ours)
+            // says nothing about the last run: no claim is made.
+            Some(_) => return None,
             // Written before 0.5.2, which first kept the version: the digest
-            // alone. 0.5.0 made it from the file's bytes, 0.5.1 as above.
+            // alone, 64 hex digits. 0.5.0 made it from the file's bytes, 0.5.1
+            // as above.
             None => {
                 let bare = before.trim();
+                if bare.len() != 64 || !bare.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return None;
+                }
                 (
                     if bare == digest {
                         "0.5.1"

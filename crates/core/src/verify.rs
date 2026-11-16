@@ -3793,24 +3793,58 @@ fn shared_setup_reasons(report: &VerifyReport) -> Vec<(&str, Vec<usize>)> {
 /// `--json` has every one (ADR 0062).
 const FAILING_TESTS_SHOWN: usize = 20;
 
-/// The failing tests of a step, by name as its runner gives them, the first
-/// [`FAILING_TESTS_SHOWN`], then how many more.
-fn failing_tests_list(step: &StepReport, place: &str) -> String {
-    let tests = &step.failed_tests;
-    let mut out = format!(
-        "\nFailing tests of {}{place} ({}):\n",
-        step.name,
-        tests.len()
-    );
-    for test in tests.iter().take(FAILING_TESTS_SHOWN) {
-        out.push_str(&format!("  {}\n", test.id));
+/// A failing test's name as the summary prints it: on one line (a line
+/// break is written `\n`), with what could be a secret hidden as in an
+/// output line (a pytest parameter can be a database URL), and at most 300
+/// characters (ADR 0062).
+fn shown_test_id(id: &str) -> String {
+    let one_line = id.replace("\r\n", "\\n").replace(['\r', '\n'], "\\n");
+    let line = hide_secrets(&one_line);
+    if line.chars().count() > 300 {
+        format!("{}...", line.chars().take(300).collect::<String>())
+    } else {
+        line
     }
-    if tests.len() > FAILING_TESTS_SHOWN {
+}
+
+/// Test names, one per line, the first [`FAILING_TESTS_SHOWN`], then how
+/// many more.
+fn push_test_names(out: &mut String, ids: &[&str]) {
+    for id in ids.iter().take(FAILING_TESTS_SHOWN) {
+        out.push_str(&format!("  {}\n", shown_test_id(id)));
+    }
+    if ids.len() > FAILING_TESTS_SHOWN {
         out.push_str(&format!(
             "  and {} more; `fscale verify --json` lists every one under failedTests\n",
-            tests.len() - FAILING_TESTS_SHOWN
+            ids.len() - FAILING_TESTS_SHOWN
         ));
     }
+}
+
+/// The failing tests of a step, by name as its runner gives them. When the
+/// results may not cover the whole run (the step timed out, or ran its
+/// runner more than once), the count is what was found, and says so.
+fn failing_tests_list(step: &StepReport, place: &str) -> String {
+    let ids: Vec<&str> = step
+        .failed_tests
+        .iter()
+        .map(|test| test.id.as_str())
+        .collect();
+    let whole = step.status != StepStatus::TimedOut
+        && !step
+            .test_results
+            .as_ref()
+            .is_some_and(|results| results.partial);
+    let count = if whole {
+        ids.len().to_string()
+    } else {
+        format!(
+            "{} found; the results do not cover the whole run",
+            ids.len()
+        )
+    };
+    let mut out = format!("\nFailing tests of {}{place} ({count}):\n", step.name);
+    push_test_names(&mut out, &ids);
     out
 }
 
@@ -4023,9 +4057,7 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                 }
                 if !new_tests.is_empty() {
                     out.push_str("New failing tests:\n");
-                    for test in &new_tests {
-                        out.push_str(&format!("  {test}\n"));
-                    }
+                    push_test_names(&mut out, &new_tests);
                     named_tests = true;
                 }
             }

@@ -37,6 +37,34 @@ warning: steps were skipped because no command was found: lint, typecheck. Set v
 "
 `;
 
+exports[`fscale verify > names each failing test of a test step before its last lines (ADR 0062) 1`] = `
+"verify: FAILED at test
+  check      passed   8 rules, no enforced violations
+  lint       passed   node lint.js
+  typecheck  off      turned off in your firescale config
+  test       FAILED   node vitest.js (exit 1)
+
+Failing tests of test (3):
+  e2e/seed/production.test.ts > seed > writes the env file with mode 600
+  e2e/seed/production.test.ts > sqlRunnerFor, with a fake ssh > runs the seed
+  e2e/seed/production.test.ts > sqlRunnerFor, with a fake ssh > stops on an error
+
+Last lines of test:
+  ⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+   FAIL  e2e/seed/production.test.ts > seed > writes the env file with mode 600
+  AssertionError: expected 420 to be 384
+   FAIL  e2e/seed/production.test.ts > sqlRunnerFor, with a fake ssh > runs the seed
+  Error: Test timed out in 5000ms.
+   FAIL  e2e/seed/production.test.ts > sqlRunnerFor, with a fake ssh > stops on an error
+  Error: Test timed out in 5000ms.
+        Tests  3 failed | 40 passed (43)
+
+Fix the failure, then run again: node vitest.js
+
+No base commit to compare with (this is not a git repo, or it has no commit yet), so every failure blocks.
+"
+`;
+
 exports[`fscale verify > never prints a plain OK when a step was skipped 1`] = `
 "verify: PARTIAL - 1 of 4 steps ran, 3 skipped
   check      passed   8 rules, no enforced violations

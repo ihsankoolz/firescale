@@ -251,11 +251,11 @@
             "required": ["status", "source"],
             "properties": {
               "status": {
-                "description": "The step's result on the base commit. setup-needed, timed-out, over-budget (the base run's time budget ran out) and stopped say nothing about the code: a failure with such a base result has no label and blocks.",
+                "description": "The step's result on the base commit. setup-needed, timed-out, over-budget (the base run's time budget ran out, or the step was not started because it is known to take longer than what was left of the budget; the note says which) and stopped say nothing about the code: a failure with such a base result has no label and blocks.",
                 "enum": ["passed", "failed", "setup-needed", "timed-out", "over-budget", "stopped"]
               },
               "source": {
-                "description": "same-inputs: no file the step reads differs between the base and the head, so its head result is its base result. cache: kept from an earlier run with the same base. ran: run now in a worktree of the base commit.",
+                "description": "same-inputs: no file the step reads differs between the base and the head, so its head result is its base result. cache: kept from an earlier run with the same base. ran: run now in a worktree of the base commit, or due to run there and not started because it is known to take longer than what was left of the budget (status over-budget, with a note).",
                 "enum": ["same-inputs", "cache", "ran"]
               },
               "note": {
@@ -507,7 +507,7 @@
           "minimum": 0
         },
         "overBudget": {
-          "description": "True when the budget ran out before every base step had run.",
+          "description": "True when the budget ran out before every base step had run. A step that was not started because it is known to take longer than what was left of the budget does not set it: its base status is over-budget and its note says why.",
           "type": "boolean"
         }
       }

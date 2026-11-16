@@ -602,13 +602,13 @@ describe('blame-aware verify', () => {
     const result = await runCli(['verify', '--json', '--progress'], root);
     expect(result.code, result.stderr).toBe(EXIT_VIOLATIONS);
     const json = await report(result.stdout);
+    expect(result.stderr).not.toContain('to run in a worktree');
+    expect(await readFile(installed, 'utf8').catch(() => '')).toBe('');
     expect(step(json, 'test').base?.status).toBe('over-budget');
     expect(step(json, 'test').base?.note).toMatch(
       /^it was not started on the base commit [0-9a-f]{7}, because it is known to take longer than what was left of the base run's time budget: its kept time is 1h 36m/,
     );
-    expect(result.stderr).not.toContain('to run in a worktree');
     expect(result.stderr).toContain('[verify] base: test: not started: its kept time is 1h 36m');
-    expect(await readFile(installed, 'utf8').catch(() => '')).toBe('');
     expect(json.base).toMatchObject({ ran: 0 });
   }, 30_000);
 
