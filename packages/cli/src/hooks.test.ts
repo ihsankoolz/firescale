@@ -1,11 +1,94 @@
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { chmod, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
-import { afterEach, describe, expect, it } from 'vitest';
-import { EXIT_OK, EXIT_USAGE, runCli } from './test-helpers.js';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { courseProjectFiles, shimEnv, writeToolShims } from './course-fixture.js';
+import {
+  commitAll,
+  EXIT_OK,
+  EXIT_USAGE,
+  EXIT_VIOLATIONS,
+  runCli,
+  stepCalls,
+} from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
+
+const WINDOWS = process.platform === 'win32';
+
+/** The version of the fscale under test, as `fscale --version` prints it. */
+let VERSION = '';
+beforeAll(async () => {
+  VERSION = (await runCli(['--version'])).stdout.trim();
+});
+
+/**
+ * The PATH of this machine without the folders that hold one of `programs`
+ * (`npx`, `npx.cmd`, `fscale.exe` and the like), so a test can say what a
+ * hook command finds. On Unix a folder with a link to `/bin/sh` comes
+ * first: fscale starts the command through `sh`, as the agents do.
+ */
+async function pathWithout(programs: string[]): Promise<string[]> {
+  const extensions = WINDOWS ? ['', '.cmd', '.exe', '.bat', '.ps1'] : [''];
+  const current = (process.env['PATH'] ?? process.env['Path'] ?? '').split(path.delimiter);
+  const kept = current.filter(
+    (dir) =>
+      dir !== '' &&
+      !programs.some((program) =>
+        extensions.some((extension) => existsSync(path.join(dir, `${program}${extension}`))),
+      ),
+  );
+  if (WINDOWS) return kept;
+  const shell = (await fixtures.create({ files: {}, track: 'no-git' })).root;
+  await symlink('/bin/sh', path.join(shell, 'sh'));
+  return [shell, ...kept];
+}
+
+/**
+ * Stand-ins in a new folder: each logs `<name> <arguments>` to `calls.log`
+ * in that folder and prints `answer`.
+ */
+async function standIns(names: string[], answer: string): Promise<{ dir: string; log: string }> {
+  const dir = (await fixtures.create({ files: {}, track: 'no-git' })).root;
+  const log = path.join(dir, 'calls.log');
+  for (const name of names) {
+    if (WINDOWS) {
+      await writeFile(
+        path.join(dir, `${name}.cmd`),
+        ['@echo off', `echo ${name} %*>> "${log}"`, `echo ${answer}`, 'exit /b 0', ''].join('\r\n'),
+      );
+    } else {
+      const file = path.join(dir, name);
+      await writeFile(
+        file,
+        ['#!/bin/sh', `echo "${name} $*" >> "${log}"`, `echo "${answer}"`, 'exit 0', ''].join('\n'),
+      );
+      await chmod(file, 0o755);
+    }
+  }
+  return { dir, log };
+}
+
+/** A PATH with the stand-ins of `dir` first, and no other `npx` or `fscale`. */
+async function onlyStandIns(dir: string): Promise<Record<string, string>> {
+  return { PATH: [dir, ...(await pathWithout(['npx', 'fscale']))].join(path.delimiter) };
+}
+
+/**
+ * The environment of a machine where `fscale` is not on the PATH and `npx`
+ * is a stand-in that answers `--version` with this fscale's version, so no
+ * test downloads anything from npm.
+ */
+async function npxOnly(): Promise<Record<string, string>> {
+  return onlyStandIns((await standIns(['npx'], VERSION)).dir);
+}
+
+/** `fscale hooks install ...` on a machine with only a stand-in `npx` (see `npxOnly`). */
+async function install(argv: string[], root: string) {
+  return runCli(['hooks', 'install', ...argv], root, await npxOnly());
+}
 
 /** The exit code that tells Claude Code and Codex "do not stop yet". */
 const EXIT_BLOCK = 2;
@@ -37,7 +120,7 @@ const stop = (root: string, agent: string, input: object, env: Record<string, st
 describe('fscale hooks install', () => {
   it('writes a hook file for each of the three agents', async () => {
     const repo = await fixtures.create();
-    const result = await runCli(['hooks', 'install', '--all'], repo.root);
+    const result = await install(['--all'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toMatchSnapshot('stdout');
     expect(result.stderr).toMatchSnapshot('stderr');
@@ -48,7 +131,7 @@ describe('fscale hooks install', () => {
 
   it('prints no note that the Cursor format is unchecked: ADR 0027 confirmed it', async () => {
     const repo = await fixtures.create();
-    const result = await runCli(['hooks', 'install', '--agent', 'cursor'], repo.root);
+    const result = await install(['--agent', 'cursor'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toBe(
       'installed         .cursor/hooks.json\n\nEach agent now runs `fscale hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n',
@@ -58,9 +141,9 @@ describe('fscale hooks install', () => {
 
   it('changes nothing when run again', async () => {
     const repo = await fixtures.create();
-    await runCli(['hooks', 'install', '--all'], repo.root);
+    await install(['--all'], repo.root);
     const before = await Promise.all(Object.values(HOOK_FILES).map((f) => read(repo.root, f)));
-    const again = await runCli(['hooks', 'install', '--all'], repo.root);
+    const again = await install(['--all'], repo.root);
     expect(again.code).toBe(EXIT_OK);
     expect(again.stdout).toContain('already installed .claude/settings.json');
     const after = await Promise.all(Object.values(HOOK_FILES).map((f) => read(repo.root, f)));
@@ -71,10 +154,7 @@ describe('fscale hooks install', () => {
     const repo = await fixtures.create({
       files: { '.claude/settings.json': '{\n"permissions":{"deny":["Read(./.env)"]}}\n' },
     });
-    const result = await runCli(
-      ['hooks', 'install', '--agent', 'claude', '--bin', 'npx firescale'],
-      repo.root,
-    );
+    const result = await install(['--agent', 'claude', '--bin', 'npx firescale'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     const settings = JSON.parse(await read(repo.root, HOOK_FILES.claude)) as {
       permissions: unknown;
@@ -97,7 +177,7 @@ describe('fscale hooks install', () => {
         ),
       },
     });
-    const result = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root);
+    const result = await install(['--agent', 'claude'], repo.root);
     expect(result.stdout).toContain('installed         .claude/settings.json');
     const settings = JSON.parse(await read(repo.root, HOOK_FILES.claude)) as {
       hooks: { Stop: { hooks: { command: string }[] }[] };
@@ -118,7 +198,7 @@ describe('fscale hooks install', () => {
         '{\n   "hooks": {\n      "afterFileEdit": [ { "command": "fmt" } ]\n   }\n}\n',
     };
     const repo = await fixtures.create({ files });
-    const result = await runCli(['hooks', 'install', '--all'], repo.root);
+    const result = await install(['--all'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     const written: string[] = [];
     for (const [file, before] of Object.entries(files)) {
@@ -138,7 +218,7 @@ describe('fscale hooks install', () => {
       written.push(after);
     }
     expect(written[0]).toContain('"zeta" :   1e3,');
-    const again = await runCli(['hooks', 'install', '--all'], repo.root);
+    const again = await install(['--all'], repo.root);
     expect(again.code).toBe(EXIT_OK);
     expect(await Promise.all(Object.keys(files).map((f) => read(repo.root, f)))).toEqual(written);
   });
@@ -146,7 +226,7 @@ describe('fscale hooks install', () => {
   it('refuses a file written on one line, and says what to add by hand', async () => {
     const minified = '{"permissions":{"deny":["Read(./.env)"]}}\n';
     const repo = await fixtures.create({ files: { '.claude/settings.json': minified } });
-    const result = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root);
+    const result = await install(['--agent', 'claude'], repo.root);
     expect(result.code).not.toBe(EXIT_OK);
     expect(result.stdout).toBe('');
     expect(result.stderr).toMatchSnapshot('stderr');
@@ -166,7 +246,7 @@ describe('fscale hooks install', () => {
       const label = refused.join(' and ');
       const files = Object.fromEntries(refused.map((agent) => [HOOK_FILES[agent], content]));
       const repo = await fixtures.create({ files });
-      const result = await runCli(['hooks', 'install', '--all'], repo.root);
+      const result = await install(['--all'], repo.root);
       expect(result.code, label).toBe(EXIT_USAGE);
       expect(result.stdout).toMatchSnapshot(`${label}: stdout`);
       expect(result.stderr).toMatchSnapshot(`${label}: stderr`);
@@ -184,7 +264,7 @@ describe('fscale hooks install', () => {
   it('--all with every file refused says so, and claims no hook', async () => {
     const files = Object.fromEntries(Object.values(HOOK_FILES).map((file) => [file, '{"a":1}\n']));
     const repo = await fixtures.create({ files });
-    const result = await runCli(['hooks', 'install', '--all'], repo.root);
+    const result = await install(['--all'], repo.root);
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stdout).toBe(
       'refused           .claude/settings.json\nrefused           .codex/hooks.json\nrefused           .cursor/hooks.json\n\nNot every hook is installed. Refused and left as it was: .claude/settings.json, .codex/hooks.json, .cursor/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.\n',
@@ -201,10 +281,10 @@ describe('fscale hooks install', () => {
     const none = await runCli(['hooks', 'install'], repo.root);
     expect(none.code).toBe(EXIT_USAGE);
     expect(none.stderr).toContain('needs --agent <claude|codex|cursor> or --all');
-    const unknown = await runCli(['hooks', 'install', '--agent', 'vim'], repo.root);
+    const unknown = await install(['--agent', 'vim'], repo.root);
     expect(unknown.code).toBe(EXIT_USAGE);
     expect(unknown.stderr).toContain('Supported agents: claude, codex, cursor.');
-    const both = await runCli(['hooks', 'install', '--agent', 'claude', '--all'], repo.root);
+    const both = await install(['--agent', 'claude', '--all'], repo.root);
     expect(both.code).toBe(EXIT_USAGE);
     const action = await runCli(['hooks'], repo.root);
     expect(action.code).toBe(EXIT_USAGE);
@@ -212,10 +292,147 @@ describe('fscale hooks install', () => {
 
   it('refuses to overwrite a settings file that is not valid JSON', async () => {
     const repo = await fixtures.create({ files: { '.claude/settings.json': '{ nope' } });
-    const result = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root);
+    const result = await install(['--agent', 'claude'], repo.root);
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toContain('.claude/settings.json is not valid JSON');
     expect(await read(repo.root, HOOK_FILES.claude)).toBe('{ nope');
+  });
+});
+
+/** The command of each agent's stop hook in the repo. */
+async function hookCommands(root: string): Promise<Record<string, string | undefined>> {
+  const claude = JSON.parse(await read(root, HOOK_FILES.claude)) as {
+    hooks: { Stop: { hooks: { command: string }[] }[] };
+  };
+  const codex = JSON.parse(await read(root, HOOK_FILES.codex)) as {
+    hooks: { Stop: { hooks: { command: string }[] }[] };
+  };
+  const cursor = JSON.parse(await read(root, HOOK_FILES.cursor)) as {
+    hooks: { stop: { command: string }[] };
+  };
+  return {
+    claude: claude.hooks.Stop[0]?.hooks[0]?.command,
+    codex: codex.hooks.Stop[0]?.hooks[0]?.command,
+    cursor: cursor.hooks.stop[0]?.command,
+  };
+}
+
+// Finding 6 of docs/reviews/cs464-0.5.1.md: in a clone of the course project
+// (no root package.json, `fscale` not on the PATH), `hooks install --all`
+// wrote `fscale hooks run --agent <name>`, which cannot start there, and said
+// nothing about it (ADR 0064).
+describe('the command the hook starts (ADR 0064)', () => {
+  it('writes a command that starts where fscale is not on the PATH: the course project', async () => {
+    const repo = await fixtures.create({ files: courseProjectFiles() });
+    const { dir, log } = await standIns(['npx'], VERSION);
+    const env = await onlyStandIns(dir);
+    const result = await runCli(['hooks', 'install', '--all'], repo.root, env);
+    expect(result.code).toBe(EXIT_OK);
+    expect(await hookCommands(repo.root)).toEqual({
+      claude: 'npx firescale hooks run --agent claude',
+      codex: 'npx firescale hooks run --agent codex',
+      cursor: 'npx firescale hooks run --agent cursor',
+    });
+    // It started the command once, the way an agent would, and says so
+    // before it runs it: npx may download firescale.
+    expect((await readFile(log, 'utf8')).trim().split(/\r?\n/)).toEqual([
+      'npx firescale --version',
+    ]);
+    expect(result.stderr).toBe(
+      'fscale: checking that the hook can start: running `npx firescale --version` in the repo root, as an agent would. npx may download firescale from the npm registry first.\n',
+    );
+    expect(result.stdout).toContain(
+      `The hook starts on this machine: \`npx firescale --version\` answered ${VERSION}.\n`,
+    );
+  });
+
+  it('says plainly when the command it wrote cannot start, and exits 1', async () => {
+    const repo = await fixtures.create({ files: courseProjectFiles() });
+    // Neither fscale nor npx on the PATH.
+    const env = { PATH: (await pathWithout(['npx', 'fscale'])).join(path.delimiter) };
+    const result = await runCli(['hooks', 'install', '--all'], repo.root, env);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout).toContain(
+      'The hook cannot start on this machine: `npx firescale --version` exited with code',
+    );
+    expect(result.stdout).toContain(
+      'An agent whose stop hook cannot start stops without verify having run',
+    );
+    expect(result.stdout).not.toContain('The hook starts on this machine');
+    // The files are written: the command may start on a teammate's machine.
+    expect((await hookCommands(repo.root)).claude).toBe('npx firescale hooks run --agent claude');
+  });
+
+  it('keeps a command given with --bin as it is, and checks that one', async () => {
+    const repo = await fixtures.create({ files: courseProjectFiles() });
+    const { dir, log } = await standIns(['my-fscale'], VERSION);
+    const env = await onlyStandIns(dir);
+    const result = await runCli(
+      ['hooks', 'install', '--agent', 'codex', '--bin', 'my-fscale --cwd .'],
+      repo.root,
+      env,
+    );
+    expect(result.code).toBe(EXIT_OK);
+    const codex = JSON.parse(await read(repo.root, HOOK_FILES.codex)) as {
+      hooks: { Stop: { hooks: { command: string }[] }[] };
+    };
+    expect(codex.hooks.Stop[0]?.hooks[0]?.command).toBe(
+      'my-fscale --cwd . hooks run --agent codex',
+    );
+    expect((await readFile(log, 'utf8')).trim()).toBe('my-fscale --cwd . --version');
+    expect(result.stdout).toContain(
+      `The hook starts on this machine: \`my-fscale --cwd . --version\` answered ${VERSION}.\n`,
+    );
+  });
+
+  it("uses the repo's own fscale script when it has one", async () => {
+    const repo = await fixtures.create({
+      files: {
+        'package.json': JSON.stringify({ name: 'app', scripts: { fscale: 'fscale' } }),
+        'pnpm-lock.yaml': "lockfileVersion: '9.0'\n",
+      },
+    });
+    const { dir } = await standIns(['pnpm'], VERSION);
+    const env = await onlyStandIns(dir);
+    const result = await runCli(['hooks', 'install', '--agent', 'claude'], repo.root, env);
+    expect(result.code).toBe(EXIT_OK);
+    const settings = JSON.parse(await read(repo.root, HOOK_FILES.claude)) as {
+      hooks: { Stop: { hooks: { command: string }[] }[] };
+    };
+    expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe(
+      'pnpm --silent fscale hooks run --agent claude',
+    );
+    expect(result.stderr).toContain("It runs this repo's own `fscale` package script.");
+  });
+
+  it('says which firescale the hook starts when it is not this one', async () => {
+    const repo = await fixtures.create({ files: courseProjectFiles() });
+    const { dir } = await standIns(['npx'], '0.0.1');
+    const env = await onlyStandIns(dir);
+    const result = await runCli(['hooks', 'install', '--agent', 'cursor'], repo.root, env);
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout).toContain(
+      `The hook starts on this machine: \`npx firescale --version\` answered 0.0.1. That is not this fscale (${VERSION}): the agent will run firescale 0.0.1.\n`,
+    );
+  });
+
+  it('checks the command already in a file, and says when it is not firescale', async () => {
+    // A hook installed earlier, by hand, with a command that answers
+    // something that is not a version.
+    const repo = await fixtures.create({
+      files: {
+        [HOOK_FILES.cursor]:
+          '{\n  "version": 1,\n  "hooks": {\n    "stop": [\n      { "command": "npx fscale hooks run --agent cursor" }\n    ]\n  }\n}\n',
+      },
+    });
+    const { dir } = await standIns(['npx'], 'Usage: fscale [options]');
+    const env = await onlyStandIns(dir);
+    const result = await runCli(['hooks', 'install', '--agent', 'cursor'], repo.root, env);
+    expect(result.stdout).toContain('already installed .cursor/hooks.json');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout).toContain(
+      'The hook cannot start on this machine: `npx fscale --version` answered "Usage: fscale [options]", which is not a firescale version.',
+    );
   });
 });
 
@@ -406,5 +623,89 @@ describe('fscale hooks run (the stop hook)', () => {
     expect(result.stderr).toContain(
       'verify: FAILED - 2 of 4 steps skipped, and verify.failOnSkipped is on',
     );
+  });
+});
+
+// Finding 5 of docs/reviews/cs464-0.5.1.md: in a copy of the course project,
+// after `hooks install --all`, `verify --affected --json` gave
+// `"reason": ".claude/settings.json belongs to no project"` for all six
+// projects. An agent's hook files are read by the agent and by firescale's
+// check, not by a project's build or tests (ADR 0064).
+describe('the hook files and verify --affected (ADR 0064)', () => {
+  const EVERY_PROJECT = [
+    'audit_service',
+    'auth_service',
+    'frontend',
+    'ledger_service',
+    'market_service',
+    'realtime_service',
+  ];
+
+  /** The projects whose steps ran, from the stand-ins' log. */
+  const projectsIn = (calls: string[]): string[] =>
+    [...new Set(calls.map((call) => call.replace(/^.* in /, '')))].sort();
+
+  /** The course project, committed, with stand-ins for python, npx and npm. */
+  async function courseProject(files: Record<string, string> = {}) {
+    const repo = await fixtures.create({ files: { ...courseProjectFiles(), ...files } });
+    await commitAll(repo.root, 'initial');
+    const tools = await fixtures.create({ files: {}, track: 'no-git' });
+    await writeToolShims(tools.root, { versions: true });
+    const log = path.join(tools.root, 'calls.log');
+    const env = shimEnv(tools.root, log);
+    const verify = async (...flags: string[]) => {
+      await writeFile(log, '');
+      const result = await runCli(['verify', ...flags], repo.root, env);
+      return { ...result, calls: await stepCalls(log), headline: result.stdout.split('\n')[0] };
+    };
+    return { repo, verify };
+  }
+
+  it('runs no project for the three files hooks install writes: the course project', async () => {
+    const { repo, verify } = await courseProject();
+    const first = await verify();
+    expect(first.code).toBe(EXIT_OK);
+    expect(projectsIn(first.calls)).toEqual(EVERY_PROJECT);
+
+    expect((await install(['--all'], repo.root)).code).toBe(EXIT_OK);
+    const affected = await verify('--affected');
+    expect(affected.code).toBe(EXIT_OK);
+    expect(affected.stdout).not.toContain('belongs to no project');
+    expect(affected.headline).toBe(
+      'verify: OK (affected only) - 0 of 6 projects ran, 6 not affected',
+    );
+    expect(affected.calls).toEqual([]);
+    expect(affected.stdout).toContain(
+      'note: 3 changed files (.claude/settings.json and 2 more) are agent hook files, which only a step that can read every file of the repo could read, and no such step runs here, so they run nothing; the check still covers them.',
+    );
+    const json = JSON.parse((await verify('--affected', '--json')).stdout) as {
+      affected?: { everything: boolean; projectsRun: number };
+    };
+    expect(json.affected).toMatchObject({ everything: false, projectsRun: 0 });
+
+    // Not in a project's cache key either: a full run takes every pass
+    // from the cache.
+    const full = await verify();
+    expect(full.code).toBe(EXIT_OK);
+    expect(full.calls).toEqual([]);
+  });
+
+  it("runs the repo root's own steps for them: those can read every file", async () => {
+    // `prettier --check .` at the root reads .claude/settings.json.
+    const { repo, verify } = await courseProject({
+      'firescale.config.json': JSON.stringify({ verify: { lint: 'npx prettier --check .' } }),
+    });
+    await verify();
+    expect((await install(['--all'], repo.root)).code).toBe(EXIT_OK);
+    const root = path.basename(repo.root);
+    const affected = await verify('--affected');
+    expect(affected.calls).toEqual([`npx prettier --check . in ${root}`]);
+    expect(affected.stdout).toContain(
+      "  the repo root's own steps: .claude/settings.json and 2 more changed, and these steps can read every file of the repo, the agent hook files among them",
+    );
+    expect(affected.stdout).not.toContain('are agent hook files');
+    // In the root's key too: a full run lints again, and no project runs.
+    const full = await verify();
+    expect(full.calls).toEqual([`npx prettier --check . in ${root}`]);
   });
 });
