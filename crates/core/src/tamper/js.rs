@@ -47,8 +47,9 @@ const MESSAGES: Messages = Messages {
 };
 
 /// What an assertion checks, without the failure message of the call that
-/// opens it (the arguments [`MESSAGES`] names); for `assert.fail`, the
-/// condition of the `if` around it. `None` when it has no message.
+/// opens it (the arguments [`MESSAGES`] names); for `assert.fail` with one
+/// argument, the condition of the `if` around it. `None` when it has no
+/// message.
 fn checked(call: Node<'_>, whole: Node<'_>, function: Node<'_>, src: &[u8]) -> Option<String> {
     let name = match function.kind() {
         "identifier" => text(function, src),
@@ -57,10 +58,16 @@ fn checked(call: Node<'_>, whole: Node<'_>, function: Node<'_>, src: &[u8]) -> O
             .map_or("", |property| text(property, src)),
         _ => return None,
     };
-    let message = call
+    let arguments = call
         .child_by_field_name("arguments")
-        .map(|list| MESSAGES.of(name, &labelled_arguments(list, src), src))
+        .map(|list| labelled_arguments(list, src))
         .unwrap_or_default();
+    if MESSAGES.all.contains(&name) && arguments.len() > 1 {
+        // Node's legacy `assert.fail(actual, expected, message, operator)`:
+        // every argument is kept as a value (ADR 0063).
+        return None;
+    }
+    let message = MESSAGES.of(name, &arguments, src);
     if MESSAGES.all.contains(&name) {
         failed_when(whole, src, &message)
     } else {
