@@ -2797,6 +2797,94 @@ mod tests {
         assert_eq!(names_in(outside.path()), ["keep.txt"]);
     }
 
+    /// From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
+    /// finding 2): after an upgrade, with the config unchanged, the note
+    /// blamed a config setting. It must name the versions instead.
+    #[test]
+    fn a_new_version_is_named_in_the_note_and_never_read_as_a_config_change() {
+        const CONFIG_NOTE: &str = "A setting of the firescale config that every step's result can depend on changed since the last run";
+        let machine = NoTools;
+        let settings = |version: &'static str, shared: &'static str| CacheSettings {
+            version,
+            read: true,
+            sets_ci: true,
+            settings: shared,
+            machine: &machine,
+            read_env: &|_| None,
+        };
+        let config = r#"{"packs":["core"],"verify":{"test":{"timeout":"2h"}}}"#;
+        let fresh = || {
+            let fixture = Fixture::new(
+                &[("firescale.config.json", config), ("a.py", "x = 1\n")],
+                Track::NoGit,
+            )
+            .unwrap();
+            // A pass kept by the old version, which this one cannot use.
+            let steps = fixture.root().join(".firescale").join("steps");
+            fs::create_dir_all(&steps).unwrap();
+            fs::write(steps.join("old.json"), "{}").unwrap();
+            fixture
+        };
+        let digest_file = |root: &Path| root.join(".firescale").join("step-cache-config.digest");
+
+        // The digest file as 0.5.0 wrote it: the config file's bytes.
+        let fixture = fresh();
+        let root = fixture.root();
+        let mut old = blake3::Hasher::new();
+        old.update(b"firescale.config.json\0");
+        old.update(config.as_bytes());
+        fs::write(digest_file(root), old.finalize().to_hex().to_string()).unwrap();
+        let note = StepCache::new(root, None, &settings("0.5.2", "same"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(!note.contains(CONFIG_NOTE), "{note}");
+        assert!(note.contains("0.5.2"), "{note}");
+        assert!(note.contains("0.5.1 or older"), "{note}");
+
+        // As 0.5.1 wrote it: the shared settings' digest alone, no version.
+        let fixture = fresh();
+        let root = fixture.root();
+        let mut old = blake3::Hasher::new();
+        old.update(b"settings\0same\n");
+        fs::write(digest_file(root), old.finalize().to_hex().to_string()).unwrap();
+        let note = StepCache::new(root, None, &settings("0.5.2", "same"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(!note.contains(CONFIG_NOTE), "{note}");
+        assert!(note.contains("0.5.2"), "{note}");
+        assert!(note.contains("0.5.1"), "{note}");
+        assert!(!note.contains("or older"), "{note}");
+
+        // From here on the file names its version: the next version names
+        // this one, whatever the settings.
+        let fixture = fresh();
+        let root = fixture.root();
+        assert_eq!(
+            StepCache::new(root, None, &settings("0.5.2", "same")).config_note(),
+            None
+        );
+        assert_eq!(
+            StepCache::new(root, None, &settings("0.5.2", "same")).config_note(),
+            None
+        );
+        let note = StepCache::new(root, None, &settings("0.5.3", "same"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(!note.contains(CONFIG_NOTE), "{note}");
+        assert!(note.contains("0.5.2") && note.contains("0.5.3"), "{note}");
+        assert_eq!(
+            StepCache::new(root, None, &settings("0.5.3", "same")).config_note(),
+            None
+        );
+
+        // A real config change on the same version still says so.
+        let note = StepCache::new(root, None, &settings("0.5.3", "other"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(note.starts_with(CONFIG_NOTE), "{note}");
+        assert!(!note.contains("0.5."), "{note}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_launcher_with_no_shebang_line_gives_its_version() {
