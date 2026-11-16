@@ -43,7 +43,7 @@ use crate::setup::locked_install;
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Version of the `fscale doctor --json` format.
-pub const DOCTOR_SCHEMA_VERSION: u32 = 1;
+pub const DOCTOR_SCHEMA_VERSION: u32 = 2;
 
 /// Local env files a `.env.example` is filled into, beside it.
 pub use crate::services::LOCAL_ENV_FILES;
@@ -66,7 +66,8 @@ pub enum Status {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
-    /// `tools`, `env`, `dependencies` or `services`.
+    /// `tools`, `env`, `dependencies`, `services` or `hooks` (the agents'
+    /// stop hooks, ADR 0064).
     pub section: &'static str,
     /// The project's folder, `.` for the root; absent for the whole repo.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1871,23 +1872,24 @@ pub fn run_doctor(root: &Path, facts: &RepoFacts, machine: &dyn Machine) -> Doct
     doctor.node_dependencies();
     doctor.env();
     doctor.services();
-    // Sections in a fixed order; within one, the order checks were made.
+    report_of(doctor.findings)
+}
+
+/// The report of `findings`: in sections in a fixed order (within one, the
+/// order checks were made), and counted.
+fn report_of(mut findings: Vec<Finding>) -> DoctorReport {
     let order = |section: &str| {
-        ["tools", "env", "dependencies", "services"]
+        ["tools", "env", "dependencies", "services", "hooks"]
             .iter()
             .position(|s| *s == section)
             .unwrap_or(9)
     };
-    doctor
-        .findings
-        .sort_by_key(|finding| order(finding.section));
-    let problems = doctor
-        .findings
+    findings.sort_by_key(|finding| order(finding.section));
+    let problems = findings
         .iter()
         .filter(|f| f.status == Status::Problem)
         .count();
-    let warnings = doctor
-        .findings
+    let warnings = findings
         .iter()
         .filter(|f| f.status == Status::Warning)
         .count();
@@ -1896,8 +1898,16 @@ pub fn run_doctor(root: &Path, facts: &RepoFacts, machine: &dyn Machine) -> Doct
         ok: problems == 0,
         problems,
         warnings,
-        checks: doctor.findings,
+        checks: findings,
     }
+}
+
+/// Adds checks made outside [`run_doctor`] (the agent hooks, which the CLI
+/// starts), and counts again.
+pub fn add_checks(report: &mut DoctorReport, findings: Vec<Finding>) {
+    let mut all = std::mem::take(&mut report.checks);
+    all.extend(findings);
+    *report = report_of(all);
 }
 
 fn section_title(section: &str) -> &'static str {
@@ -1905,6 +1915,7 @@ fn section_title(section: &str) -> &'static str {
         "tools" => "Tools",
         "env" => "Environment variables",
         "dependencies" => "Dependencies",
+        "hooks" => "Agent hooks",
         _ => "Services",
     }
 }

@@ -113,6 +113,11 @@ pub struct Snapshot {
     /// it, because it ignores it: the file is among `files` all the same,
     /// read from disk, and no commit has a copy of it (ADR 0058).
     config_unlisted: bool,
+    /// What each agent hook file at the root holds apart from its hook
+    /// entries ([`crate::hooks::outside_hooks`]), read from disk whether or
+    /// not git lists the file: in every key by value (ADR 0064). Empty in a
+    /// snapshot that was not captured, where every file counts as absent.
+    outside_hooks: Vec<(&'static str, String)>,
 }
 
 fn abs(root: &Path, rel: &str) -> PathBuf {
@@ -285,6 +290,7 @@ impl Snapshot {
                     problem: Some(problem),
                     taken: Some(taken),
                     config_unlisted: false,
+                    outside_hooks: Vec::new(),
                 }
             }
         };
@@ -341,13 +347,23 @@ impl Snapshot {
                 problem: Some("the files could not all be hashed".to_owned()),
                 taken: Some(taken),
                 config_unlisted,
+                outside_hooks: Vec::new(),
             };
         }
+        let outside_hooks = crate::hooks::AGENTS
+            .iter()
+            .map(|agent| {
+                let file = agent.config_file();
+                let bytes = fs::read(abs(root, file)).ok();
+                (file, crate::hooks::outside_hooks(bytes.as_deref()))
+            })
+            .collect();
         Self {
             files: hashed.into_iter().collect(),
             problem: None,
             taken: Some(taken),
             config_unlisted,
+            outside_hooks,
         }
     }
 
@@ -513,15 +529,17 @@ fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
     if path == crate::config::JSON_CONFIG {
         return scope.holds_root();
     }
-    // The agents' hook files (`.claude/settings.json` and the like) are read
-    // by the agents and by firescale's check, and by a step only as one of
-    // every file of the repo (`prettier --check .`): a file only for a unit
-    // whose folders hold the repo root (ADR 0064).
-    if crate::hooks::is_agent_hook_file(path) {
-        return scope.holds_root();
-    }
     if scope.folders.iter().any(|folder| inside(path, folder)) {
         return true;
+    }
+    // The agents' hook files (`.claude/settings.json` and the like) are a
+    // file only of a unit whose folders hold them: the repo root's own
+    // steps (`prettier --check .`), or a project that reads one by its path
+    // (`require('../.claude/settings.json')`, a shared node of the graph).
+    // For every other unit, what such a file holds apart from its hook
+    // entries is in the key by value ([`files_digest`], ADR 0064).
+    if crate::hooks::is_agent_hook_file(path) {
+        return false;
     }
     let unowned = !owned.iter().any(|folder| inside(path, folder));
     // A file directly in the repo root that no project owns and that is a
@@ -566,6 +584,18 @@ fn files_digest(snapshot: &Snapshot, scope: &Scope, owned: &[String]) -> Result<
             _ => "file",
         };
         hasher.update(format!("{marker}\0{path}\0{shown}\n").as_bytes());
+    }
+    // What the agent hook files hold apart from their hook entries reaches
+    // every step: Claude Code gives the `env` of `.claude/settings.json` to
+    // every command it starts. In every key, by value (ADR 0064).
+    for agent in crate::hooks::AGENTS {
+        let file = agent.config_file();
+        let outside = snapshot
+            .outside_hooks
+            .iter()
+            .find(|(path, _)| *path == file)
+            .map_or("{}", |(_, value)| value.as_str());
+        hasher.update(format!("outside-hooks\0{file}\0{outside}\n").as_bytes());
     }
     Ok(hasher.finalize().to_hex().to_string())
 }
@@ -1590,6 +1620,17 @@ impl<'a> StepCache<'a> {
         if self.key(folder, kind, step, command, dir).is_err() {
             return false;
         }
+        // A changed agent hook file is a difference for every unit, whatever
+        // part of it changed: a step that reads it, or that the `env` it
+        // sets reaches, must not take its head result for the base's
+        // (review of ADR 0064). It costs a base run on a branch that edits
+        // one.
+        if changed
+            .iter()
+            .any(|path| crate::hooks::is_agent_hook_file(path))
+        {
+            return false;
+        }
         // For a unit that does not hold the repo root, the config is in the
         // key by value, not as a file. The step is the same only if the
         // config's difference from the base's does not reach it (ADR 0058).
@@ -1656,7 +1697,9 @@ impl<'a> StepCache<'a> {
         let mut files = blake3::Hasher::new();
         files.update(format!("base\0{commit}\0{environment}\n").as_bytes());
         for (path, id) in &tree {
-            if covers(&scope, owned, path) {
+            // A hook file of the base is in every unit's base key: what it
+            // holds apart from its hook entries reaches every step.
+            if covers(&scope, owned, path) || crate::hooks::is_agent_hook_file(path) {
                 files.update(format!("{path}\0{id}\n").as_bytes());
             }
         }
@@ -2123,6 +2166,7 @@ mod tests {
             problem: None,
             taken: None,
             config_unlisted: false,
+            outside_hooks: Vec::new(),
         };
         let reason = UnitDigests::new(None)
             .digest(&snapshot, &Scope::whole_repo())
@@ -2133,6 +2177,7 @@ mod tests {
             problem: Some("git ls-files failed".to_owned()),
             taken: None,
             config_unlisted: false,
+            outside_hooks: Vec::new(),
         };
         assert!(UnitDigests::new(None)
             .digest(&unlisted, &Scope::whole_repo())
@@ -2525,7 +2570,10 @@ mod tests {
             assert_ne!(with_env, none, "{file}");
             // By value: the order of the keys and the spacing do not count.
             fixture
-                .write(file, "{\n  \"hooks\": {\"Stop\": []},\n  \"env\": {\"A\": \"1\"}\n}\n")
+                .write(
+                    file,
+                    "{\n  \"hooks\": {\"Stop\": []},\n  \"env\": {\"A\": \"1\"}\n}\n",
+                )
                 .unwrap();
             assert_eq!(project(), with_env, "{file}");
             // A file that is not JSON counts whole, as any other file.

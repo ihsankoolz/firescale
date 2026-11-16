@@ -8,8 +8,8 @@
   "required": ["schemaVersion", "ok", "problems", "warnings", "checks"],
   "properties": {
     "schemaVersion": {
-      "description": "Version of this format. Changes only on a breaking change.",
-      "const": 1
+      "description": "Version of this format. Changes only on a breaking change. Version 2 added the section hooks.",
+      "const": 2
     },
     "ok": {
       "description": "True when no check found a problem. Warnings do not count. The exit code is 0 when true, 1 when false.",
@@ -26,7 +26,7 @@
       "minimum": 0
     },
     "checks": {
-      "description": "Every check, grouped by section in the order tools, env, dependencies, services.",
+      "description": "Every check, grouped by section in the order tools, env, dependencies, services, hooks.",
       "type": "array",
       "items": {
         "type": "object",
@@ -34,8 +34,8 @@
         "required": ["section", "subject", "status", "detail"],
         "properties": {
           "section": {
-            "description": "tools: installed tool versions against what the repo declares. env: the names in each .env.example. dependencies: installed packages and virtual environments. services: local services the repo names.",
-            "enum": ["tools", "env", "dependencies", "services"]
+            "description": "tools: installed tool versions against what the repo declares. env: the names in each .env.example. dependencies: installed packages and virtual environments. services: local services the repo names. hooks: whether the stop hook in each agent hook file starts on this machine.",
+            "enum": ["tools", "env", "dependencies", "services", "hooks"]
           },
           "project": {
             "description": "The folder of the project the check is about, as fscale facts prints it. Absent for checks about the whole repo.",

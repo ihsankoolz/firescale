@@ -68,9 +68,10 @@ impl Agent {
 
 /// True for the stop hook files of the agents at the repo root
 /// (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`).
-/// Agents and firescale's check read them; a build or a test of a project
-/// below the repo root does not, so they are files only of the units whose
-/// key holds the repo root (ADR 0064).
+/// Agents and firescale's check read them. Each is a file only of the units
+/// whose folders hold it: the repo root's own steps, or a project that
+/// reads it by its path. What it holds apart from its hook entries is in
+/// every key by value ([`outside_hooks`], ADR 0064).
 #[must_use]
 pub fn is_agent_hook_file(path: &str) -> bool {
     AGENTS.iter().any(|agent| agent.config_file() == path)
@@ -82,25 +83,52 @@ pub fn hook_command(bin: &str, agent: Agent) -> String {
     format!("{bin} hooks run --agent {}", agent.name())
 }
 
+/// The command that starts this version of firescale through npx, pinned:
+/// `npx --yes firescale@<version>`, the same pin as the starter CI's tamper
+/// step. A release changes it in the next `fscale` only.
+#[must_use]
+pub fn pinned_npx() -> String {
+    format!("npx --yes firescale@{}", crate::version())
+}
+
 /// How this repo starts fscale: through its own `fscale` package script
-/// when it has one, else `npx firescale` (the same as the starter CI). The
-/// answer depends on the repo only, never on this machine's PATH, so every
-/// teammate's agent runs the same command (ADR 0064).
+/// when it has one, else through the firescale it lists among its
+/// dependencies, else this version of firescale through npx, pinned
+/// ([`pinned_npx`]). The answer depends on the repo only, never on this
+/// machine's PATH, so every teammate's agent runs the same command, and a
+/// release of firescale does not change it (ADR 0064).
 #[must_use]
 pub fn fscale_command(facts: &crate::facts::RepoFacts, package_json: Option<&Value>) -> String {
     let has_script = package_json
         .and_then(|json| json.get("scripts"))
         .and_then(|scripts| scripts.get("fscale"))
         .is_some_and(Value::is_string);
-    if !has_script {
-        return "npx firescale".to_owned();
+    let manager = facts.package_manager.as_deref();
+    if has_script {
+        return match manager {
+            Some("pnpm") => "pnpm --silent fscale".to_owned(),
+            Some("yarn") => "yarn --silent fscale".to_owned(),
+            Some("bun") => "bun run --silent fscale".to_owned(),
+            _ => "npm run --silent fscale --".to_owned(),
+        };
     }
-    match facts.package_manager.as_deref() {
-        Some("pnpm") => "pnpm --silent fscale".to_owned(),
-        Some("yarn") => "yarn --silent fscale".to_owned(),
-        Some("bun") => "bun run --silent fscale".to_owned(),
-        _ => "npm run --silent fscale --".to_owned(),
+    let installed = ["devDependencies", "dependencies"].iter().any(|list| {
+        package_json
+            .and_then(|json| json.get(list))
+            .and_then(|deps| deps.get("firescale"))
+            .is_some()
+    });
+    if installed {
+        // The `fscale` that `node_modules/.bin` holds, never a download:
+        // `npx --no` fails instead of fetching it.
+        return match manager {
+            Some("pnpm") => "pnpm exec fscale".to_owned(),
+            Some("yarn") => "yarn --silent fscale".to_owned(),
+            Some("bun") => "bun run --silent fscale".to_owned(),
+            _ => "npx --no fscale".to_owned(),
+        };
     }
+    pinned_npx()
 }
 
 /// [`fscale_command`] for the repo at `root`: the default of
@@ -113,12 +141,14 @@ pub fn default_bin(root: &Path) -> String {
     match crate::facts::detect_facts_with(root, None) {
         Ok(facts) => fscale_command(&facts, package_json.as_ref()),
         // Facts that cannot be read leave no package manager to name.
-        Err(_) => "npx firescale".to_owned(),
+        Err(_) => pinned_npx(),
     }
 }
 
 /// How the commands of our stop hook in an agent's file start fscale: the
 /// text before `hooks run --agent <name>` (`npx firescale`), once each.
+/// This is text from the repo: it is only started when it is a command
+/// fscale would write itself ([`may_start`]).
 #[must_use]
 pub fn installed_prefixes(root: &Path, agent: Agent) -> Vec<String> {
     let needle = format!("hooks run --agent {}", agent.name());
@@ -141,17 +171,77 @@ pub fn installed_prefixes(root: &Path, agent: Agent) -> Vec<String> {
     prefixes
 }
 
-/// How long `hooks install` waits for `<command> --version`: long enough
+/// True when fscale may start `prefix` to check it: it is exactly one of
+/// the commands fscale writes itself (`allowed`: the repo's default, and a
+/// `--bin` given in this run). Any other text in a hook file came from the
+/// repo, and starting it would run the repo's text on this machine
+/// (review of ADR 0064).
+#[must_use]
+pub fn may_start(prefix: &str, allowed: &[&str]) -> bool {
+    allowed.contains(&prefix)
+}
+
+/// What an agent hook file holds apart from its hook entries (the
+/// top-level `hooks` key of all three formats), written the same way
+/// whatever the order of its keys and its spacing. Claude Code gives the
+/// `env` of `.claude/settings.json` to every command it starts, verify
+/// among them, so this part is in every step's key by value (ADR 0064).
+/// A file that is absent counts as `{}`; one that is not a JSON object
+/// counts as its bytes.
+#[must_use]
+pub fn outside_hooks(bytes: Option<&[u8]>) -> String {
+    let Some(bytes) = bytes else {
+        return "{}".to_owned();
+    };
+    let text = String::from_utf8_lossy(bytes);
+    match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
+        Ok(Value::Object(mut map)) => {
+            map.remove("hooks");
+            canonical(&Value::Object(map))
+        }
+        _ => format!("bytes:{}", blake3::hash(bytes).to_hex()),
+    }
+}
+
+/// JSON with the keys of every object sorted, and no spacing.
+fn canonical(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let fields: Vec<String> = keys
+                .into_iter()
+                .map(|key| format!("{}:{}", Value::from(key.as_str()), canonical(&map[key])))
+                .collect();
+            format!("{{{}}}", fields.join(","))
+        }
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(canonical).collect();
+            format!("[{}]", items.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
+/// How long the check waits for `<command> --version --json`: long enough
 /// for npx to download firescale once.
 pub const START_CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// What starting `<prefix> --version` gave.
+/// What the check asks a hook's command: `--version --json`, which only
+/// firescale (0.5.2 and later) answers with `{"name":"firescale",...}`.
+/// One start answers both whether it is firescale and which version.
+#[must_use]
+pub fn probe_line(prefix: &str) -> String {
+    format!("{prefix} --version --json")
+}
+
+/// What starting [`probe_line`] gave.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartCheck {
-    /// It exited 0 and its last line is a version.
+    /// It exited 0 with firescale's answer: this version.
     Answered(String),
-    /// It exited 0, and its last line is not a version.
-    NotAVersion(String),
+    /// It exited 0 with something else: the last lines it printed.
+    NotFirescale(String),
     /// It exited with this code (`None`: stopped by a signal) and printed
     /// this.
     Failed { code: Option<i32>, output: String },
@@ -161,19 +251,109 @@ pub enum StartCheck {
     NoShell(String),
 }
 
-/// Starts `<prefix> --version` in the repo root through the platform shell
-/// (`sh -c`, `cmd /D /S /C`), with stdin closed, as an agent starts its
-/// hook command from the project root (ADR 0064). It runs what the hook
-/// would run: a package script of the repo, or npx, which may download
-/// firescale. The caller says so before it calls this.
+/// True for a PATH folder that a package manager puts first for the run
+/// of a script or of npx (`node_modules/.bin`, npx's
+/// `_npx/<hash>/node_modules/.bin`, npm's `node-gyp-bin`): a folder inside
+/// a `node_modules`. An agent started from a terminal does not have it.
+fn launcher_folder(dir: &str) -> bool {
+    dir.split(['/', '\\'])
+        .any(|part| part.eq_ignore_ascii_case("node_modules"))
+}
+
+/// The PATH the check gives a hook's command: this process's PATH without
+/// the folders a package manager put there for its own run, and those
+/// folders (review of ADR 0064: run through npx, `--bin fscale` found
+/// `node_modules/.bin/fscale`, which an agent would not).
 #[must_use]
-pub fn check_start(root: &Path, prefix: &str) -> StartCheck {
+pub fn check_path() -> (Option<std::ffi::OsString>, Vec<String>) {
+    let Some(path) = std::env::var_os("PATH") else {
+        return (None, Vec::new());
+    };
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    for dir in std::env::split_paths(&path) {
+        let shown = dir.to_string_lossy().into_owned();
+        if launcher_folder(&shown) {
+            dropped.push(shown);
+        } else {
+            kept.push(dir);
+        }
+    }
+    (std::env::join_paths(kept).ok(), dropped)
+}
+
+/// What the check says before it starts `prefix`: that it may download
+/// firescale, or that it runs the repo's own fscale. Empty for anything
+/// else.
+#[must_use]
+pub fn launch_note(prefix: &str) -> String {
+    let words: Vec<&str> = prefix.split_whitespace().collect();
+    let first = words.first().copied().unwrap_or_default();
+    let next = words
+        .iter()
+        .skip(1)
+        .copied()
+        .find(|word| !word.starts_with('-'));
+    let local = words.contains(&"--no");
+    let tool = match (first, next) {
+        ("npx" | "bunx", _) if !local => Some(first.to_owned()),
+        ("npm", Some(sub @ ("exec" | "x"))) if !local => Some(format!("npm {sub}")),
+        ("pnpm" | "yarn", Some("dlx")) | ("bun", Some("x")) => {
+            Some(format!("{first} {}", next.unwrap_or_default()))
+        }
+        _ => None,
+    };
+    if let Some(tool) = tool {
+        return format!(" {tool} may download firescale from the npm registry first.");
+    }
+    if (first == "npx" && local) || (first == "pnpm" && next == Some("exec")) {
+        return " It runs the fscale installed in this repo's node_modules.".to_owned();
+    }
+    // `npm run fscale`, `pnpm --silent fscale`, `bun run --silent fscale`.
+    let after_run = || {
+        words
+            .iter()
+            .skip(2)
+            .copied()
+            .find(|word| !word.starts_with('-'))
+    };
+    let script = match (first, next) {
+        ("npm" | "bun" | "pnpm" | "yarn", Some("run" | "run-script")) => after_run(),
+        ("pnpm" | "yarn", next) => next,
+        _ => None,
+    };
+    if script == Some("fscale") {
+        return " It runs this repo's own `fscale` package script.".to_owned();
+    }
+    String::new()
+}
+
+/// Starts [`probe_line`] in the repo root through the platform shell
+/// (`sh -c`, `cmd /D /S /C`), with stdin closed, as an agent starts its
+/// hook command from the project root (ADR 0064): with `path` as the PATH
+/// ([`check_path`]) and, for Claude Code's file, `CLAUDE_PROJECT_DIR` set
+/// to the root. It runs what the hook would run: a package script of the
+/// repo, or npx, which may download firescale. The caller says so before it
+/// calls this, and starts only a command fscale writes ([`may_start`]).
+#[must_use]
+pub fn check_start(
+    root: &Path,
+    prefix: &str,
+    path: Option<&std::ffi::OsStr>,
+    claude: bool,
+) -> StartCheck {
     use std::sync::atomic::AtomicBool;
 
     use crate::process::{run_tree, Ending, Watch};
 
-    let mut command = crate::doctor::shell(&format!("{prefix} --version"));
+    let mut command = crate::doctor::shell(&probe_line(prefix));
     command.current_dir(root);
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    if claude {
+        command.env("CLAUDE_PROJECT_DIR", root);
+    }
     let never = AtomicBool::new(false);
     let watch = Watch {
         timeout: Some(START_CHECK_TIMEOUT),
@@ -192,20 +372,21 @@ pub fn check_start(root: &Path, prefix: &str) -> StartCheck {
     let stdout = String::from_utf8_lossy(&finished.stdout).into_owned();
     match finished.ending {
         Ending::Exited(Some(0)) => {
-            let last = stdout
-                .lines()
-                .map(str::trim)
-                .rfind(|line| !line.is_empty())
-                .unwrap_or_default()
-                .to_owned();
-            let one_word = !last.is_empty() && !last.contains(char::is_whitespace);
-            if one_word
-                && last.starts_with(|c: char| c.is_ascii_digit())
-                && crate::doctor::version_numbers(&last).is_some()
-            {
-                StartCheck::Answered(last)
-            } else {
-                StartCheck::NotAVersion(last)
+            let answer = stdout.lines().map(str::trim).find_map(|line| {
+                let value: Value = serde_json::from_str(line).ok()?;
+                (value.get("name")?.as_str()? == "firescale")
+                    .then(|| value.get("version")?.as_str().map(str::to_owned))?
+            });
+            match answer {
+                Some(version) => StartCheck::Answered(version),
+                None => {
+                    let shown: Vec<&str> = stdout
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .collect();
+                    StartCheck::NotFirescale(shown[shown.len().saturating_sub(3)..].join(" "))
+                }
             }
         }
         Ending::TimedOut => StartCheck::TimedOut,
@@ -220,6 +401,117 @@ pub fn check_start(root: &Path, prefix: &str) -> StartCheck {
             output: String::new(),
         },
     }
+}
+
+/// The check's result in words: `Ok` with the version firescale answered,
+/// or `Err` with why the command cannot start, starting with the command.
+///
+/// # Errors
+///
+/// Why the command cannot start.
+pub fn start_verdict(prefix: &str, check: &StartCheck) -> std::result::Result<String, String> {
+    let line = probe_line(prefix);
+    Err(match check {
+        StartCheck::Answered(version) => return Ok(version.clone()),
+        StartCheck::NotFirescale(answer) if answer.is_empty() => {
+            format!("`{line}` printed nothing, where firescale prints its name and version.")
+        }
+        StartCheck::NotFirescale(answer) => format!(
+            "`{line}` answered \"{answer}\", which is not firescale's answer (a line {{\"name\":\"firescale\",\"version\":...}}): another program, or a firescale older than 0.5.2."
+        ),
+        StartCheck::Failed { code, output } => {
+            let code =
+                code.map_or_else(|| "no exit code".to_owned(), |code| format!("code {code}"));
+            let shown: Vec<&str> = output
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+            let tail = &shown[shown.len().saturating_sub(10)..];
+            if tail.is_empty() {
+                format!("`{line}` exited with {code} and printed nothing.")
+            } else {
+                format!(
+                    "`{line}` exited with {code} and printed:\n{}",
+                    tail.iter()
+                        .map(|line| format!("  {}", line.trim_end()))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            }
+        }
+        StartCheck::TimedOut => format!(
+            "`{line}` did not answer within {} seconds.",
+            START_CHECK_TIMEOUT.as_secs()
+        ),
+        StartCheck::NoShell(error) => {
+            format!("the shell that starts `{line}` could not be started ({error}).")
+        }
+    })
+}
+
+/// How the agent hook files among the changed files reach
+/// `verify --affected` (ADR 0064).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HookFileChanges {
+    /// Changed only inside their hook entries, and in no folder of the
+    /// graph: they reach only the units whose folders hold the repo root.
+    pub settled: Vec<&'static str>,
+    /// Changed outside their hook entries (`env`, `permissions`, ...), or
+    /// there is no base to compare with: they reach every project.
+    pub outside: Vec<&'static str>,
+}
+
+/// Sorts the changed agent hook files ([`HookFileChanges`]). A hook file
+/// that a node of the graph holds (a project that reads it by its path)
+/// and that changed only inside its hook entries is in neither list: it is
+/// a file of that node, as any other.
+#[must_use]
+pub fn hook_file_changes(
+    root: &Path,
+    base: Option<&str>,
+    changed: &std::collections::BTreeSet<String>,
+    graph: &crate::graph::Graph,
+) -> HookFileChanges {
+    let files: Vec<&'static str> = AGENTS
+        .iter()
+        .map(|agent| agent.config_file())
+        .filter(|file| changed.contains(*file))
+        .collect();
+    let mut sorted = HookFileChanges::default();
+    if files.is_empty() {
+        return sorted;
+    }
+    let Some(commit) = crate::configkey::comparison_commit(root, base) else {
+        sorted.outside = files;
+        return sorted;
+    };
+    let at_base = crate::git::files_at(root, &commit, &files);
+    for file in files {
+        let head = fs::read(resolve(root, file)).ok();
+        let was = at_base.get(file).map(Vec::as_slice);
+        if outside_hooks(head.as_deref()) != outside_hooks(was) {
+            sorted.outside.push(file);
+            continue;
+        }
+        let held = graph.nodes.iter().any(|node| {
+            node.path != "." && (file == node.path || file.starts_with(&format!("{}/", node.path)))
+        });
+        if !held {
+            sorted.settled.push(file);
+        }
+    }
+    sorted
+}
+
+/// Why fscale did not start a command it found in `file`, and what to do.
+#[must_use]
+pub fn not_started(agent: Agent, prefix: &str, writes: &str) -> String {
+    format!(
+        "it runs `{}`, which is not the command fscale writes here (`{writes}`), and fscale starts no other. Read it in {}; if it is yours, check that it starts: run `{}` in the repo root.",
+        hook_command(prefix, agent),
+        agent.config_file(),
+        probe_line(prefix)
+    )
 }
 
 fn object_mut<'a>(

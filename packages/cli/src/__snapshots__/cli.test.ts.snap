@@ -22,7 +22,7 @@ Usage:
                                Scaffold new files from JSON input (package, rule)
   fscale schema [<generator>]  Print a generator's input JSON Schema, or list the generators
   fscale hooks install         Make an agent run verify before it may stop (--agent, --all)
-  fscale --version             Print the firescale version
+  fscale --version [--json]    Print the firescale version (--json: with its name)
   fscale --help                Print this help
 
 Options:
@@ -54,7 +54,8 @@ Options:
                    deterministic fix cannot repair)
   --all            hooks install: every supported agent
   --bin <command>  hooks install: how the hook starts fscale (default: the repo's own
-                   fscale package script, else npx firescale)
+                   fscale package script, else the firescale it installs, else
+                   npx --yes firescale@<this version>)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
   --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
                    took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is
