@@ -3789,6 +3789,65 @@ fn shared_setup_reasons(report: &VerifyReport) -> Vec<(&str, Vec<usize>)> {
     groups
 }
 
+/// At most this many failing tests of one step are named in the summary;
+/// `--json` has every one (ADR 0062).
+const FAILING_TESTS_SHOWN: usize = 20;
+
+/// A failing test's name as the summary prints it: on one line (a line
+/// break is written `\n`), with what could be a secret hidden as in an
+/// output line (a pytest parameter can be a database URL), and at most 300
+/// characters (ADR 0062).
+fn shown_test_id(id: &str) -> String {
+    let one_line = id.replace("\r\n", "\\n").replace(['\r', '\n'], "\\n");
+    let line = hide_secrets(&one_line);
+    if line.chars().count() > 300 {
+        format!("{}...", line.chars().take(300).collect::<String>())
+    } else {
+        line
+    }
+}
+
+/// Test names, one per line, the first [`FAILING_TESTS_SHOWN`], then how
+/// many more.
+fn push_test_names(out: &mut String, ids: &[&str]) {
+    for id in ids.iter().take(FAILING_TESTS_SHOWN) {
+        out.push_str(&format!("  {}\n", shown_test_id(id)));
+    }
+    if ids.len() > FAILING_TESTS_SHOWN {
+        out.push_str(&format!(
+            "  and {} more; `fscale verify --json` lists every one under failedTests\n",
+            ids.len() - FAILING_TESTS_SHOWN
+        ));
+    }
+}
+
+/// The failing tests of a step, by name as its runner gives them. When the
+/// results may not cover the whole run (the step timed out, or ran its
+/// runner more than once), the count is what was found, and says so.
+fn failing_tests_list(step: &StepReport, place: &str) -> String {
+    let ids: Vec<&str> = step
+        .failed_tests
+        .iter()
+        .map(|test| test.id.as_str())
+        .collect();
+    let whole = step.status != StepStatus::TimedOut
+        && !step
+            .test_results
+            .as_ref()
+            .is_some_and(|results| results.partial);
+    let count = if whole {
+        ids.len().to_string()
+    } else {
+        format!(
+            "{} found; the results do not cover the whole run",
+            ids.len()
+        )
+    };
+    let mut out = format!("\nFailing tests of {}{place} ({count}):\n", step.name);
+    push_test_names(&mut out, &ids);
+    out
+}
+
 /// One block for several steps that need the same setup: the reason once,
 /// then each step with its own setup command and the command to run again.
 /// Only the first step's last lines are shown; `--json` has every step's.
@@ -3935,6 +3994,7 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             .map_or_else(String::new, |project| {
                 format!(" in {}", place_name(project))
             });
+        let mut named_tests = false;
         match failure.label {
             Some(crate::blame::Label::PreExisting) => {
                 let how = match failure.base.as_ref().map(|base| base.source) {
@@ -3997,12 +4057,20 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                 }
                 if !new_tests.is_empty() {
                     out.push_str("New failing tests:\n");
-                    for test in &new_tests {
-                        out.push_str(&format!("  {test}\n"));
-                    }
+                    push_test_names(&mut out, &new_tests);
+                    named_tests = true;
                 }
             }
             _ => {}
+        }
+        // Each failing test by name, so it is plain how many failed and
+        // which; the last lines below show how (ADR 0062). Not when the
+        // new ones were just listed: the others are counted there.
+        if !named_tests
+            && matches!(failure.status, StepStatus::Failed | StepStatus::TimedOut)
+            && !failure.failed_tests.is_empty()
+        {
+            out.push_str(&failing_tests_list(failure, &place));
         }
         if !failure.output_tail.is_empty() {
             out.push_str(&format!("\nLast lines of {}{place}:\n", failure.name));
@@ -4635,6 +4703,173 @@ mod tests {
             command: "fscale check".to_owned(),
             violations: Vec::new(),
         }
+    }
+
+    /// From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
+    /// finding 1): the summary kept only the last lines of a failing test
+    /// step, so it did not show whether a fourth test failed.
+    #[test]
+    fn a_failing_test_step_lists_its_failing_tests_by_name_up_to_twenty() {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let fail = if cfg!(windows) {
+            "echo 3 failed, 1751 passed & exit /b 1"
+        } else {
+            "echo 3 failed, 1751 passed; exit 1"
+        };
+        let plan = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![("test".to_owned(), Planned::Command(fail.to_owned()))],
+            ..VerifyPlan::default()
+        };
+        let run = || run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        let failing = |ids: &[String]| {
+            ids.iter()
+                .map(|id| FailedTest {
+                    id: id.clone(),
+                    label: None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // The ledger step's three failing tests, as pytest names them.
+        let ledger = [
+            "unit_test/service/test_settlement.py::test_a_thousand_winners_and_a_thousand_losers_settle_within_five_seconds",
+            "unit_test/service/test_void.py::test_a_void_finishes_within_five_seconds[1000-positions]",
+            "unit_test/service/test_void.py::test_a_void_finishes_within_five_seconds[10000-trades]",
+        ]
+        .map(str::to_owned);
+        let mut report = run();
+        assert_eq!(report.steps[1].status, StepStatus::Failed);
+        report.steps[1].failed_tests = failing(&ledger);
+        let text = format_verify_human(&report);
+        let list = format!("\nFailing tests of test (3):\n  {}\n", ledger.join("\n  "));
+        let at = text.find(&list).unwrap_or_else(|| panic!("{text}"));
+        // The last lines are kept, after the list.
+        let last = text
+            .find("\nLast lines of test:\n  3 failed, 1751 passed\n")
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(at < last, "{text}");
+
+        // More than twenty: the first twenty, then how many more.
+        let many: Vec<String> = (1..=23)
+            .map(|n| format!("e2e/seed/production.test.ts > seed > case {n:02}"))
+            .collect();
+        report.steps[1].failed_tests = failing(&many);
+        let text = format_verify_human(&report);
+        let list = format!(
+            "\nFailing tests of test (23):\n  {}\n  and 3 more; `fscale verify --json` lists every one under failedTests\n",
+            many[..20].join("\n  ")
+        );
+        assert!(text.contains(&list), "{text}");
+        assert!(!text.contains("case 21"), "{text}");
+
+        // No per-test results: the summary is as before.
+        let report = run();
+        let text = format_verify_human(&report);
+        assert!(!text.contains("Failing tests"), "{text}");
+        assert!(
+            text.contains("\nLast lines of test:\n  3 failed, 1751 passed\n"),
+            "{text}"
+        );
+    }
+
+    /// A report of one failing `test` step, and failing tests to give it.
+    fn one_failing_test_step() -> VerifyReport {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let fail = if cfg!(windows) { "exit /b 1" } else { "exit 1" };
+        let plan = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![("test".to_owned(), Planned::Command(fail.to_owned()))],
+            ..VerifyPlan::default()
+        };
+        run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap()
+    }
+
+    fn failed_tests(ids: &[String], label: Option<crate::blame::Label>) -> Vec<FailedTest> {
+        ids.iter()
+            .map(|id| FailedTest {
+                id: id.clone(),
+                label,
+            })
+            .collect()
+    }
+
+    /// From the review of ADR 0062: a test's name is printed as safely as
+    /// an output line: secrets hidden, on one line, and not too long.
+    #[test]
+    fn failing_test_names_hide_secrets_and_stay_on_one_short_line() {
+        let mut report = one_failing_test_step();
+        let secret = "tests/test_db.py::test_connects[postgresql://app:s3cret@db/x]".to_owned();
+        let two_lines = "src/a.test.ts > reads\nthe second line".to_owned();
+        let long = format!("tests/test_long.py::test_{}", "x".repeat(400));
+        report.steps[1].failed_tests = failed_tests(&[secret, two_lines, long], None);
+        let text = format_verify_human(&report);
+        assert!(!text.contains("s3cret"), "{text}");
+        assert!(
+            text.contains("  tests/test_db.py::test_connects[postgresql://***@db/x]\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  src/a.test.ts > reads\\nthe second line\n"),
+            "{text}"
+        );
+        assert!(!text.contains(&"x".repeat(301)), "{text}");
+        assert!(text.contains("\nFailing tests of test (3):\n"), "{text}");
+    }
+
+    /// From the review of ADR 0062: when the results may not cover the
+    /// whole run, the count is what was found, not the total.
+    #[test]
+    fn a_failing_test_list_that_may_not_be_whole_says_so() {
+        let mut report = one_failing_test_step();
+        let ids: Vec<String> = ["a", "b", "c"]
+            .map(|id| format!("tests/test_x.py::test_{id}"))
+            .to_vec();
+        report.steps[1].failed_tests = failed_tests(&ids, None);
+        report.steps[1].test_results = Some(crate::pertest::TestResults {
+            partial: true,
+            ..crate::pertest::TestResults::default()
+        });
+        let text = format_verify_human(&report);
+        assert!(
+            text.contains(
+                "\nFailing tests of test (3 found; the results do not cover the whole run):\n"
+            ),
+            "{text}"
+        );
+        report.steps[1].test_results = None;
+        report.steps[1].status = StepStatus::TimedOut;
+        let text = format_verify_human(&report);
+        assert!(
+            text.contains(
+                "\nFailing tests of test (3 found; the results do not cover the whole run):\n"
+            ),
+            "{text}"
+        );
+    }
+
+    /// From the review of ADR 0062: the `New failing tests:` list has the
+    /// same cap, and hides secrets the same way.
+    #[test]
+    fn the_new_failing_tests_list_has_the_same_cap_and_hides_secrets() {
+        let mut report = one_failing_test_step();
+        report.steps[1].label = Some(crate::blame::Label::New);
+        let mut many: Vec<String> = (1..=23)
+            .map(|n| format!("tests/test_new.py::test_{n:02}"))
+            .collect();
+        many[0] = "tests/test_db.py::test_connects[postgresql://app:s3cret@db/x]".to_owned();
+        report.steps[1].failed_tests = failed_tests(&many, Some(crate::blame::Label::New));
+        let text = format_verify_human(&report);
+        assert!(!text.contains("s3cret"), "{text}");
+        assert!(text.contains("New failing tests:\n"), "{text}");
+        assert!(text.contains("  tests/test_new.py::test_20\n"), "{text}");
+        assert!(!text.contains("test_21"), "{text}");
+        assert!(
+            text.contains(
+                "  and 3 more; `fscale verify --json` lists every one under failedTests\n"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

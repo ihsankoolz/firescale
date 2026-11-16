@@ -93,6 +93,36 @@ describe('fscale verify', () => {
     expect(result.stdout).toMatchSnapshot();
   });
 
+  it('names each failing test of a test step before its last lines (ADR 0062)', async () => {
+    // A stand-in for Vitest's default reporter, with the course project's
+    // three frontend failures (docs/reviews/cs464-0.5.1.md, finding 1).
+    const vitest = [
+      "console.log('⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯\\n');",
+      "console.log(' FAIL  e2e/seed/production.test.ts > seed > writes the env file with mode 600');",
+      "console.log('AssertionError: expected 420 to be 384');",
+      "console.log(' FAIL  e2e/seed/production.test.ts > sqlRunnerFor, with a fake ssh > runs the seed');",
+      "console.log('Error: Test timed out in 5000ms.');",
+      "console.log(' FAIL  e2e/seed/production.test.ts > sqlRunnerFor, with a fake ssh > stops on an error');",
+      "console.log('Error: Test timed out in 5000ms.');",
+      "console.log('      Tests  3 failed | 40 passed (43)');",
+      'process.exit(1);',
+      '',
+    ].join('\n');
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: 'node lint.js', typecheck: false, test: 'node vitest.js' },
+        }),
+        'lint.js': "console.log('lint clean');\n",
+        'vitest.js': vitest,
+      },
+    });
+    const result = await runCli(['verify'], repo.root);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(result.stdout).toContain('Failing tests of test (3):');
+    expect(result.stdout).toMatchSnapshot();
+  });
+
   it('prints schema-valid JSON for a failing repo', async () => {
     const repo = await fixtures.create({ files: repoFiles(FAILING_TEST) });
     const result = await runCli(['verify', '--json'], repo.root);

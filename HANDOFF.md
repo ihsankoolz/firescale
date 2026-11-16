@@ -6,11 +6,11 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 **In progress: the 0.5.2 run** (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`). Six pull requests, each with a failing test first, a fresh review of its diff, and a merge on green on Linux, macOS and Windows. Blocks per pull request are in DECISIONS.md "0.5.2":
 
-1. The base run: quickest base step first, a step known to take longer than the budget left is not started, the version note, failing tests by name (ADR 0062). Branch `fix052-base-run`: in review.
-2. Tamper guard: suppression codes end at the first word that is not a code; `expected-changed` ignores failure messages and never pairs two tests (ADR 0063). Branch `fix052-tamper`: being built.
-3. Hooks and affected: a hook command that starts without `fscale` on the PATH, a check that it starts, and the agent hook files (ADR 0064). Branch `fix052-hooks`: fixing the review's findings.
-4. Small ones: Vite's built-in names, doctor's wording, Claude Code's result fields confirmed (ADR 0065, ADR 0048). Branch `fix052-small`: in review.
-5. This repo's CI: where the Windows time goes, docs-only changes, a fair limit for two slow tests (ADR 0066). Branch `fix052-ci`: this pull request.
+1. The base run: quickest base step first, a step known to take longer than the budget left is not started, the version note, failing tests by name (ADR 0062). [#63](https://github.com/ihsankoolz/firescale/pull/63): this pull request.
+2. Tamper guard: suppression codes end at the first word that is not a code; `expected-changed` ignores failure messages and never pairs two tests (ADR 0063). Branch `fix052-tamper`: fixing the review's findings (new misses it found), then the measured rates before and after.
+3. Hooks and affected: a hook command that starts without `fscale` on the PATH, a check that it starts, and the agent hook files (ADR 0064). [#64](https://github.com/ihsankoolz/firescale/pull/64): in its second review.
+4. Small ones: Vite's built-in names, doctor's wording, Claude Code's result fields confirmed (ADR 0065, ADR 0048). Merged as [#62](https://github.com/ihsankoolz/firescale/pull/62).
+5. This repo's CI: where the Windows time goes, docs-only changes, a fair limit for two slow tests (ADR 0066). Merged as [#61](https://github.com/ihsankoolz/firescale/pull/61). The Windows job took 21m 28s on it, against 26m 26s to 34m 32s before.
 6. Version 0.5.2 and the list of what changes on the course project: after 1 to 5.
 
 The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged. The run ended there. Do not start M36 or the project-type table without the owner's word.

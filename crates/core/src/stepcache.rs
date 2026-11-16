@@ -1784,12 +1784,18 @@ impl<'a> StepCache<'a> {
             .push(line);
     }
 
-    /// One line when a config setting that is in every step's key changed
-    /// since the last run that used this cache, so no kept pass applies any
-    /// more (ADR 0043, ADR 0058). Said once, on the first run after the
-    /// change; a digest of those settings (and of a `firescale.config.ts`,
-    /// which is in every key as a file) is kept in
-    /// `.firescale/step-cache-config.digest`, beside the cache's folder.
+    /// One line when every kept pass stopped applying since the last run
+    /// that used this cache: either firescale's version changed, or a config
+    /// setting that is in every step's key changed (ADR 0043, ADR 0058,
+    /// ADR 0062). Said once, on the first run after the change.
+    ///
+    /// `.firescale/step-cache-config.digest` holds the version and a digest
+    /// of those settings (and of a `firescale.config.ts`, which is in every
+    /// key as a file). A new version is named as such and never read as a
+    /// config change: a new version may make that digest another way.
+    /// Before 0.5.2 the file held the digest alone; such a file was written
+    /// by 0.5.1 when it is 0.5.1's digest of these same settings, and
+    /// otherwise by 0.5.1 or an older version.
     #[must_use]
     pub fn config_note(&self) -> Option<String> {
         let mut hasher = blake3::Hasher::new();
@@ -1798,13 +1804,20 @@ impl<'a> StepCache<'a> {
             hasher.update(&bytes);
         }
         let digest = hasher.finalize().to_hex().to_string();
+        let record = format!("version {}\nsettings {digest}\n", self.version);
         let dir = cache_dir(&self.root);
         let file = self
             .root
             .join(".firescale")
             .join("step-cache-config.digest");
-        let before = fs::read_to_string(&file).ok();
-        if before.as_deref().map(str::trim) == Some(digest.as_str()) {
+        // Nothing is read or written through a link (ADR 0060, ADR 0061).
+        let linked = is_symlink(&self.root.join(".firescale")) || is_symlink(&file);
+        let before = if linked {
+            None
+        } else {
+            fs::read_to_string(&file).ok()
+        };
+        if before.as_deref() == Some(record.as_str()) {
             return None;
         }
         let had_passes = fs::read_dir(&dir).is_ok_and(|entries| {
@@ -1812,16 +1825,53 @@ impl<'a> StepCache<'a> {
                 .filter_map(Result::ok)
                 .any(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
         });
-        if !is_symlink(&self.root.join(".firescale"))
-            && !is_symlink(&file)
+        if !linked
             && file
                 .parent()
                 .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
         {
             ignore_firescale_folder(&self.root);
-            let _ = fs::write(&file, &digest);
+            let _ = fs::write(&file, &record);
         }
-        (before.is_some() && had_passes).then(|| {
+        let before = before.filter(|_| had_passes)?;
+        let line = |prefix: &str| {
+            before
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix))
+                .map(str::trim)
+        };
+        let (old_version, old_settings) = match line("version ") {
+            Some(version) if !version.is_empty() => {
+                (version, line("settings ").unwrap_or_default())
+            }
+            // A file that holds no record (empty, cut short, or not ours)
+            // says nothing about the last run: no claim is made.
+            Some(_) => return None,
+            // Written before 0.5.2, which first kept the version: the digest
+            // alone, 64 hex digits. 0.5.0 made it from the file's bytes, 0.5.1
+            // as above.
+            None => {
+                let bare = before.trim();
+                if bare.len() != 64 || !bare.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return None;
+                }
+                (
+                    if bare == digest {
+                        "0.5.1"
+                    } else {
+                        "0.5.1 or older"
+                    },
+                    bare,
+                )
+            }
+        };
+        if old_version != self.version {
+            return Some(format!(
+                "firescale is {} now, and the last run used {old_version}. The version is part of every step's cache key, so no pass kept before applies: every step runs again this time.",
+                self.version
+            ));
+        }
+        (old_settings != digest).then(|| {
             "A setting of the firescale config that every step's result can depend on changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.".to_owned()
         })
     }
@@ -2795,6 +2845,152 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.join(".firescale")).unwrap();
         let _ = StepCache::new(root, None, &settings).config_note();
         assert_eq!(names_in(outside.path()), ["keep.txt"]);
+    }
+
+    /// From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
+    /// finding 2): after an upgrade, with the config unchanged, the note
+    /// blamed a config setting. It must name the versions instead.
+    #[test]
+    fn a_new_version_is_named_in_the_note_and_never_read_as_a_config_change() {
+        const CONFIG_NOTE: &str = "A setting of the firescale config that every step's result can depend on changed since the last run";
+        let machine = NoTools;
+        let settings = |version: &'static str, shared: &'static str| CacheSettings {
+            version,
+            read: true,
+            sets_ci: true,
+            settings: shared,
+            machine: &machine,
+            read_env: &|_| None,
+        };
+        let config = r#"{"packs":["core"],"verify":{"test":{"timeout":"2h"}}}"#;
+        let fresh = || {
+            let fixture = Fixture::new(
+                &[("firescale.config.json", config), ("a.py", "x = 1\n")],
+                Track::NoGit,
+            )
+            .unwrap();
+            // A pass kept by the old version, which this one cannot use.
+            let steps = fixture.root().join(".firescale").join("steps");
+            fs::create_dir_all(&steps).unwrap();
+            fs::write(steps.join("old.json"), "{}").unwrap();
+            fixture
+        };
+        let digest_file = |root: &Path| root.join(".firescale").join("step-cache-config.digest");
+
+        // The digest file as 0.5.0 wrote it: the config file's bytes.
+        let fixture = fresh();
+        let root = fixture.root();
+        let mut old = blake3::Hasher::new();
+        old.update(b"firescale.config.json\0");
+        old.update(config.as_bytes());
+        fs::write(digest_file(root), old.finalize().to_hex().to_string()).unwrap();
+        let note = StepCache::new(root, None, &settings("0.5.2", "same"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(!note.contains(CONFIG_NOTE), "{note}");
+        assert!(note.contains("0.5.2"), "{note}");
+        assert!(note.contains("0.5.1 or older"), "{note}");
+
+        // As 0.5.1 wrote it: the shared settings' digest alone, no version.
+        let fixture = fresh();
+        let root = fixture.root();
+        let mut old = blake3::Hasher::new();
+        old.update(b"settings\0same\n");
+        fs::write(digest_file(root), old.finalize().to_hex().to_string()).unwrap();
+        let note = StepCache::new(root, None, &settings("0.5.2", "same"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(!note.contains(CONFIG_NOTE), "{note}");
+        assert!(note.contains("0.5.2"), "{note}");
+        assert!(note.contains("0.5.1"), "{note}");
+        assert!(!note.contains("or older"), "{note}");
+
+        // From here on the file names its version: the next version names
+        // this one, whatever the settings.
+        let fixture = fresh();
+        let root = fixture.root();
+        assert_eq!(
+            StepCache::new(root, None, &settings("0.5.2", "same")).config_note(),
+            None
+        );
+        assert_eq!(
+            StepCache::new(root, None, &settings("0.5.2", "same")).config_note(),
+            None
+        );
+        let note = StepCache::new(root, None, &settings("0.5.3", "same"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(!note.contains(CONFIG_NOTE), "{note}");
+        assert!(note.contains("0.5.2") && note.contains("0.5.3"), "{note}");
+        assert_eq!(
+            StepCache::new(root, None, &settings("0.5.3", "same")).config_note(),
+            None
+        );
+
+        // A real config change on the same version still says so.
+        let note = StepCache::new(root, None, &settings("0.5.3", "other"))
+            .config_note()
+            .unwrap_or_default();
+        assert!(note.starts_with(CONFIG_NOTE), "{note}");
+        assert!(!note.contains("0.5."), "{note}");
+    }
+
+    /// From the review of ADR 0062: a digest file that holds no record
+    /// makes no claim about the version of the last run.
+    #[test]
+    fn an_empty_or_broken_digest_file_names_no_version() {
+        let machine = NoTools;
+        let settings = CacheSettings {
+            version: "0.5.2",
+            read: true,
+            sets_ci: true,
+            settings: "same",
+            machine: &machine,
+            read_env: &|_| None,
+        };
+        for content in ["", "\n", "not a digest\n"] {
+            let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+            let root = fixture.root();
+            let steps = root.join(".firescale").join("steps");
+            fs::create_dir_all(&steps).unwrap();
+            fs::write(steps.join("old.json"), "{}").unwrap();
+            fs::write(
+                root.join(".firescale").join("step-cache-config.digest"),
+                content,
+            )
+            .unwrap();
+            let note = StepCache::new(root, None, &settings).config_note();
+            assert_eq!(note, None, "{content:?}");
+        }
+    }
+
+    /// Nothing is read through a link either (ADR 0060, ADR 0061).
+    #[cfg(unix)]
+    #[test]
+    fn the_config_digest_is_never_read_through_a_symlink() {
+        let machine = NoTools;
+        let settings = CacheSettings {
+            version: "0.5.2",
+            read: true,
+            sets_ci: true,
+            settings: "same",
+            machine: &machine,
+            read_env: &|_| None,
+        };
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        let steps = root.join(".firescale").join("steps");
+        fs::create_dir_all(&steps).unwrap();
+        fs::write(steps.join("old.json"), "{}").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let elsewhere = outside.path().join("digest");
+        fs::write(&elsewhere, "version 0.0.1\nsettings x\n").unwrap();
+        std::os::unix::fs::symlink(
+            &elsewhere,
+            root.join(".firescale").join("step-cache-config.digest"),
+        )
+        .unwrap();
+        assert_eq!(StepCache::new(root, None, &settings).config_note(), None);
     }
 
     #[cfg(unix)]
