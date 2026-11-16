@@ -31,6 +31,7 @@ use crate::git::{run_git, run_git_env};
 use crate::pertest::{follow_renames, TestResults};
 use crate::progress::{format_duration, format_limit};
 use crate::stepcache::{now_secs, StepCache};
+use crate::steptimes::Known;
 use crate::verify::{
     run_base_step, settle, signature_within, Limit, ProjectPlan, RunOptions, StepReport,
     StepStatus, VerifyPlan, VerifyReport, DEFAULT_BASE_BUDGET,
@@ -877,6 +878,43 @@ pub struct BaseRun<'a> {
 struct Pending {
     index: usize,
     key: Option<String>,
+    /// How long the step took on the head the last time
+    /// (`.firescale/step-times.json`, ADR 0057): it sets the order of the
+    /// base run, and a step known to take longer than what is left of the
+    /// budget is not started (ADR 0062).
+    known: Option<Known>,
+}
+
+/// The base run's time budget: `verify.baseBudget`, 5 minutes by default,
+/// `None` with no limit.
+fn base_budget(run: &BaseRun<'_>) -> Option<Duration> {
+    match run.options.config.base_budget {
+        Some(Limit::Off) => None,
+        Some(Limit::After(limit)) => Some(limit),
+        None => Some(DEFAULT_BASE_BUDGET),
+    }
+}
+
+/// Where a step goes in the base run (ADR 0037, ADR 0062): failures first,
+/// since they are what the labels are for, then passing steps; within each,
+/// the shortest kept time first, and a step with no kept time after those
+/// with one. Sorting by it is stable, so steps that compare equal keep the
+/// order of the report.
+fn run_order(passed: bool, known: Option<Known>) -> (bool, bool, Duration) {
+    (
+        passed,
+        known.is_none(),
+        known.map_or(Duration::ZERO, |known| known.duration),
+    )
+}
+
+/// What is left of the base run's budget, when a step is known to take
+/// longer than that, so it is not started (ADR 0062). A step with no kept
+/// time, or a base run with no budget, is started. A step that did not
+/// finish when it last ran takes at least its kept time, so that counts too.
+fn longer_than_left(known: Option<Known>, left: Option<Duration>) -> Option<Duration> {
+    let (known, left) = (known?, left?);
+    (known.duration > left).then_some(left)
 }
 
 fn head_outcome(status: StepStatus) -> Option<BaseStatus> {
@@ -915,11 +953,7 @@ fn plan_of<'a>(plan: &'a VerifyPlan, step: &StepReport) -> Option<&'a ProjectPla
 /// base step that cannot run is "not judged", and its failure blocks.
 pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     let started = Instant::now();
-    let budget = match run.options.config.base_budget {
-        Some(Limit::Off) => None,
-        Some(Limit::After(limit)) => Some(limit),
-        None => Some(DEFAULT_BASE_BUDGET),
-    };
+    let budget = base_budget(run);
     let deadline = budget.map(|limit| started + limit);
     let mut summary = BaseReport {
         compared: true,
@@ -1053,12 +1087,25 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
                 continue;
             }
         }
-        to_run.push(Pending { index, key });
+        // The head's kept time, for the head's command: the base runs that
+        // same command (ADR 0062).
+        let known = run
+            .options
+            .times
+            .and_then(|times| times.last(folder, &step.name, &command).ok().flatten());
+        to_run.push(Pending { index, key, known });
     }
     // Failures first: they are what the labels are for. Passing steps run on
     // the base only when a worktree is needed anyway, so a run with no
-    // failure costs no base run (ADR 0037).
-    to_run.sort_by_key(|pending| report.steps[pending.index].status == StepStatus::Passed);
+    // failure costs no base run (ADR 0037). Within each, the quickest first,
+    // so one slow step cannot use the whole budget before the others start
+    // (ADR 0062).
+    to_run.sort_by_key(|pending| {
+        run_order(
+            report.steps[pending.index].status == StepStatus::Passed,
+            pending.known,
+        )
+    });
     let failing_left = to_run
         .iter()
         .any(|pending| report.steps[pending.index].status != StepStatus::Passed);
@@ -1302,11 +1349,14 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
             (true, BaseStatus::TimedOut) => {
                 (None, Some(format!("it timed out on the base commit {short} too")))
             }
+            // A step that was not started has its own note (ADR 0062).
             (true, BaseStatus::OverBudget) => (
                 None,
-                Some(format!(
-                    "the base run ran out of its time budget ({budget_text}, verify.baseBudget) before it finished"
-                )),
+                Some(outcome.note.clone().unwrap_or_else(|| {
+                    format!(
+                        "the base run ran out of its time budget ({budget_text}, verify.baseBudget) before it finished"
+                    )
+                })),
             ),
             (true, BaseStatus::Stopped) => {
                 (None, Some("verify was stopped during the base run".to_owned()))
@@ -1500,6 +1550,28 @@ fn run_in_worktree(
         } else if past(deadline) {
             summary.over_budget = true;
             BaseOutcome::new(BaseStatus::OverBudget, BaseSource::Ran, None)
+        } else if let Some((known, left)) = pending.known.zip(longer_than_left(
+            pending.known,
+            deadline.map(|deadline| deadline.saturating_duration_since(Instant::now())),
+        )) {
+            // Known to take longer than what is left: starting it would only
+            // use up the budget that the steps after it need (ADR 0062).
+            let budget_text = base_budget(run).map_or_else(|| "no limit".to_owned(), format_limit);
+            let left_text = format_duration(left);
+            say(&format!(
+                "{}: not started: {}, more than the {left_text} left of the budget ({budget_text}, verify.baseBudget)",
+                place(step),
+                known.describe()
+            ));
+            BaseOutcome::new(
+                BaseStatus::OverBudget,
+                BaseSource::Ran,
+                Some(format!(
+                    "it was not started on the base commit {}, because it is known to take longer than what was left of the base run's time budget: {} (.firescale/step-times.json), and {left_text} of {budget_text} (verify.baseBudget) was left",
+                    run.base.short(),
+                    known.describe()
+                )),
+            )
         } else {
             let command = step.command.clone().unwrap_or_default();
             let project = plan_of(run.plan, step);
@@ -2366,6 +2438,53 @@ mod tests {
             fs::read_to_string(worktree.root.join("lib").join("a.txt")).unwrap(),
             "head\n"
         );
+    }
+
+    /// The course project's base run (docs/reviews/cs464-0.5.1.md, finding
+    /// 1): the ledger step (1h 36m) went first and used the whole 5-minute
+    /// budget, so the frontend step (1m 09s) never started.
+    #[test]
+    fn the_base_run_goes_quickest_first_and_leaves_out_a_step_known_to_take_longer_than_what_is_left(
+    ) {
+        let took = |ms: u64| {
+            Some(Known {
+                duration: Duration::from_millis(ms),
+                finished: true,
+            })
+        };
+        // (passed on the head, kept time), in the report's order.
+        let steps = [
+            (false, took(5_763_707)), // test in backend/ledger_service
+            (false, None),            // a failing step with no kept time
+            (false, took(69_498)),    // test in frontend
+            (true, took(1_000)),      // a passing step (verify.labelFixed)
+            (false, took(32_189)),    // test in backend/audit_service
+            (false, None),            // another with no kept time
+        ];
+        let mut order: Vec<usize> = (0..steps.len()).collect();
+        order.sort_by_key(|&index| run_order(steps[index].0, steps[index].1));
+        // Failures first, quickest first; no kept time after those with
+        // one, in the report's order; then the passing step.
+        assert_eq!(order, [4, 2, 0, 1, 5, 3]);
+
+        let budget = Some(Duration::from_secs(5 * 60));
+        // Longer than the whole budget: not started.
+        assert_eq!(longer_than_left(took(5_763_707), budget), budget);
+        // A step that ran at least that long and did not finish counts too.
+        let unfinished = Some(Known {
+            duration: Duration::from_secs(301),
+            finished: false,
+        });
+        assert_eq!(longer_than_left(unfinished, budget), budget);
+        // Shorter than the whole budget, but longer than what is left.
+        let left = Some(Duration::from_secs(60));
+        assert_eq!(longer_than_left(took(69_498), left), left);
+        // It fits, or exactly fits: started.
+        assert_eq!(longer_than_left(took(69_498), budget), None);
+        assert_eq!(longer_than_left(took(60_000), left), None);
+        // No kept time, or no budget: started.
+        assert_eq!(longer_than_left(None, Some(Duration::ZERO)), None);
+        assert_eq!(longer_than_left(took(5_763_707), None), None);
     }
 
     #[test]

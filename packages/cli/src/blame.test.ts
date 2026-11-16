@@ -410,7 +410,10 @@ describe('blame-aware verify', () => {
     const { root, write } = await blameRepo('ok', 'fail');
     const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
     config.verify.test = 'node slow-on-base.js';
-    config.verify.baseBudget = '2s';
+    // Long enough that what is left after the worktree is made stays over
+    // the step's kept time (its quick failure on the head), so it starts on
+    // the base and the budget runs out while it runs (ADR 0062).
+    config.verify.baseBudget = '4s';
     await write('firescale.config.json', JSON.stringify(config));
     await write(
       'slow-on-base.js',
@@ -424,7 +427,7 @@ describe('blame-aware verify', () => {
     const json = await report(result.stdout);
     expect(step(json, 'test').label).toBeUndefined();
     expect(step(json, 'test').base?.status).toBe('over-budget');
-    expect(json.notes?.join('\n')).toContain('ran out of its time budget (2s, verify.baseBudget)');
+    expect(json.notes?.join('\n')).toContain('ran out of its time budget (4s, verify.baseBudget)');
   }, 30_000);
 
   // From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
@@ -455,7 +458,7 @@ describe('blame-aware verify', () => {
             lint: false,
             typecheck: false,
             test: false,
-            baseBudget: '10s',
+            baseBudget: '20s',
             projects: {
               'backend/ledger_service': { test: 'node test.js' },
               frontend: { test: 'node test.js' },
@@ -516,13 +519,13 @@ describe('blame-aware verify', () => {
     expect(ledger.label).toBeUndefined();
     expect(ledger.base?.status).toBe('over-budget');
     expect(ledger.base?.note).toMatch(
-      /^it was not started on the base commit [0-9a-f]{7}, because it is known to take longer than what was left of the base run's time budget: it took 1h 36m when it last ran \(\.firescale\/step-times\.json\), and .+ of 10s \(verify\.baseBudget\) was left, so this failure blocks as it would without a base$/,
+      /^it was not started on the base commit [0-9a-f]{7}, because it is known to take longer than what was left of the base run's time budget: it took 1h 36m when it last ran \(\.firescale\/step-times\.json\), and .+ of 20s \(verify\.baseBudget\) was left, so this failure blocks as it would without a base$/,
     );
     expect(json.notes).toContain(`test in backend/ledger_service: ${ledger.base?.note}.`);
     const runs = (await readFile(log, 'utf8')).split(/\r?\n/).filter(Boolean);
     expect(runs.filter((line) => line.startsWith('base '))).toEqual(['base frontend']);
     expect(result.stderr).toMatch(
-      /\[verify\] base: test in backend\/ledger_service: not started: it took 1h 36m when it last ran, more than the .+ left of the budget \(10s, verify\.baseBudget\)/,
+      /\[verify\] base: test in backend\/ledger_service: not started: it took 1h 36m when it last ran, more than the .+ left of the budget \(20s, verify\.baseBudget\)/,
     );
   }, 30_000);
 
