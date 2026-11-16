@@ -92,6 +92,8 @@ fscale sync --check    # CI: exit 1 if sync would change something
 
 Drift is anything a fix would repair again: a generated file that is gone from disk and from git, a `.gitignore` that lost a required line. A file that is deleted from disk but still tracked is not recreated (see above); `git rm` it, or `git restore` it. `sync --check` is a dry run of `sync` whose exit code is 1 when there is at least one change, and it prints the changes as a diff.
 
+Whatever packs are on, `sync` also moves an older pin firescale wrote in an agent's stop hook (`npx --yes firescale@<version> hooks run --agent <name>`) to its own version, and says so under `agent hooks`. No other command in those files is changed ([hooks.md](hooks.md), ADR 0064).
+
 ## Staging
 
 `core/ci-exists` and `core/readme-setup` only count files that git tracks: an untracked workflow does not run in CI, and an untracked README is not in anyone's clone. So when their fixes create a file, they also run `git add` on that one file, and the output says so:
