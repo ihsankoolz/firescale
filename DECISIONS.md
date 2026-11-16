@@ -2,6 +2,52 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
+
+**Pull request 2: tamper guard** (branch `fix052-tamper`, ADR 0063)
+
+Findings 3 and 4 of `docs/reviews/cs464-0.5.1.md` and its section "Tamper guard on 150 commits of main". For each item: a test that failed first, built from the review's exact output, then the fix. Each review case is also in `bench/tamper-corpus.json`.
+
+- **1. The words of a comment after `# noqa:` were read as codes, reproduced and fixed.** Failing tests first: `the_words_of_a_comment_after_the_codes_are_not_codes` (suppress.rs) failed with `left: ["noqa:E402", "noqa:(after", "noqa:the", "noqa:backend", "noqa:is", "noqa:chosen)", …]`; `counts the codes after # noqa, not the words of a comment after them` (tamper.test.ts) got 7 findings, not 2; and the corpus cases `py: a comment added after the code of a # noqa` and `py: a reason added after a # nosec code and a # pylint: disable` failed with `expected [ 'suppression-added' ] to deeply equal []`. Fix: after `noqa:`, `pylint: disable=` and `nosec`, the list ends at the first word that is not a code of that tool. The code shapes and their sources are in ADR 0063.
+- **2. A changed failure message was an `expected-changed`, reproduced and fixed.** Failing tests first: `a_failure_message_that_changed_is_not_an_expected_value` (mod.rs) failed with `left: ["pytest.fail( \"a third request waited for a slot while two publishes stalled: \" \"a publish runs inside the market's slot\" ) (on the base: pytest.fail( \"…\" \"the publish runs inside the market's slot\" ), line 8)"], right: []`; `a_failure_message_is_not_an_expected_value_in_javascript_and_rust` got 6 `expected-changed` (expect, assert.equal, assert.strictEqual, assert.ok, assert, assert.fail); the corpus cases `py: only the text pytest.fail prints changed`, `py: only an assert's message changed`, `ts: only the message given to expect changed`, `js: only the message of node's assert changed` and `rs: only the message of assert_eq! and assert! changed` failed with `expected [ 'expected-changed' ] to deeply equal []`. Then, for the other readers, `a_failure_message_is_not_an_expected_value_in_any_language` (mod.rs) failed first on Go with `left: ["t.Errorf(\"Add(1, 2) = %d: two\", got) (on the base: t.Errorf(\"Add(1, 2) = %d: one\", got), line 12)", "assert.Equal(t, 3, Add(2, 1), \"two\") (…)", "assert.Equalf(t, 4, Add(2, 2), \"two %d\", 4) (…)"], right: []`. Fix: each reader leaves the failure message out of what an assertion checks, by each framework's documented signature, and a call that is all message (`pytest.fail`, `t.Errorf`, `fail`, `XCTFail`, `Assert.Fail`, …) checks the condition of the `if` around it. Each language's test also checks that a changed value is still one finding.
+- **3. An assert of a renamed test was paired with one of a new test, reproduced and fixed.** Failing tests first: `an_assertion_is_never_paired_with_one_of_a_different_test` (mod.rs) gave 2 findings, among them `assert upstream.calls == 0 (on the base: assert upstream.calls == 1, line 5)`; `names the assert a renamed test lost, in that test, not a changed value` (tamper.test.ts) and the corpus case `py: a renamed test lost an assert while a new test has a like one` failed with `expected [ 'expected-changed' ] to deeply equal [ 'assertion-removed' ]`. Fix: a gone test is followed to the new test that shares the most assertions with it; `expected-changed` pairs only within a test and its rename; and what a renamed test lost is `assertion-removed`, here `assert upstream.calls == 1 (in test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service, renamed test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy)`. Renaming or moving a test with what it checks is still not a finding (the existing rename tests and corpus cases pass).
+- **4. Corpus.** 10 cases added (471 in all), each from a review case or its pair (a value and a message changed together is still `expected-changed`).
+- **5. Numbers** (`bench/RESULTS.md`). On the course project's 150 commits: 61 findings before (the review's exact count), 45 after: `suppression-added` 58 → 43, `expected-changed` 3 → 0, `assertion-removed` 0 → 2. Both new ones are in merge `01458325`, in renamed tests: the review's `assert upstream.calls == 1` and `assert served[0] is served[1]` in `test_auth_client_lifespan.py`, which the review had not seen; I read both diffs and each assertion is gone. **`tamper-rates.mjs` and `tamper-misses.mjs` were not measured**: the "before" corpus run had not finished after 2 h 20 min on the shared machine and was stopped when I was asked to finish. So I cannot say whether the held-out miss count changed; `bench/RESULTS.md` gives the exact commands.
+
+**Decided on your behalf (ADR 0063):**
+
+- The code shapes: Ruff and flake8 codes are uppercase letters then digits; pylint's are a message id, a category letter, or a lowercase name with `-` and `_`; bandit's are `B` and digits, a name with `_`, or one of its 13 one-word test names. Sources are in the ADR.
+- In `# pylint: disable=`, a second word in one comma item ends the list. pylint itself reads every word there, so `disable=a b` is one code here and two for pylint.
+- The message tables go by the name of the call, from each framework's documented signatures. A message is the first argument at or after its place that is written as a string, with what follows; an argument there that is not a string is a value.
+- A call that is all message checks the condition of the `if` around it. Without that, removing the message would have hidden value changes such as `if got != 3 { t.Errorf(…) }` → `if got != 4`, which were caught before only because the message spelled the value.
+- Renames are followed by shared assertions with literals masked, ties to the most alike names. A gone test that shares no assertion with a new one was not renamed.
+- What a renamed test lost is checked per test; a test that kept its name is still checked by the net count only.
+
+**Needs your decision:**
+
+- **Per-test losses only for renamed tests.** A test that keeps its name and drops an assertion, while a new test in the same file adds one, is still not a finding (the net count, ADR 0042). I limited the new per-test check to renamed tests: that is the review's case, and doing it for every test would name assertions moved from one kept test to another. Say if you want it for all tests.
+- **JUnit 4's leading message** (`assertEquals("msg", expected, actual)`) is not left out, and its actual value, when written as a string, is taken for the message. JUnit 5 order wins in the table.
+
+**Tests changed, none weakened:** none. No existing test or corpus case was edited; only new ones were added.
+
+**Known limits:**
+
+- A message is left out only for the calls in the tables. A wrapper or an unlisted framework keeps its message in what it checks, as before.
+- A message that is not written as a string (a variable, `String.format(…)`) counts as a value.
+- A fail call in a loop, a `switch` or a helper, not in an `if`, keeps only its call: a changed value there is now missed where its message spelled the value.
+- Rename following is a guess; two tests renamed and rewritten together can be paired the wrong way.
+- Bandit test names of one word are from its current list.
+- When a renamed test lost several assertions and is short fewer, the ones named are the first in the file.
+- No before and after numbers on the corpus and the held-out cheats (see item 5). A miss could rise where a value was spelled only in a failure message, or in a fail call not inside an `if`.
+
+**Found while fixing, not fixed:**
+
+- node's legacy `assert.fail(actual, expected, message, operator)` has four arguments; all are taken as message, so a value changed there is not seen. It is deprecated in node.
+- Go's gomega: every argument after the matcher is taken as the description. There is no test of gomega's message in this pull request.
+- Three timing tests of `cargo test -p firescale-core` failed once under load (`runs::tests::a_run_that_is_still_going_is_named_and_not_waited_for`, `verify::tests::a_step_past_its_limit_is_timed_out_and_the_other_projects_still_run`, `verify::tests::a_timed_out_step_whose_output_shows_a_service_down_names_the_fix`) and passed when run again alone. This pull request does not touch that code.
+
+**Not reproduced:** nothing. All three cases of the review failed first.
+
 ## 0.5.1 — fixes after running 0.5.0 on the course project (run of 2026-11-15, second)
 
 You ran 0.5.0 on the course project on Windows: a full verify took over 1h 33m and was stopped. This run is five pull requests from that. For each item: a test that failed first, then the fix; an item that could not be reproduced was left alone and says what was tried. The pull requests were built side by side and merged as each was ready, so they are in the order they merged, under the numbers you gave them.

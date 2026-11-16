@@ -59,7 +59,7 @@ So the review's third case is one `assertion-removed`, `assert upstream.calls ==
 
 ## Consequences
 
-- On the course project's 150 commits the guard gives 44 findings where it gave 61: the 15 comment words and the 3 false `expected-changed` are gone, and the renamed test's lost assertion is named (`bench/RESULTS.md`).
+- On the course project's 150 commits the guard gives 45 findings where it gave 61: the 15 comment words and the 3 false `expected-changed` are gone, and two assertions that renamed tests lost are named, the review's `assert upstream.calls == 1` and `assert served[0] is served[1]` in `test_auth_client_lifespan.py`, which the review had not seen (`bench/RESULTS.md`).
 - `expected-changed` needs a person's approval (ADR 0046). Fewer false ones means fewer approvals asked for nothing.
 - Before and after numbers on the corpus and the held-out cheats are in `bench/RESULTS.md`.
 
@@ -69,6 +69,7 @@ So the review's third case is one `assertion-removed`, `assert upstream.calls ==
 - **A message that is not written as a string** (a variable, `String.format(…)`, a lambda) is taken for a value.
 - **JUnit 4 puts the message first** (`assertEquals(message, expected, actual)`). That message is not left out, and when the actual value there is written as a string it is taken for the message.
 - **`failed_when` looks up at most six levels**, through statements and blocks only. A fail call in a loop, a `switch` or a helper keeps only its call, so a changed value there is now missed where its message spelled the value.
+- **When a renamed test lost several assertions and is short fewer**, the ones named are the first in the file, not always the ones that went.
 - **Rename following is a guess.** Two tests renamed and rewritten at once may be paired the wrong way; the effect is a misnamed `assertion-removed`, or an `expected-changed` missed because its two assertions were not taken for one test. The net count of `assertion-removed` (ADR 0042) is not changed by it.
 - **Losses are checked per test only for renamed tests.** A test that keeps its name and loses an assertion while a new test of the file gains one is still covered by the net count (ADR 0042), as before. Doing the same for every kept test would name assertions moved between tests.
 - **pylint's own reading is wider.** `disable=unused-import unused-variable` (two names with no comma) is one code here; pylint reads two. `bandit`'s list stops at a word bandit would log and ignore.
