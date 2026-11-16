@@ -433,11 +433,10 @@ pub(super) fn failed_when(call: Node<'_>, src: &[u8], arguments: &[Node<'_>]) ->
             let conditions: Vec<Node<'_>> = parent
                 .children_by_field_name("condition", &mut cursor)
                 .collect();
-            let (first, last) = (conditions.first()?, conditions.last()?);
-            if conditions.iter().any(|condition| inside(*condition)) {
+            if conditions.is_empty() || conditions.iter().any(|condition| inside(*condition)) {
                 return None;
             }
-            let condition = squeeze(first.start_byte(), last.end_byte());
+            let (condition, uncompared) = condition_text(&conditions, src);
             let otherwise = parent
                 .child_by_field_name("alternative")
                 .is_some_and(&inside);
@@ -451,7 +450,16 @@ pub(super) fn failed_when(call: Node<'_>, src: &[u8], arguments: &[Node<'_>]) ->
             } else {
                 condition
             };
-            return Some(format!("{word}({condition}):{}", bare()));
+            // A number in the condition that is compared with nothing (a
+            // timeout, an argument) is no expected value; then the call
+            // keeps its message, as before ADR 0063, since the value may be
+            // written there (review of pull request 66).
+            let call = if uncompared {
+                squeeze(call.start_byte(), call.end_byte())
+            } else {
+                bare()
+            };
+            return Some(format!("{word}({condition}):{call}"));
         }
         if kind == "except_clause" || kind == "catch_clause" {
             let mut cursor = parent.walk();
@@ -479,6 +487,124 @@ pub(super) fn failed_when(call: Node<'_>, src: &[u8], arguments: &[Node<'_>]) ->
         child = parent;
     }
     None
+}
+
+/// The operators that compare two values, in the grammars the guard reads
+/// (Dart names its operators `equality_operator` and `relational_operator`).
+const COMPARISONS: [&str; 16] = [
+    "==",
+    "!=",
+    "===",
+    "!==",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "<>",
+    "is",
+    "is not",
+    "in",
+    "not in",
+    "!in",
+    "equality_operator",
+    "relational_operator",
+];
+
+/// The text of an `if`'s condition, without white space, for
+/// [`failed_when`]: each number that no comparison holds is `_`, and each
+/// string is written with double quotes (`'ok'` and `"ok"` are one value,
+/// as black rewrites them). Also whether a number was masked. A number in a
+/// comparison (`got != 3`, `add(1, 1) != 2`) and every string stay values
+/// (review of pull request 66).
+fn condition_text(conditions: &[Node<'_>], src: &[u8]) -> (String, bool) {
+    fn squeezed(src: &[u8], start: usize, end: usize, out: &mut String) {
+        out.extend(String::from_utf8_lossy(&src[start..end]).split_whitespace());
+    }
+    fn string(node: Node<'_>) -> bool {
+        let kind = node.kind();
+        let mut plain = true;
+        crate::imports::walk(node, |inner| {
+            let kind = inner.kind();
+            if kind.contains("interpolat") || kind.contains("substitution") {
+                plain = false;
+            }
+            plain
+        });
+        plain
+            && !kind.contains("concatenated")
+            && (kind.contains("string") || kind.contains("char_literal"))
+    }
+    fn visit(node: Node<'_>, src: &[u8], compared: bool, out: &mut String, masked: &mut bool) {
+        let mut cursor = node.walk();
+        // Swift reads `!=` as a `custom_operator`: its text is the operator.
+        let compared = compared
+            || node.children(&mut cursor).any(|child| {
+                let symbol = String::from_utf8_lossy(&src[child.start_byte()..child.end_byte()]);
+                COMPARISONS.contains(&child.kind())
+                    || (child.child_count() == 0 && COMPARISONS[..8].contains(&symbol.as_ref()))
+            });
+        let text = String::from_utf8_lossy(&src[node.start_byte()..node.end_byte()]);
+        if string(node) {
+            out.extend(by_value(&text).split_whitespace());
+            return;
+        }
+        if node.child_count() == 0 {
+            if !compared && text.starts_with(|c: char| c.is_ascii_digit()) {
+                out.push('_');
+                *masked = true;
+            } else {
+                out.extend(text.split_whitespace());
+            }
+            return;
+        }
+        let mut at = node.start_byte();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            squeezed(src, at, child.start_byte(), out);
+            visit(child, src, compared, out, masked);
+            at = child.end_byte();
+        }
+        squeezed(src, at, node.end_byte(), out);
+    }
+    let mut out = String::new();
+    let mut masked = false;
+    let mut at = conditions.first().map_or(0, Node::start_byte);
+    for condition in conditions {
+        squeezed(src, at, condition.start_byte(), &mut out);
+        visit(*condition, src, false, &mut out, &mut masked);
+        at = condition.end_byte();
+    }
+    (out, masked)
+}
+
+/// A string literal written with double quotes: its prefix (`b`, `f`),
+/// then its text between one or three quotes of the same kind. Text not
+/// written that way is returned as it is.
+fn by_value(literal: &str) -> String {
+    let body = literal.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let prefix = &literal[..literal.len() - body.len()];
+    let Some(quote) = body
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '"' | '\'' | '`'))
+    else {
+        return literal.to_owned();
+    };
+    let triple: String = std::iter::repeat_n(quote, 3).collect();
+    let fence = if body.len() >= 6 && body.starts_with(&triple) && body.ends_with(&triple) {
+        triple
+    } else {
+        quote.to_string()
+    };
+    match body
+        .strip_prefix(fence.as_str())
+        .and_then(|rest| rest.strip_suffix(fence.as_str()))
+    {
+        Some(inner) if body.len() >= 2 * fence.len() => {
+            format!("{}\"{inner}\"", prefix.to_ascii_lowercase())
+        }
+        _ => literal.to_owned(),
+    }
 }
 
 /// Which arguments of an assertion call are its failure message, by the
