@@ -2,6 +2,70 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
+
+**Pull request 5: this repo's CI**
+
+- **Item 1 (where the Windows time goes), measured before any change.** From the step times of the API and the job logs of the last three pull request runs that passed, with the Linux push runs of the same commits (ADR 0066 has every number, with run and job ids):
+
+  | Commit 74eccc6 (push 43794633022, PR 43794639420 attempt 2) | Linux node 24 | macOS          | Windows        |
+  | ----------------------------------------------------------- | ------------- | -------------- | -------------- |
+  | Job, start to end                                           | 279 s         | 554 s          | 1608 s         |
+  | Queue / setup and post steps                                | 2 / 23 s      | 3 / 28 s       | 3 / 70 s       |
+  | Build / Lint / Typecheck                                    | 18 / 24 / 4 s | 16 / 19 / 4 s  | 41 / 36 / 3 s  |
+  | `cargo test`: compile / firescale_core / firescale_rules    | 24 / 34 / 5 s | 27 / 38 / 20 s | 36 / 47 / 90 s |
+  | Vitest, wall time / sum of the 53 files                     | 141 / 378 s   | 397 / 773 s    | 1277 / 2687 s  |
+  | `tamper.test.ts` (479 tests)                                | 64 s          | 153 s          | 871 s          |
+  | `config-affects.test.ts` / `blame.test.ts`                  | 46 / 22 s     | 139 / 69 s     | 316 / 180 s    |
+
+  The other two runs (36ad227: Windows job 2072 s, Vitest 1674 s, tamper 1107 s; e6e31f8: 1586 s, 1236 s, 848 s) say the same. Vitest is 85 % of the Windows job. Its tail is one file: `tamper.test.ts` runs 479 cases one after the other (1.7 s each on Windows, 0.13 s on Linux), Vitest starts it 388 to 567 s into the run because it is a small file, and for the last 506 to 713 s it is the only file still running, on one of three workers (10 to 47 s on Linux and macOS). Under that, every process costs more on Windows: the suites that start the most processes grow most (`firescale_rules` 18 times Linux, `tamper.test.ts` 13 times), and one `fscale verify --json` of a corpus case starts 53 `git` processes. The fixtures, base-run worktrees and Rust temp files are written under `TEMP`, which is on `C:`, while the checkout is on the faster `D:`. Queue time (2 to 4 s), the pnpm cache and `pnpm install` (1 to 2 s) are not where the time goes, and `pnpm test` rebuilds nothing that Build made.
+
+- **A docs-only pull request today:** #60 added one file under `docs/reviews/`. Its runs took 27.2 minutes of Linux jobs, 72.6 of Windows and 39.0 of macOS, and its first Windows attempt failed on a test timeout and was run again.
+- **The three timeouts (item 4):** `verify.test.ts` "rejects a project folder that does not exist, and a malformed projects section" (30,110 ms, run 43685125688 attempt 1, 2026-11-15), `agent-runner.test.ts` "a protected glob that can match no path stops the run" (30,798 ms, run 43720192980, 2026-11-15) and `config-affects.test.ts` "keeps the whole-file rule for a firescale.config.ts" (30,169 ms, run 43794639420 attempt 1, 2026-11-16). The first two were fixed at the cause in the 0.5.1 run (8531c25, 5e6a3cc) and now take 0.7 to 5.2 s and 8.3 to 15.5 s on Windows. The third is not fixed: 14.9 to 26.1 s when it passes.
+
+The changes, made after that report was committed:
+
+- **Item 2 (cut the Windows time), changed.** (1) `vitest.config.ts` starts the three longest files first (`tamper.test.ts`, `config-affects.test.ts`, `blame.test.ts`); the others keep Vitest's order. Checked here with one worker: the files ran `tamper`, `blame`, `cli`, `explain` with it, `blame`, `cli`, `tamper`, `explain` without. (2) On Windows, `TEMP` and `TMP` point at `RUNNER_TEMP` on `D:` for the tests. Every test still runs on every OS. **Expected:** Vitest on Windows about 910, 1235 and 915 s for the three runs above instead of 1277, 1674 and 1236 s (5 to 7 minutes less, from the order alone), plus whatever the work drive gives (pip measured 10 to 28 %); a Windows job of about 20 to 25 minutes. **Measured:** in this pull request's own run (to be added from its Windows job).
+- **Item 3 (docs only), changed.** A first job, `changes`, compares with plain `git diff --name-only --no-renames`: a pull request's merge commit with the base tip, a branch push with its merge base with `main` (the whole branch, so a docs push after a code push does not hide the code), a push to `main` with the commit before it. Docs only: every path is a `.md` file under `docs/` or at the root, except `docs/rules.md` (a Rust test includes it), anything under `docs/schemas/` (a Vitest test reads it), and `README.md`, `AGENTS.md` and `CLAUDE.md` in any case of letters (`fscale check` on this repo reads them; `core/readme-setup` finds `readme.md` too). Any other file under `docs/` is code. Anything under `crates/` and `packages/`, every `SKILL.md` and every snapshot counts as code. Started by hand, or when it cannot tell (a force push, a new branch with no merge base, a failed diff, no file changed, a failed `changes` job), everything runs. The test jobs are skipped with `if:`, never filtered with `paths`. Checked here by running the job's script on real commits: #60's commit and branch gave `code=false`; 5e6a3cc and 8531c25 `code=true`; a rename of a `SKILL.md` into `docs/` `code=true` (both paths listed); `docs/rules.md` and `docs/schemas/n.json` `code=true`; `HANDOFF.md` and `docs/a b.md` docs; `docs/img.png`, `readme.md`, `Claude.md` and `x.MD` code; a zero, unknown or missing base, and a manual run, everything.
+- **Item 3, no required check left waiting: one check to require.** A last job, `tests`, needs every job, always runs, and fails if any failed or was cancelled (skipped counts as passed). Running, its name is evaluated: `tests (push)` and `tests (pull request)`, the two checks to require. A test job's own check cannot be required: skipped by `if:`, it is reported under its name unexpanded (run 43794639420 lists `ubuntu-latest / node ${{ matrix.node }}`, skipped), so a required `ubuntu-latest / node 22` would wait forever on a docs-only change. The test jobs stay the two matrices of ADR 0016, with `needs: changes` and the docs-only `if:`; check names and Rust cache keys unchanged. A docs-only change shows them as skipped and gets a `docs only` job on Linux: Prettier, and `fscale check` on this repo with no violation at all, which is what `core-pack.test.ts` asserts. Expected for a change like #60: about 2 minutes of Linux instead of 139 job-minutes.
+- **Item 4 (the timeout), a limit of its own.** `config-affects.test.ts` "keeps the whole-file rule for a firescale.config.ts" (five verify runs on the six-project fixture) and the test of the same shape that reached 30.0 s, "runs every step again, and every project under --affected, when <setting> changes" (seven cases, four runs each), get 60 s (`SEVERAL_RUNS`). Measured on Windows in five runs: the `firescale.config.ts` test 14.9 to 26.1 s when it passed, 30.2 s when it timed out (run 43794639420 attempt 1, whose Vitest took 1611 s against 1277 s for the next attempt); the siblings 12.8 to 30.0 s, with 30.0 and 28.5 s in run 43759663089 (Vitest 1674 s) and up to 27.7 s in the attempt of the timeout. Linux 1.5 to 3.0 s, macOS 6.8 to 9.1 s. 60 s is twice the slowest seen, as for the other multi-run tests (60 and 90 s). The cause under it is the cost of each process on Windows, which item 2 lowers but cannot remove without changing what the test runs. The rest of the suite keeps 30 s.
+- **After the review** (the coordinator's reviewer, on 1066acc):
+  - **The `docs only` job passed a violation.** It ran `pnpm fscale check` and looked only at the exit code; this repo enforces no rule, so a committed `docs/leak.md` with a `ghp_…`-shaped token gave `OK: 14 rules checked, 1 violation (0 enforced, 1 report-only)` and exit 0, where `core-pack.test.ts` would have failed. Replayed here on that commit: the old step exits 0. Now the job reads `fscale check --json` and fails unless `summary.violations` is 0, printing the report; on the same commit it exits 1. This is the cheapest form of the test's check (running the test needs a full `pnpm build`); it leaves out the rule count, which a docs change cannot change.
+  - **Two checks of one name on one commit.** My first version made the test jobs four literal-named jobs so that a skipped one kept its check name. Then the push run reported `macos-latest / node 24` and `windows-latest / node 24` as skipped beside the pull request run's real ones (push run 43812399243 on 1066acc), and the mirror for Linux on pull requests from this repository; GitHub does not say which of two same-named checks satisfies a required one. Giving the skipped copy a name expression, as the review suggested, does not work: push run 43819859990 showed each skipped job under the expression's text, so on a docs-only change the real name was gone too. Hence the `tests` job (item 3 above), and the matrices back as they were (their skipped copies show `${{ matrix.os }} / node 24`, never a real name).
+  - **A push to `main` could be cancelled by the next one**, and it is compared with the commit before it, so a docs merge could leave a code merge with no Linux run. Each push to `main` now has a concurrency group of its own (its run id) and is never cancelled.
+  - **`docs/*` counted every file under `docs/`.** Now only `.md` files, and the root README, AGENTS and CLAUDE files count as code in any case of letters.
+  - My figures for the siblings mixed two runs; they are corrected above, in ADR 0066 and in the test's comment.
+
+**Decided on your behalf** (ADR 0066):
+
+- The order of the Vitest files, not sharding: Vitest shards by file, so one shard would still hold all of `tamper.test.ts`, and each extra Windows job pays about 2.5 minutes of setup again. `cargo test` stays in the same job as Vitest (a separate job would save about 3 minutes of wall time for about 2 more job-minutes).
+- The `tests` job is one more short Linux job per run (about one billed minute), the price of a check that is always reported under one name.
+- A docs-only change is not left with no check: the `docs only` job runs Prettier and `fscale check` on this repo (no violation at all), on Linux, from the push.
+- To make CI a gate, require `tests (push)` and `tests (pull request)`, nothing else. A pull request from a fork has no push run, so `tests (push)` would wait on it; this repo has none.
+- Every push to `main` runs to the end (ADR 0016 cancelled the older one). A merge queue would need a `merge_group` trigger, which the workflow does not have.
+- A docs-only push to `main` skips the test jobs too. A push to any other branch is judged on the whole branch.
+- `docs/ci.md` is about the workflow `fscale init` writes, so it is unchanged; the workflow's own comments and ADR 0066 describe this repo's CI. `HANDOFF.md` ("CI (ADR 0016)") should say that a docs-only change runs only `docs only`; I did not edit it.
+
+**Tests changed, none weakened:** `config-affects.test.ts`: the two tests above have 60 s instead of 30 s. Prettier re-indented them because of the new argument. Their assertions are unchanged.
+
+**Known limits:**
+
+- The measured Windows time comes only from this pull request's own run. The temp-drive change is a guess until then.
+- A skipped job shows its name unexpanded in the list of checks (`${{ matrix.os }} / node 24`, the `docs` job's expression text). It is only how it reads.
+- Docs outside `docs/` and the root `.md` files (`packages/cli/README.md`, `bench/RESULTS.md`) still run everything.
+- The `bench` and `package` jobs are still matrices that run only by hand. They must not be made required checks.
+- `vitest.config.ts` names three files. A renamed file just loses its place at the front.
+- Locally (Windows 11, CPU at 76 % from other work) the two tests with the new limit took over 60 s (61.6 s for the `firescale.config.ts` test), as many tests did over 30 s in the 0.5.1 run. CI is their gate.
+
+**Found while fixing, not fixed:**
+
+- One `fscale verify --json` of a tamper corpus case, with no step to run, starts 53 `git` processes (counted with `GIT_TRACE`): `git rev-parse --is-inside-work-tree` 14 times, `git ls-files -z --cached` 8 times, `git rev-parse --git-path index` 4 times. `init` and `sync` stage about fifty files with one `git add` each (`agent-files.test.ts` says so). On Windows a process costs far more than on Linux, so this is most of a corpus case's 1.7 s there, and it is what the course project pays on every verify. Product code, not this pull request.
+- **The tamper guard does not read YAML anchors.** With the test steps shared through an anchor (`steps: &test-steps` and `steps: *test-steps`), `fscale tamper --base origin/main` reported six report-only findings, `CI weakened: … pnpm test (on pull requests (some changes)) is gone`, for both jobs; a change that only moved the old steps behind an anchor gave the same six. Once both sides use anchors it would see no command at all. GitHub Actions reads anchors since 2025-09-18, so a user's workflow can have them. The steps are written out here instead (the test jobs are two matrices again, as before); the guard is not changed.
+- `firescale_rules`' unit tests take 90 to 121 s on Windows against 3 to 5 s on Linux; I did not find which tests.
+- The Rust cache on macOS and Windows never matches its key exactly (a pull request's cache is scoped to its merge ref, and `main` never runs these jobs), so Build and Lint compile about 30 dependencies again: about 40 s of the Windows job.
+
+**Not reproduced:** nothing; the slow job, the docs-only runs and the three timeouts are all in the logs, with run ids.
+
 ## 0.5.1 — fixes after running 0.5.0 on the course project (run of 2026-11-15, second)
 
 You ran 0.5.0 on the course project on Windows: a full verify took over 1h 33m and was stopped. This run is five pull requests from that. For each item: a test that failed first, then the fix; an item that could not be reproduced was left alone and says what was tried. The pull requests were built side by side and merged as each was ready, so they are in the order they merged, under the numbers you gave them.
@@ -699,6 +763,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 | Several Python services, each with its own `requirements.txt` | `GoogleCloudPlatform/microservices-demo` | `c7cb6d5bfd6ea3aed768634ebbcb98cb7a523712` |
 
 ## Needs your decision (all milestones, most important first)
+
+- **(0.5.2) This repo's CI: wall time or minutes on Windows** (ADR 0066). The Windows job keeps `cargo test` and Vitest in one job. Splitting them into two parallel Windows jobs would save about 3 more minutes of waiting and cost about 2 more Windows job-minutes per pull request. Say if waiting matters more. Also: a docs-only change now runs no test job, only `docs only` (Prettier and `fscale check`); say if you want a narrower or wider list of what counts as docs.
 
 - **(M32) The binary grew from 11.5 MB to 31.0 MB** (ADR 0052): the eight grammars' parse tables. Start-up is unchanged. Keep it, or ask for the grammars as an optional build (two packages), or for grammars loaded on demand as WebAssembly.
 - **(M32) `not-checked` still blocks when the guard is enforced** (ADR 0052): 2 in 1,000 real commits after the fixes, both false. Say if it should report without blocking.

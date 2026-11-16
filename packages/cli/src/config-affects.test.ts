@@ -13,6 +13,12 @@ import { commitAll, EXIT_OK, runCli, stepCalls } from './test-helpers.js';
 const fixtures = fixtureSet();
 afterEach(fixtures.cleanup);
 
+// Tests that start verify four or five times on the six-project course
+// fixture. In five Windows runs they took 12.8 to 30.0 s when they passed
+// (30.0 s in run 43759663089) and once hit the 30 s limit (30.2 s, run
+// 43794639420 attempt 1), against 1.5 to 3 s on Linux (ADR 0066).
+const SEVERAL_RUNS = 60_000;
+
 const EVERY_PROJECT = [
   'audit_service',
   'auth_service',
@@ -146,19 +152,23 @@ describe('what a config change affects (ADR 0058)', () => {
       { rules: { 'core/env-example': { options: { excludePaths: ['x/'] } } } },
     ],
   ] as const) {
-    it(`runs every step again, and every project under --affected, when ${name} changes`, async () => {
-      const { verify, config } = await courseProject();
-      await verify();
-      await config(change);
-      const affected = await verify('--affected');
-      expect(projectsIn(affected.calls)).toEqual(EVERY_PROJECT);
-      expect(affected.stdout).toContain('6 of 6 projects ran');
-      expect(affected.stdout).not.toContain(ONLY_OUT_SETTINGS);
-      // Those passes are kept under the new keys.
-      const full = await verify('--no-cache');
-      expect(projectsIn(full.calls)).toEqual(EVERY_PROJECT);
-      expect((await verify()).calls).toEqual([]);
-    });
+    it(
+      `runs every step again, and every project under --affected, when ${name} changes`,
+      async () => {
+        const { verify, config } = await courseProject();
+        await verify();
+        await config(change);
+        const affected = await verify('--affected');
+        expect(projectsIn(affected.calls)).toEqual(EVERY_PROJECT);
+        expect(affected.stdout).toContain('6 of 6 projects ran');
+        expect(affected.stdout).not.toContain(ONLY_OUT_SETTINGS);
+        // Those passes are kept under the new keys.
+        const full = await verify('--no-cache');
+        expect(projectsIn(full.calls)).toEqual(EVERY_PROJECT);
+        expect((await verify()).calls).toEqual([]);
+      },
+      SEVERAL_RUNS,
+    );
   }
 
   it('runs every step again when a setting every step shares changes, with one note', async () => {
@@ -300,30 +310,34 @@ describe('what a config change affects (ADR 0058)', () => {
     }
   });
 
-  it('keeps the whole-file rule for a firescale.config.ts', async () => {
-    const { repo, verify } = await courseProject({
-      'firescale.config.ts': 'export default { verify: { timeout: "1h" } };\n',
-    });
-    const first = await verify();
-    expect(first.code).toBe(EXIT_OK);
-    expect(projectsIn(first.calls)).toEqual(EVERY_PROJECT);
-    expect((await verify()).calls).toEqual([]);
-    await repo.write('firescale.config.ts', 'export default { verify: { timeout: "2h" } };\n');
-    const affected = await verify('--affected');
-    expect(projectsIn(affected.calls)).toEqual(EVERY_PROJECT);
-    expect(affected.stdout).toContain('the firescale config firescale.config.ts changed');
-    // Its bytes are in every key.
-    await repo.write('firescale.config.ts', 'export default { verify: { timeout: "3h" } };\n');
-    expect(projectsIn((await verify()).calls)).toEqual(EVERY_PROJECT);
+  it(
+    'keeps the whole-file rule for a firescale.config.ts',
+    async () => {
+      const { repo, verify } = await courseProject({
+        'firescale.config.ts': 'export default { verify: { timeout: "1h" } };\n',
+      });
+      const first = await verify();
+      expect(first.code).toBe(EXIT_OK);
+      expect(projectsIn(first.calls)).toEqual(EVERY_PROJECT);
+      expect((await verify()).calls).toEqual([]);
+      await repo.write('firescale.config.ts', 'export default { verify: { timeout: "2h" } };\n');
+      const affected = await verify('--affected');
+      expect(projectsIn(affected.calls)).toEqual(EVERY_PROJECT);
+      expect(affected.stdout).toContain('the firescale config firescale.config.ts changed');
+      // Its bytes are in every key.
+      await repo.write('firescale.config.ts', 'export default { verify: { timeout: "3h" } };\n');
+      expect(projectsIn((await verify()).calls)).toEqual(EVERY_PROJECT);
 
-    // Renamed to .json: the .ts file is among the changed files.
-    await commitAll(repo.root, 'a ts config');
-    await rm(path.join(repo.root, 'firescale.config.ts'));
-    await repo.write('firescale.config.json', '{ "verify": { "timeout": "3h" } }\n');
-    const renamed = await verify('--affected');
-    expect(projectsIn(renamed.calls)).toEqual(EVERY_PROJECT);
-    expect(renamed.stdout).toContain('the firescale config firescale.config.ts changed');
-  });
+      // Renamed to .json: the .ts file is among the changed files.
+      await commitAll(repo.root, 'a ts config');
+      await rm(path.join(repo.root, 'firescale.config.ts'));
+      await repo.write('firescale.config.json', '{ "verify": { "timeout": "3h" } }\n');
+      const renamed = await verify('--affected');
+      expect(projectsIn(renamed.calls)).toEqual(EVERY_PROJECT);
+      expect(renamed.stdout).toContain('the firescale config firescale.config.ts changed');
+    },
+    SEVERAL_RUNS,
+  );
 
   // The owner's case again, with the config in .gitignore: git lists it
   // nowhere, and it is still compared with the defaults, setting by setting.

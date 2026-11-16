@@ -1,9 +1,13 @@
 name: CI
 
-# What runs when (ADR 0016):
+# What runs when (ADR 0016, ADR 0066):
 #   push to any branch         Linux, Node 22 and 24
 #   pull request into main     macOS and Windows, Node 24 (Linux comes from the push)
 #   started by hand            all of the above, plus the benchmark and npm package jobs
+# A push or pull request that changes only docs runs none of the test jobs,
+# only the `docs only` job (see the `changes` job). Started by hand, all run.
+# The checks to require are `tests (push)` and `tests (pull request)`, from
+# the `tests` job at the end.
 on:
   push:
     # Branches only: a version tag starts the Release workflow, not this one.
@@ -14,20 +18,125 @@ on:
 
 # A new push to a branch, or to a pull request, cancels the run still in
 # progress for it. Push runs and pull request runs are separate groups, so
-# they never cancel each other.
+# they never cancel each other. Each push to main has a group of its own (its
+# run id), so its run is never cancelled, nor dropped while queued: the
+# `changes` job compares a push to main with the commit before it, and a
+# docs-only merge must not cancel the Linux run of the code merge before it
+# (ADR 0066).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  changes:
+    # Decides from the changed files whether the test jobs run (ADR 0066).
+    # The jobs below are skipped with `if:`, not left out with a `paths`
+    # filter on the workflow: a skipped job is reported as a passed check,
+    # while a check that a filter keeps from running is never reported, and a
+    # required one would wait forever.
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, so the commit to compare with is in the clone.
+          fetch-depth: 0
+
+      - name: Changed files
+        id: files
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # Only documentation, read by no build and no test: a .md file
+          # under docs/ or at the root. Narrow on purpose: docs/rules.md is
+          # read by a Rust test, docs/schemas by a Vitest test, README.md and
+          # AGENTS.md by the rules `fscale check` runs on this repo (in any
+          # case: core/readme-setup finds readme.md too), and nothing under
+          # crates/ or packages/ counts (each rule's SKILL.md is compiled
+          # into the binary).
+          docs_only() {
+            case "$1" in
+              docs/rules.md | docs/schemas/*) return 1 ;;
+              docs/*.md) return 0 ;;
+              */*) return 1 ;;
+            esac
+            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+              readme.md | agents.md | claude.md) return 1 ;;
+            esac
+            case "$1" in
+              *.md) return 0 ;;
+            esac
+            return 1
+          }
+          everything() {
+            echo "Every job runs: $1."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          case "$EVENT" in
+            pull_request)
+              # The merge commit's first parent is the tip of the base branch.
+              base=$(git rev-parse --verify --quiet 'HEAD^1') || everything "the merge commit has no parent"
+              ;;
+            push)
+              if [ "$REF" = "refs/heads/$DEFAULT_BRANCH" ]; then
+                # What this push added to the default branch.
+                base=$BEFORE
+              else
+                # The whole branch, not only this push: a docs-only push after
+                # a code push must not report the branch as tested.
+                base=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD) || everything "the branch has no merge base with $DEFAULT_BRANCH"
+              fi
+              ;;
+            *)
+              everything "the run was started by $EVENT"
+              ;;
+          esac
+          git cat-file -e "$base^{commit}" 2>/dev/null || everything "the commit to compare with ($base) is not in the clone"
+
+          # --no-renames lists both paths of a rename.
+          git diff --name-only --no-renames -z "$base" HEAD > "$RUNNER_TEMP/changed" || everything "git diff failed"
+          count=0
+          code=false
+          while IFS= read -r -d '' file; do
+            count=$((count + 1))
+            if docs_only "$file"; then
+              echo "docs  $file"
+            else
+              echo "code  $file"
+              code=true
+            fi
+          done < "$RUNNER_TEMP/changed"
+          [ "$count" -gt 0 ] || everything "no file changed since $base"
+          if [ "$code" = true ]; then
+            echo "Every job runs: $count files changed since $base, not only docs."
+          else
+            echo "Only docs changed since $base ($count files): the test jobs are skipped."
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # The test jobs. Each runs unless the change is only docs; if the `changes`
+  # job failed, its output is empty and they run. The check to require is the
+  # `tests` job at the end, not these: a job skipped with `if:` is reported
+  # under its name unexpanded (`ubuntu-latest / node ${{ matrix.node }}`).
+  # That is also why a copy skipped because of the event never shares a name
+  # with the real check on the same commit.
   linux:
     # Every push, and manual runs. A pull request from this repository already
     # has a push run for the same commit, so only pull requests from forks,
     # whose pushes do not run here, get Linux from the pull request event.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
     name: ubuntu-latest / node ${{ matrix.node }}
     runs-on: ubuntu-latest
     strategy:
@@ -76,7 +185,8 @@ jobs:
   desktop:
     # macOS and Windows minutes cost more than Linux ones, so these run only
     # for pull requests into main and for manual runs, on one Node version.
-    if: github.event_name != 'push'
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && github.event_name != 'push' }}
     name: ${{ matrix.os }} / node 24
     runs-on: ${{ matrix.os }}
     strategy:
@@ -86,7 +196,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # The same steps as the linux job. Keep the two lists identical.
+      # The same steps as the linux job, plus the temp folder on Windows. Keep
+      # the two lists identical.
       # Reads the pinned pnpm version from `packageManager` in package.json.
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
@@ -115,11 +226,93 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # The checkout is on D:, the runner's work drive, but the temp folder is
+      # on C:, the slower system drive. The tests write their fixture repos,
+      # verify's base runs and Rust's temp files there (ADR 0066).
+      - name: Temp folder on the work drive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
       - name: Test
         run: pnpm test
 
       - name: Smoke test
         run: pnpm fscale --version
+
+  docs:
+    # A change of docs only still gets the two checks that read those files:
+    # Prettier, and `fscale check` on this repo (core-pack.test.ts runs the
+    # same check; core/no-secrets-in-source reads every file). On Linux, from
+    # the push, like the linux jobs.
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'false' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository) }}
+    name: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && 'docs (runs in the push run)' || 'docs only' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # The linux job's cache, restored only: this job builds one crate.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux
+          save-if: false
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Prettier
+        run: pnpm lint:format
+
+      # What core-pack.test.ts asserts on this repo: `fscale check` passes
+      # with no violation at all. Its exit code is not enough: this repo
+      # enforces no rule, so a report-only violation still exits 0.
+      - name: Check this repo with fscale, no violation at all
+        run: |
+          pnpm --silent fscale check --json > "$RUNNER_TEMP/check.json"
+          violations=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).summary.violations" "$RUNNER_TEMP/check.json")
+          if [ "$violations" != 0 ]; then
+            pnpm --silent fscale check
+            echo "::error::fscale check reports $violations violation(s) in this repo. core-pack.test.ts requires none: fix them, or the next change that runs the tests fails."
+            exit 1
+          fi
+          echo "fscale check: no violations."
+
+  tests:
+    # The one check to require (ADR 0066). It always runs, so its name is
+    # evaluated: `tests (push)` in a push run, `tests (pull request)` in a pull
+    # request run. It fails when any job before it failed or was cancelled,
+    # and passes when each passed or was skipped. A matrix job's result is
+    # failure when any of its copies failed. A test job's own check cannot be
+    # required: skipped, it is reported under its name unexpanded, and never
+    # under the name it has when it runs.
+    needs: [changes, linux, desktop, docs]
+    if: ${{ !cancelled() }}
+    name: ${{ github.event_name == 'push' && 'tests (push)' || github.event_name == 'pull_request' && 'tests (pull request)' || 'tests (manual)' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: changes ${{ needs.changes.result }}, linux ${{ needs.linux.result }}, desktop ${{ needs.desktop.result }}, docs ${{ needs.docs.result }}
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "$RESULTS"
+          if [ "$FAILED" != false ]; then
+            echo "::error::A job failed or was cancelled."
+            exit 1
+          fi
 
   bench:
     # Costly, and rarely changes the answer. Runs only when the workflow is

@@ -4,17 +4,16 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**Nothing is in progress.** The 0.5.1 run (2026-11-15 and 16: fixes after running 0.5.0 on the course project) is merged, six pull requests, each green on Linux, macOS and Windows (DECISIONS.md "0.5.1"):
+**In progress: the 0.5.2 run** (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`). Six pull requests, each with a failing test first, a fresh review of its diff, and a merge on green on Linux, macOS and Windows. Blocks per pull request are in DECISIONS.md "0.5.2":
 
-1. Slow steps: a warning for a step that took over 5 minutes last time, a kept time for a stopped step, `verify --budget`, a calmer heartbeat and estimate (ADR 0057). [#56](https://github.com/ihsankoolz/firescale/pull/56).
-2. What a config change affects: only settings that can change a step's result change its key (ADR 0058). [#57](https://github.com/ihsankoolz/firescale/pull/57).
-3. Stopped runs and doctor: a stopped run says plainly that nothing was labelled; doctor reads env files in the folders above a project (ADR 0059). [#54](https://github.com/ihsankoolz/firescale/pull/54).
-4. Leftovers from "Found while fixing" (ADR 0060). [#55](https://github.com/ihsankoolz/firescale/pull/55).
-5. Version 0.5.1 and docs. [#58](https://github.com/ihsankoolz/firescale/pull/58).
+1. The base run: quickest base step first, a step known to take longer than the budget left is not started, the version note, failing tests by name (ADR 0062). Branch `fix052-base-run`: in review.
+2. Tamper guard: suppression codes end at the first word that is not a code; `expected-changed` ignores failure messages and never pairs two tests (ADR 0063). Branch `fix052-tamper`: being built.
+3. Hooks and affected: a hook command that starts without `fscale` on the PATH, a check that it starts, and the agent hook files (ADR 0064). Branch `fix052-hooks`: fixing the review's findings.
+4. Small ones: Vite's built-in names, doctor's wording, Claude Code's result fields confirmed (ADR 0065, ADR 0048). Branch `fix052-small`: in review.
+5. This repo's CI: where the Windows time goes, docs-only changes, a fair limit for two slow tests (ADR 0066). Branch `fix052-ci`: this pull request.
+6. Version 0.5.2 and the list of what changes on the course project: after 1 to 5.
 
-6. Small fixes found on the way, seven items (ADR 0061): this pull request. It came after the version was set and is part of 0.5.1.
-
-The run ended there. Do not start M36 or the project-type table without the owner's word.
+The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged. The run ended there. Do not start M36 or the project-type table without the owner's word.
 
 - **Version:** 0.5.1 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.1` tag exists**; the owner pushes it when ready (`RELEASING.md`). 0.5.0 is released: the tag `v0.5.0` is on commit `b43a548` (2026-11-15) and it is npm's latest, so 0.5.1 will be the first release with the fixes of this run.
 - **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run; `fscale doctor` says PROBLEM for a `.env` that is a symbolic link when its variables are set nowhere else; `hooks install` no longer prints the note about the Cursor hook format.
@@ -55,7 +54,7 @@ The run ended there. Do not start M36 or the project-type table without the owne
 
 1. Read `SPEC.md`, `PLAN.md`, `AGENTS.md`, `docs/decisions/` and `DECISIONS.md`.
 2. Verify locally before pushing: `pnpm build && pnpm fscale verify`. That runs check, lint, typecheck and every test.
-3. CI (ADR 0016): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
+3. CI (ADR 0016, ADR 0066): a push runs Linux only. macOS and Windows run on a pull request into `main`, so open the pull request to get them. A change of docs only (`.md` files under `docs/` and at the root, but not README, AGENTS, CLAUDE, `docs/rules.md` or `docs/schemas/`) runs only the `docs only` job. The checks to require, if the owner ever requires any, are `tests (push)` and `tests (pull request)`. If jobs end within seconds with no logs, the account's Actions limit is back: add anything unproven on macOS or Windows to "CI owed" in DECISIONS.md.
 4. Ask the owner what is next: M36 to M39 are on hold (see "In progress"). A milestone goes on a branch named `m<N>-<short-name>`; do one per session and stop.
 
 Notes on M27, for whoever builds M28 or touches the runner (ADR 0047):
@@ -224,7 +223,7 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 - The `explain` snapshot embeds the rule's SKILL.md, which is compiled into the binary. After editing a SKILL.md: `pnpm build`, then update that snapshot on purpose.
 - Commits must use the owner's git identity with no co-author or tool attribution. Check `git config user.name` and `user.email` in a fresh clone.
 - The result cache is on by default. Use `--no-cache` when debugging a rule, and see decision 1 in `DECISIONS.md`.
-- CI (ADR 0016): a push to any branch runs Linux on Node 22 and 24. macOS and Windows run only on a pull request into `main`. The `bench` and `package` jobs run only when the workflow is started by hand. A new push cancels the run in progress. The owner is short on Actions minutes and tokens: push seldom, keep subagent use modest.
+- CI (ADR 0016, ADR 0066): a push to any branch runs Linux on Node 22 and 24. macOS and Windows run only on a pull request into `main`. A change of docs only runs only the `docs only` job (Prettier, and `fscale check` with no violation at all). The `bench` and `package` jobs run only when the workflow is started by hand. A new push cancels the run in progress, except on `main`, where every push gets its own run. The owner is short on Actions minutes and tokens: push seldom, keep subagent use modest.
 - This repo's agent hooks (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`) run `pnpm --silent fscale hooks run`, which runs the whole of `fscale verify` (about 22 s) when an agent tries to stop, and sends it back up to 3 times while it fails.
 - `fscale explain` only knows rules of packs that are on. Tests that explain an `agent-ready` rule need a config that lists the pack.
 - `fscale fix --dry-run` copies the repo to the temp folder and runs the real fixes there. A test that asserts a dry run changed nothing should compare the repo's files and `git ls-files` before and after.
