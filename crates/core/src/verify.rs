@@ -4637,6 +4637,74 @@ mod tests {
         }
     }
 
+    /// From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
+    /// finding 1): the summary kept only the last lines of a failing test
+    /// step, so it did not show whether a fourth test failed.
+    #[test]
+    fn a_failing_test_step_lists_its_failing_tests_by_name_up_to_twenty() {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let fail = if cfg!(windows) {
+            "echo 3 failed, 1751 passed & exit /b 1"
+        } else {
+            "echo 3 failed, 1751 passed; exit 1"
+        };
+        let plan = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![("test".to_owned(), Planned::Command(fail.to_owned()))],
+            ..VerifyPlan::default()
+        };
+        let run = || run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        let failing = |ids: &[String]| {
+            ids.iter()
+                .map(|id| FailedTest {
+                    id: id.clone(),
+                    label: None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // The ledger step's three failing tests, as pytest names them.
+        let ledger = [
+            "unit_test/service/test_settlement.py::test_a_thousand_winners_and_a_thousand_losers_settle_within_five_seconds",
+            "unit_test/service/test_void.py::test_a_void_finishes_within_five_seconds[1000-positions]",
+            "unit_test/service/test_void.py::test_a_void_finishes_within_five_seconds[10000-trades]",
+        ]
+        .map(str::to_owned);
+        let mut report = run();
+        assert_eq!(report.steps[1].status, StepStatus::Failed);
+        report.steps[1].failed_tests = failing(&ledger);
+        let text = format_verify_human(&report);
+        let list = format!("\nFailing tests of test (3):\n  {}\n", ledger.join("\n  "));
+        let at = text.find(&list).unwrap_or_else(|| panic!("{text}"));
+        // The last lines are kept, after the list.
+        let last = text
+            .find("\nLast lines of test:\n  3 failed, 1751 passed\n")
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(at < last, "{text}");
+
+        // More than twenty: the first twenty, then how many more.
+        let many: Vec<String> = (1..=23)
+            .map(|n| format!("e2e/seed/production.test.ts > seed > case {n:02}"))
+            .collect();
+        report.steps[1].failed_tests = failing(&many);
+        let text = format_verify_human(&report);
+        let list = format!(
+            "\nFailing tests of test (23):\n  {}\n  and 3 more; `fscale verify --json` lists every one under failedTests\n",
+            many[..20].join("\n  ")
+        );
+        assert!(text.contains(&list), "{text}");
+        assert!(!text.contains("case 21"), "{text}");
+
+        // No per-test results: the summary is as before.
+        let report = run();
+        let text = format_verify_human(&report);
+        assert!(!text.contains("Failing tests"), "{text}");
+        assert!(
+            text.contains("\nLast lines of test:\n  3 failed, 1751 passed\n"),
+            "{text}"
+        );
+    }
+
     #[test]
     fn stops_at_the_first_failing_step_and_keeps_its_output() {
         let fixture = Fixture::new(&[], Track::NoGit).unwrap();
