@@ -106,6 +106,44 @@ Findings 7, 8, 9 and 10 of `docs/reviews/cs464-0.5.1.md`. For each: a test that 
 
 **Not reproduced:** findings 7, 8 and 10 reproduced. For finding 9, a cause outside firescale that gives the exact message and exit code was reproduced on the same machine; the 09:07 failures themselves were not, since the review's commands were not kept.
 
+**Pull request 1: the base run** (branch `fix052-base-run`, ADR 0062)
+
+Findings 1 and 2 of `docs/reviews/cs464-0.5.1.md`. For each item: a test that failed first, then the fix. Every item was reproduced.
+
+- **1. Base steps run shortest kept time first, reproduced and fixed.** Failing test first: `runs the quick base step first, and does not start one known to take longer than the budget (ADR 0062)` (blame.test.ts). Built from finding 1: two projects, `backend/ledger_service` and `frontend`, each failing the same way on the head and the base; the ledger step takes 25 s on the base and its kept time is the report's 5,763,707 ms; a small `verify.baseBudget`. It failed with the report's two notes: `AssertionError: ["test in backend/ledger_service: the base run ran out of its time budget (10s, verify.baseBudget) before it finished, so this failure blocks as it would without a base.","test in frontend: the base run ran out of its time budget (10s, verify.baseBudget) before it finished, so this failure blocks as it would without a base."]: expected 'over-budget' to be 'failed'`. Fix: failing steps still go first, and within them the shortest kept time (`.firescale/step-times.json`) goes first; a step with no kept time goes after those with one, in the report's order. A pure test pins the order: `the_base_run_goes_quickest_first_and_leaves_out_a_step_known_to_take_longer_than_what_is_left` (blame.rs).
+- **2. A base step known to take longer than what is left of the budget is not started, reproduced and fixed** (same test). Its failure blocks as today, with the note `test in backend/ledger_service: it was not started on the base commit bc43f27, because it is known to take longer than what was left of the base run's time budget: it took 1h 36m when it last ran (.firescale/step-times.json), and 4m 58s of 5m (verify.baseBudget) was left, so this failure blocks as it would without a base.` and the progress line `[verify] base: test in backend/ledger_service: not started: it took 1h 36m when it last ran, more than the 4m 58s left of the budget (5m, verify.baseBudget)`. In the test the frontend step is now `pre-existing`, and only it ran on the base.
+- **3. The test**, as asked: the end-to-end test above, and the Rust unit test of the order and of the "not started" decision (longer than the whole budget, longer than what is left, exactly what is left, a run that did not finish, no kept time, no budget). After the fix the end-to-end test waits on no budget: the slow step is never started.
+- **4. The note after a version change names the versions, reproduced and fixed.** Why it happened: the report's guess is right. 0.5.0 kept in `.firescale/step-cache-config.digest` a digest of the config file's bytes; 0.5.1 a digest of the settings every step shares, made another way. 0.5.1 found a digest it had not made, and passes were kept (0.5.0's, which no 0.5.1 key can find), so it said a setting changed. Failing test first: `a_new_version_is_named_in_the_note_and_never_read_as_a_config_change` (stepcache.rs). A digest file as 0.5.0 wrote it, the same config, the cache's version set to 0.5.2 through `CacheSettings::version` (no flag was added): it panicked with the report's text, `A setting of the firescale config that every step's result can depend on changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.` (A file as 0.5.1 wrote it gave no note at all: the next upgrade would have said nothing.) Fix: the file now holds `version <v>` and `settings <digest>`. Another version gives `firescale is 0.5.2 now, and the last run used 0.5.1. The version is part of every step's cache key, so no pass kept before applies: every step runs again this time.` and never the config note. A real config change on the same version still gives the config note (same test).
+- **5. A failing test step lists its failing tests, reproduced and fixed.** Failing test first: `a_failing_test_step_lists_its_failing_tests_by_name_up_to_twenty` (verify.rs), with the ledger step's three pytest names from the report: the summary had only `Last lines of test:` (the test panicked where it looked for the list). Fix: before its last lines, a failed or timed-out step with per-test results prints `Failing tests of test in backend/ledger_service (3):` and each test as its runner names it, at most 20, then `and N more;` with a pointer to `fscale verify --json`. With no per-test results the summary is as before.
+
+**Decided on your behalf** (ADR 0062):
+
+- **Which kept time counts: the head step's own** (its project, name and command). The base runs the same command with the head's dependencies, on a commit that differs only by the change; the kept time already holds this run's head time (a failure only raises it), so a quick import error on the head does not make a 1h 36m suite look quick. The base run still keeps no time. A wrong guess can only make a step block as it would without a base; it can never label a new failure.
+- Failing steps still run before passing ones (`verify.labelFixed`); the order by time is within each group.
+- A kept time from a run that did not finish (`it ran at least ...`) counts as that time: the step takes at least that long.
+- A step that was not started is `over-budget` on the base with its own note, and the report's `base.overBudget` stays false for it, since the budget did not run out. The `Compared with ...` line counts only the steps that ran.
+- **The last lines stay** after the list of failing tests: the list says which tests failed, the lines say how. No list for a step that needs setup, a `pre-existing` or `flaky` step, or a `new` step whose `New failing tests:` list was printed (it names the new ones and counts the others).
+- **JSON unchanged, schema 7.** The failing tests were already in each step's `failedTests`. The digest file is not part of any JSON.
+- A digest file written before 0.5.2 is named `0.5.1` when it is 0.5.1's digest of the same settings, and `0.5.1 or older` otherwise. After a version change the settings are not compared (another version may make the digest another way): the note names the versions only.
+
+**Tests changed, none weakened:**
+
+- `blame.test.ts` "falls back to blocking when the base run runs out of its budget, and says so": `verify.baseBudget` from `2s` to `4s`. Its step's kept time is its quick failure on the head. With 2 s, a slow worktree (a loaded Windows runner) could leave less than that, and the step would now be not started, with the new note, instead of running out the budget. It still proves the same thing.
+- The new end-to-end test was committed with a budget of `10s` (the failure above) and raised to `20s` in the fix commit, so that the frontend's base run fits on a slow runner. After the fix its time does not depend on the budget.
+- No snapshot changed: none of the summary snapshots has a step with per-test results.
+
+**Known limits:**
+
+- When the change itself makes a step much slower or quicker, the order and the "not started" choice follow the old time.
+- The control run of `fixed` (ADR 0040) and the rerun of a new failure (flakiness) do not read the kept times.
+- On this machine, with other builds running, the two budget tests of `blame.test.ts` took 30 to 100 s each (a `git worktree add` alone took over 8 s) and passed only with a longer Vitest timeout given on the command line. CI is the gate.
+
+**Found while fixing, not fixed:**
+
+- `runs::tests::a_run_that_is_still_going_is_named_and_not_waited_for` and `verify::tests::a_step_past_its_limit_is_timed_out_and_the_other_projects_still_run` failed once in a full `cargo test -p firescale-core` on this loaded machine and passed when run again alone. Timing, not this change.
+
+**Not reproduced:** nothing; every item reproduced.
+
 ## 0.5.1 — fixes after running 0.5.0 on the course project (run of 2026-11-15, second)
 
 You ran 0.5.0 on the course project on Windows: a full verify took over 1h 33m and was stopped. This run is five pull requests from that. For each item: a test that failed first, then the fix; an item that could not be reproduced was left alone and says what was tried. The pull requests were built side by side and merged as each was ready, so they are in the order they merged, under the numbers you gave them.
@@ -806,6 +844,8 @@ Picked once on 2026-11-12 and cloned (shallow, read-only) into a temporary folde
 
 - **(0.5.2) This repo's CI: wall time or minutes on Windows** (ADR 0066). The Windows job keeps `cargo test` and Vitest in one job. Splitting them into two parallel Windows jobs would save about 3 more minutes of waiting and cost about 2 more Windows job-minutes per pull request. Say if waiting matters more. Also: a docs-only change now runs no test job, only `docs only` (Prettier and `fscale check`); say if you want a narrower or wider list of what counts as docs.
 
+
+- **(0.5.2, pull request 1) A base step known to take longer than what is left of `verify.baseBudget` is not started, so its failure always blocks** (ADR 0062). On the course project the ledger step (1h 36m) will block on every run with a note while the budget is 5 minutes, though it fails on `main` too; the frontend's failures now get their label. To have the ledger step judged, the course project can set `verify.baseBudget` above its time (or `false`), at the cost of one base run as long as the head's for each new base commit (the base result is kept in `.firescale/base/` and reused while the base and the lockfiles stay the same). Keep it, or say if you want another default for a step this slow.
 - **(M32) The binary grew from 11.5 MB to 31.0 MB** (ADR 0052): the eight grammars' parse tables. Start-up is unchanged. Keep it, or ask for the grammars as an optional build (two packages), or for grammars loaded on demand as WebAssembly.
 - **(M32) `not-checked` still blocks when the guard is enforced** (ADR 0052): 2 in 1,000 real commits after the fixes, both false. Say if it should report without blocking.
 - **(M32) None of the new languages' test frameworks ran here**, and no cheating corpus was written for them (ADR 0052): the readers follow the frameworks' documentation; their misses are not measured.
