@@ -28,15 +28,21 @@ import type { Adapter, AgentResult, Invocation, Request } from './protocol.js';
  *   repo's deny rules itself), no command-running tools or WebFetch unless
  *   `--tools` names them, and the file tools confined to the working folder.
  * - `--no-session-persistence`: the session is not saved.
+ *
+ * The result object (`total_cost_usd`, `num_turns`, `is_error`, `subtype`)
+ * is read as a real run of 2.1.325 printed it: a pass gave its cost and
+ * turns (so `is_error` was false and `subtype` was `success`), and a run
+ * over `--max-turns` gave the subtype `error_max_turns`.
  */
 export const claude: Adapter = {
   name: 'claude',
   program: 'claude',
   versionArgs: ['--version'],
   authArgs: ['auth', 'status'],
-  unverified: [
-    'the fields of the print-mode JSON result (total_cost_usd, num_turns, is_error, subtype): the docs list them for the SDK result, not for `claude -p --output-format json`',
-  ],
+  // The fields of the print-mode JSON result (total_cost_usd, num_turns,
+  // is_error, subtype) were confirmed by a real run of Claude Code 2.1.325
+  // on Windows on 2026-11-16 (ADR 0048, "Manual checks").
+  unverified: [],
   invocation(request: Request): Invocation {
     const { policy } = request;
     // A command is denied with and without arguments (`Bash(git push)`,
