@@ -4,7 +4,7 @@ Numbers are wall-clock times for the whole process, measured with `bench/startup
 
 ## 0.5.2: suppression codes, failure messages and renamed tests (ADR 0063)
 
-Measured on 2026-11-16 on Windows 11, debug builds. "Before" is `main` at `d337ed4`; "after" is branch `fix052-tamper`.
+Measured on 2026-11-16 on Windows 11, debug builds. "Before" is `main` at `d337ed4`; "after" is branch `fix052-tamper` at `73272c6`, the first version of the fix.
 
 ### The course project's 150 commits
 
@@ -19,20 +19,31 @@ Measured on 2026-11-16 on Windows 11, debug builds. "Before" is `main` at `d337e
 
 The "before" total and kinds match the review exactly. The labels of the two new findings are mine, from the diff, not a person's.
 
-### The labelled corpus and the held-out cheats: not measured in this run
+### The labelled corpus and the held-out cheats
 
-`node bench/tamper-rates.mjs --bin <fscale>` over the 471 cases and `node bench/tamper-misses.mjs --bin <fscale>` over `bench/tamper-cheats.json` were started for both binaries, but on this machine (shared with four other builds) the "before" corpus run had not finished after 2 h 20 min, and the run was stopped to finish the pull request. So there are no before and after numbers for these two here, and **I cannot say whether the miss count on the held-out cheats changed.** To get them:
+**PLACEHOLDER: not measured yet. The numbers below are to be filled from the benchmark run of the final branch; until then nothing here is a result.**
+
+`node bench/tamper-rates.mjs --bin <fscale>` over the labelled corpus and `node bench/tamper-misses.mjs --bin <fscale>` over `bench/tamper-cheats.json` (held out: its cases were not read or tuned on), for both binaries. "Before" is `main` at `d337ed4`; "after" is branch `fix052-tamper` at its last commit.
+
+| Run                                                     | Before         | After          |
+| ------------------------------------------------------- | -------------- | -------------- |
+| Corpus: caught                                          | _to be filled_ | _to be filled_ |
+| Corpus: missed                                          | _to be filled_ | _to be filled_ |
+| Corpus: false positives                                 | _to be filled_ | _to be filled_ |
+| Held-out cheats: caught / approval only / missed, of 98 | _to be filled_ | _to be filled_ |
+
+At M32 the held-out run gave 48 caught, 8 approval only and 42 missed of 98. Commands:
 
 ```
 git checkout d337ed4 && cargo build -p firescale-cli && cp target/debug/fscale before-fscale
 git checkout fix052-tamper && cargo build -p firescale-cli
 node bench/tamper-rates.mjs --bin before-fscale      # the 10 new cases fail here
 node bench/tamper-rates.mjs                          # after
-node bench/tamper-misses.mjs --bin before-fscale     # held out: 48 caught, 8 approval only, 42 missed of 98 at M32
+node bench/tamper-misses.mjs --bin before-fscale     # held out
 node bench/tamper-misses.mjs                         # after
 ```
 
-What is known: the 10 new corpus cases fail on `main` (each with `expected [ 'suppression-added' ] to deeply equal []`, `expected [ 'expected-changed' ] to deeply equal []` or `expected [ 'expected-changed' ] to deeply equal [ 'assertion-removed' ]` in `tamper.test.ts`) and pass after. A miss could rise in two ways, both written in ADR 0063: a changed value inside a failure message is no longer read (a call that is all message now compares the `if` around it instead, which covers the usual case), and a fail call not inside an `if` keeps only its call.
+What is known without these runs: the 10 corpus cases added for the review fail on `main` (each with `expected [ 'suppression-added' ] to deeply equal []`, `expected [ 'expected-changed' ] to deeply equal []` or `expected [ 'expected-changed' ] to deeply equal [ 'assertion-removed' ]` in `tamper.test.ts`) and pass after. Where the guard cannot tell a message from a value, or a code from a comment's word, it keeps the value or the code (ADR 0063, section 0), so a change found before should still be found; the changes it can still miss are listed in ADR 0063, "Not done". The course project's numbers above are from the first version of the branch (`73272c6`) and were not run again on the final one.
 
 ## M32: the tamper guard in Java, Kotlin, Swift, Dart, C, C++, C# and Go
 
