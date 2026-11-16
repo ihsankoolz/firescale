@@ -28,7 +28,7 @@ The "before" total and kinds match the review exactly. The labels of the two new
 | Before: `main` at `d337ed4` (0.5.1)            |     47 |                   8 |            43 |
 | After: `fix052-tamper` at `d5c72b1` (the code) |     47 |                   8 |            43 |
 
-The same 43 cases are missed on both sides, and the same 8 need approval only (the lists were compared line by line). The miss count is not higher than `main`'s, which was the condition to merge.
+The same 43 cases are missed on both sides, and the same 8 need approval only (the lists were compared line by line). After the five fixes of the pull request's review (DECISIONS.md "Pull request 2", items 15 to 19), the code that was merged gave the same again: 47, 8 and 43, with the same missed cases. The miss count is not higher than `main`'s, which was the condition to merge.
 
 Limits: 98 cases, written by one subagent in one sitting (M26), in JavaScript, TypeScript, Python, Rust and config only. The readers this change touched most for Java, Kotlin, C#, Go and Swift (JUnit 4's message, FluentAssertions, gomega, `guard`) have no held-out cases, so "no new miss" holds for these 98 cases, not in general. M32 measured 42 missed on a Linux release build; `main` at `d337ed4` already misses 43 here, before this change. Which case changed between M32 and `d337ed4` was not looked into.
 
