@@ -1879,7 +1879,7 @@ fn hook_starts(
             probe_line(&started),
             launch_note(&started)
         );
-        let mut check = check_start(root, &started, path.as_deref(), claude);
+        let mut check = check_start(root, &started, path.as_deref(), claude, !doctor);
         if let Some(version) = pin {
             check = pinned_answer(version, check);
         }

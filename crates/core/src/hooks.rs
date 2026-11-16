@@ -168,14 +168,56 @@ pub fn move_pins(text: &str, agent: Agent) -> Option<(String, Vec<MovedPin>)> {
         if out.matches(quoted.as_str()).count() != in_stop {
             continue;
         }
-        let new = serde_json::to_string(&hook_command(&pinned_npx(), agent)).ok()?;
-        out = out.replace(quoted.as_str(), &new);
+        let new_command = hook_command(&pinned_npx(), agent);
+        let new = serde_json::to_string(&new_command).ok()?;
+        let candidate = out.replace(quoted.as_str(), &new);
+        // The text must have changed this command where the hooks hold it,
+        // and nothing else: written with an escape, the same text elsewhere
+        // could have been changed instead (review of the final diff).
+        let mut expected =
+            serde_json::from_str::<Value>(out.trim_start_matches('\u{feff}')).ok()?;
+        rename_stop_command(&mut expected, agent, command, &new_command);
+        let got = serde_json::from_str::<Value>(candidate.trim_start_matches('\u{feff}')).ok()?;
+        if got != expected {
+            return None;
+        }
+        out = candidate;
         moved.push(MovedPin {
             from: version.to_owned(),
             to: this.to_owned(),
         });
     }
     (!moved.is_empty()).then_some((out, moved))
+}
+
+/// Sets every stop hook command of `agent` that is `from` to `to`.
+fn rename_stop_command(value: &mut Value, agent: Agent, from: &str, to: &str) {
+    let key = match agent {
+        Agent::Claude | Agent::Codex => "Stop",
+        Agent::Cursor => "stop",
+    };
+    let Some(list) = value
+        .get_mut("hooks")
+        .and_then(|hooks| hooks.get_mut(key))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    let entries: Vec<&mut Value> = match agent {
+        Agent::Claude | Agent::Codex => list
+            .iter_mut()
+            .filter_map(|group| group.get_mut("hooks").and_then(Value::as_array_mut))
+            .flatten()
+            .collect(),
+        Agent::Cursor => list.iter_mut().collect(),
+    };
+    for entry in entries {
+        if let Some(command) = entry.get_mut("command") {
+            if command.as_str() == Some(from) {
+                *command = Value::String(to.to_owned());
+            }
+        }
+    }
 }
 
 /// What `fscale doctor` starts for a pin: npx with `--no`, which runs
@@ -341,15 +383,40 @@ pub fn outside_hooks(agent: Agent, bytes: Option<&[u8]>) -> String {
     }
 }
 
+/// The commands a release of firescale writes before
+/// `hooks run --agent <name>`: the defaults of [`fscale_command`] now and
+/// before 0.5.2 (`fscale`, `npx firescale`, `npx --no fscale`), and any pin
+/// ([`pinned_version`]).
+const WRITTEN: [&str; 9] = [
+    "fscale",
+    "npx firescale",
+    "npx --no fscale",
+    "npx --no -- fscale",
+    "pnpm exec fscale",
+    "pnpm --silent fscale",
+    "yarn --silent fscale",
+    "bun run --silent fscale",
+    "npm run --silent fscale --",
+];
+
+/// True when `command` is exactly a stop hook command firescale writes:
+/// one of its forms, then ` hooks run --agent <name>`, and nothing more.
+/// A prefix of env settings, a `cd`, or more text after it is not (review
+/// of the final diff): those change what verify sees.
+fn written_by_firescale(command: &str, agent: Agent) -> bool {
+    command
+        .strip_suffix(&format!(" hooks run --agent {}", agent.name()))
+        .is_some_and(|prefix| WRITTEN.contains(&prefix) || pinned_version(prefix).is_some())
+}
+
 /// Removes firescale's own stop hook entries from a `hooks` object, then
 /// the groups and events left empty.
 fn set_aside_ours(hooks: &mut Value, agent: Agent) {
-    let needle = format!("hooks run --agent {}", agent.name());
     let ours = |entry: &Value| {
         entry
             .get("command")
             .and_then(Value::as_str)
-            .is_some_and(|command| command.contains(&needle))
+            .is_some_and(|command| written_by_firescale(command, agent))
     };
     let stop = match agent {
         Agent::Claude | Agent::Codex => "Stop",
@@ -487,7 +554,9 @@ fn launcher_folder(dir: &Path, root: &str) -> bool {
         return false;
     };
     let base = comparable(base);
-    root == base || root.starts_with(&format!("{base}/"))
+    // The repo root's, a folder's above it, or a workspace package's
+    // inside it (`pnpm --filter web ...`; review of the final diff).
+    root == base || root.starts_with(&format!("{base}/")) || base.starts_with(&format!("{root}/"))
 }
 
 /// The PATH the check gives a hook's command: this process's PATH without
@@ -576,13 +645,24 @@ pub fn check_start(
     prefix: &str,
     path: Option<&std::ffi::OsStr>,
     claude: bool,
+    downloads: bool,
 ) -> StartCheck {
     use std::sync::atomic::AtomicBool;
 
     use crate::process::{run_tree, Ending, Watch};
 
     let mut command = crate::doctor::shell(&probe_line(prefix));
-    command.current_dir(root);
+    // On Windows `cmd` looks for a program in the current folder before
+    // the PATH: a repo's own `npx.cmd` would run (review of the final diff).
+    command
+        .current_dir(root)
+        .env("NoDefaultCurrentDirectoryInExePath", "1");
+    if !downloads {
+        // Nor may a package manager be downloaded through corepack.
+        command
+            .env("COREPACK_ENABLE_NETWORK", "0")
+            .env("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0");
+    }
     if let Some(path) = path {
         command.env("PATH", path);
     }
@@ -742,6 +822,17 @@ pub fn hook_file_changes(
 /// Why fscale did not start a command it found in `file`, and what to do.
 #[must_use]
 pub fn not_started(agent: Agent, prefix: &str, writes: &str) -> String {
+    if matches!(prefix, "fscale" | "npx firescale") {
+        // The default of firescale 0.5.1 and older, which nothing rewrites:
+        // `sync` moves only a pin (the owner's decision on ADR 0064).
+        return format!(
+            "it runs `{}`, the command firescale 0.5.1 and older wrote. It starts only where `{prefix}` is on the PATH, and fscale does not start it to check. To get `{}`, remove that stop hook entry from {} and run `fscale hooks install --agent {}`.",
+            hook_command(prefix, agent),
+            hook_command(writes, agent),
+            agent.config_file(),
+            agent.name()
+        );
+    }
     format!(
         "it runs `{}`, which is not the command fscale writes here (`{writes}`), and fscale starts no other. Read it in {}; if it is yours, check that it starts: run `{}` in the repo root.",
         hook_command(prefix, agent),
