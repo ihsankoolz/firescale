@@ -3,7 +3,6 @@
 //! the files each agent reads.
 
 use firescale_core::facts::{Project, RepoFacts, UNNAMED_ROOT};
-use serde_json::Value;
 
 use crate::group_project::contributing::{places, portable};
 
@@ -183,23 +182,9 @@ pub(crate) fn block_is_current(text: &str, block: &str) -> bool {
     }
 }
 
-/// How this repo starts fscale: through its own `fscale` package script
-/// when it has one, else `npx firescale` (the same as the starter CI).
-pub(crate) fn fscale_command(facts: &RepoFacts, package_json: Option<&Value>) -> String {
-    let has_script = package_json
-        .and_then(|json| json.get("scripts"))
-        .and_then(|scripts| scripts.get("fscale"))
-        .is_some_and(Value::is_string);
-    if !has_script {
-        return "npx firescale".to_owned();
-    }
-    match facts.package_manager.as_deref() {
-        Some("pnpm") => "pnpm --silent fscale".to_owned(),
-        Some("yarn") => "yarn --silent fscale".to_owned(),
-        Some("bun") => "bun run --silent fscale".to_owned(),
-        _ => "npm run --silent fscale --".to_owned(),
-    }
-}
+/// How this repo starts fscale. It lives in core since `fscale hooks
+/// install` uses it too (ADR 0064).
+pub(crate) use firescale_core::hooks::fscale_command;
 
 /// A project's command as every machine writes it (review of M13): a
 /// Python project managed by uv, Poetry or Pipenv runs through its manager

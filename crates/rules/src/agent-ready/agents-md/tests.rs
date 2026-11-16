@@ -139,12 +139,16 @@ mod fixed_repo {
         .unwrap();
         assert_eq!(fix(&f), ["AGENTS.md"]);
         let text = f.read("AGENTS.md").unwrap();
+        let verify = format!(
+            "run `npx --yes firescale@{} verify` from the repo root",
+            firescale_core::version()
+        );
         for needle in [
             "<!-- BEGIN firescale",
             "- Build: `npm run build`",
             "- Test: `npm run test`",
             "- Lint: `npm run lint`",
-            "run `npx firescale verify` from the repo root",
+            verify.as_str(),
             "<!-- END firescale -->",
         ] {
             assert!(text.contains(needle), "{needle}: {text}");
