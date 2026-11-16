@@ -3161,4 +3161,17 @@ mod tests {
             Vec::<String>::new()
         );
     }
+
+    #[test]
+    fn node_s_legacy_four_argument_assert_fail_keeps_its_values() {
+        // `assert.fail(actual, expected, message, operator)`: only a fail
+        // with one argument is all message.
+        let legacy = |expected: &str| {
+            format!("const assert = require(\"assert\");\n\nit(\"adds\", () => {{\n  const got = add(1, 1);\n  if (got !== 2) {{\n    assert.fail(got, {expected}, undefined, \"===\");\n  }}\n}});\n")
+        };
+        assert_eq!(
+            changed("src/legacy.test.js", &legacy("2"), &legacy("3")).len(),
+            1
+        );
+    }
 }
