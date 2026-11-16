@@ -3541,4 +3541,14 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn a_fail_call_beside_a_number_compared_with_nothing_keeps_its_message() {
+        // The number is no value, so the message may be the only place the
+        // value is written: 0.5.1 found this change in the message.
+        let go = |want: &str| {
+            format!("package calc\n\nimport (\n\t\"reflect\"\n\t\"testing\"\n)\n\nfunc TestPair(t *testing.T) {{\n\tif !reflect.DeepEqual(Pair(), []int{{1, {want}}}) {{\n\t\tt.Fatalf(\"want [1 {want}]\")\n\t}}\n}}\n")
+        };
+        assert_eq!(changed("calc/pair_test.go", &go("2"), &go("3")).len(), 1);
+    }
 }
