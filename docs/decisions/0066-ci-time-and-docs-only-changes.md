@@ -1,6 +1,6 @@
 # 0066 — This repo's CI: where the Windows time goes, and changes that touch only docs
 
-Status: proposed (2026-11-16, 0.5.2 run, pull request 5). Builds on ADR 0016 (what runs when) and ADR 0009 (actions pinned to commit SHAs). Not about the workflow `fscale init` writes (ADR 0041, `docs/ci.md`).
+Status: proposed (2026-11-16, 0.5.2 run, pull request 5). Amends ADR 0016 (what runs when): a change of docs only runs no test job, and the test jobs are four jobs with one list of steps. Keeps ADR 0009 (actions pinned to commit SHAs). Not about the workflow `fscale init` writes (ADR 0041, `docs/ci.md`).
 
 ## Context
 
@@ -79,4 +79,59 @@ Older timeouts of the same kind were given limits of their own before (`scaffold
 
 ## Decision
 
-(Written in the next commit, once the numbers above are in.)
+Nothing below drops a test or a platform: every test still runs on Linux, macOS and Windows for every change that is not docs only.
+
+### 1. The longest Vitest files start first
+
+`vitest.config.ts` gets a sequencer, `LongestFirst`, that takes Vitest's own order and moves three files to the front, longest first: `tamper.test.ts`, `config-affects.test.ts`, `blame.test.ts` (the three longest on Windows in every run above). The other files keep Vitest's order. With three workers, `tamper.test.ts` then runs on one worker from the start while the other two take the rest, so the run takes about the longer of `tamper.test.ts` and half of the other files, instead of ending with `tamper.test.ts` alone.
+
+Expected on Windows, from the three runs: 1277, 1674 and 1236 s of Vitest become about 910, 1235 and 915 s, 5 to 7 minutes less, a little less than that since `tamper.test.ts` no longer has the machine to itself. Linux and macOS gain 10 to 47 s. Checked here: with one worker, the files ran in the order `tamper`, `blame`, `cli`, `explain` with the sequencer and `blame`, `cli`, `tamper`, `explain` without it.
+
+### 2. On Windows, the temp folder is on the work drive
+
+A step before Test sets `TEMP` and `TMP` to `RUNNER_TEMP` (`D:\a\_temp`), on Windows only. Node's `os.tmpdir()` and Rust's `std::env::temp_dir()` read them, so the fixture repos, verify's base-run worktrees and `tempfile` folders are on `D:`. Expected: a saving that cannot be measured before the run; pip's was 10 to 28 % of its Windows job.
+
+### 3. A change of docs only runs no test job
+
+- **A first job, `changes`, decides** from `git diff --name-only --no-renames` (plain git, no new action; `--no-renames` lists both paths of a rename). It compares:
+  - on a pull request: the merge commit with its first parent, the tip of the base branch;
+  - on a push to a branch: the head with its merge base with the default branch. The whole branch, not the push: a docs-only push after a code push must not report the branch as tested;
+  - on a push to the default branch: the head with the commit before the push (`github.event.before`);
+  - started by hand: nothing; everything runs.
+- **Docs only** means every changed path is under `docs/` or is a `.md` file at the repo root, with these exceptions, which count as code: `docs/rules.md` (a Rust test includes it), `docs/schemas/**` (a Vitest test reads the ledger schema), and `README.md`, `AGENTS.md` and `CLAUDE.md` (the rules that `fscale check` runs on this repo read them, and `README.md` goes into the npm package). Nothing under `crates/` or `packages/` counts: each rule's `SKILL.md` is compiled into the binary and snapshotted, and snapshots and fixtures are there too. Found by reading what the build and the tests read: `include_str!` and `CARGO_MANIFEST_DIR` in the crates, `import.meta.url` and `REPO` in the tests.
+- **Anything it cannot decide runs everything**: a push with no earlier commit (`0000…`) or one the clone does not hold (a force push), a branch with no merge base, a failed `git diff`, no changed file at all, and a failed `changes` job (the test jobs run whenever its output is not `false`).
+- **The test jobs are skipped with `if:`**, never left out with `paths` or `paths-ignore` on the workflow. GitHub reports a skipped job as a passed check; a workflow that a path filter keeps from running reports nothing, and a required check would wait forever.
+- **The test jobs are no longer matrices.** A matrix job skipped by `if:` is reported once, under its unexpanded name: run 43794639420 shows `ubuntu-latest / node ${{ matrix.node }}`, skipped, so a required `ubuntu-latest / node 22` would never be reported. The four jobs (`linux-22`, `linux-24`, `macos`, `windows`) have literal names, the same check names as before, and share one list of steps through a YAML anchor (`&test-steps`; GitHub Actions reads anchors and aliases since 2025-09-18, <https://github.blog/changelog/2025-09-18-actions-yaml-anchors-and-non-public-workflow-templates/>). The Node version is a job variable. This also ends ADR 0016's "keep the two lists identical by hand".
+- **The Rust cache keeps its keys.** rust-cache names a cache after the job id; the shared steps pass `shared-key: linux` or `desktop`, the old job ids, so the caches saved before are found (read in rust-cache's `src/config.ts` at the pinned commit: a shared key takes the place of the job id in the key).
+- **A change of docs only still gets the checks that read docs**, in a `docs only` job on Linux (from the push, like the Linux jobs): `pnpm lint:format` (Prettier checks the Markdown) and `pnpm fscale check` on this repo (what `core-pack.test.ts` checks; `core/no-secrets-in-source` reads every file). It restores the Linux Rust cache and saves nothing. When the change is not docs only, this job is skipped, which also counts as passed.
+- **No required check is left waiting**, today or if the owner makes the jobs required: every job named above always ends as passed, failed or skipped. To require them, require the four test checks, `docs only` and `changes`. The `bench` and `package` jobs are still matrices that run only by hand; they must not be required.
+
+Expected for a pull request like #60: the `changes` job (about 15 s) in its push and pull request runs, and the `docs only` job (about 1 to 2 minutes, mostly building `fscale`) in its push runs, instead of 139 job-minutes.
+
+`docs/ci.md` is about the workflow `fscale init` writes, not this one, so it is unchanged.
+
+### 4. The test that timed out: a limit of its own, with the measured times
+
+Of the three, two were fixed at the cause in the 0.5.1 run (one fixture instead of seven; eleven cases side by side), and their Windows times since are far from the limit. The third, `config-affects.test.ts` "keeps the whole-file rule for a firescale.config.ts", starts verify five times on the six-project course fixture, and each run that runs every project starts 18 stand-in commands through `cmd.exe`. None of the runs can be dropped or run side by side without testing something else: each depends on the cache the run before it left. The cause under it is the cost of a process on Windows (see "Where the time goes"), which items 1 and 2 reduce but do not remove.
+
+It gets a limit of 60 s (`SEVERAL_RUNS`), as did the other tests that start verify many times (`scaffold` and `bridge` 60 s, `step-cache` 90 s). So does the test of the same shape that came within 0.1 s of the limit: "runs every step again, and every project under --affected, when <setting> changes" (seven cases, four verify runs each). Measured on Windows: 12.8 to 26.1 s in four runs, and 28.5, 30.0 and 30.2 s in the slow one; on Linux 1.5 to 3.0 s, on macOS 6.8 to 9.1 s. 60 s is twice the slowest time seen. The rest of the suite keeps 30 s. What the tests assert is unchanged.
+
+## Why not
+
+- **Sharding the Windows test step into parallel jobs.** Vitest shards by file, so one shard still holds all of `tamper.test.ts` (850 to 1100 s), and each extra Windows job pays about 2.5 minutes of setup, build and lint again. The order of item 1 gets most of what two shards would, at no extra minutes.
+- **`cargo test` and Vitest in two parallel jobs.** About 3 minutes less wall time on Windows, about 2 more job-minutes (setup and a second compile). Worth it later if wall time matters more than minutes.
+- **Splitting `tamper.test.ts` into several files.** With three workers it gains little over item 1 while the other files together take longer than it, and it is a change of test code that the order makes unnecessary.
+- **More Vitest workers.** The runner has four CPUs and Vitest uses three; every test starts processes of its own, and more at once is what pushed the timed-out tests over their limit.
+- **A Dev Drive.** pip measured ReFS slower than plain `D:` on these runners, and it needs a virtual disk made in every job.
+- **Caching Vitest's results**, so that it orders files by their last time: a pull request's cache is scoped to its merge ref and `main` never runs Windows (ADR 0016), so the cache would almost never be found.
+- **`paths-ignore` on the workflow**: see item 3.
+- **Fewer `git` processes in `fscale verify`.** One corpus case starts 53 (`git rev-parse --is-inside-work-tree` 14 times, `git ls-files -z --cached` 8 times, and others), and `init` stages about fifty files one `git add` each. Fewer would help every Windows user, not only CI, but it is a change of product code, not of this pull request.
+
+## Consequences
+
+- Expected Windows job: about 20 to 25 minutes instead of 26 to 35. The measured time of this pull request's own run is in DECISIONS.md.
+- A docs-only change shows the four test checks as skipped and `docs only` as passed. A file the build reads counts as code, so a slip in the list costs minutes, not a missed test.
+- On `main`, a docs-only merge compares with the commit before it. If two merges land close together and the code merge's run is cancelled by the docs merge's run (ADR 0016), `main`'s Linux run is skipped for both; the code was tested on its pull request.
+- Docs outside `docs/` and the root (`packages/cli/README.md`, `bench/RESULTS.md`) still run everything.
+- `vitest.config.ts` names three files. A renamed file loses its place at the front and nothing else changes; update the list when the longest files change.
+- On Windows the tests no longer write under `C:\Users\runneradmin\AppData\Local\Temp`, whose 8.3 short form (`RUNNER~1`) the fixtures already resolve with `realpath`. The owner's machine has no short form in its temp path either.
