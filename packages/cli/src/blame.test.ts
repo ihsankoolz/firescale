@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet, type FixtureRepo } from '@firescale/sdk/testing';
@@ -425,6 +425,105 @@ describe('blame-aware verify', () => {
     expect(step(json, 'test').label).toBeUndefined();
     expect(step(json, 'test').base?.status).toBe('over-budget');
     expect(json.notes?.join('\n')).toContain('ran out of its time budget (2s, verify.baseBudget)');
+  }, 30_000);
+
+  // From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
+  // finding 1): the ledger step's kept time was 1h 36m, the budget 5m. It
+  // ran first on the base, used the whole budget, and the frontend step,
+  // which fails the same way on the base, never got its label.
+  it('runs the quick base step first, and does not start one known to take longer than the budget (ADR 0062)', async () => {
+    const outside = await fixtures.create({ files: {}, track: 'no-git' });
+    const log = path.join(outside.root, 'runs.log');
+    // Fails on the head and on the base with the same output; `slow` makes
+    // it take 25 s on the base.
+    const failing = (name: string, lines: string[], slow: boolean) =>
+      [
+        "const fs = require('fs');",
+        "const where = process.env.FSCALE_BASE_RUN ? 'base' : 'head';",
+        `fs.appendFileSync(${JSON.stringify(log)}, where + ' ${name}\\n');`,
+        `console.log(${JSON.stringify(lines.join('\n'))});`,
+        slow
+          ? "if (where === 'base') setTimeout(() => process.exit(1), 25000); else process.exit(1);"
+          : 'process.exit(1);',
+        '',
+      ].join('\n');
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: {
+            lint: false,
+            typecheck: false,
+            test: false,
+            baseBudget: '10s',
+            projects: {
+              'backend/ledger_service': { test: 'node test.js' },
+              frontend: { test: 'node test.js' },
+            },
+          },
+        }),
+        '.gitignore': '.firescale/\n',
+        'backend/ledger_service/test.js': failing(
+          'ledger',
+          [
+            'FAILED unit_test/service/test_settlement.py::test_a_thousand_winners_and_a_thousand_losers_settle_within_five_seconds - AssertionError: settlement took 45.475 s, over the 5 s budget',
+            '3 failed, 1751 passed, 1 skipped',
+          ],
+          true,
+        ),
+        'frontend/test.js': failing(
+          'frontend',
+          [
+            ' FAIL  e2e/seed/production.test.ts > seed > writes the file with mode 600',
+            'Tests  3 failed | 40 passed (43)',
+          ],
+          false,
+        ),
+      },
+      track: 'no-git',
+    });
+    const root = repo.root;
+    expect((await runGit(root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+    await commitAll(root, 'base');
+    expect((await runGit(root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    await writeFile(path.join(root, 'backend/ledger_service/change.js'), 'module.exports = 1;\n');
+    await writeFile(path.join(root, 'frontend/change.js'), 'module.exports = 1;\n');
+    // The ledger step's kept time, as the course project had it.
+    await mkdir(path.join(root, '.firescale'), { recursive: true });
+    await writeFile(
+      path.join(root, '.firescale', 'step-times.json'),
+      JSON.stringify({
+        format: 1,
+        steps: [
+          {
+            project: 'backend/ledger_service',
+            step: 'test',
+            command: 'node test.js',
+            durationMs: 5_763_707,
+            finished: true,
+            ranAt: Math.floor(Date.now() / 1000),
+          },
+        ],
+      }),
+    );
+    const result = await runCli(['verify', '--json', '--progress'], root);
+    expect(result.code, result.stderr).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    const frontend = step(json, 'test', 'frontend');
+    const ledger = step(json, 'test', 'backend/ledger_service');
+    expect(frontend.base?.status, JSON.stringify(json.notes)).toBe('failed');
+    expect(frontend.label).toBe('pre-existing');
+    expect(ledger.label).toBeUndefined();
+    expect(ledger.base?.status).toBe('over-budget');
+    expect(ledger.base?.note).toMatch(
+      /^it was not started on the base commit [0-9a-f]{7}, because it is known to take longer than what was left of the base run's time budget: it took 1h 36m when it last ran \(\.firescale\/step-times\.json\), and .+ of 10s \(verify\.baseBudget\) was left, so this failure blocks as it would without a base$/,
+    );
+    expect(json.notes).toContain(`test in backend/ledger_service: ${ledger.base?.note}.`);
+    const runs = (await readFile(log, 'utf8')).split(/\r?\n/).filter(Boolean);
+    expect(runs.filter((line) => line.startsWith('base '))).toEqual(['base frontend']);
+    expect(result.stderr).toMatch(
+      /\[verify\] base: test in backend\/ledger_service: not started: it took 1h 36m when it last ran, more than the .+ left of the budget \(10s, verify\.baseBudget\)/,
+    );
   }, 30_000);
 
   it('never labels a step that needs setup on the head new', async () => {
