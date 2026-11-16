@@ -375,11 +375,31 @@ fn pylint_code(word: &str) -> bool {
     id || name || PYLINT_ONE_WORD.contains(&word)
 }
 
+/// A pylint message id in lower case (`w0612`): pylint upper-cases an id
+/// before it looks it up, so it is the id `W0612` (review of pull request
+/// 66). A lone letter in lower case is a word, not a category.
+fn pylint_lower_id(word: &str) -> bool {
+    word.len() > 1
+        && word.starts_with(['c', 'r', 'w', 'e', 'f', 'i'])
+        && word[1..].chars().all(|c| c.is_ascii_digit())
+}
+
 /// The messages of `# pylint: disable=a, b`: every word shaped like one, up to
 /// a `;`, where pylint's own reader stops. pylint reads every word of the
-/// list, so `disable=unused-import unused-variable` is two (ADR 0063).
+/// list, so `disable=unused-import unused-variable` is two (ADR 0063). An id
+/// is keyed in upper case, as pylint reads it.
 fn pylint_codes(list: &str) -> Vec<String> {
-    every_code(list.split(';').next().unwrap_or_default(), pylint_code)
+    let list = list.split(';').next().unwrap_or_default();
+    list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| {
+            if pylint_lower_id(word) {
+                Some(word.to_ascii_uppercase())
+            } else {
+                pylint_code(word).then(|| word.to_owned())
+            }
+        })
+        .collect()
 }
 
 /// The suppressions a Python comment holds. A comment may hold several,
