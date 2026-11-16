@@ -150,9 +150,11 @@ describe('fscale fix --agent claude', () => {
     });
     const result = await runCli(['fix', '--agent', 'claude', '--rule', RULE], root, env);
     expect(result.code, result.stderr + result.stdout).toBe(EXIT_OK);
-    // What was not confirmed from Claude Code itself is in the output.
     expect(result.stdout).toContain('Agent: claude 9.9.9 (stand-in)');
-    expect(result.stdout).toContain('unverified (ADR 0048, check by hand): the fields');
+    // The fields of the JSON result were confirmed by the owner's run of
+    // Claude Code 2.1.325 (ADR 0048, docs/reviews/cs464-0.5.1.md finding 10),
+    // so nothing about Claude Code is printed as unverified any more.
+    expect(result.stdout).not.toContain('unverified');
 
     const logged = await calls();
     expect(logged.map((call) => call.args[0])).toEqual(['--version', 'auth', '-p']);
