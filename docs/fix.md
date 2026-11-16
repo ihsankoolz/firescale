@@ -70,10 +70,11 @@ Exit code 0 when the run passed (or there was nothing to fix), 1 when it failed,
 | `codex`   | `codex exec --json --ephemeral --ignore-user-config --skip-git-repo-check --sandbox workspace-write -c sandbox_workspace_write.network_access=false -`, prompt on standard input                                                                                           | no: Codex reports tokens, not money             |
 | `fake`    | the stand-in the tests use, `crates/testkit/src/fake_agent.rs`                                                                                                                                                                                                             | what its scenario says                          |
 
-The adapters are TypeScript (`packages/agents`, shipped in the `firescale` npm package as `agents/`), started with Node (`FSCALE_NODE`; `FSCALE_AGENTS` points at another `cli.js`). Where each flag was confirmed, and what was not, is in ADR 0048. **Unverified** (printed under `Agent:` in every run's output too):
+The adapters are TypeScript (`packages/agents`, shipped in the `firescale` npm package as `agents/`), started with Node (`FSCALE_NODE`; `FSCALE_AGENTS` points at another `cli.js`). Where each flag was confirmed, and what was not, is in ADR 0048. **Unverified** (printed under `Agent:` in the output of every Codex run too):
 
-- `claude`: the fields of the JSON result of `claude -p --output-format json` (`total_cost_usd`, `num_turns`, `is_error`, `subtype`). The docs list them for the SDK's result message. If they differ, a run that worked reads as failed, and its cost is missing.
 - `codex`: `--sandbox workspace-write` and `-c sandbox_workspace_write.network_access=false` (Codex's documentation could not be reached; its shared options were not read).
+
+For `claude`, the fields of the JSON result of `claude -p --output-format json` (`total_cost_usd`, `num_turns`, `is_error`, `subtype`) were confirmed by a real run of Claude Code 2.1.325 on Windows (ADR 0048, "Manual checks"), so a Claude Code run prints no unverified line. An npm-installed `claude.cmd` on Windows was not tried; the adapters need the `.exe`.
 
 **Codex cannot be limited like Claude Code.** `codex exec` takes no list of tools, commands or paths to deny, and it runs shell commands and reads files as its sandbox allows, your untracked `.env` files included. So `--agent codex` is refused in a repo whose own agent settings deny anything, and every Codex run prints a warning. The diff guard, the re-check and the time limit still hold what it writes.
 
