@@ -397,8 +397,19 @@ jobs:
       - name: Prettier
         run: pnpm lint:format
 
-      - name: Check this repo with fscale
-        run: pnpm fscale check
+      # What core-pack.test.ts asserts on this repo: `fscale check` passes
+      # with no violation at all. Its exit code is not enough: this repo
+      # enforces no rule, so a report-only violation still exits 0.
+      - name: Check this repo with fscale, no violation at all
+        run: |
+          pnpm --silent fscale check --json > "$RUNNER_TEMP/check.json"
+          violations=$(node -p "JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8')).summary.violations" "$RUNNER_TEMP/check.json")
+          if [ "$violations" != 0 ]; then
+            pnpm --silent fscale check
+            echo "::error::fscale check reports $violations violation(s) in this repo. core-pack.test.ts requires none: fix them, or the next change that runs the tests fails."
+            exit 1
+          fi
+          echo "fscale check: no violations."
 
   bench:
     # Costly, and rarely changes the answer. Runs only when the workflow is
