@@ -661,7 +661,9 @@ describe('fscale sync', () => {
     const repo = await fixtures.create({
       files: {
         'firescale.config.json': '{}',
-        '.gitignore': '# nothing yet\n',
+        // *.log: core/gitignore-basics asks for it in every repo (0.5.2), and this
+        // test is about the two tracked files only.
+        '.gitignore': '# logs only\n*.log\n',
         'README.md': '# mine\n\n## Install\n\n## Usage\n',
         '.github/workflows/build.yml': 'on: pull_request\njobs: {}\n',
       },
