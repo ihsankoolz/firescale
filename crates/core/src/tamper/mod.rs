@@ -3249,4 +3249,30 @@ mod tests {
             Vec::<String>::new()
         );
     }
+
+    #[test]
+    fn a_noqa_whose_first_word_is_no_ruff_code_does_not_cover_a_new_noqa() {
+        // Review of pull request 66, (a3): `# noqa: e501` was keyed
+        // `noqa:*`, and once removed it covered a `# noqa: F401` added
+        // anywhere in the change. 0.5.1 found the F401.
+        let head = "x = 1\nimport os  # noqa: F401\n";
+        let added = vec!["SuppressionAdded a.py:2 # noqa: F401 (noqa:F401)"];
+        for base in [
+            "x = 1  # noqa: e501\n",
+            "x = 1  # noqa: E402.\n",
+            "x = 1  # noqa: because\n",
+        ] {
+            assert_eq!(
+                guarded(&[("a.py", base)], &[("a.py", head)]),
+                added,
+                "{base}"
+            );
+        }
+        // A plain `# noqa` turns every code off: as in 0.5.1, it covers one
+        // added in its place.
+        assert_eq!(
+            guarded(&[("a.py", "x = 1  # noqa\n")], &[("a.py", head)]),
+            Vec::<String>::new()
+        );
+    }
 }
