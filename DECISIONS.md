@@ -4,6 +4,14 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
+**Pull request 8: pull requests gated on Linux** (ADR 0067, your decision)
+
+- **What runs when, now.** A pull request into `main` waits for Linux only (the push run, Node 22 and 24). macOS and Windows run every night on `main` (18:17 UTC), when the workflow is started by hand, and on a pull request labelled `release` (adding the label starts them). The version pull request of a release carries the label.
+- **The cost, stated:** a bug that shows only on macOS or Windows is found at night or on the release pull request, not on the pull request that brings it. ADR 0067 has the rest.
+- **New: `.github/workflows/tamper-bench.yml`**, started by hand: builds fscale from two refs, clones the 17 repos of `bench/tamper-history.json` and `bench/tamper-history-m32.json` at their recorded heads, runs `bench/tamper-history.mjs` with both binaries, one Linux job per repo, and uploads the JSON Lines files. Not run yet.
+- **No failing test first:** this repo's workflows have no test (as in pull request 5); the runs show the change. This pull request's own run skips macOS and Windows.
+- **Decided on your behalf:** the hour (02:17 in UTC+8); the pull request run also starts on `labeled`; `tests (nightly)` names the scheduled run's check; the bench workflow clones each repo at the head its labels were made on, so the commits are the labelled ones.
+
 **Pull request 5: this repo's CI**
 
 - **Item 1 (where the Windows time goes), measured before any change.** From the step times of the API and the job logs of the last three pull request runs that passed, with the Linux push runs of the same commits (ADR 0066 has every number, with run and job ids):

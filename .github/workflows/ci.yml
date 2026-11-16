@@ -1,19 +1,29 @@
 name: CI
 
-# What runs when (ADR 0016, ADR 0066):
+# What runs when (ADR 0016, ADR 0066, amended by ADR 0067):
 #   push to any branch         Linux, Node 22 and 24
-#   pull request into main     macOS and Windows, Node 24 (Linux comes from the push)
+#   pull request into main     Linux only (from the push); the gate
+#   pull request labelled `release`
+#                              also macOS and Windows, Node 24
+#   every night, on main       Linux, macOS and Windows
 #   started by hand            all of the above, plus the benchmark and npm package jobs
+# So a bug that shows only on macOS or Windows is found at night or on the
+# release pull request, not on the pull request that brings it (ADR 0067).
 # A push or pull request that changes only docs runs none of the test jobs,
-# only the `docs only` job (see the `changes` job). Started by hand, all run.
-# The checks to require are `tests (push)` and `tests (pull request)`, from
-# the `tests` job at the end.
+# only the `docs only` job (see the `changes` job). Started by hand or at
+# night, all run. The checks to require are `tests (push)` and
+# `tests (pull request)`, from the `tests` job at the end.
 on:
   push:
     # Branches only: a version tag starts the Release workflow, not this one.
     branches: ['**']
   pull_request:
     branches: [main]
+    # `labeled`: adding the `release` label starts macOS and Windows.
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    # 18:17 UTC, 02:17 in the owner's time zone (UTC+8). Runs on main.
+    - cron: '17 18 * * *'
   workflow_dispatch:
 
 # A new push to a branch, or to a pull request, cancels the run still in
@@ -183,10 +193,12 @@ jobs:
         run: pnpm fscale --version
 
   desktop:
-    # macOS and Windows minutes cost more than Linux ones, so these run only
-    # for pull requests into main and for manual runs, on one Node version.
+    # macOS and Windows minutes cost more than Linux ones, and a Windows run
+    # takes over 20 minutes, so these run only at night on main, when started
+    # by hand, and on a pull request labelled `release`, on one Node version
+    # (ADR 0067).
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && github.event_name != 'push' }}
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'release'))) }}
     name: ${{ matrix.os }} / node 24
     runs-on: ${{ matrix.os }}
     strategy:
@@ -300,7 +312,7 @@ jobs:
     # under the name it has when it runs.
     needs: [changes, linux, desktop, docs]
     if: ${{ !cancelled() }}
-    name: ${{ github.event_name == 'push' && 'tests (push)' || github.event_name == 'pull_request' && 'tests (pull request)' || 'tests (manual)' }}
+    name: ${{ github.event_name == 'push' && 'tests (push)' || github.event_name == 'pull_request' && 'tests (pull request)' || github.event_name == 'schedule' && 'tests (nightly)' || 'tests (manual)' }}
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed or was skipped
