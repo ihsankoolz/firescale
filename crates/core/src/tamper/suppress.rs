@@ -471,12 +471,34 @@ fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
     keys
 }
 
-/// `noqa`, `noqa: E501, F401` or `noqa:E501`.
+/// `noqa`, `noqa: E501, F401` or `noqa:E501`. A word of the list that is
+/// a code but for its case or a mark after it (`e501`, `E402.`) is still a
+/// code, keyed as written, and a mark ends the list. A list whose first word
+/// is no code (`noqa: because`) is keyed `noqa:?`: a suppression when it is
+/// added, but not one that turned every code off, so removing it does not
+/// cover a code added elsewhere (review of pull request 66).
 fn noqa(tool: &str, rest: &str) -> Vec<String> {
-    match rest.trim_start().strip_prefix(':') {
-        Some(list) => keyed(tool, codes(list, ruff_code)),
-        None => keyed(tool, Vec::new()),
+    let Some(list) = rest.trim_start().strip_prefix(':') else {
+        return keyed(tool, Vec::new());
+    };
+    let mut found = Vec::new();
+    for word in list
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+    {
+        let bare = word.trim_end_matches(|c: char| c.is_ascii_punctuation());
+        if !ruff_code(&bare.to_ascii_uppercase()) {
+            break;
+        }
+        found.push(word.to_owned());
+        if bare.len() < word.len() {
+            break;
+        }
     }
+    if found.is_empty() && !list.trim().is_empty() {
+        found.push("?".to_owned());
+    }
+    keyed(tool, found)
 }
 
 /// `ignore` or `ignore[code, other]`.
