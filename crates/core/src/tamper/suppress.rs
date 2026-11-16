@@ -263,11 +263,102 @@ fn eslint_settings(rest: &str) -> Vec<String> {
         .collect()
 }
 
-/// Codes after `noqa:` or in `[…]`: split at commas and white space.
-fn codes(list: &str) -> Vec<String> {
+/// The codes at the head of a list split at commas and white space, up to
+/// the first word that `is_code` does not take: the words after it are a
+/// comment (`# noqa: E402  (after the backend is chosen)`), never codes
+/// (finding 3 of the 0.5.1 review, ADR 0063).
+fn codes(list: &str, is_code: fn(&str) -> bool) -> Vec<String> {
     list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .take_while(|word| is_code(word))
         .map(str::to_owned)
         .collect()
+}
+
+/// Any word: a list in `[…]` or a quoted value ends where its brackets or
+/// quotes do.
+fn any_word(_: &str) -> bool {
+    true
+}
+
+/// A Ruff or flake8 rule code: upper-case ASCII letters, then digits
+/// (`E402`, `F401`, `PLC0415`). Ruff's docs: "sequences of uppercase ASCII
+/// characters followed by ASCII digits … The list ends at the last valid
+/// code." Ruff also reads two codes with no delimiter (`F401F841`).
+fn ruff_code(word: &str) -> bool {
+    word.starts_with(|c: char| c.is_ascii_uppercase())
+        && word.ends_with(|c: char| c.is_ascii_digit())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+}
+
+/// Bandit's tests named by one word (its docs' plugin and blacklist
+/// lists); every other test name holds a `_` (`assert_used`).
+const BANDIT_ONE_WORD: [&str; 13] = [
+    "ciphers",
+    "eval",
+    "ftplib",
+    "hashlib",
+    "httpsconnection",
+    "input",
+    "marshal",
+    "md5",
+    "pickle",
+    "random",
+    "telnetlib",
+    "tempnam",
+    "trojansource",
+];
+
+/// A Bandit test after `nosec`: an id (`B602`) or a test's name
+/// (`assert_used`, `pickle`). Bandit ignores any other word, and a `nosec`
+/// that names no test it knows turns every test off.
+fn bandit_code(word: &str) -> bool {
+    let id = word
+        .strip_prefix('B')
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()));
+    let name = word.contains('_')
+        && word.starts_with(|c: char| c.is_ascii_lowercase())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    id || name || BANDIT_ONE_WORD.contains(&word)
+}
+
+/// A pylint message, group or category: a message id (`C0114`), a
+/// category letter (`C`), or a name (`unused-import`, `typecheck`, `all`).
+fn pylint_code(word: &str) -> bool {
+    let id = word.starts_with(['C', 'R', 'W', 'E', 'F', 'I'])
+        && word[1..].chars().all(|c| c.is_ascii_digit());
+    let name = word.starts_with(|c: char| c.is_ascii_lowercase())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    id || name
+}
+
+/// The messages of `# pylint: disable=a, b`. A pylint name looks like a
+/// word of prose (`fixme`, `typecheck`), so the list goes on only after a
+/// comma: a code followed by white space and another word ends it, and so
+/// do `;` and the first word that is no message.
+fn pylint_codes(list: &str) -> Vec<String> {
+    let list = list.split(';').next().unwrap_or_default();
+    let mut out = Vec::new();
+    for item in list.split(',') {
+        let mut words = item.split_whitespace();
+        let Some(first) = words.next() else {
+            continue;
+        };
+        if !pylint_code(first) {
+            break;
+        }
+        out.push(first.to_owned());
+        if words.next().is_some() {
+            break;
+        }
+    }
+    out
 }
 
 /// The suppressions a Python comment holds. A comment may hold several,
@@ -314,7 +405,10 @@ fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
                 keys.push("mypy-file:*".to_owned());
             } else if let Some(list) = rest.strip_prefix("disable-error-code") {
                 let list = list.trim_start().trim_start_matches('=').trim();
-                keys.extend(keyed("mypy-file", codes(list.trim_matches(['"', '\'']))));
+                keys.extend(keyed(
+                    "mypy-file",
+                    codes(list.trim_matches(['"', '\'']), any_word),
+                ));
             }
         } else if let Some(rest) = part.strip_prefix("pylint:").map(str::trim_start) {
             if directive(rest, "skip-file").is_some() {
@@ -325,10 +419,12 @@ fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
                 .iter()
                 .find_map(|form| rest.strip_prefix(form));
             if let Some(list) = list {
-                keys.extend(keyed("pylint", codes(list)));
+                keys.extend(keyed("pylint", pylint_codes(list)));
             }
         } else if let Some(rest) = directive(part, "nosec") {
-            keys.extend(keyed("nosec", codes(rest)));
+            // Bandit also reads `# nosec: B101`.
+            let rest = rest.trim_start().strip_prefix(':').unwrap_or(rest);
+            keys.extend(keyed("nosec", codes(rest, bandit_code)));
         }
     }
     keys
@@ -337,7 +433,7 @@ fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
 /// `noqa`, `noqa: E501, F401` or `noqa:E501`.
 fn noqa(tool: &str, rest: &str) -> Vec<String> {
     match rest.trim_start().strip_prefix(':') {
-        Some(list) => keyed(tool, codes(list)),
+        Some(list) => keyed(tool, codes(list, ruff_code)),
         None => keyed(tool, Vec::new()),
     }
 }
@@ -348,7 +444,12 @@ fn bracketed(tool: &str, rest: &str) -> Vec<String> {
         .trim_start()
         .strip_prefix('[')
         .and_then(|list| list.split(']').next());
-    keyed(tool, inside.map(codes).unwrap_or_default())
+    keyed(
+        tool,
+        inside
+            .map(|list| codes(list, any_word))
+            .unwrap_or_default(),
+    )
 }
 
 /// The lints a Rust attribute allows: `#[allow(a, clippy::b)]`,
