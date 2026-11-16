@@ -3194,4 +3194,38 @@ mod tests {
             vec!["ExpectedChanged tests/test_parts.py:7 assert y() == 5 (on the base: assert y() == 2, line 3)"]
         );
     }
+
+    #[test]
+    fn a_kotlin_test_assert_beside_a_junit_4_import_keeps_its_expected_value() {
+        // Review of pull request 66, (a1): `import org.junit.*` read every
+        // `assertEquals` of the file in JUnit 4's order, so kotlin.test's
+        // expected value was taken for a message. A named `message =` can
+        // only be kotlin.test's: Kotlin passes no named argument to Java.
+        let path = "src/test/kotlin/VersionTest.kt";
+        let named = |value: &str| {
+            format!("import org.junit.*\nimport kotlin.test.assertEquals\n\nclass VersionTest {{\n    @Test fun v() {{ assertEquals(\"{value}\", version(), message = \"version\") }}\n}}\n")
+        };
+        assert_eq!(changed(path, &named("v1"), &named("v2")).len(), 1);
+        // By place, an `assertEquals` imported from kotlin.test by name.
+        let placed = |value: &str| {
+            format!("import org.junit.*\nimport kotlin.test.assertEquals\n\nclass VersionTest {{\n    @Test fun v() {{ assertEquals(\"{value}\", version(), \"version\") }}\n}}\n")
+        };
+        assert_eq!(changed(path, &placed("v1"), &placed("v2")).len(), 1);
+        assert_eq!(
+            changed(
+                path,
+                &placed("v1"),
+                &placed("v1").replace("\"version\")", "\"the version\")")
+            ),
+            Vec::<String>::new()
+        );
+        // A real JUnit 4 call still takes its message first.
+        let junit4 = |message: &str| {
+            format!("import org.junit.Assert.assertEquals\nimport org.junit.Test\n\nclass VersionTest {{\n    @Test fun v() {{\n        assertEquals(\"{message}\", \"v1\", version())\n        Assert.assertEquals(\"{message}\", \"v1\", version())\n    }}\n}}\n")
+        };
+        assert_eq!(
+            changed(path, &junit4("version"), &junit4("the version")),
+            Vec::<String>::new()
+        );
+    }
 }
