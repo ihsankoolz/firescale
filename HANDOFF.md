@@ -4,18 +4,19 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**In progress: the 0.5.2 run** (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`). Six pull requests, each with a failing test first, a fresh review of its diff, and a merge on green on Linux, macOS and Windows. Blocks per pull request are in DECISIONS.md "0.5.2":
+**Nothing in progress.** The 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`) is merged. Each fix had a failing test first. Blocks per pull request are in DECISIONS.md "0.5.2":
 
-1. The base run: quickest base step first, a step known to take longer than the budget left is not started, the version note, failing tests by name (ADR 0062). [#63](https://github.com/ihsankoolz/firescale/pull/63): this pull request.
-2. Tamper guard: suppression codes end at the first word that is not a code; `expected-changed` ignores failure messages and never pairs two tests (ADR 0063). Branch `fix052-tamper`: fixing the review's findings (new misses it found), then the measured rates before and after.
-3. Hooks and affected: a hook command that starts without `fscale` on the PATH, a check that it starts, and the agent hook files (ADR 0064). [#64](https://github.com/ihsankoolz/firescale/pull/64): in its second review.
+1. The base run: quickest base step first, a step known to take longer than the budget left is not started, the version note, failing tests by name (ADR 0062). Merged as [#63](https://github.com/ihsankoolz/firescale/pull/63).
+2. Tamper guard: suppression codes end at the first word that is not a code; `expected-changed` ignores failure messages; tests followed through renames, moves, merges and splits (ADR 0063). Merged as [#66](https://github.com/ihsankoolz/firescale/pull/66). Gate: the held-out cheats, 43 missed of 98 before and after. The rates on real commits were not measured again (bench/RESULTS.md says why); `tamper-bench.yml` can.
+3. Hooks and affected: a pinned hook command that starts without `fscale` on the PATH, a check that it starts, doctor's `Agent hooks`, `sync` moving an older pin firescale wrote, and the agent hook files under `--affected` (ADR 0064). Merged as [#64](https://github.com/ihsankoolz/firescale/pull/64).
 4. Small ones: Vite's built-in names, doctor's wording, Claude Code's result fields confirmed (ADR 0065, ADR 0048). Merged as [#62](https://github.com/ihsankoolz/firescale/pull/62).
-5. This repo's CI: where the Windows time goes, docs-only changes, a fair limit for two slow tests (ADR 0066). Merged as [#61](https://github.com/ihsankoolz/firescale/pull/61). The Windows job took 21m 28s on it, against 26m 26s to 34m 32s before.
-6. Version 0.5.2 and the list of what changes on the course project: after 1 to 5.
+5. This repo's CI: where the Windows time goes, docs-only changes (ADR 0066). Merged as [#61](https://github.com/ihsankoolz/firescale/pull/61). Then pull requests gated on Linux, macOS and Windows at night, by hand and on a pull request labelled `release`, and `tamper-bench.yml` (ADR 0067): merged as [#65](https://github.com/ihsankoolz/firescale/pull/65).
+6. `*.log` in `core/gitignore-basics` (finding 5, the owner's decision). Merged as [#67](https://github.com/ihsankoolz/firescale/pull/67).
+7. Version 0.5.2 and the list of what changes on the course project (DECISIONS.md, "0.5.2 on the course project: what you should see change"): this pull request.
 
-The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged. The run ended there. Do not start M36 or the project-type table without the owner's word.
+The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged and released. The 0.5.2 run ended with its version pull request. Do not start M36 or the project-type table without the owner's word.
 
-- **Version:** 0.5.1 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.1` tag exists**; the owner pushes it when ready (`RELEASING.md`). 0.5.0 is released: the tag `v0.5.0` is on commit `b43a548` (2026-11-15) and it is npm's latest, so 0.5.1 will be the first release with the fixes of this run.
+- **Version:** 0.5.2 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.2` tag exists**; the owner pushes it when ready (`RELEASING.md`). 0.5.1 is released: the tag `v0.5.1` is on commit `62b795b` (2026-11-16) and it is npm's latest. Until 0.5.2 is on npm, the hook command `hooks install` writes (`npx --yes firescale@0.5.2 ...`) does not resolve, and `fscale sync` moves a 0.5.1 pin to it.
 - **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run; `fscale doctor` says PROBLEM for a `.env` that is a symbolic link when its variables are set nowhere else; `hooks install` no longer prints the note about the Cursor hook format.
 - **Verify's JSON is schema version 7** (`notRun`, `budgetMs`, the step status `over-budget`).
 - **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
@@ -23,7 +24,7 @@ The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged. The run ended 
 - **Not fixed, by the owner's choice:** audit bugs 15, 16, 18, 19 and 21 to 30, and every simplification item (1 to 79) and shared piece (parts A, B and C) of the audit. Problems found beside the fixed bugs are listed, not fixed, in DECISIONS.md "Audit bug fixes" under each "Found while fixing".
 - **On hold until the owner says so:** M36 Swift, M37 .NET, M38 Android and M39 Flutter (PLAN.md "M33 to M39"). Do not start them, and do not start the audit's parts A, B or C, without the owner's word.
 - **Done before the run:** M31 to M35 are merged (M35 as [#47](https://github.com/ihsankoolz/firescale/pull/47), ADR 0055), and the audit itself ([#48](https://github.com/ihsankoolz/firescale/pull/48)).
-- **Boxes still open from earlier runs:** M28's manual real-agent test; M29's `supabase start` and `supabase test db` (Docker). Each is listed with its steps in DECISIONS.md.
+- **Boxes still open from earlier runs:** M28's manual real-agent test for Codex (the Claude Code half was done in `docs/reviews/cs464-0.5.1.md`, step 3c); M29's `supabase start` and `supabase test db` (Docker). Each is listed with its steps in DECISIONS.md.
 - **For a session on the owner's Windows machine** (the second half of the 0.5.1 run was made there): run `pnpm` from PowerShell, not Git Bash. `pnpm install` adds an `@pnpm/exe` entry to `pnpm-lock.yaml` there: never commit it (`git checkout pnpm-lock.yaml`). With several builds at once the Vitest suite does not finish inside its 30 s limits and a timed-out test can write a stray snapshot entry: run test files one at a time with `CI=true`, and let the pull request's CI be the gate. A first link after a build can fail with `LNK1104`; run it again.
 - **For the next session in this kind of container:**
   - It has a real, signed-in `claude` next to `node` (`/opt/node22/bin`). A test must never leave a stand-in off the PATH; see ADR 0048, "Tests".
@@ -60,7 +61,7 @@ The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged. The run ended 
 Notes on M27, for whoever builds M28 or touches the runner (ADR 0047):
 
 - Core pieces: `crates/core/src/agentrun.rs` (`Policy::strict`, `repo_limits`, `ProgramAdapter` and the protocol, `diff_guard` over `staged_changes`, `is_secret`, `RepoState`, `RunWorktree` as a drop guard, `LedgerEntry`/`append_ledger`). Orchestration: `crates/cli/src/agentfix.rs` (`fix_with_agent`, `judge`, `AgentEnvironment`). Stand-in: `crates/testkit/src/fake_agent.rs`; tests: `packages/cli/src/agent-runner.test.ts`.
-- An M28 adapter is a program speaking the same protocol; `adapter()` in `agentfix.rs` maps `--agent` names to programs. Claude Code facts (code.claude.com, changelog 2.1.325): `-p`, `--output-format json`, `--max-turns`, `--max-budget-usd`, `--allowedTools`/`--disallowedTools` with `Read(./.env)`-style rules, `--permission-mode dontAsk`, `--setting-sources`, `--settings`, `--strict-mcp-config`, `claude auth status` (exit 0/1); the print-mode JSON envelope is not documented (SDK result fields `total_cost_usd`, `num_turns`, `is_error`, `subtype`). Codex (docs host unreachable; source at `rust-v0.169.0`): `codex exec [PROMPT|-]`, `--json` JSONL (`turn.completed` with `usage`; no money cost), `--ephemeral`, `--ignore-user-config`, `--skip-git-repo-check`, approvals forced to never, untrusted project config off unless `--trust`, `codex login status` (exit 0/1); `-c`, `--sandbox`, `--cd`, `--model` live in shared options not read: unverified.
+- An M28 adapter is a program speaking the same protocol; `adapter()` in `agentfix.rs` maps `--agent` names to programs. Claude Code facts (code.claude.com, changelog 2.1.325): `-p`, `--output-format json`, `--max-turns`, `--max-budget-usd`, `--allowedTools`/`--disallowedTools` with `Read(./.env)`-style rules, `--permission-mode dontAsk`, `--setting-sources`, `--settings`, `--strict-mcp-config`, `claude auth status` (exit 0/1); the print-mode JSON envelope is not documented, but a real run in the 0.5.1 review confirmed its result fields `total_cost_usd`, `num_turns`, `is_error`, `subtype` (ADR 0048, ADR 0065). Codex (docs host unreachable; source at `rust-v0.169.0`): `codex exec [PROMPT|-]`, `--json` JSONL (`turn.completed` with `usage`; no money cost), `--ephemeral`, `--ignore-user-config`, `--skip-git-repo-check`, approvals forced to never, untrusted project config off unless `--trust`, `codex login status` (exit 0/1); `-c`, `--sandbox`, `--cd`, `--model` live in shared options not read: unverified.
 
 Notes on M26, for whoever touches approvals or the measured rates (ADR 0046):
 
@@ -233,9 +234,10 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Tag `v0.5.0` on `main` once the 0.5.0 pull request is merged, and push the tag when you are ready to release (`RELEASING.md`). The release now builds without any cache, so it takes longer. `v0.3.0` and `v0.4.0` are tagged, and 0.4.0 is npm's latest.
+- Tag `v0.5.2` on `main` and push the tag when you are ready to release (`RELEASING.md`). The release builds without any cache, so it takes longer. `v0.5.1` is tagged and is npm's latest.
 - After 0.5.0 is on npm: M22's manual check (a fixture repo on GitHub with `--shared-cache`), and M25's and M26's checks of the `Tamper guard` workflow on a real pull request (DECISIONS.md, "Review of the long run").
-- Run 0.5.0 on the course project: DECISIONS.md, "0.5.0 on the course project: what you should see change".
+- Run 0.5.2 on the course project: DECISIONS.md, "0.5.2 on the course project: what you should see change".
+- Start `tamper-bench.yml` by hand (before `main` at `v0.5.1`, after `v0.5.2`) and label its new findings, to measure the 0.5.2 tamper guard on real commits (bench/RESULTS.md, "Not measured again for 0.5.2").
 - Open the repo once in Codex as a trusted project and check that `.codex/config.toml` (the `firescale` permission profile) loads; it follows Codex's source but was not run (ADR 0027).
 - Check `.cursor/cli.json` against Cursor's docs, which could not be read from the build session.
 
@@ -243,4 +245,4 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 - Decide the items under "Needs your decision" in `DECISIONS.md`.
 - Tick the second box of the publishing checkpoint: see a repo made by `npx firescale@0.1.0 init` pass its generated CI on GitHub (step 7 under "Publishing to npm" in `DECISIONS.md`).
-- Run M28's manual test with a real agent (ADR 0048, "Manual checks").
+- Run M28's manual test with Codex (ADR 0048, "Manual checks"); the Claude Code half was done in the 0.5.1 review, step 3c.
