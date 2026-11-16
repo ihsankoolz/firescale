@@ -1,6 +1,6 @@
 # 0016 — CI: Linux on every push, macOS and Windows on pull requests into main
 
-Status: accepted (2026-11-11). Supersedes the M6 amendment of ADR 0009. The action pinning in ADR 0009 is unchanged. Amended by ADR 0066: a change of docs only runs no test job, the test jobs are four jobs instead of two matrices, and a push to `main` is never cancelled.
+Status: accepted (2026-11-11). Supersedes the M6 amendment of ADR 0009. The action pinning in ADR 0009 is unchanged. Amended by ADR 0066: a change of docs only runs no test job, a `tests` job is the one check to require, and a push to `main` is never cancelled.
 
 ## Context
 
