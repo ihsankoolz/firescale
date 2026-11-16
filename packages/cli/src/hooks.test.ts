@@ -134,9 +134,12 @@ describe('fscale hooks install', () => {
     const result = await install(['--agent', 'cursor'], repo.root);
     expect(result.code).toBe(EXIT_OK);
     expect(result.stdout).toBe(
-      'installed         .cursor/hooks.json\n\nEach agent now runs `fscale hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n',
+      `installed         .cursor/hooks.json\n\nEach agent now runs \`npx firescale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.\nThe hook starts on this machine: \`npx firescale --version\` answered ${VERSION}.\n`,
     );
-    expect(result.stderr).toBe('');
+    // Only the line that says what the check runs (ADR 0064).
+    expect(result.stderr).toBe(
+      'fscale: checking that the hook can start: running `npx firescale --version` in the repo root, as an agent would. npx may download firescale from the npm registry first.\n',
+    );
   });
 
   it('changes nothing when run again', async () => {
@@ -182,7 +185,9 @@ describe('fscale hooks install', () => {
     const settings = JSON.parse(await read(repo.root, HOOK_FILES.claude)) as {
       hooks: { Stop: { hooks: { command: string }[] }[] };
     };
-    expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe('fscale hooks run --agent claude');
+    expect(settings.hooks.Stop[0]?.hooks[0]?.command).toBe(
+      'npx firescale hooks run --agent claude',
+    );
   });
 
   it("keeps every line of a person's file and adds only the hook's lines", async () => {
@@ -212,7 +217,7 @@ describe('fscale hooks install', () => {
           0,
         );
       }
-      expect(after).toContain('fscale hooks run --agent');
+      expect(after).toContain('npx firescale hooks run --agent');
       expect(after.includes('\r\n')).toBe(before.includes('\r\n'));
       expect(after.replaceAll('\r\n', '').includes('\r')).toBe(false);
       written.push(after);
@@ -255,7 +260,7 @@ describe('fscale hooks install', () => {
         if ((refused as readonly string[]).includes(agent)) {
           expect(text, `${label}: ${file}`).toBe(content);
         } else {
-          expect(text, `${label}: ${file}`).toContain(`fscale hooks run --agent ${agent}`);
+          expect(text, `${label}: ${file}`).toContain(`npx firescale hooks run --agent ${agent}`);
         }
       }
     }
@@ -704,7 +709,9 @@ describe('the hook files and verify --affected (ADR 0064)', () => {
       "  the repo root's own steps: .claude/settings.json and 2 more changed, and these steps can read every file of the repo, the agent hook files among them",
     );
     expect(affected.stdout).not.toContain('are agent hook files');
-    // In the root's key too: a full run lints again, and no project runs.
+    // In the root's key too: after another change to a hook file, a full
+    // run lints again, and every project's steps come from the cache.
+    await repo.write('.cursor/hooks.json', `${await read(repo.root, '.cursor/hooks.json')}\n`);
     const full = await verify();
     expect(full.calls).toEqual([`npx prettier --check . in ${root}`]);
   });

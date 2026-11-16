@@ -193,8 +193,10 @@ fn direct(program: &str, args: &[&str]) -> Command {
     command
 }
 
+/// `command` through the platform shell: `cmd /D /S /C` on Windows, `sh -c`
+/// elsewhere.
 #[cfg(windows)]
-fn shell(command: &str) -> Command {
+pub(crate) fn shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
     let mut shell = Command::new("cmd");
     shell
@@ -204,7 +206,7 @@ fn shell(command: &str) -> Command {
 }
 
 #[cfg(not(windows))]
-fn shell(command: &str) -> Command {
+pub(crate) fn shell(command: &str) -> Command {
     let mut shell = Command::new("sh");
     shell.args(["-c", command]);
     shell

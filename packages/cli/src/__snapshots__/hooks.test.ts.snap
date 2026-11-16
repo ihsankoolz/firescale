@@ -1,13 +1,14 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > claude and cursor: stderr 1`] = `
-"fscale: .claude/settings.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add this item to the list "hooks.Stop" by hand:
+"fscale: checking that the hook can start: running \`npx firescale --version\` in the repo root, as an agent would. npx may download firescale from the npm registry first.
+fscale: .claude/settings.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add this item to the list "hooks.Stop" by hand:
 
 {
   "hooks": [
     {
       "type": "command",
-      "command": "fscale hooks run --agent claude"
+      "command": "npx firescale hooks run --agent claude"
     }
   ]
 }
@@ -16,7 +17,7 @@ Then run this again to check it.
 fscale: .cursor/hooks.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add "version": 1 at the top level and this item to the list "hooks.stop" by hand:
 
 {
-  "command": "fscale hooks run --agent cursor"
+  "command": "npx firescale hooks run --agent cursor"
 }
 
 Then run this again to check it.
@@ -29,12 +30,14 @@ installed         .codex/hooks.json
 refused           .cursor/hooks.json
 
 Not every hook is installed. Refused and left as it was: .claude/settings.json, .cursor/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.
-The hook is in .codex/hooks.json: there the agent runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+The hook is in .codex/hooks.json: there the agent runs \`npx firescale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+The hook starts on this machine: \`npx firescale --version\` answered 0.5.1.
 "
 `;
 
 exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > claude: stderr 1`] = `
-"fscale: .claude/settings.json is not valid JSON (key must be a string at line 1 column 3), so the hook cannot be added. Fix the file, then run this again.
+"fscale: checking that the hook can start: running \`npx firescale --version\` in the repo root, as an agent would. npx may download firescale from the npm registry first.
+fscale: .claude/settings.json is not valid JSON (key must be a string at line 1 column 3), so the hook cannot be added. Fix the file, then run this again.
 "
 `;
 
@@ -44,18 +47,20 @@ installed         .codex/hooks.json
 installed         .cursor/hooks.json
 
 Not every hook is installed. Refused and left as it was: .claude/settings.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.
-The hook is in .codex/hooks.json, .cursor/hooks.json: there the agent runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+The hook is in .codex/hooks.json, .cursor/hooks.json: there the agent runs \`npx firescale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+The hook starts on this machine: \`npx firescale --version\` answered 0.5.1.
 "
 `;
 
 exports[`fscale hooks install > --all tries every file: it writes the ones it can, and says which it refused > codex: stderr 1`] = `
-"fscale: .codex/hooks.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add this item to the list "hooks.Stop" by hand:
+"fscale: checking that the hook can start: running \`npx firescale --version\` in the repo root, as an agent would. npx may download firescale from the npm registry first.
+fscale: .codex/hooks.json was left as it is: the stop hook cannot go in as new lines, and firescale does not rewrite lines you wrote. The file, or the object or list the hook goes into, is written on one line or is null. Put its brackets on their own lines and run this again, or add it by hand. Add this item to the list "hooks.Stop" by hand:
 
 {
   "hooks": [
     {
       "type": "command",
-      "command": "fscale hooks run --agent codex"
+      "command": "npx firescale hooks run --agent codex"
     }
   ]
 }
@@ -70,7 +75,8 @@ refused           .codex/hooks.json
 installed         .cursor/hooks.json
 
 Not every hook is installed. Refused and left as it was: .codex/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.
-The hook is in .claude/settings.json, .cursor/hooks.json: there the agent runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+The hook is in .claude/settings.json, .cursor/hooks.json: there the agent runs \`npx firescale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+The hook starts on this machine: \`npx firescale --version\` answered 0.5.1.
 "
 `;
 
@@ -81,7 +87,7 @@ exports[`fscale hooks install > refuses a file written on one line, and says wha
   "hooks": [
     {
       "type": "command",
-      "command": "fscale hooks run --agent claude"
+      "command": "npx firescale hooks run --agent claude"
     }
   ]
 }
@@ -98,7 +104,7 @@ exports[`fscale hooks install > writes a hook file for each of the three agents 
         "hooks": [
           {
             "type": "command",
-            "command": "fscale hooks run --agent claude"
+            "command": "npx firescale hooks run --agent claude"
           }
         ]
       }
@@ -116,7 +122,7 @@ exports[`fscale hooks install > writes a hook file for each of the three agents 
         "hooks": [
           {
             "type": "command",
-            "command": "fscale hooks run --agent codex"
+            "command": "npx firescale hooks run --agent codex"
           }
         ]
       }
@@ -132,7 +138,7 @@ exports[`fscale hooks install > writes a hook file for each of the three agents 
   "hooks": {
     "stop": [
       {
-        "command": "fscale hooks run --agent cursor"
+        "command": "npx firescale hooks run --agent cursor"
       }
     ]
   }
@@ -140,14 +146,18 @@ exports[`fscale hooks install > writes a hook file for each of the three agents 
 "
 `;
 
-exports[`fscale hooks install > writes a hook file for each of the three agents > stderr 1`] = `""`;
+exports[`fscale hooks install > writes a hook file for each of the three agents > stderr 1`] = `
+"fscale: checking that the hook can start: running \`npx firescale --version\` in the repo root, as an agent would. npx may download firescale from the npm registry first.
+"
+`;
 
 exports[`fscale hooks install > writes a hook file for each of the three agents > stdout 1`] = `
 "installed         .claude/settings.json
 installed         .codex/hooks.json
 installed         .cursor/hooks.json
 
-Each agent now runs \`fscale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+Each agent now runs \`npx firescale hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+The hook starts on this machine: \`npx firescale --version\` answered 0.5.1.
 "
 `;
 

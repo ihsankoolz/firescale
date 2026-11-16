@@ -53,7 +53,8 @@ Options:
   --rule <id>      fix --agent: the rule to fix (default: the first with violations a
                    deterministic fix cannot repair)
   --all            hooks install: every supported agent
-  --bin <command>  hooks install: how the hook starts fscale (default: fscale)
+  --bin <command>  hooks install: how the hook starts fscale (default: the repo's own
+                   fscale package script, else npx firescale)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
   --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
                    took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is

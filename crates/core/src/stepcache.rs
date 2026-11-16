@@ -513,6 +513,13 @@ fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
     if path == crate::config::JSON_CONFIG {
         return scope.holds_root();
     }
+    // The agents' hook files (`.claude/settings.json` and the like) are read
+    // by the agents and by firescale's check, and by a step only as one of
+    // every file of the repo (`prettier --check .`): a file only for a unit
+    // whose folders hold the repo root (ADR 0064).
+    if crate::hooks::is_agent_hook_file(path) {
+        return scope.holds_root();
+    }
     if scope.folders.iter().any(|folder| inside(path, folder)) {
         return true;
     }
@@ -2369,6 +2376,49 @@ mod tests {
             Track::NoGit,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn the_agent_hook_files_are_files_only_in_the_key_of_a_unit_that_holds_the_repo_root() {
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let project = || {
+            cache_over(root, Some(graph.clone()), &machine, "one")
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let root_steps = || {
+            cache_over(root, Some(graph.clone()), &machine, "one")
+                .key(None, None, "test", "node -e 0", root)
+                .unwrap()
+                .key
+        };
+        let (first, first_root) = (project(), root_steps());
+        // The three files `fscale hooks install --all` writes (ADR 0064).
+        for file in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".cursor/hooks.json",
+        ] {
+            fixture.write(file, "{\n  \"hooks\": {}\n}\n").unwrap();
+        }
+        assert_eq!(project(), first);
+        let with_hooks = root_steps();
+        assert_ne!(with_hooks, first_root);
+        // Any other file in those folders is still in every key, as any
+        // file no project owns.
+        fixture.write(".claude/hooks/check.sh", "exit 0\n").unwrap();
+        assert_ne!(project(), first);
+        assert_ne!(root_steps(), with_hooks);
+        // A hook file inside a project is that project's file.
+        let before = project();
+        fixture.write("api/.claude/settings.json", "{}\n").unwrap();
+        assert_ne!(project(), before);
     }
 
     #[test]
