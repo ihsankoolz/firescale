@@ -38,6 +38,7 @@ node_modules/@firescale/cli-<os>-<arch>/bin/fscale check
 
 - **"the package @firescale/cli-… is not installed"**: optional dependencies were skipped. Reinstall without `--omit=optional` or `--no-optional`.
 - **"there is no prebuilt fscale binary for …"**: your platform has no package yet. Build from source and set `FSCALE_BINARY`.
+- **`'fscale' is not recognized as an internal or external command` from `npx firescale` on Windows**: npx runs the command through `cmd.exe`, and `cmd.exe` does not search a `PATH` longer than about 8,191 characters. npx adds one folder to `PATH` for each folder above the one you are in, so a deep folder or a long `PATH` can pass that limit. Open a new terminal, or shorten `PATH`. A shell hook that adds to `PATH` on every `cd` (for example `mise activate bash` in Git Bash) makes `PATH` grow with each change of folder.
 
 ## From a checkout
 
