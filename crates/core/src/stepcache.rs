@@ -2921,6 +2921,64 @@ mod tests {
         assert!(!note.contains("0.5."), "{note}");
     }
 
+    /// From the review of ADR 0062: a digest file that holds no record
+    /// makes no claim about the version of the last run.
+    #[test]
+    fn an_empty_or_broken_digest_file_names_no_version() {
+        let machine = NoTools;
+        let settings = CacheSettings {
+            version: "0.5.2",
+            read: true,
+            sets_ci: true,
+            settings: "same",
+            machine: &machine,
+            read_env: &|_| None,
+        };
+        for content in ["", "\n", "not a digest\n"] {
+            let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+            let root = fixture.root();
+            let steps = root.join(".firescale").join("steps");
+            fs::create_dir_all(&steps).unwrap();
+            fs::write(steps.join("old.json"), "{}").unwrap();
+            fs::write(
+                root.join(".firescale").join("step-cache-config.digest"),
+                content,
+            )
+            .unwrap();
+            let note = StepCache::new(root, None, &settings).config_note();
+            assert_eq!(note, None, "{content:?}");
+        }
+    }
+
+    /// Nothing is read through a link either (ADR 0060, ADR 0061).
+    #[cfg(unix)]
+    #[test]
+    fn the_config_digest_is_never_read_through_a_symlink() {
+        let machine = NoTools;
+        let settings = CacheSettings {
+            version: "0.5.2",
+            read: true,
+            sets_ci: true,
+            settings: "same",
+            machine: &machine,
+            read_env: &|_| None,
+        };
+        let fixture = Fixture::new(&[("a.py", "x = 1\n")], Track::NoGit).unwrap();
+        let root = fixture.root();
+        let steps = root.join(".firescale").join("steps");
+        fs::create_dir_all(&steps).unwrap();
+        fs::write(steps.join("old.json"), "{}").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let elsewhere = outside.path().join("digest");
+        fs::write(&elsewhere, "version 0.0.1\nsettings x\n").unwrap();
+        std::os::unix::fs::symlink(
+            &elsewhere,
+            root.join(".firescale").join("step-cache-config.digest"),
+        )
+        .unwrap();
+        assert_eq!(StepCache::new(root, None, &settings).config_note(), None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_launcher_with_no_shebang_line_gives_its_version() {

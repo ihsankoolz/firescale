@@ -4741,6 +4741,105 @@ mod tests {
         );
     }
 
+    /// A report of one failing `test` step, and failing tests to give it.
+    fn one_failing_test_step() -> VerifyReport {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let fail = if cfg!(windows) { "exit /b 1" } else { "exit 1" };
+        let plan = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![("test".to_owned(), Planned::Command(fail.to_owned()))],
+            ..VerifyPlan::default()
+        };
+        run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap()
+    }
+
+    fn failed_tests(ids: &[String], label: Option<crate::blame::Label>) -> Vec<FailedTest> {
+        ids.iter()
+            .map(|id| FailedTest {
+                id: id.clone(),
+                label,
+            })
+            .collect()
+    }
+
+    /// From the review of ADR 0062: a test's name is printed as safely as
+    /// an output line: secrets hidden, on one line, and not too long.
+    #[test]
+    fn failing_test_names_hide_secrets_and_stay_on_one_short_line() {
+        let mut report = one_failing_test_step();
+        let secret = "tests/test_db.py::test_connects[postgresql://app:s3cret@db/x]".to_owned();
+        let two_lines = "src/a.test.ts > reads\nthe second line".to_owned();
+        let long = format!("tests/test_long.py::test_{}", "x".repeat(400));
+        report.steps[1].failed_tests = failed_tests(&[secret, two_lines, long], None);
+        let text = format_verify_human(&report);
+        assert!(!text.contains("s3cret"), "{text}");
+        assert!(
+            text.contains("  tests/test_db.py::test_connects[postgresql://***@db/x]\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("  src/a.test.ts > reads\\nthe second line\n"),
+            "{text}"
+        );
+        assert!(!text.contains(&"x".repeat(301)), "{text}");
+        assert!(text.contains("\nFailing tests of test (3):\n"), "{text}");
+    }
+
+    /// From the review of ADR 0062: when the results may not cover the
+    /// whole run, the count is what was found, not the total.
+    #[test]
+    fn a_failing_test_list_that_may_not_be_whole_says_so() {
+        let mut report = one_failing_test_step();
+        let ids: Vec<String> = ["a", "b", "c"]
+            .map(|id| format!("tests/test_x.py::test_{id}"))
+            .to_vec();
+        report.steps[1].failed_tests = failed_tests(&ids, None);
+        report.steps[1].test_results = Some(crate::pertest::TestResults {
+            partial: true,
+            ..crate::pertest::TestResults::default()
+        });
+        let text = format_verify_human(&report);
+        assert!(
+            text.contains(
+                "\nFailing tests of test (3 found; the results do not cover the whole run):\n"
+            ),
+            "{text}"
+        );
+        report.steps[1].test_results = None;
+        report.steps[1].status = StepStatus::TimedOut;
+        let text = format_verify_human(&report);
+        assert!(
+            text.contains(
+                "\nFailing tests of test (3 found; the results do not cover the whole run):\n"
+            ),
+            "{text}"
+        );
+    }
+
+    /// From the review of ADR 0062: the `New failing tests:` list has the
+    /// same cap, and hides secrets the same way.
+    #[test]
+    fn the_new_failing_tests_list_has_the_same_cap_and_hides_secrets() {
+        let mut report = one_failing_test_step();
+        report.steps[1].label = Some(crate::blame::Label::New);
+        let mut many: Vec<String> = (1..=23)
+            .map(|n| format!("tests/test_new.py::test_{n:02}"))
+            .collect();
+        many[0] = "tests/test_db.py::test_connects[postgresql://app:s3cret@db/x]".to_owned();
+        report.steps[1].failed_tests = failed_tests(&many, Some(crate::blame::Label::New));
+        let text = format_verify_human(&report);
+        assert!(!text.contains("s3cret"), "{text}");
+        assert!(text.contains("New failing tests:\n"), "{text}");
+        assert!(text.contains("  tests/test_new.py::test_20\n"), "{text}");
+        assert!(!text.contains("test_21"), "{text}");
+        assert!(
+            text.contains(
+                "  and 3 more; `fscale verify --json` lists every one under failedTests\n"
+            ),
+            "{text}"
+        );
+    }
+
     #[test]
     fn stops_at_the_first_failing_step_and_keeps_its_output() {
         let fixture = Fixture::new(&[], Track::NoGit).unwrap();

@@ -411,13 +411,14 @@ describe('blame-aware verify', () => {
     const config = JSON.parse(await readFile(path.join(root, 'firescale.config.json'), 'utf8'));
     config.verify.test = 'node slow-on-base.js';
     // Long enough that what is left after the worktree is made stays over
-    // the step's kept time (its quick failure on the head), so it starts on
-    // the base and the budget runs out while it runs (ADR 0062).
-    config.verify.baseBudget = '4s';
+    // the step's time on the head (its quick failure, about a second with
+    // Node's start), so it starts on the base and the budget runs out while
+    // it runs (ADR 0062).
+    config.verify.baseBudget = '15s';
     await write('firescale.config.json', JSON.stringify(config));
     await write(
       'slow-on-base.js',
-      "if (process.cwd().includes('firescale-base-')) setTimeout(() => process.exit(1), 20000); else process.exit(1);\n",
+      "if (process.cwd().includes('firescale-base-')) setTimeout(() => process.exit(1), 60000); else process.exit(1);\n",
     );
     await commitAll(root, 'slow on the base');
     expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
@@ -427,8 +428,8 @@ describe('blame-aware verify', () => {
     const json = await report(result.stdout);
     expect(step(json, 'test').label).toBeUndefined();
     expect(step(json, 'test').base?.status).toBe('over-budget');
-    expect(json.notes?.join('\n')).toContain('ran out of its time budget (4s, verify.baseBudget)');
-  }, 30_000);
+    expect(json.notes?.join('\n')).toContain('ran out of its time budget (15s, verify.baseBudget)');
+  }, 60_000);
 
   // From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
   // finding 1): the ledger step's kept time was 1h 36m, the budget 5m. It
@@ -438,16 +439,15 @@ describe('blame-aware verify', () => {
     const outside = await fixtures.create({ files: {}, track: 'no-git' });
     const log = path.join(outside.root, 'runs.log');
     // Fails on the head and on the base with the same output; `slow` makes
-    // it take 25 s on the base.
+    // it take 30 s, so on the head it runs into its own 3 s limit and its
+    // kept time is what is known about it (ADR 0062).
     const failing = (name: string, lines: string[], slow: boolean) =>
       [
         "const fs = require('fs');",
         "const where = process.env.FSCALE_BASE_RUN ? 'base' : 'head';",
         `fs.appendFileSync(${JSON.stringify(log)}, where + ' ${name}\\n');`,
         `console.log(${JSON.stringify(lines.join('\n'))});`,
-        slow
-          ? "if (where === 'base') setTimeout(() => process.exit(1), 25000); else process.exit(1);"
-          : 'process.exit(1);',
+        slow ? 'setTimeout(() => process.exit(1), 30000);' : 'process.exit(1);',
         '',
       ].join('\n');
     const repo = await fixtures.create({
@@ -460,7 +460,7 @@ describe('blame-aware verify', () => {
             test: false,
             baseBudget: '20s',
             projects: {
-              'backend/ledger_service': { test: 'node test.js' },
+              'backend/ledger_service': { test: { command: 'node test.js', timeout: '3s' } },
               frontend: { test: 'node test.js' },
             },
           },
@@ -519,14 +519,97 @@ describe('blame-aware verify', () => {
     expect(ledger.label).toBeUndefined();
     expect(ledger.base?.status).toBe('over-budget');
     expect(ledger.base?.note).toMatch(
-      /^it was not started on the base commit [0-9a-f]{7}, because it is known to take longer than what was left of the base run's time budget: it took 1h 36m when it last ran \(\.firescale\/step-times\.json\), and .+ of 20s \(verify\.baseBudget\) was left, so this failure blocks as it would without a base$/,
+      /^it was not started on the base commit [0-9a-f]{7}, because it is known to take longer than what was left of the base run's time budget: its kept time is 1h 36m \(\.firescale\/step-times\.json\), and .+ of 20s \(verify\.baseBudget\) was left, so this failure blocks as it would without a base$/,
     );
     expect(json.notes).toContain(`test in backend/ledger_service: ${ledger.base?.note}.`);
     const runs = (await readFile(log, 'utf8')).split(/\r?\n/).filter(Boolean);
     expect(runs.filter((line) => line.startsWith('base '))).toEqual(['base frontend']);
     expect(result.stderr).toMatch(
-      /\[verify\] base: test in backend\/ledger_service: not started: it took 1h 36m when it last ran, more than the .+ left of the budget \(20s, verify\.baseBudget\)/,
+      /\[verify\] base: test in backend\/ledger_service: not started: its kept time is 1h 36m \(\.firescale\/step-times\.json\), more than the .+ left of the budget \(20s, verify\.baseBudget\)/,
     );
+    // The quick step went first: the report's order puts the ledger first.
+    const started = result.stderr.indexOf('[verify] base: test in frontend: started');
+    const notStarted = result.stderr.indexOf(
+      '[verify] base: test in backend/ledger_service: not started',
+    );
+    expect(started, result.stderr).toBeGreaterThanOrEqual(0);
+    expect(started, result.stderr).toBeLessThan(notStarted);
+  }, 30_000);
+
+  // From the review of ADR 0062: a kept time only rises after a failure or
+  // a stop, so a stale one must not keep a step out of the base run when
+  // the head has just run it to its end, quickly.
+  it("starts a base step by this run's head time, not a stale kept time (ADR 0062)", async () => {
+    const { root, write } = await blameRepo('ok', 'fail');
+    await write('lint.txt', 'ok, changed\n');
+    await mkdir(path.join(root, '.firescale'), { recursive: true });
+    await writeFile(
+      path.join(root, '.firescale', 'step-times.json'),
+      JSON.stringify({
+        format: 1,
+        steps: [
+          {
+            step: 'test',
+            command: 'node test.js',
+            durationMs: 6 * 60_000,
+            finished: false,
+            ranAt: Math.floor(Date.now() / 1000),
+          },
+        ],
+      }),
+    );
+    const result = await runCli(['verify', '--json'], root);
+    expect(result.code, result.stderr).toBe(EXIT_OK);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').base?.status, JSON.stringify(json.notes)).toBe('failed');
+    expect(step(json, 'test').label).toBe('pre-existing');
+  }, 30_000);
+
+  // From the review of ADR 0062: when no base step can fit, no worktree is
+  // made and verify.baseInstall does not run.
+  it('makes no worktree and runs no install when every base step is known to take longer than the budget (ADR 0062)', async () => {
+    const outside = await fixtures.create({ files: {}, track: 'no-git' });
+    const installed = path.join(outside.root, 'installed.log');
+    const { root, write } = await blameRepo('ok', 'fail', {
+      test: { command: 'node hang.js', timeout: '2s' },
+      baseInstall: 'node install.js',
+      baseBudget: '1m',
+    });
+    await write('hang.js', 'setTimeout(() => process.exit(1), 30000);\n');
+    await write(
+      'install.js',
+      `require('fs').appendFileSync(${JSON.stringify(installed)}, 'installed\\n');\n`,
+    );
+    await commitAll(root, 'a test that hangs');
+    expect((await runGit(root, ['branch', '--force', 'main', 'HEAD'])).code).toBe(0);
+    await write('lint.txt', 'ok, changed\n');
+    await mkdir(path.join(root, '.firescale'), { recursive: true });
+    await writeFile(
+      path.join(root, '.firescale', 'step-times.json'),
+      JSON.stringify({
+        format: 1,
+        steps: [
+          {
+            step: 'test',
+            command: 'node hang.js',
+            durationMs: 5_763_707,
+            finished: true,
+            ranAt: Math.floor(Date.now() / 1000),
+          },
+        ],
+      }),
+    );
+    const result = await runCli(['verify', '--json', '--progress'], root);
+    expect(result.code, result.stderr).toBe(EXIT_VIOLATIONS);
+    const json = await report(result.stdout);
+    expect(step(json, 'test').base?.status).toBe('over-budget');
+    expect(step(json, 'test').base?.note).toMatch(
+      /^it was not started on the base commit [0-9a-f]{7}, because it is known to take longer than what was left of the base run's time budget: its kept time is 1h 36m/,
+    );
+    expect(result.stderr).not.toContain('to run in a worktree');
+    expect(result.stderr).toContain('[verify] base: test: not started: its kept time is 1h 36m');
+    expect(await readFile(installed, 'utf8').catch(() => '')).toBe('');
+    expect(json.base).toMatchObject({ ran: 0 });
   }, 30_000);
 
   it('never labels a step that needs setup on the head new', async () => {
