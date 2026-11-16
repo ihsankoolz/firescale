@@ -4,6 +4,43 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
+**Pull request 7: `*.log` in core/gitignore-basics**
+
+The `*.log` part of finding 5 of `docs/reviews/cs464-0.5.1.md`: an untracked `verify.log` at the root of the course project made `verify --dry-run --affected` say `6 of 6 projects would run, 0 not affected`, with `verify.log belongs to no project` for each. Decided by the owner: `core/gitignore-basics` ignores `*.log`. A log is not added to the "runs nothing" list of ADR 0034. The other part of finding 5 (the files `hooks install` writes) is not in this pull request.
+
+- **`*.log` in `.gitignore`, reproduced and fixed.** Failing tests first:
+  - `a stray verify.log at the root > is no change once the gitignore fix has run and been committed` (`packages/cli/src/config-affects.test.ts`). The course project, committed; `fscale fix --rules core/gitignore-basics`, committed; then, as in the report, an untracked `cs464_project_export.md` and `verify.log` at the root. Before the fix: `expected 'verify --affected (dry run): 6 of 6 p…' to be 'verify --affected (dry run): 0 of 6 p…'`, with `Received: "verify --affected (dry run): 6 of 6 projects would run, 0 not affected. Nothing was run."`, the report's headline.
+  - In `crates/rules/src/core/gitignore-basics/tests.rs`, module `log_files`: `an_adopted_gitignore_without_log_files_is_reported` (`left: []`, `right: [".gitignore does not ignore \"*.log\". Add \"*.log\" to .gitignore so generated files are not committed."]`), `fix_adds_the_line_to_the_existing_block_and_git_then_ignores_verify_log` (`left: []`, `right: [".gitignore"]`: the fix changed nothing), `a_new_gitignore_lists_log_files_after_the_folders` (`left: "# Generated files and dependencies\ntarget/\n"`, `right: "# Generated files and dependencies\ntarget/\n*.log\n"`), `a_repo_with_no_detected_language_still_ignores_log_files` (`left: 0`, `right: 1`), `any_line_that_ignores_log_files_at_the_root_counts_and_a_negation_does_not` (`left: 0`, `right: 1`, on `*.log` followed by `!*.log`). One more, `a_folder_only_line_does_not_count` (`*.log/` ignores folders only), was added with the fix, after a first version of it counted `*.log/`.
+  - Fix: `*.log` is a required entry of the rule in every git repo, after the language and build-output entries. It is written as `*.log`, not `*.log/` (that would ignore folders only), and the finding says `Add "*.log"`. The fix appends it the same way as the other lines: at the end of the existing `.gitignore`, under the existing `# Generated files and dependencies` line, which is not written twice. A line counts when git, reading it, ignores a `.log` file at the root: `*.log`, `/*.log`, `**/*.log`; `*.log` followed by `!*.log` does not, and neither does `*.log/`.
+  - **`sync --check` on a repo adopted before 0.5.2 exits 1 once**, with `+*.log` in the diff for `.gitignore`. That is expected: run `fscale sync` and commit. `docs/init.md` says so; the SKILL.md (and its three synced copies), `docs/rules.md` and `docs/verify.md` ("More, never less, when unsure") list `*.log`. This repo's own `.gitignore` has `*.log` now, so `fscale check` still passes on it.
+
+**Decided by the owner:** `*.log` in `core/gitignore-basics`, not in ADR 0034's list.
+
+**Decided on your behalf** (no ADR: a line in an existing rule):
+
+- `*.log` is asked for in every git repo, also when no language is detected: a log has nothing to do with the language.
+- It comes last in the block, after the folders: `node_modules/`, then `*.log`.
+
+**Tests changed, none weakened** (`crates/rules/src/core/gitignore-basics/tests.rs`):
+
+- `reports_each_missing_entry` expects 3 findings, not 2: `*.log` is reported too, and the test checks it.
+- `appends_and_keeps_crlf` checks that the file ends with `node_modules/\r\n*.log\r\n`, not `node_modules/\r\n`: the new line keeps CRLF too.
+- `accepts_all_equivalent_spellings`, `accepts_rust_and_python_entries`, both `negation` tests and both `projects_in_subfolders` tests: `*.log` was added to their `.gitignore` fixtures, so each still tests only what its name says.
+- `scaffold.test.ts`, `reports drift in a file a person edited back, without touching the rest`: the repaired `.gitignore` ends with `node_modules/\n*.log\n`.
+- `scaffold.test.ts`, `does not recreate a file git still tracks: staged work in the index is never replaced`: its `.gitignore` fixture was `# nothing yet`, so `sync --check` now exited 1 for `*.log` (first push, Linux CI: `sync --check: expected 1 to be +0`). The fixture has `*.log` now; the test is about the two tracked files, and every other assertion is unchanged.
+- Snapshots updated on purpose, each because the block written into a new `.gitignore` now has `*.log`: `fix-loop.test.ts` (`shows one rule editing the file another rule creates, for built-in rules`), `scaffold.test.ts` (the `adopt --dry-run` diff that shows the new `.gitignore`), and the `.gitignore` snapshots of `expo-pack.test.ts`, `go-pack.test.ts`, `nextjs-pack.test.ts` and `python-pack.test.ts`. Each was edited by hand (one added line, and a hunk header) and then run on its own: a `-u` run of all six files at once on this loaded machine hit the time limit and filed snapshots under the wrong test names, so it was thrown away.
+
+**Known limits:**
+
+- A log file git already tracks stays tracked: `.gitignore` does not apply to tracked files. `git rm --cached <file>` untracks it; the rule does not say which logs are tracked.
+- `*.log` covers a log in any folder, not only at the root (git reads a pattern with no slash at every depth). A log a team means to commit, such as a test fixture named `expected.log`, needs `git add -f` or a `!` line after `*.log`.
+- Only `.log` files. A summary saved under another name (`verify.txt` runs nothing already, ADR 0034; `verify.out` still runs every project).
+- The change itself: until the new `.gitignore` is committed, it is a changed dotfile that belongs to no project, so the next `verify --affected` runs every project once.
+
+**Found while fixing, not fixed:** with no change at all and no `--base`, `verify --affected` runs every project ("nothing to compare"). So in a repo where `verify.log` was the only change, ignoring it turns `6 of 6 because of verify.log` into `6 of 6 because nothing changed`. Documented already (`docs/verify.md`); the test adds an inert file, as in the report.
+
+**Not reproduced:** nothing; the report's headline came out word for word.
+
 **Pull request 8: pull requests gated on Linux** (ADR 0067, your decision)
 
 - **What runs when, now.** A pull request into `main` waits for Linux only (the push run, Node 22 and 24). macOS and Windows run every night on `main` (18:17 UTC), when the workflow is started by hand, and on a pull request labelled `release` (adding the label starts them). The version pull request of a release carries the label.

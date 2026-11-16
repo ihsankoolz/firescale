@@ -404,6 +404,30 @@ describe('the note that names inert files', () => {
   });
 });
 
+// The 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,
+// finding 5): an untracked verify.log at the root ran all 6 projects. The
+// owner decided that core/gitignore-basics ignores `*.log`; a log is not
+// on the list of files that run nothing (ADR 0034).
+describe('a stray verify.log at the root', () => {
+  it('is no change once the gitignore fix has run and been committed', async () => {
+    const { repo, verify } = await courseProject();
+    const fixed = await runCli(['fix', '--rules', 'core/gitignore-basics'], repo.root);
+    expect(fixed.code).toBe(EXIT_OK);
+    await commitAll(repo.root, 'ignore logs');
+
+    // As in the report: an inert file changed too. (With no change at all,
+    // --affected has nothing to compare with and runs every project.)
+    await repo.write('cs464_project_export.md', '# Export\n');
+    await repo.write('verify.log', 'verify: OK - 6 of 6 projects ran\n');
+    const plan = await verify('--affected', '--dry-run');
+    expect(plan.headline).toBe(
+      'verify --affected (dry run): 0 of 6 projects would run, 6 not affected. Nothing was run.',
+    );
+    expect(plan.stdout).not.toContain('verify.log');
+    expect(await repo.read('.gitignore')).toMatch(/\n\*\.log\n$/);
+  });
+});
+
 // Why a time limit is in no key (ADR 0058): a step it stops is never kept,
 // and a pass kept under another limit is still true of the code.
 describe('time limits and the step cache', () => {

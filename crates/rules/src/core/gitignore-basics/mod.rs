@@ -16,10 +16,17 @@ const GITIGNORE: &str = ".gitignore";
 
 pub struct GitignoreBasics;
 
+/// Log files, in every git repo: a log a tool writes into the repo (a saved
+/// `verify.log`) is not committed, and `verify --affected` does not count it
+/// as a change. The owner's decision after the 0.5.1 run on the course
+/// project; a log is not on ADR 0034's list of files that run nothing.
+const LOG_FILES: &str = "*.log";
+
 /// Entries every repo of a detected language should ignore: names for the
 /// languages, and for each marker-file ecosystem's project its build output
 /// (ADR 0051) — a bare name for a project at the root, a path for one in a
-/// subfolder (`native/build`), which git reads as that folder only.
+/// subfolder (`native/build`), which git reads as that folder only. Then
+/// `*.log`, whatever the languages.
 fn required_entries(languages: &[String], kinds: &[(&str, &str)]) -> Vec<String> {
     let has = |name: &str| languages.iter().any(|language| language == name);
     let mut entries: Vec<String> = Vec::new();
@@ -47,7 +54,18 @@ fn required_entries(languages: &[String], kinds: &[(&str, &str)]) -> Vec<String>
             }
         }
     }
+    entries.push(LOG_FILES.to_owned());
     entries
+}
+
+/// The .gitignore line for `entry`: a folder as `name/`, the `*.log` pattern
+/// as it is (`*.log/` would match folders only).
+fn line(entry: &str) -> String {
+    if entry == LOG_FILES {
+        entry.to_owned()
+    } else {
+        format!("{entry}/")
+    }
 }
 
 /// Covered when git, reading `gitignore` at the repo root, ignores `entry`
@@ -66,7 +84,13 @@ fn missing_entries(ctx: &RuleContext, gitignore: &str) -> Result<Vec<String>> {
         .collect();
     let mut missing = Vec::new();
     for entry in required_entries(&facts.languages, &kinds) {
-        if is_covered(gitignore, &entry) {
+        // `*.log` must ignore files: a folder-only `*.log/` does not count.
+        let covered = if entry == LOG_FILES {
+            firescale_core::walk::gitignore_covers_file(gitignore, &entry)
+        } else {
+            is_covered(gitignore, &entry)
+        };
+        if covered {
             continue;
         }
         // A subfolder project's own .gitignore counts for its build output.
@@ -158,7 +182,8 @@ impl BuiltinRule for GitignoreBasics {
             .into_iter()
             .map(|entry| {
                 finding(format!(
-                    ".gitignore does not ignore \"{entry}\". Add \"{entry}/\" to .gitignore so generated files are not committed."
+                    ".gitignore does not ignore \"{entry}\". Add \"{}\" to .gitignore so generated files are not committed.",
+                    line(&entry)
                 ))
             })
             .collect())
@@ -188,7 +213,7 @@ impl BuiltinRule for GitignoreBasics {
         if !current.lines().any(|line| line.trim() == header) {
             block.push(header.to_owned());
         }
-        block.extend(missing.iter().map(|entry| format!("{entry}/")));
+        block.extend(missing.iter().map(|entry| line(entry)));
         ctx.write(
             GITIGNORE,
             &format!("{current}{separator}{}{eol}", block.join(eol)),
