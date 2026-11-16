@@ -1784,12 +1784,18 @@ impl<'a> StepCache<'a> {
             .push(line);
     }
 
-    /// One line when a config setting that is in every step's key changed
-    /// since the last run that used this cache, so no kept pass applies any
-    /// more (ADR 0043, ADR 0058). Said once, on the first run after the
-    /// change; a digest of those settings (and of a `firescale.config.ts`,
-    /// which is in every key as a file) is kept in
-    /// `.firescale/step-cache-config.digest`, beside the cache's folder.
+    /// One line when every kept pass stopped applying since the last run
+    /// that used this cache: either firescale's version changed, or a config
+    /// setting that is in every step's key changed (ADR 0043, ADR 0058,
+    /// ADR 0062). Said once, on the first run after the change.
+    ///
+    /// `.firescale/step-cache-config.digest` holds the version and a digest
+    /// of those settings (and of a `firescale.config.ts`, which is in every
+    /// key as a file). A new version is named as such and never read as a
+    /// config change: a new version may make that digest another way.
+    /// Before 0.5.2 the file held the digest alone; such a file was written
+    /// by 0.5.1 when it is 0.5.1's digest of these same settings, and
+    /// otherwise by 0.5.1 or an older version.
     #[must_use]
     pub fn config_note(&self) -> Option<String> {
         let mut hasher = blake3::Hasher::new();
@@ -1798,13 +1804,14 @@ impl<'a> StepCache<'a> {
             hasher.update(&bytes);
         }
         let digest = hasher.finalize().to_hex().to_string();
+        let record = format!("version {}\nsettings {digest}\n", self.version);
         let dir = cache_dir(&self.root);
         let file = self
             .root
             .join(".firescale")
             .join("step-cache-config.digest");
         let before = fs::read_to_string(&file).ok();
-        if before.as_deref().map(str::trim) == Some(digest.as_str()) {
+        if before.as_deref() == Some(record.as_str()) {
             return None;
         }
         let had_passes = fs::read_dir(&dir).is_ok_and(|entries| {
@@ -1819,9 +1826,38 @@ impl<'a> StepCache<'a> {
                 .is_some_and(|parent| fs::create_dir_all(parent).is_ok())
         {
             ignore_firescale_folder(&self.root);
-            let _ = fs::write(&file, &digest);
+            let _ = fs::write(&file, &record);
         }
-        (before.is_some() && had_passes).then(|| {
+        let before = before.filter(|_| had_passes)?;
+        let line = |prefix: &str| {
+            before
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix))
+                .map(str::trim)
+        };
+        let (old_version, old_settings) = match line("version ") {
+            Some(version) => (version, line("settings ").unwrap_or_default()),
+            // Written before 0.5.2, which first kept the version: the digest
+            // alone. 0.5.0 made it from the file's bytes, 0.5.1 as above.
+            None => {
+                let bare = before.trim();
+                (
+                    if bare == digest {
+                        "0.5.1"
+                    } else {
+                        "0.5.1 or older"
+                    },
+                    bare,
+                )
+            }
+        };
+        if old_version != self.version {
+            return Some(format!(
+                "firescale is {} now, and the last run used {old_version}. The version is part of every step's cache key, so no pass kept before applies: every step runs again this time.",
+                self.version
+            ));
+        }
+        (old_settings != digest).then(|| {
             "A setting of the firescale config that every step's result can depend on changed since the last run, and it is part of every step's cache key, so no pass kept before applies: every step runs again this time.".to_owned()
         })
     }
