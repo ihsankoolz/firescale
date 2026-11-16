@@ -598,6 +598,32 @@ subprocess.call(cmd, shell=True)  # nosec B602
     }
 
     #[test]
+    fn pylint_and_bandit_read_every_word_shaped_like_a_code() {
+        // Both tools read on past a word that is not a code (ADR 0063):
+        // stopping there would hide the codes after it.
+        let source = r##"
+import os  # pylint: disable=unused-import unused-variable
+x = f()  # pylint: disable=invalid-name, kept for old callers
+y = g()  # pylint: disable=fixme,W0611 see below
+subprocess.call(cmd, shell=True)  # nosec B602 and B607
+tree = parse(text)  # nosec xml_bad_cElementTree for the old parser
+"##;
+        assert_eq!(
+            keys(source, Language::Python),
+            [
+                "pylint:unused-import",
+                "pylint:unused-variable",
+                "pylint:invalid-name",
+                "pylint:fixme",
+                "pylint:W0611",
+                "nosec:B602",
+                "nosec:B607",
+                "nosec:xml_bad_cElementTree",
+            ]
+        );
+    }
+
+    #[test]
     fn the_words_of_a_comment_after_the_codes_are_not_codes() {
         // Finding 3 of the 0.5.1 review (docs/diagrams/15-lmsr.py:43).
         let source = r##"
@@ -609,7 +635,7 @@ x = f()  # pylint: disable=unused-import, too-many-locals  kept for the old call
 y = g()  # pylint: disable=C0114  see the module docs
 subprocess.call(cmd, shell=True)  # nosec B602, B607 the command is fixed in config
 assert yaml.load("{}") == []  # nosec assert_used because the test needs it
-z = h()  # nosec the input is ours
+z = h()  # nosec the data is ours
 "##;
         assert_eq!(
             keys(source, Language::Python),
