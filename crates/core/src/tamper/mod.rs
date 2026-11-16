@@ -3228,4 +3228,25 @@ mod tests {
             Vec::<String>::new()
         );
     }
+
+    #[test]
+    fn a_pylint_message_id_in_lower_case_is_a_code() {
+        // Review of pull request 66, (a2): pylint upper-cases a message id,
+        // so `w0612` turns W0612 off.
+        assert_eq!(
+            guarded(
+                &[("a.py", "x = f()  # pylint: disable=invalid-name\n")],
+                &[("a.py", "x = f()  # pylint: disable=invalid-name,w0612\n")]
+            ),
+            vec!["SuppressionAdded a.py:1 # pylint: disable=invalid-name,w0612 (pylint:W0612)"]
+        );
+        // The same id in another case is the same suppression.
+        assert_eq!(
+            guarded(
+                &[("a.py", "x = f()  # pylint: disable=W0612\n")],
+                &[("a.py", "x = f()  # pylint: disable=w0612\n")]
+            ),
+            Vec::<String>::new()
+        );
+    }
 }
