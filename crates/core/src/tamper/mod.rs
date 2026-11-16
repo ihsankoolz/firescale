@@ -58,6 +58,7 @@ use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
+use tree_sitter::Node;
 
 use crate::blame::BaseCommit;
 use crate::git::run_git;
@@ -362,6 +363,352 @@ pub struct Assertion {
     /// one. Counted, and also counted apart: an assertion made conditional
     /// is a removal (ADR 0052, found in review).
     pub conditional: bool,
+    /// The shape without the failure message, when the assertion has one
+    /// (`assert x == 1, "why"`, `pytest.fail("why")`, `assert_eq!(a, b,
+    /// "why")`): what it checks. Only the expected values of what it checks
+    /// need an approval (ADR 0063).
+    pub checked: Option<String>,
+}
+
+impl Assertion {
+    /// What the assertion checks: its shape without its failure message.
+    #[must_use]
+    pub fn checked(&self) -> &str {
+        self.checked.as_deref().unwrap_or(&self.shape)
+    }
+}
+
+/// `node`'s text without white space and without the parts in `cut`: an
+/// assertion's shape with its failure message left out, or `None` when
+/// nothing is cut.
+pub(super) fn without(node: Node<'_>, src: &[u8], cut: &[Node<'_>]) -> Option<String> {
+    let mut ranges: Vec<(usize, usize)> = cut
+        .iter()
+        .map(|part| (part.start_byte(), part.end_byte()))
+        .filter(|(start, end)| *start >= node.start_byte() && *end <= node.end_byte())
+        .collect();
+    if ranges.is_empty() {
+        return None;
+    }
+    ranges.sort_unstable();
+    let mut kept: Vec<u8> = Vec::new();
+    let mut at = node.start_byte();
+    for (start, end) in ranges {
+        if start > at {
+            kept.extend_from_slice(&src[at..start]);
+        }
+        at = at.max(end);
+    }
+    kept.extend_from_slice(&src[at..node.end_byte()]);
+    Some(String::from_utf8_lossy(&kept).split_whitespace().collect())
+}
+
+/// What a call whose every argument is its message checks
+/// (`pytest.fail("…")`, `t.Errorf("…")`, `XCTFail("…")`), when it is the
+/// branch of something that holds its expected value: the condition of an
+/// `if` (`!(…)` in an `else`) or a Swift `guard`, or the exception an
+/// `except` or `catch` names; then the call without its arguments. So a
+/// changed condition pairs as a changed value and a changed message does
+/// not (ADR 0063). Anywhere else (a `switch`, a `match`, a loop, the test's
+/// own body) `None`: the call is compared with its message, as before,
+/// since the message may be the only place its value is written.
+pub(super) fn failed_when(call: Node<'_>, src: &[u8], arguments: &[Node<'_>]) -> Option<String> {
+    let squeeze = |start: usize, end: usize| -> String {
+        String::from_utf8_lossy(&src[start..end])
+            .split_whitespace()
+            .collect()
+    };
+    let inside = |outer: Node<'_>| {
+        outer.start_byte() <= call.start_byte() && call.end_byte() <= outer.end_byte()
+    };
+    let bare = || {
+        without(call, src, arguments).unwrap_or_else(|| squeeze(call.start_byte(), call.end_byte()))
+    };
+    let mut child = call;
+    for _ in 0..6 {
+        let parent = child.parent()?;
+        let kind = parent.kind();
+        if kind.starts_with("if_") || kind == "elif_clause" || kind == "guard_statement" {
+            let mut cursor = parent.walk();
+            let conditions: Vec<Node<'_>> = parent
+                .children_by_field_name("condition", &mut cursor)
+                .collect();
+            if conditions.is_empty() || conditions.iter().any(|condition| inside(*condition)) {
+                return None;
+            }
+            let (condition, uncompared) = condition_text(&conditions, src);
+            let otherwise = parent
+                .child_by_field_name("alternative")
+                .is_some_and(&inside);
+            let word = if kind == "guard_statement" {
+                "guard"
+            } else {
+                "if"
+            };
+            let condition = if otherwise {
+                format!("!({condition})")
+            } else {
+                condition
+            };
+            // A number in the condition that is compared with nothing (a
+            // timeout, an argument) is no expected value; then the call
+            // keeps its message, as before ADR 0063, since the value may be
+            // written there (review of pull request 66).
+            let call = if uncompared {
+                squeeze(call.start_byte(), call.end_byte())
+            } else {
+                bare()
+            };
+            return Some(format!("{word}({condition}):{call}"));
+        }
+        if kind == "except_clause" || kind == "catch_clause" {
+            let mut cursor = parent.walk();
+            let body = parent
+                .named_children(&mut cursor)
+                .find(|part| part.kind().contains("block") && inside(*part))?;
+            let header = squeeze(parent.start_byte(), body.start_byte());
+            return Some(format!("{header}:{}", bare()));
+        }
+        // Only a block, a statement around the call, or an `else` lies
+        // between such a branch and the call.
+        let wrapper = kind.contains("block")
+            || kind.contains("else")
+            || matches!(
+                kind,
+                "expression_statement"
+                    | "statement_list"
+                    | "statements"
+                    | "control_structure_body"
+                    | "compound_statement"
+            );
+        if !wrapper {
+            return None;
+        }
+        child = parent;
+    }
+    None
+}
+
+/// The operators that compare two values, in the grammars the guard reads
+/// (Dart names its operators `equality_operator` and `relational_operator`).
+const COMPARISONS: [&str; 16] = [
+    "==",
+    "!=",
+    "===",
+    "!==",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "<>",
+    "is",
+    "is not",
+    "in",
+    "not in",
+    "!in",
+    "equality_operator",
+    "relational_operator",
+];
+
+/// The text of an `if`'s condition, without white space, for
+/// [`failed_when`]: each number that no comparison holds is `_`, and each
+/// string is written with double quotes (`'ok'` and `"ok"` are one value,
+/// as black rewrites them). Also whether a number was masked. A number in a
+/// comparison (`got != 3`, `add(1, 1) != 2`) and every string stay values
+/// (review of pull request 66).
+fn condition_text(conditions: &[Node<'_>], src: &[u8]) -> (String, bool) {
+    fn squeezed(src: &[u8], start: usize, end: usize, out: &mut String) {
+        out.extend(String::from_utf8_lossy(&src[start..end]).split_whitespace());
+    }
+    fn string(node: Node<'_>) -> bool {
+        let kind = node.kind();
+        let mut plain = true;
+        crate::imports::walk(node, |inner| {
+            let kind = inner.kind();
+            if kind.contains("interpolat") || kind.contains("substitution") {
+                plain = false;
+            }
+            plain
+        });
+        plain
+            && !kind.contains("concatenated")
+            && (kind.contains("string") || kind.contains("char_literal"))
+    }
+    fn visit(node: Node<'_>, src: &[u8], compared: bool, out: &mut String, masked: &mut bool) {
+        let mut cursor = node.walk();
+        // Swift reads `!=` as a `custom_operator`: its text is the operator.
+        let compared = compared
+            || node.children(&mut cursor).any(|child| {
+                let symbol = String::from_utf8_lossy(&src[child.start_byte()..child.end_byte()]);
+                COMPARISONS.contains(&child.kind())
+                    || (child.child_count() == 0 && COMPARISONS[..8].contains(&symbol.as_ref()))
+            });
+        let text = String::from_utf8_lossy(&src[node.start_byte()..node.end_byte()]);
+        if string(node) {
+            out.extend(by_value(&text).split_whitespace());
+            return;
+        }
+        if node.child_count() == 0 {
+            if !compared && text.starts_with(|c: char| c.is_ascii_digit()) {
+                out.push('_');
+                *masked = true;
+            } else {
+                out.extend(text.split_whitespace());
+            }
+            return;
+        }
+        let mut at = node.start_byte();
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            squeezed(src, at, child.start_byte(), out);
+            visit(child, src, compared, out, masked);
+            at = child.end_byte();
+        }
+        squeezed(src, at, node.end_byte(), out);
+    }
+    let mut out = String::new();
+    let mut masked = false;
+    let mut at = conditions.first().map_or(0, Node::start_byte);
+    for condition in conditions {
+        squeezed(src, at, condition.start_byte(), &mut out);
+        visit(*condition, src, false, &mut out, &mut masked);
+        at = condition.end_byte();
+    }
+    (out, masked)
+}
+
+/// A string literal written with double quotes: its prefix (`b`, `f`),
+/// then its text between one or three quotes of the same kind. Text not
+/// written that way is returned as it is.
+fn by_value(literal: &str) -> String {
+    let body = literal.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    let prefix = &literal[..literal.len() - body.len()];
+    let Some(quote) = body
+        .chars()
+        .next()
+        .filter(|c| matches!(c, '"' | '\'' | '`'))
+    else {
+        return literal.to_owned();
+    };
+    let triple: String = std::iter::repeat_n(quote, 3).collect();
+    let fence = if body.len() >= 6 && body.starts_with(&triple) && body.ends_with(&triple) {
+        triple
+    } else {
+        quote.to_string()
+    };
+    match body
+        .strip_prefix(fence.as_str())
+        .and_then(|rest| rest.strip_suffix(fence.as_str()))
+    {
+        Some(inner) if body.len() >= 2 * fence.len() => {
+            format!("{}\"{inner}\"", prefix.to_ascii_lowercase())
+        }
+        _ => literal.to_owned(),
+    }
+}
+
+/// Which arguments of an assertion call are its failure message, by the
+/// name of what is called (its last name: `assertEqual`, `XCTAssertEqual`),
+/// from each framework's documented signatures (ADR 0063).
+pub(super) struct Messages {
+    /// Calls whose every argument is the message: `fail("why")`.
+    pub all: &'static [&'static str],
+    /// Calls that check this many values first: `assertEqual(first,
+    /// second, msg)` is 2. The message is the first positional argument at
+    /// or after that index that is written as a string, with what follows
+    /// it (the values it is formatted with). An argument that is not a
+    /// string there (a `delta`, a `places`, a comparer) is a value.
+    pub from: &'static [(&'static str, usize)],
+    /// Argument labels that name a message (`msg=`, `reason:`), read only in
+    /// the calls of `all` and `from`.
+    pub labels: &'static [&'static str],
+}
+
+impl Messages {
+    /// The message arguments of a call named `name`, given its arguments in
+    /// order, each with its label if it has one.
+    pub(super) fn of<'t>(
+        &self,
+        name: &str,
+        arguments: &[(Option<&str>, Node<'t>)],
+        src: &[u8],
+    ) -> Vec<Node<'t>> {
+        if self.all.contains(&name) {
+            return arguments.iter().map(|(_, node)| *node).collect();
+        }
+        let Some(from) = self
+            .from
+            .iter()
+            .find(|(called, _)| *called == name)
+            .map(|(_, from)| *from)
+        else {
+            return Vec::new();
+        };
+        let mut positional = 0;
+        let mut message = false;
+        let mut out = Vec::new();
+        for (label, node) in arguments {
+            match label {
+                Some(label) if self.labels.contains(label) => out.push(*node),
+                Some(_) => {}
+                None => {
+                    message = message
+                        || (positional >= from
+                            && string_like(&String::from_utf8_lossy(
+                                &src[node.start_byte()..node.end_byte()],
+                            )));
+                    if message {
+                        out.push(*node);
+                    }
+                    positional += 1;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// True when an expression is written as a string: a literal in any of the
+/// languages' quotes, with a prefix (`f"…"`, `r"…"`, `$"…"`, `@"…"`), or a
+/// concatenation or format that starts with one (`"a: " + x`).
+pub(super) fn string_like(expression: &str) -> bool {
+    let rest = expression.trim_start();
+    // Raw strings take `#`s too: Rust's `r#"…"#`, Swift's `#"…"#`.
+    let rest = rest.trim_start_matches(|c: char| {
+        matches!(
+            c,
+            'f' | 'F' | 'r' | 'R' | 'b' | 'B' | 'u' | 'U' | '$' | '@' | '#'
+        )
+    });
+    rest.starts_with(['"', '\'', '`']) && expression.trim_start().len() - rest.len() <= 4
+}
+
+/// The named arguments of a call's argument list, comments left out, each
+/// with its label when it has one (`msg="…"`, `reason: "…"`, `message =
+/// "…"`, `because: "…"`). Grammars that wrap each argument
+/// (`value_argument`, `argument`) are read through the wrapper.
+pub(super) fn labelled_arguments<'t, 's>(
+    list: Node<'t>,
+    src: &'s [u8],
+) -> Vec<(Option<&'s str>, Node<'t>)> {
+    let mut cursor = list.walk();
+    list.named_children(&mut cursor)
+        .filter(|node| !node.is_extra() && !node.kind().contains("comment"))
+        .map(|node| {
+            let whole = std::str::from_utf8(&src[node.start_byte()..node.end_byte()]).unwrap_or("");
+            // `name=`, `name:` or `name =` before the value, but not `==`
+            // or `::`.
+            let name_end = whole
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(whole.len());
+            let after = whole[name_end..].trim_start();
+            let labelled = name_end > 0
+                && !whole.starts_with(|c: char| c.is_ascii_digit())
+                && (after.starts_with('=') && !after.starts_with("==")
+                    || after.starts_with(':') && !after.starts_with("::"));
+            (labelled.then(|| &whole[..name_end]), node)
+        })
+        .collect()
 }
 
 /// What a test file holds.
@@ -1196,15 +1543,68 @@ pub fn guard_at(
     let mut head_always_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
     // The same, by file and test: which one went is named by its test first.
     let mut head_in_test: BTreeMap<(String, String, String), usize> = BTreeMap::new();
-    let counts = &mut report.counts;
-    for (file, base_file, head_file) in &pairs {
-        let path = &file.path;
-        // Assertions that changed only in their values, file by file (M26).
-        if let (Some(before), Some(after)) = (base_file, head_file) {
-            if !allows(path, Kind::ExpectedChanged) {
-                approval_findings.extend(expected_changes(path, before, after));
+    // Assertions that renamed tests lost (ADR 0063).
+    let mut lost_in_renames: Vec<Finding> = Vec::new();
+    // What each changed test file holds: its new tests, and how many more
+    // of each check than on the base. A test or a check that went from one
+    // file may be in another (ADR 0063).
+    let own: Vec<(BTreeSet<String>, BTreeMap<String, isize>)> = pairs
+        .iter()
+        .map(|(_, base_file, head_file)| {
+            let ids = |read: &Option<TestFile>| -> BTreeSet<String> {
+                read.iter()
+                    .flat_map(|read| read.tests.iter().map(|test| test.id.clone()))
+                    .collect()
+            };
+            let new_tests: BTreeSet<String> = ids(head_file)
+                .difference(&ids(base_file))
+                .cloned()
+                .collect();
+            let mut more: BTreeMap<String, isize> = BTreeMap::new();
+            for (read, step) in [(head_file, 1isize), (base_file, -1)] {
+                for assertion in read.iter().flat_map(|read| &read.assertions) {
+                    *more.entry(assertion.checked().to_owned()).or_default() += step;
+                }
             }
+            (new_tests, more)
+        })
+        .collect();
+    let mut all_new: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut all_more: BTreeMap<&str, isize> = BTreeMap::new();
+    for (new_tests, more) in &own {
+        for id in new_tests {
+            *all_new.entry(id.as_str()).or_default() += 1;
         }
+        for (shape, count) in more {
+            *all_more.entry(shape.as_str()).or_default() += count;
+        }
+    }
+    let counts = &mut report.counts;
+    for (index, (file, base_file, head_file)) in pairs.iter().enumerate() {
+        let path = &file.path;
+        let (own_new, own_more) = &own[index];
+        let elsewhere = Elsewhere {
+            new_tests: all_new
+                .iter()
+                .filter(|(id, count)| **count > usize::from(own_new.contains(**id)))
+                .map(|(id, _)| (*id).to_owned())
+                .collect(),
+            more: all_more
+                .iter()
+                .map(|(shape, count)| {
+                    let mine = own_more.get(*shape).copied().unwrap_or(0);
+                    ((*shape).to_owned(), count - mine)
+                })
+                .filter(|(_, count)| *count != 0)
+                .collect(),
+        };
+        // The tests this file's change renamed, merged or split (ADR 0063).
+        let renamed = match (base_file, head_file) {
+            (Some(before), Some(after)) => successors(before, after, &elsewhere),
+            _ => Successors::default(),
+        };
+        // What followed tests lost (ADR 0063), found below.
+        let mut file_losses: Vec<Finding> = Vec::new();
         let count_tests = !allows(path, Kind::TestDeleted);
         let count_skips = !allows(path, Kind::TestSkipped);
         let count_assertions = !allows(path, Kind::AssertionRemoved);
@@ -1255,7 +1655,7 @@ pub fn guard_at(
                 let test = test_id(read, assertion);
                 for _ in 0..assertion.weight {
                     base_shapes.push(BaseAssertion {
-                        shape: assertion.shape.clone(),
+                        shape: assertion.checked().to_owned(),
                         text: assertion.text.clone(),
                         file: path.clone(),
                         line: assertion.line,
@@ -1264,7 +1664,24 @@ pub fn guard_at(
                     });
                 }
             }
+            if let (true, Some(after)) = (count_assertions, head_file) {
+                let excused_ids: BTreeSet<&str> = excused_tests
+                    .iter()
+                    .filter_map(|index| read.tests.get(*index))
+                    .map(|test| test.id.as_str())
+                    .collect();
+                file_losses =
+                    followed_losses(path, read, after, &renamed, &excused_ids, &elsewhere);
+            }
         }
+        // Assertions that changed only in their values, file by file (M26).
+        if let (Some(before), Some(after)) = (base_file, head_file) {
+            if !allows(path, Kind::ExpectedChanged) {
+                let lost: BTreeSet<usize> = file_losses.iter().map(|lost| lost.line).collect();
+                approval_findings.extend(expected_changes(path, before, after, &renamed, &lost));
+            }
+        }
+        lost_in_renames.extend(file_losses);
         // A file whose every test is skipped on the base and now (the whole
         // file under `#if canImport(…)`, `@TestOn(…)`, a platform's name): a
         // new test in it is no more skipped than the others were (found on
@@ -1309,18 +1726,14 @@ pub fn guard_at(
             if count_assertions {
                 for assertion in &read.assertions {
                     counts.head_assertions += assertion.weight;
-                    let key = (
-                        assertion.shape.clone(),
-                        path.clone(),
-                        test_id(read, assertion),
-                    );
-                    *head_shapes.entry(assertion.shape.clone()).or_default() += assertion.weight;
+                    // By what it checks, without its message (ADR 0063).
+                    let checked = assertion.checked().to_owned();
+                    let key = (checked.clone(), path.clone(), test_id(read, assertion));
+                    *head_shapes.entry(checked.clone()).or_default() += assertion.weight;
                     *head_in_test.entry(key.clone()).or_default() += assertion.weight;
                     if !assertion.conditional {
                         head_always += assertion.weight;
-                        *head_always_shapes
-                            .entry(assertion.shape.clone())
-                            .or_default() += assertion.weight;
+                        *head_always_shapes.entry(checked).or_default() += assertion.weight;
                         *head_always_in_test.entry(key).or_default() += assertion.weight;
                     }
                 }
@@ -1492,6 +1905,21 @@ pub fn guard_at(
                     what: entry.text.clone(),
                 });
             }
+        }
+    }
+    // An assertion a renamed test lost. One the net count named already
+    // (both match by what an assertion checks, without its message) is named
+    // once, with the test it was in.
+    for lost in lost_in_renames {
+        let named = findings.iter_mut().find(|finding| {
+            finding.kind == Kind::AssertionRemoved
+                && finding.on_base
+                && finding.file == lost.file
+                && finding.line == lost.line
+        });
+        match named {
+            Some(finding) => finding.what = lost.what,
+            None => findings.push(lost),
         }
     }
     // More suppressions of a rule: name the new ones, up to the shortfall
@@ -1756,54 +2184,225 @@ fn test_id(file: &TestFile, assertion: &Assertion) -> String {
         .unwrap_or_default()
 }
 
+/// The id of the test an assertion is in, or "" outside any test.
+fn test_of<'f>(file: &'f TestFile, assertion: &Assertion) -> &'f str {
+    assertion
+        .test
+        .and_then(|index| file.tests.get(index))
+        .map_or("", |test| test.id.as_str())
+}
+
+/// At most this many (gone, new) pairs of tests are weighed per file when
+/// following renames; a file rewritten past that follows none.
+const MAX_RENAME_PAIRS: usize = 40_000;
+
+/// What the other changed test files say about one file's change: the tests
+/// that are new there, and how many more of each check (with literals as
+/// written, without the message) they hold now than on the base.
+#[derive(Debug, Default)]
+struct Elsewhere {
+    new_tests: BTreeSet<String>,
+    more: BTreeMap<String, isize>,
+}
+
+/// The tests of one file that the change renamed, merged or split, in
+/// groups: the base's tests that are gone and the new tests that follow
+/// them (ADR 0063).
+#[derive(Debug, Default)]
+struct Successors {
+    groups: Vec<(Vec<String>, Vec<String>)>,
+    of_gone: BTreeMap<String, usize>,
+    of_new: BTreeMap<String, usize>,
+}
+
+/// True when one test's name starts with the other's: `test_totals` and
+/// `test_totals_b`, a part split off.
+fn split_names(a: &str, b: &str) -> bool {
+    a.starts_with(b) || b.starts_with(a)
+}
+
+/// Follows the tests of one file through the change. A gone test that is
+/// new in another changed file moved there and is followed by nothing here.
+/// Each other gone test is followed by the new test that shares the most
+/// of its assertions once every literal is masked (ties: the names most
+/// alike, then the ids): a rename, or with several gone tests that pick
+/// the same one, a merge. A new test that no gone test picked follows the
+/// gone test it shares most with when one name starts with the other: a
+/// part split off (`test_totals` → `test_totals_a`, `test_totals_b`). A
+/// gone test that shares no assertion with a new test was not renamed.
+/// Before ADR 0063 every gone test was taken for a rename of every new one,
+/// so `assert upstream.calls == 1` of a renamed test was paired with
+/// `assert upstream.calls == 0` of a new, different one (finding 4 of the
+/// 0.5.1 review).
+fn successors(before: &TestFile, after: &TestFile, elsewhere: &Elsewhere) -> Successors {
+    let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
+    let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
+    let gone: Vec<&str> = before_ids
+        .difference(&after_ids)
+        .copied()
+        .filter(|id| !elsewhere.new_tests.contains(*id))
+        .collect();
+    let new: Vec<&str> = after_ids.difference(&before_ids).copied().collect();
+    let mut out = Successors::default();
+    if gone.is_empty() || new.is_empty() || gone.len() * new.len() > MAX_RENAME_PAIRS {
+        return out;
+    }
+    let skeletons = |file: &TestFile, ids: &[&str]| -> BTreeMap<String, BTreeMap<String, usize>> {
+        let mut by_test: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+        for assertion in &file.assertions {
+            let id = test_of(file, assertion);
+            if ids.contains(&id) {
+                *by_test
+                    .entry(id.to_owned())
+                    .or_default()
+                    .entry(approval::skeleton(assertion.checked()))
+                    .or_default() += 1;
+            }
+        }
+        by_test
+    };
+    let had = skeletons(before, &gone);
+    let has = skeletons(after, &new);
+    let alike = |a: &str, b: &str| -> usize {
+        let start = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+        let end = a
+            .chars()
+            .rev()
+            .zip(b.chars().rev())
+            .take_while(|(x, y)| x == y)
+            .count();
+        (start + end).min(a.chars().count().max(b.chars().count()))
+    };
+    let shared = |old: &str, now: &str| -> usize {
+        match (had.get(old), has.get(now)) {
+            (Some(old_shapes), Some(new_shapes)) => old_shapes
+                .iter()
+                .map(|(shape, count)| (*count).min(new_shapes.get(shape).copied().unwrap_or(0)))
+                .sum(),
+            _ => 0,
+        }
+    };
+    // The best of `options` for `id`: most shared, then most alike, then
+    // the first id.
+    let best = |id: &str, options: &[&str], forward: bool| -> Option<String> {
+        options
+            .iter()
+            .map(|other| {
+                let count = if forward {
+                    shared(id, other)
+                } else {
+                    shared(other, id)
+                };
+                (count, alike(id, other), *other)
+            })
+            .filter(|(count, _, _)| *count > 0)
+            .max_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(b.2.cmp(a.2)))
+            .map(|(_, _, other)| other.to_owned())
+    };
+    let mut edges: Vec<(String, String)> = Vec::new();
+    for old in &gone {
+        if let Some(now) = best(old, &new, true) {
+            edges.push(((*old).to_owned(), now));
+        }
+    }
+    let picked: BTreeSet<String> = edges.iter().map(|(_, now)| now.clone()).collect();
+    for now in new.iter().filter(|now| !picked.contains(**now)) {
+        if let Some(old) = best(now, &gone, false).filter(|old| split_names(old, now)) {
+            edges.push((old, (*now).to_owned()));
+        }
+    }
+    // Groups: the tests joined by an edge, through any number of edges.
+    let mut group: BTreeMap<(bool, String), usize> = BTreeMap::new();
+    for (old, now) in &edges {
+        let at_old = group.get(&(false, old.clone())).copied();
+        let at_new = group.get(&(true, now.clone())).copied();
+        let index = match (at_old, at_new) {
+            (Some(a), Some(b)) if a != b => {
+                let (keep, drop) = (a.min(b), a.max(b));
+                for value in group.values_mut() {
+                    if *value == drop {
+                        *value = keep;
+                    }
+                }
+                keep
+            }
+            (Some(a), _) | (None, Some(a)) => a,
+            (None, None) => group.values().max().map_or(0, |m| m + 1),
+        };
+        group.insert((false, old.clone()), index);
+        group.insert((true, now.clone()), index);
+    }
+    let mut numbered: BTreeMap<usize, usize> = BTreeMap::new();
+    for ((is_new, id), index) in &group {
+        let next = numbered.len();
+        let at = *numbered.entry(*index).or_insert(next);
+        if out.groups.len() <= at {
+            out.groups.push((Vec::new(), Vec::new()));
+        }
+        if *is_new {
+            out.groups[at].1.push(id.clone());
+            out.of_new.insert(id.clone(), at);
+        } else {
+            out.groups[at].0.push(id.clone());
+            out.of_gone.insert(id.clone(), at);
+        }
+    }
+    out
+}
+
 /// The assertions of one file that the change rewrote in their values only:
 /// gone from the base and new now, with the same shape once every literal
-/// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text).
-fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Finding> {
+/// is masked (`toBe(30)` → `toBe(31)`, an inline snapshot's text), in the
+/// same test or in tests that follow one another ([`successors`]: a rename,
+/// a merge, a split). The failure message is left out first
+/// ([`Assertion::checked`]): a message that changed is not an expected
+/// value (ADR 0063).
+fn expected_changes(
+    path: &str,
+    before: &TestFile,
+    after: &TestFile,
+    followed: &Successors,
+    lost: &BTreeSet<usize>,
+) -> Vec<Finding> {
     let mut left: BTreeMap<&str, usize> = BTreeMap::new();
     for assertion in &after.assertions {
-        *left.entry(assertion.shape.as_str()).or_default() += 1;
+        *left.entry(assertion.checked()).or_default() += 1;
     }
     let mut gone: Vec<&Assertion> = Vec::new();
     for assertion in &before.assertions {
-        match left.get_mut(assertion.shape.as_str()) {
+        match left.get_mut(assertion.checked()) {
             Some(count) if *count > 0 => *count -= 1,
             _ => gone.push(assertion),
         }
     }
     let mut had: BTreeMap<&str, usize> = BTreeMap::new();
     for assertion in &before.assertions {
-        *had.entry(assertion.shape.as_str()).or_default() += 1;
+        *had.entry(assertion.checked()).or_default() += 1;
     }
     let mut new: Vec<&Assertion> = Vec::new();
     for assertion in &after.assertions {
-        match had.get_mut(assertion.shape.as_str()) {
+        match had.get_mut(assertion.checked()) {
             Some(count) if *count > 0 => *count -= 1,
             _ => new.push(assertion),
         }
     }
     // Paired only within the same test (found on real history: a new test's
-    // assertion was paired with a deleted test's).
-    let test_of = |file: &TestFile, assertion: &Assertion| -> String {
-        assertion
-            .test
-            .and_then(|index| file.tests.get(index))
-            .map(|test| test.id.clone())
-            .unwrap_or_default()
-    };
-    // A test renamed with its value changed: an assertion of a test that is
-    // gone may pair with one of a test that is new (found in review).
+    // assertion was paired with a deleted test's), or tests that follow one
+    // another (found in review, M26; ADR 0063). A test that is gone and is
+    // followed by none pairs with nothing.
     let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
     let after_ids: BTreeSet<&str> = after.tests.iter().map(|t| t.id.as_str()).collect();
-    const RENAMED: &str = "\u{0}renamed";
     let gone_ids: Vec<String> = gone
         .iter()
         .map(|a| {
             let id = test_of(before, a);
-            if !id.is_empty() && !after_ids.contains(id.as_str()) {
-                RENAMED.to_owned()
+            if id.is_empty() || after_ids.contains(id) {
+                id.to_owned()
             } else {
-                id
+                match followed.of_gone.get(id) {
+                    Some(group) => format!("\u{0}{group}"),
+                    None => format!("\u{0}\u{0}{id}"),
+                }
             }
         })
         .collect();
@@ -1811,24 +2410,53 @@ fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Find
         .iter()
         .map(|a| {
             let id = test_of(after, a);
-            if !id.is_empty() && !before_ids.contains(id.as_str()) {
-                RENAMED.to_owned()
+            if id.is_empty() || before_ids.contains(id) {
+                id.to_owned()
             } else {
-                id
+                match followed.of_new.get(id) {
+                    Some(group) => format!("\u{0}{group}"),
+                    None => format!("\u{0}\u{1}{id}"),
+                }
             }
         })
         .collect();
     let gone_shapes: Vec<(&str, &str)> = gone
         .iter()
         .zip(&gone_ids)
-        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .map(|(a, id)| (id.as_str(), a.checked()))
         .collect();
     let new_shapes: Vec<(&str, &str)> = new
         .iter()
         .zip(&new_ids)
-        .map(|(a, id)| (id.as_str(), a.shape.as_str()))
+        .map(|(a, id)| (id.as_str(), a.checked()))
         .collect();
-    approval::pairs(&gone_shapes, &new_shapes)
+    let mut paired = approval::pairs(&gone_shapes, &new_shapes);
+    // What is left of gone tests and new tests pairs as before ADR 0063,
+    // any gone test with any new one, but for an assertion named lost
+    // (`lost`, base lines: [`followed_losses`]). So a value changed in
+    // tests whose following was not seen is still a change, and the
+    // review's `upstream.calls == 1`, named lost in its renamed test, is not
+    // paired with another test's `upstream.calls == 0`.
+    let (old_used, new_used): (BTreeSet<usize>, BTreeSet<usize>) = (
+        paired.iter().map(|(old, _)| *old).collect(),
+        paired.iter().map(|(_, now)| *now).collect(),
+    );
+    let in_gone_test = |id: &str| id.starts_with('\u{0}');
+    let rest_gone: Vec<usize> = (0..gone.len())
+        .filter(|i| !old_used.contains(i) && in_gone_test(&gone_ids[*i]))
+        .filter(|i| !lost.contains(&gone[*i].line))
+        .collect();
+    let rest_new: Vec<usize> = (0..new.len())
+        .filter(|i| !new_used.contains(i) && in_gone_test(&new_ids[*i]))
+        .collect();
+    let any: Vec<(&str, &str)> = rest_gone.iter().map(|i| ("", gone[*i].checked())).collect();
+    let any_new: Vec<(&str, &str)> = rest_new.iter().map(|i| ("", new[*i].checked())).collect();
+    paired.extend(
+        approval::pairs(&any, &any_new)
+            .into_iter()
+            .map(|(old, now)| (rest_gone[old], rest_new[now])),
+    );
+    paired
         .into_iter()
         .map(|(old, now)| Finding {
             kind: Kind::ExpectedChanged,
@@ -1841,6 +2469,191 @@ fn expected_changes(path: &str, before: &TestFile, after: &TestFile) -> Vec<Find
             ),
         })
         .collect()
+}
+
+/// The assertions that tests followed through a rename, a merge or a split
+/// ([`successors`]) lost (ADR 0063). Assertions are counted over the whole
+/// change (ADR 0042), so a new test elsewhere hides one that a renamed test
+/// dropped; a group of tests that follow one another is also compared with
+/// itself. Only its shortfall is named, so an assertion traded for another
+/// is not a loss, nor is one rewritten in its values (`expected-changed`),
+/// nor one that moved to another test of the file or to another changed
+/// file (more of that check there now than on the base). `excused` tests
+/// (deleted with their subject) are left out.
+fn followed_losses(
+    path: &str,
+    before: &TestFile,
+    after: &TestFile,
+    followed: &Successors,
+    excused: &BTreeSet<&str>,
+    elsewhere: &Elsewhere,
+) -> Vec<Finding> {
+    let mut found = Vec::new();
+    // The assertions of new tests that follow no gone test: one of them may
+    // hold a lost check with a literal now named by a variable.
+    let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
+    let mut gained: Vec<Option<&Assertion>> = after
+        .assertions
+        .iter()
+        .filter(|a| {
+            let id = test_of(after, a);
+            !id.is_empty() && !before_ids.contains(id) && !followed.of_new.contains_key(id)
+        })
+        .map(Some)
+        .collect();
+    for (olds, nows) in &followed.groups {
+        let in_old = |a: &&Assertion| {
+            let id = test_of(before, a);
+            olds.iter().any(|old| old == id) && !excused.contains(id)
+        };
+        let in_new = |a: &&Assertion| {
+            let id = test_of(after, a);
+            nows.iter().any(|now| now == id)
+        };
+        let had: Vec<&Assertion> = before.assertions.iter().filter(in_old).collect();
+        let mut has: Vec<Option<&Assertion>> =
+            after.assertions.iter().filter(in_new).map(Some).collect();
+        let weight =
+            |list: &mut dyn Iterator<Item = &Assertion>| list.map(|a| a.weight).sum::<usize>();
+        let mut short = weight(&mut had.iter().copied())
+            .saturating_sub(weight(&mut has.iter().flatten().copied()));
+        if short == 0 {
+            continue;
+        }
+        // The same check kept, then the same check with other values.
+        let mut take = |a: &Assertion, same: &dyn Fn(&Assertion, &Assertion) -> bool| -> bool {
+            match has.iter_mut().find(|b| b.is_some_and(|b| same(a, b))) {
+                Some(slot) => {
+                    *slot = None;
+                    true
+                }
+                None => false,
+            }
+        };
+        let unmatched: Vec<&Assertion> = had
+            .iter()
+            .copied()
+            .filter(|a| !take(a, &|a, b| a.checked() == b.checked()))
+            .collect();
+        let lost: Vec<&Assertion> = unmatched
+            .into_iter()
+            .filter(|a| {
+                !take(a, &|a, b| {
+                    approval::skeleton(a.checked()) == approval::skeleton(b.checked())
+                })
+            })
+            .collect();
+        // Moved: more of that check outside the group now than outside it
+        // on the base, in this file or in another changed one.
+        let mut outside: BTreeMap<&str, isize> = elsewhere
+            .more
+            .iter()
+            .map(|(shape, more)| (shape.as_str(), *more))
+            .collect();
+        for a in after.assertions.iter().filter(|a| !in_new(a)) {
+            *outside.entry(a.checked()).or_default() += 1;
+        }
+        for a in before.assertions.iter().filter(|a| !in_old(a)) {
+            *outside.entry(a.checked()).or_default() -= 1;
+        }
+        let mut named = Vec::new();
+        for a in lost {
+            match outside.get_mut(a.checked()) {
+                Some(more) if *more > 0 => {
+                    *more -= 1;
+                    short = short.saturating_sub(a.weight);
+                }
+                _ => named.push(a),
+            }
+        }
+        // Reworded into a new test that follows none: the same check with a
+        // literal named by a variable (`parse("x") is None` → `bad = "x"`,
+        // `parse(bad) is None`; review of pull request 66). A value that
+        // changed is not reworded, so `upstream.calls == 1` is still lost
+        // beside a new test's `upstream.calls == 0`.
+        let named: Vec<&Assertion> = named
+            .into_iter()
+            .filter(|a| {
+                let slot = gained
+                    .iter_mut()
+                    .find(|b| b.is_some_and(|b| named_by_a_variable(a.checked(), b.checked())));
+                match slot {
+                    Some(slot) => {
+                        *slot = None;
+                        short = short.saturating_sub(a.weight);
+                        false
+                    }
+                    None => true,
+                }
+            })
+            .collect();
+        let now = nows.join(", ");
+        for a in named {
+            if short == 0 {
+                break;
+            }
+            short = short.saturating_sub(a.weight);
+            let old = test_of(before, a);
+            let how = if olds.len() == 1 && nows.len() == 1 {
+                "renamed"
+            } else {
+                "now"
+            };
+            found.push(Finding {
+                kind: Kind::AssertionRemoved,
+                file: path.to_owned(),
+                line: a.line,
+                on_base: true,
+                what: format!("{} (in {old}, {how} {now})", a.text),
+            });
+        }
+    }
+    found
+}
+
+/// The tokens of an assertion's text without white space: a string
+/// literal, a run of letters, digits and `_`, or one other character.
+fn tokens(shape: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = shape.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let start = at;
+        let c = bytes[at];
+        if matches!(c, b'"' | b'\'' | b'`') {
+            at += 1;
+            while at < bytes.len() && bytes[at] != c {
+                at += if bytes[at] == b'\\' { 2 } else { 1 };
+            }
+            at = (at + 1).min(bytes.len());
+        } else if c.is_ascii_alphanumeric() || c == b'_' {
+            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                at += 1;
+            }
+        } else {
+            at += shape[at..].chars().next().map_or(1, char::len_utf8);
+        }
+        out.push(shape.get(start..at).unwrap_or_default());
+    }
+    out
+}
+
+/// True when `now` is `old` with one literal or more each named by a
+/// variable, and nothing else changed: `parse("x")isNone` and
+/// `parse(bad)isNone`. Two literals that differ are a changed value, not
+/// this.
+fn named_by_a_variable(old: &str, now: &str) -> bool {
+    let literal = |token: &str| {
+        token.starts_with(['"', '\'', '`']) || token.starts_with(|c: char| c.is_ascii_digit())
+    };
+    let variable = |token: &str| token.starts_with(|c: char| c.is_alphabetic() || c == '_');
+    let (old, now) = (tokens(old), tokens(now));
+    old.len() == now.len()
+        && old != now
+        && old
+            .iter()
+            .zip(&now)
+            .all(|(a, b)| a == b || (literal(a) && variable(b)))
 }
 
 /// A suppression key's tool family, how far it reaches (0: a line or an
@@ -2104,5 +2917,638 @@ mod tests {
         assert!(!covers("noqa:E501", "noqa:F841"));
         assert!(!covers("allow:clippy::all", "allow:dead_code"));
         assert!(!covers("noqa:*", "type-ignore:*"));
+    }
+
+    /// The `what` of each `expected-changed` finding between two versions
+    /// of one test file.
+    fn changed(path: &str, base: &str, head: &str) -> Vec<String> {
+        let language = Language::of(path).expect("a language the guard reads");
+        let (before, after) = (
+            read_test_file(base, language),
+            read_test_file(head, language),
+        );
+        let followed = successors(&before, &after, &Elsewhere::default());
+        let lost: BTreeSet<usize> = followed_losses(
+            path,
+            &before,
+            &after,
+            &followed,
+            &BTreeSet::new(),
+            &Elsewhere::default(),
+        )
+        .iter()
+        .map(|lost| lost.line)
+        .collect();
+        expected_changes(path, &before, &after, &followed, &lost)
+            .into_iter()
+            .map(|finding| finding.what)
+            .collect()
+    }
+
+    #[test]
+    fn a_failure_message_that_changed_is_not_an_expected_value() {
+        // Finding 4 of the 0.5.1 review: test_connection_slots.py:409.
+        let fail = |word: &str| {
+            format!(
+                "import pytest\n\n\nasync def test_a_stalled_publish_does_not_hold_the_market_s_slot():\n    try:\n        await commit()\n    except TimeoutError:\n        pytest.fail(\n            \"a third request waited for a slot while two publishes stalled: \"\n            \"{word} publish runs inside the market's slot\"\n        )\n"
+            )
+        };
+        assert_eq!(
+            changed("tests/test_slots.py", &fail("the"), &fail("a")),
+            Vec::<String>::new()
+        );
+        // test_trade.py:1026: the message after the comma of an assert.
+        let idle = |place: &str| {
+            format!(
+                "async def test_idle():\n    idle = await idle_in_transaction()\n    assert idle == 0, f\"{{idle}} backend(s) idle in transaction across {place}\"\n"
+            )
+        };
+        assert_eq!(
+            changed(
+                "tests/test_trade.py",
+                &idle("the gate's call"),
+                &idle("the refresh")
+            ),
+            Vec::<String>::new()
+        );
+        // unittest's msg, positional or named, and self.fail.
+        let unit = |message: &str| {
+            format!(
+                "import unittest\n\n\nclass TestCart(unittest.TestCase):\n    def test_total(self):\n        self.assertEqual(total([1, 2]), 3, \"{message}\")\n        self.assertTrue(total([]) == 0, msg=\"{message}\")\n        self.assertAlmostEqual(mean([1, 2]), 1.5, 7, \"{message}\")\n        if broken():\n            self.fail(\"{message}\")\n"
+            )
+        };
+        assert_eq!(
+            changed("tests/test_cart.py", &unit("adds"), &unit("sums")),
+            Vec::<String>::new()
+        );
+        // A value that changed is still one, message or not.
+        assert_eq!(
+            changed(
+                "tests/test_trade.py",
+                &idle("the gate's call"),
+                &idle("the gate's call").replace("idle == 0", "idle == 1")
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_failure_message_is_not_an_expected_value_in_javascript_and_rust() {
+        let ts = |message: &str| {
+            format!(
+                "import assert from \"node:assert\";\n\nit(\"adds\", () => {{\n  expect(total([10, 20]), \"{message}\").toBe(30);\n  assert.equal(total([1]), 1, \"{message}\");\n  assert.strictEqual(total([2]), 2, \"{message}\");\n  assert.ok(total([]) === 0, \"{message}\");\n  assert(total([3]) === 3, \"{message}\");\n  if (broken()) assert.fail(\"{message}\");\n}});\n"
+            )
+        };
+        assert_eq!(
+            changed("src/cart.test.ts", &ts("adds"), &ts("sums")),
+            Vec::<String>::new()
+        );
+        let rs = |message: &str| {
+            format!(
+                "#[test]\nfn adds() {{\n    assert_eq!(add(1, 2), 3, \"{message}\");\n    assert_ne!(add(1, 2), 4, \"{message}: {{}}\", 4);\n    assert!(add(0, 0) == 0, \"{message}\");\n    debug_assert_eq!(add(2, 2), 4, \"{message}\");\n}}\n"
+            )
+        };
+        assert_eq!(
+            changed("tests/add.rs", &rs("adds"), &rs("sums")),
+            Vec::<String>::new()
+        );
+        // The values still count.
+        assert_eq!(
+            changed(
+                "tests/add.rs",
+                &rs("adds"),
+                &rs("adds").replace("add(1, 2), 3", "add(1, 2), 4")
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_assertion_is_never_paired_with_one_of_a_different_test() {
+        // Finding 4 of the 0.5.1 review: test_trade.py:1265 against line
+        // 932. The base's test was renamed and lost `upstream.calls == 1`;
+        // `upstream.calls == 0` is in a new test the base does not have.
+        let base = "async def test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the gate's call\"\n    assert upstream.calls == 1\n    assert trade.state_version == 1\n";
+        let head = "async def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the refresh\"\n    assert trade.state_version == 1\n\n\nasync def test_a_suspended_trader_hears_about_the_suspension_not_the_market():\n    with pytest.raises(AccountSuspended):\n        await buy(upstream, suspended=True)\n    assert upstream.calls == 0\n";
+        assert_eq!(
+            changed("tests/test_trade.py", base, head),
+            Vec::<String>::new()
+        );
+        // A renamed test whose value changed is still followed.
+        let one = |name: &str, value: u8| {
+            format!("def test_{name}():\n    assert total([10, 20]) == {value}\n    assert total([]) == 0\n")
+        };
+        assert_eq!(
+            changed("tests/test_cart.py", &one("adds", 30), &one("sums", 31)).len(),
+            1
+        );
+    }
+    /// One test file per language with a message `MSG` in each assertion
+    /// that has one, and a value to change: (path, source, value, other
+    /// value).
+    const MESSAGE_CASES: [(&str, &str, &str, &str); 9] = [
+        (
+            "calc/calc_test.go",
+            "package calc\n\nimport (\n\t\"testing\"\n\n\t\"github.com/stretchr/testify/assert\"\n)\n\nfunc TestAdd(t *testing.T) {\n\tgot := Add(1, 2)\n\tif got != 3 {\n\t\tt.Errorf(\"Add(1, 2) = %d: MSG\", got)\n\t}\n\tassert.Equal(t, 3, Add(2, 1), \"MSG\")\n\tassert.Equalf(t, 4, Add(2, 2), \"MSG %d\", 4)\n}\n",
+            "got != 3",
+            "got != 4",
+        ),
+        (
+            "src/test/java/CalcTest.java",
+            "import static org.junit.jupiter.api.Assertions.*;\nimport static org.assertj.core.api.Assertions.assertThat;\n\nimport org.junit.jupiter.api.Test;\n\nclass CalcTest {\n    @Test\n    void adds() {\n        assertEquals(3, Calc.add(1, 2), \"MSG\");\n        assertTrue(Calc.add(0, 0) == 0, \"MSG\");\n        assertThat(Calc.add(2, 2)).as(\"MSG\").isEqualTo(4);\n        if (Calc.add(1, 1) != 2) {\n            fail(\"MSG\");\n        }\n        assert Calc.add(3, 3) == 6 : \"MSG\";\n    }\n}\n",
+            "isEqualTo(4)",
+            "isEqualTo(5)",
+        ),
+        (
+            "src/test/kotlin/CalcTest.kt",
+            "import kotlin.test.Test\nimport kotlin.test.assertEquals\nimport kotlin.test.assertTrue\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        assertEquals(3, add(1, 2), \"MSG\")\n        assertTrue(add(0, 0) == 0, message = \"MSG\")\n    }\n}\n",
+            "assertEquals(3,",
+            "assertEquals(4,",
+        ),
+        (
+            "Tests/CalcTests/CalcTests.swift",
+            "import XCTest\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        XCTAssertEqual(add(1, 2), 3, \"MSG\")\n        XCTAssertTrue(add(0, 0) == 0, \"MSG\")\n        if add(1, 1) != 2 {\n            XCTFail(\"MSG\")\n        }\n    }\n}\n",
+            "add(1, 2), 3",
+            "add(1, 2), 4",
+        ),
+        (
+            "test/calc_test.dart",
+            "import 'package:test/test.dart';\n\nvoid main() {\n  test('adds', () {\n    expect(add(1, 2), equals(3), reason: 'MSG');\n    if (add(1, 1) != 2) {\n      fail('MSG');\n    }\n  });\n}\n",
+            "equals(3)",
+            "equals(4)",
+        ),
+        (
+            "tests/Calc.Tests/CalcTests.cs",
+            "using FluentAssertions;\nusing NUnit.Framework;\n\npublic class CalcTests\n{\n    [Test]\n    public void Adds()\n    {\n        Assert.AreEqual(3, Calc.Add(1, 2), \"MSG\");\n        Assert.That(Calc.Add(2, 2), Is.EqualTo(4), \"MSG\");\n        Assert.IsTrue(Calc.Add(0, 0) == 0, \"MSG\");\n        Calc.Add(3, 3).Should().Be(6, \"MSG\");\n    }\n}\n",
+            "Be(6,",
+            "Be(7,",
+        ),
+        (
+            "test/test_calc.c",
+            "#include \"unity.h\"\n#include \"calc.h\"\n\nvoid test_adds(void) {\n    TEST_ASSERT_EQUAL_INT_MESSAGE(3, add(1, 2), \"MSG\");\n    if (add(1, 1) != 2) {\n        TEST_FAIL_MESSAGE(\"MSG\");\n    }\n}\n",
+            "add(1, 1) != 2",
+            "add(1, 1) != 3",
+        ),
+        (
+            "tests/test_calc.py",
+            "import pytest\n\n\ndef test_adds():\n    if add(1, 1) != 2:\n        pytest.fail(\"MSG\")\n",
+            "!= 2",
+            "!= 3",
+        ),
+        (
+            "src/calc.test.ts",
+            "import assert from \"node:assert\";\n\nit(\"adds\", () => {\n  if (add(1, 1) !== 2) {\n    assert.fail(\"MSG\");\n  }\n});\n",
+            "!== 2",
+            "!== 3",
+        ),
+    ];
+
+    #[test]
+    fn a_failure_message_is_not_an_expected_value_in_any_language() {
+        for (path, source, value, other) in MESSAGE_CASES {
+            assert_eq!(
+                changed(
+                    path,
+                    &source.replace("MSG", "one"),
+                    &source.replace("MSG", "two")
+                ),
+                Vec::<String>::new(),
+                "{path}: only the message changed"
+            );
+            assert_eq!(
+                changed(
+                    path,
+                    &source.replace("MSG", "one"),
+                    &source.replace("MSG", "one").replace(value, other)
+                )
+                .len(),
+                1,
+                "{path}: {value} became {other}"
+            );
+        }
+    }
+    /// The findings of the guard on a git repo whose base commit holds
+    /// `base` and whose working tree holds `head`, as `Kind path:line what`.
+    fn guarded(base: &[(&str, &str)], head: &[(&str, &str)]) -> Vec<String> {
+        use std::process::Command;
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let root = dir.path();
+        let write = |files: &[(&str, &str)]| {
+            for (path, text) in files {
+                let file = root.join(path);
+                std::fs::create_dir_all(file.parent().expect("a folder")).expect("mkdir");
+                std::fs::write(file, text).expect("write");
+            }
+        };
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(root)
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        write(base);
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        git(&["add", "--all"]);
+        git(&["commit", "--quiet", "--no-verify", "-m", "base"]);
+        let commit = git(&["rev-parse", "HEAD"]);
+        for (path, _) in base {
+            std::fs::remove_file(root.join(path)).expect("remove");
+        }
+        write(head);
+        let changed: BTreeSet<String> = base
+            .iter()
+            .chain(head)
+            .map(|(path, _)| (*path).to_owned())
+            .collect();
+        let base = BaseCommit {
+            reference: "main".to_owned(),
+            commit,
+        };
+        guard(root, &base, &changed)
+            .findings
+            .into_iter()
+            .map(|f| format!("{:?} {}:{} {}", f.kind, f.file, f.line, f.what))
+            .collect()
+    }
+
+    #[test]
+    fn a_test_moved_or_split_to_another_file_is_not_a_rename_of_a_test_left_behind() {
+        let get_user = "def test_get_user():\n    resp = get(\"/users/1\")\n    assert resp.status_code == 200\n    assert resp.json()[\"name\"] == \"alice\"\n";
+        let health =
+            "def test_health():\n    resp = get(\"/health\")\n    assert resp.status_code == 200\n";
+        assert_eq!(
+            guarded(
+                &[("tests/test_api.py", get_user)],
+                &[
+                    ("tests/test_api.py", health),
+                    ("tests/test_users.py", get_user)
+                ]
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_totals.py",
+                    "def test_totals():\n    assert f() == 1\n    assert g() == 2\n"
+                )],
+                &[
+                    (
+                        "tests/test_totals.py",
+                        "def test_total_f():\n    assert f() == 1\n"
+                    ),
+                    (
+                        "tests/test_total_g.py",
+                        "def test_total_g():\n    assert g() == 2\n"
+                    )
+                ]
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_value_changed_in_tests_merged_or_split_is_an_expected_change() {
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_math.py",
+                    "def test_adds():\n    assert g() == 2\n\n\ndef test_sums():\n    assert f() == 1\n"
+                )],
+                &[(
+                    "tests/test_math.py",
+                    "def test_adds_and_sums():\n    assert g() == 2\n    assert f() == 5\n\n\ndef test_empty():\n    assert h() == 0\n"
+                )]
+            ),
+            vec!["ExpectedChanged tests/test_math.py:3 assert f() == 5 (on the base: assert f() == 1, line 6)"]
+        );
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_totals.py",
+                    "def test_totals():\n    assert f() == 1\n    assert g() == 2\n"
+                )],
+                &[(
+                    "tests/test_totals.py",
+                    "def test_totals_a():\n    assert g() == 2\n\n\ndef test_totals_b():\n    assert f() == 5\n"
+                )]
+            ),
+            vec!["ExpectedChanged tests/test_totals.py:6 assert f() == 5 (on the base: assert f() == 1, line 2)"]
+        );
+    }
+
+    #[test]
+    fn an_assertion_a_renamed_test_lost_is_named_once() {
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_x.py",
+                    "def test_old():\n    assert x() == 1, \"one\"\n    assert y() == 2\n"
+                )],
+                &[(
+                    "tests/test_x.py",
+                    "def test_new():\n    assert x() == 1, \"two\"\n"
+                )]
+            ),
+            vec!["AssertionRemoved tests/test_x.py:3 assert y() == 2 (in test_old, renamed test_new)"]
+        );
+    }
+
+    /// Changes whose value sits where a message could be: each must stay a
+    /// finding (ADR 0063: when unsure, a value). (path, base, head).
+    const VALUES_NOT_MESSAGES: [(&str, &str, &str); 8] = [
+        (
+            "calc/calc_test.go",
+            "package calc\n\nimport (\n\t\"testing\"\n\n\t\"gotest.tools/v3/assert\"\n)\n\nfunc TestRun(t *testing.T) {\n\terr := Run()\n\tassert.Error(t, err, \"boom\")\n}\n",
+            "package calc\n\nimport (\n\t\"testing\"\n\n\t\"gotest.tools/v3/assert\"\n)\n\nfunc TestRun(t *testing.T) {\n\terr := Run()\n\tassert.Error(t, err, \"bang\")\n}\n",
+        ),
+        (
+            "tests/Names.Tests/NamesTests.cs",
+            "using FluentAssertions;\nusing Xunit;\n\npublic class NamesTests\n{\n    [Fact]\n    public void Lists()\n    {\n        Names().Should().BeEquivalentTo(\"alice\", \"bob\");\n    }\n}\n",
+            "using FluentAssertions;\nusing Xunit;\n\npublic class NamesTests\n{\n    [Fact]\n    public void Lists()\n    {\n        Names().Should().BeEquivalentTo(\"alice\", \"carol\");\n    }\n}\n",
+        ),
+        (
+            "tests/rows.rs",
+            "#[test]\nfn reads_a_row() {\n    let row = first_row();\n    assert_eq!(row.get::<_, String>(0).unwrap(), \"alice\");\n}\n",
+            "#[test]\nfn reads_a_row() {\n    let row = first_row();\n    assert_eq!(row.get::<_, String>(0).unwrap(), \"bob\");\n}\n",
+        ),
+        (
+            "src/test/java/UserTest.java",
+            "import static org.junit.Assert.assertEquals;\n\nimport org.junit.Test;\n\npublic class UserTest {\n    @Test\n    public void name() {\n        assertEquals(\"name\", user.getName(), \"alice\");\n    }\n}\n",
+            "import static org.junit.Assert.assertEquals;\n\nimport org.junit.Test;\n\npublic class UserTest {\n    @Test\n    public void name() {\n        assertEquals(\"name\", user.getName(), \"bob\");\n    }\n}\n",
+        ),
+        (
+            "Tests/CalcTests/CalcTests.swift",
+            "import XCTest\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        guard add(1, 1) == 2 else {\n            XCTFail(\"want 2\")\n            return\n        }\n    }\n}\n",
+            "import XCTest\n\nfinal class CalcTests: XCTestCase {\n    func testAdds() {\n        guard add(1, 1) == 3 else {\n            XCTFail(\"want 3\")\n            return\n        }\n    }\n}\n",
+        ),
+        (
+            "calc/switch_test.go",
+            "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tgot := Add(1, 2)\n\tswitch {\n\tcase got != 3:\n\t\tt.Errorf(\"want 3\")\n\t}\n}\n",
+            "package calc\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {\n\tgot := Add(1, 2)\n\tswitch {\n\tcase got != 4:\n\t\tt.Errorf(\"want 4\")\n\t}\n}\n",
+        ),
+        (
+            "tests/test_match.py",
+            "import pytest\n\n\ndef test_adds():\n    match add(1, 1):\n        case 2:\n            pass\n        case _:\n            pytest.fail(\"want 2\")\n",
+            "import pytest\n\n\ndef test_adds():\n    match add(1, 1):\n        case 3:\n            pass\n        case _:\n            pytest.fail(\"want 3\")\n",
+        ),
+        (
+            "src/switch.test.ts",
+            "import assert from \"node:assert\";\n\nit(\"adds\", () => {\n  switch (add(1, 1)) {\n    case 2:\n      break;\n    default:\n      assert.fail(\"want 2\");\n  }\n});\n",
+            "import assert from \"node:assert\";\n\nit(\"adds\", () => {\n  switch (add(1, 1)) {\n    case 3:\n      break;\n    default:\n      assert.fail(\"want 3\");\n  }\n});\n",
+        ),
+    ];
+
+    #[test]
+    fn a_value_where_a_message_could_be_is_still_an_expected_change() {
+        let missed: Vec<&str> = VALUES_NOT_MESSAGES
+            .iter()
+            .filter(|(path, base, head)| changed(path, base, head).len() != 1)
+            .map(|(path, _, _)| *path)
+            .collect();
+        assert_eq!(missed, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_junit_4_message_and_a_swift_guard_message_are_not_expected_values() {
+        let junit4 = |message: &str| {
+            format!("import static org.junit.Assert.assertEquals;\n\nimport org.junit.Test;\n\npublic class UserTest {{\n    @Test\n    public void name() {{\n        assertEquals(\"{message}\", \"alice\", user.getName());\n    }}\n}}\n")
+        };
+        assert_eq!(
+            changed(
+                "src/test/java/UserTest.java",
+                &junit4("name"),
+                &junit4("the name")
+            ),
+            Vec::<String>::new()
+        );
+        let guard = |message: &str| {
+            format!("import XCTest\n\nfinal class CalcTests: XCTestCase {{\n    func testAdds() {{\n        guard add(1, 1) == 2 else {{\n            XCTFail(\"{message}\")\n            return\n        }}\n    }}\n}}\n")
+        };
+        assert_eq!(
+            changed(
+                "Tests/CalcTests/CalcTests.swift",
+                &guard("want 2"),
+                &guard("wanted 2")
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_junit_4_assert_called_on_its_class_after_a_wildcard_import_keeps_its_values() {
+        // `import org.junit.*;` names no `org.junit.Assert`, and
+        // `Assert.assertEquals` takes its message first (JUnit 4).
+        let junit4 = |message: &str, value: &str| {
+            format!("import org.junit.*;\n\npublic class UserTest {{\n    @Test\n    public void name() {{\n        Assert.assertEquals(\"{message}\", user.getName(), \"{value}\");\n    }}\n}}\n")
+        };
+        let path = "src/test/java/UserTest.java";
+        assert_eq!(
+            changed(path, &junit4("name", "alice"), &junit4("name", "bob")).len(),
+            1
+        );
+        assert_eq!(
+            changed(path, &junit4("name", "alice"), &junit4("the name", "alice")),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn node_s_legacy_four_argument_assert_fail_keeps_its_values() {
+        // `assert.fail(actual, expected, message, operator)`: only a fail
+        // with one argument is all message.
+        let legacy = |expected: &str| {
+            format!("const assert = require(\"assert\");\n\nit(\"adds\", () => {{\n  const got = add(1, 1);\n  if (got !== 2) {{\n    assert.fail(got, {expected}, undefined, \"===\");\n  }}\n}});\n")
+        };
+        assert_eq!(
+            changed("src/legacy.test.js", &legacy("2"), &legacy("3")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_value_changed_in_a_test_whose_following_was_not_seen_is_still_an_expected_change() {
+        // test_a is followed by test_b; test_c took one of its checks with
+        // another value, and its name is not test_a's. Before ADR 0063 any
+        // gone test paired with any new one, and this was found.
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_parts.py",
+                    "def test_a():\n    assert x() == 1\n    assert y() == 2\n"
+                )],
+                &[(
+                    "tests/test_parts.py",
+                    "def test_b():\n    assert x() == 1\n    assert z() == 3\n\n\ndef test_c():\n    assert y() == 5\n"
+                )]
+            ),
+            vec!["ExpectedChanged tests/test_parts.py:7 assert y() == 5 (on the base: assert y() == 2, line 3)"]
+        );
+    }
+
+    #[test]
+    fn a_kotlin_test_assert_beside_a_junit_4_import_keeps_its_expected_value() {
+        // Review of pull request 66, (a1): `import org.junit.*` read every
+        // `assertEquals` of the file in JUnit 4's order, so kotlin.test's
+        // expected value was taken for a message. A named `message =` can
+        // only be kotlin.test's: Kotlin passes no named argument to Java.
+        let path = "src/test/kotlin/VersionTest.kt";
+        let named = |value: &str| {
+            format!("import org.junit.*\nimport kotlin.test.assertEquals\n\nclass VersionTest {{\n    @Test fun v() {{ assertEquals(\"{value}\", version(), message = \"version\") }}\n}}\n")
+        };
+        assert_eq!(changed(path, &named("v1"), &named("v2")).len(), 1);
+        // By place, an `assertEquals` imported from kotlin.test by name.
+        let placed = |value: &str| {
+            format!("import org.junit.*\nimport kotlin.test.assertEquals\n\nclass VersionTest {{\n    @Test fun v() {{ assertEquals(\"{value}\", version(), \"version\") }}\n}}\n")
+        };
+        assert_eq!(changed(path, &placed("v1"), &placed("v2")).len(), 1);
+        assert_eq!(
+            changed(
+                path,
+                &placed("v1"),
+                &placed("v1").replace("\"version\")", "\"the version\")")
+            ),
+            Vec::<String>::new()
+        );
+        // A real JUnit 4 call still takes its message first.
+        let junit4 = |message: &str| {
+            format!("import org.junit.Assert.assertEquals\nimport org.junit.Test\n\nclass VersionTest {{\n    @Test fun v() {{\n        assertEquals(\"{message}\", \"v1\", version())\n        Assert.assertEquals(\"{message}\", \"v1\", version())\n    }}\n}}\n")
+        };
+        assert_eq!(
+            changed(path, &junit4("version"), &junit4("the version")),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_pylint_message_id_in_lower_case_is_a_code() {
+        // Review of pull request 66, (a2): pylint upper-cases a message id,
+        // so `w0612` turns W0612 off.
+        assert_eq!(
+            guarded(
+                &[("a.py", "x = f()  # pylint: disable=invalid-name\n")],
+                &[("a.py", "x = f()  # pylint: disable=invalid-name,w0612\n")]
+            ),
+            vec!["SuppressionAdded a.py:1 # pylint: disable=invalid-name,w0612 (pylint:W0612)"]
+        );
+        // The same id in another case is the same suppression.
+        assert_eq!(
+            guarded(
+                &[("a.py", "x = f()  # pylint: disable=W0612\n")],
+                &[("a.py", "x = f()  # pylint: disable=w0612\n")]
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_noqa_whose_first_word_is_no_ruff_code_does_not_cover_a_new_noqa() {
+        // Review of pull request 66, (a3): `# noqa: e501` was keyed
+        // `noqa:*`, and once removed it covered a `# noqa: F401` added
+        // anywhere in the change. 0.5.1 found the F401.
+        let head = "x = 1\nimport os  # noqa: F401\n";
+        let added = vec!["SuppressionAdded a.py:2 # noqa: F401 (noqa:F401)"];
+        for base in [
+            "x = 1  # noqa: e501\n",
+            "x = 1  # noqa: E402.\n",
+            "x = 1  # noqa: because\n",
+        ] {
+            assert_eq!(
+                guarded(&[("a.py", base)], &[("a.py", head)]),
+                added,
+                "{base}"
+            );
+        }
+        // A plain `# noqa` turns every code off: as in 0.5.1, it covers one
+        // added in its place.
+        assert_eq!(
+            guarded(&[("a.py", "x = 1  # noqa\n")], &[("a.py", head)]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_check_reworded_into_a_new_test_split_off_is_not_lost() {
+        // Review of pull request 66, (b1): an honest split whose moved
+        // check names its value another way. 0.5.1 gave nothing: the count
+        // is the same.
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_parse.py",
+                    "def test_parse():\n    assert parse(\"1\") == 1\n    assert parse(\"x\") is None\n"
+                )],
+                &[(
+                    "tests/test_parse.py",
+                    "def test_parse_number():\n    assert parse(\"1\") == 1\n\n\ndef test_rejects_garbage():\n    bad = \"x\"\n    assert parse(bad) is None\n"
+                )]
+            ),
+            Vec::<String>::new()
+        );
+        // The course project's renamed test that lost `upstream.calls == 1`
+        // is still named: the new test checks another value.
+        let base = "async def test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the gate's call\"\n    assert upstream.calls == 1\n    assert trade.state_version == 1\n";
+        let head = "async def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the refresh\"\n    assert trade.state_version == 1\n\n\nasync def test_a_suspended_trader_hears_about_the_suspension_not_the_market():\n    with pytest.raises(AccountSuspended):\n        await buy(upstream, suspended=True)\n    assert upstream.calls == 0\n";
+        assert_eq!(
+            guarded(&[("tests/test_trade.py", base)], &[("tests/test_trade.py", head)]),
+            vec!["AssertionRemoved tests/test_trade.py:5 assert upstream.calls == 1 (in test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service, renamed test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy)"]
+        );
+    }
+
+    #[test]
+    fn only_a_compared_value_around_a_fail_call_is_an_expected_value() {
+        // Review of pull request 66, (b2): every literal of the `if` around
+        // a fail call was taken for an expected value. 0.5.1 gave nothing
+        // for these.
+        let go = |condition: &str| {
+            format!("package srv\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestServe(t *testing.T) {{\n\tif {condition} {{\n\t\tt.Fatal(\"bad\")\n\t}}\n}}\n")
+        };
+        let path = "srv/serve_test.go";
+        assert_eq!(
+            changed(
+                path,
+                &go("!waitFor(t, ready, 5*time.Second)"),
+                &go("!waitFor(t, ready, 10*time.Second)")
+            ),
+            Vec::<String>::new()
+        );
+        // A compared value is one.
+        assert_eq!(changed(path, &go("got != 3"), &go("got != 4")).len(), 1);
+        // black writes a string with other quotes: the same value.
+        let python = |condition: &str| {
+            format!("import pytest\n\n\ndef test_status():\n    status = fetch()\n    if {condition}:\n        pytest.fail(\"bad\")\n")
+        };
+        let path = "tests/test_status.py";
+        assert_eq!(
+            changed(path, &python("status != 'ok'"), &python("status != \"ok\"")),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            changed(path, &python("status != 'ok'"), &python("status != 'okay'")).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_fail_call_beside_a_number_compared_with_nothing_keeps_its_message() {
+        // The number is no value, so the message may be the only place the
+        // value is written: 0.5.1 found this change in the message.
+        let go = |want: &str| {
+            format!("package calc\n\nimport (\n\t\"reflect\"\n\t\"testing\"\n)\n\nfunc TestPair(t *testing.T) {{\n\tif !reflect.DeepEqual(Pair(), []int{{1, {want}}}) {{\n\t\tt.Fatalf(\"want [1 {want}]\")\n\t}}\n}}\n")
+        };
+        assert_eq!(changed("calc/pair_test.go", &go("2"), &go("3")).len(), 1);
     }
 }

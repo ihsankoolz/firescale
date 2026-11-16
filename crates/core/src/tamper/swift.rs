@@ -36,7 +36,7 @@ use tree_sitter::{Language, Node};
 use super::reach::{self, Grammar};
 use super::recover;
 use super::suppress::{keyed, shown};
-use super::{Assertion, Suppression, TestCase, TestFile};
+use super::{failed_when, without, Assertion, Messages, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
 
 /// What the Swift grammar calls the nodes [`reach`] looks at. Its `if` and
@@ -244,6 +244,74 @@ fn positional(node: Node<'_>) -> Vec<Node<'_>> {
         }
     }
     found
+}
+
+/// The failure messages of XCTest and Swift Testing (ADR 0063): XCTest's
+/// `_ message: @autoclosure () -> String` after the values each assertion
+/// takes (`XCTAssertEqual(expression1, expression2, message)`), the
+/// `Comment` of `#expect` and `#require`, and `XCTFail(message)`, which is
+/// all message.
+const MESSAGES: Messages = Messages {
+    all: &["XCTFail"],
+    from: &[
+        ("XCTAssert", 1),
+        ("XCTAssertTrue", 1),
+        ("XCTAssertFalse", 1),
+        ("XCTAssertNil", 1),
+        ("XCTAssertNotNil", 1),
+        ("XCTAssertNoThrow", 1),
+        ("XCTAssertThrowsError", 1),
+        ("XCTUnwrap", 1),
+        ("expect", 1),
+        ("require", 1),
+        ("XCTAssertEqual", 2),
+        ("XCTAssertNotEqual", 2),
+        ("XCTAssertIdentical", 2),
+        ("XCTAssertNotIdentical", 2),
+        ("XCTAssertGreaterThan", 2),
+        ("XCTAssertGreaterThanOrEqual", 2),
+        ("XCTAssertLessThan", 2),
+        ("XCTAssertLessThanOrEqual", 2),
+    ],
+    labels: &[],
+};
+
+/// What an assertion checks, without its failure message (see
+/// [`MESSAGES`]); for `XCTFail(…)`, the condition of the `if` around it.
+fn checked(node: Node<'_>, name: &str, src: &[u8]) -> Option<String> {
+    let mut cursor = node.walk();
+    let list = node
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "call_suffix")
+        .and_then(|suffix| {
+            let mut cursor = suffix.walk();
+            let found = suffix
+                .named_children(&mut cursor)
+                .find(|child| child.kind() == "value_arguments");
+            found
+        });
+    let arguments: Vec<(Option<&str>, Node<'_>)> = list
+        .map(|list| {
+            let mut cursor = list.walk();
+            list.named_children(&mut cursor)
+                .filter(|child| child.kind() == "value_argument")
+                .map(|argument| {
+                    (
+                        argument
+                            .child_by_field_name("name")
+                            .map(|label| text(label, src)),
+                        argument,
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let message = MESSAGES.of(name, &arguments, src);
+    if MESSAGES.all.contains(&name) {
+        failed_when(node, src, &message)
+    } else {
+        without(node, src, &message)
+    }
 }
 
 /// The source text of a node without white space.
@@ -957,6 +1025,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .map_or(1, |test| test.weight),
                     test,
                     conditional,
+                    checked: checked(node, name, src),
                 });
                 true
             }

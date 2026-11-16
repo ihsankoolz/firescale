@@ -5,8 +5,75 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
-use super::{Assertion, TestCase, TestFile};
+use super::{failed_when, labelled_arguments, without, Assertion, Messages, TestCase, TestFile};
 use crate::imports::{js_dialect, js_string, parse, text, walk, JsDialect};
+
+/// The failure messages of JS and TS assertions (ADR 0063): Vitest's and
+/// Chai's `expect(value, message)`, Node's `node:assert` (`assert(value,
+/// message)`, `assert.equal(actual, expected, message)`,
+/// `assert.fail(message)`) and Chai's `assert` methods of the same names.
+const MESSAGES: Messages = Messages {
+    all: &["fail"],
+    from: &[
+        ("expect", 1),
+        ("soft", 1),
+        ("assert", 1),
+        ("ok", 1),
+        ("isTrue", 1),
+        ("isFalse", 1),
+        ("isOk", 1),
+        ("isNotOk", 1),
+        ("isNull", 1),
+        ("isNotNull", 1),
+        ("isUndefined", 1),
+        ("isDefined", 1),
+        ("exists", 1),
+        ("notExists", 1),
+        ("equal", 2),
+        ("notEqual", 2),
+        ("strictEqual", 2),
+        ("notStrictEqual", 2),
+        ("deepEqual", 2),
+        ("notDeepEqual", 2),
+        ("deepStrictEqual", 2),
+        ("notDeepStrictEqual", 2),
+        ("match", 2),
+        ("doesNotMatch", 2),
+        ("include", 2),
+        ("notInclude", 2),
+        ("lengthOf", 2),
+    ],
+    labels: &[],
+};
+
+/// What an assertion checks, without the failure message of the call that
+/// opens it (the arguments [`MESSAGES`] names); for `assert.fail` with one
+/// argument, the condition of the `if` around it. `None` when it has no
+/// message.
+fn checked(call: Node<'_>, whole: Node<'_>, function: Node<'_>, src: &[u8]) -> Option<String> {
+    let name = match function.kind() {
+        "identifier" => text(function, src),
+        "member_expression" => function
+            .child_by_field_name("property")
+            .map_or("", |property| text(property, src)),
+        _ => return None,
+    };
+    let arguments = call
+        .child_by_field_name("arguments")
+        .map(|list| labelled_arguments(list, src))
+        .unwrap_or_default();
+    if MESSAGES.all.contains(&name) && arguments.len() > 1 {
+        // Node's legacy `assert.fail(actual, expected, message, operator)`:
+        // every argument is kept as a value (ADR 0063).
+        return None;
+    }
+    let message = MESSAGES.of(name, &arguments, src);
+    if MESSAGES.all.contains(&name) {
+        failed_when(whole, src, &message)
+    } else {
+        without(whole, src, &message)
+    }
+}
 
 const TEST_NAMES: [&str; 5] = ["it", "test", "xit", "xtest", "fit"];
 const SUITE_NAMES: [&str; 6] = [
@@ -444,6 +511,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
                     .join(" "),
                 test: inside.and_then(|block| block.test),
                 conditional: false,
+                checked: checked(node, whole, function, src),
                 weight: inside.map_or(1, |block| block.weight),
             });
             return true;

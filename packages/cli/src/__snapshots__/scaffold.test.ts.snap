@@ -163,9 +163,10 @@ core/gitignore-basics
 
 --- /dev/null
 +++ b/.gitignore
-@@ -0,0 +1,2 @@
+@@ -0,0 +1,3 @@
 +# Generated files and dependencies
 +node_modules/
++*.log
 
 core/readme-setup
   would create README.md (and stage it with git add)

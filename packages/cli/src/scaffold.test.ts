@@ -661,7 +661,9 @@ describe('fscale sync', () => {
     const repo = await fixtures.create({
       files: {
         'firescale.config.json': '{}',
-        '.gitignore': '# nothing yet\n',
+        // *.log: core/gitignore-basics asks for it in every repo (0.5.2), and this
+        // test is about the two tracked files only.
+        '.gitignore': '# logs only\n*.log\n',
         'README.md': '# mine\n\n## Install\n\n## Usage\n',
         '.github/workflows/build.yml': 'on: pull_request\njobs: {}\n',
       },
@@ -754,7 +756,7 @@ describe('fscale sync', () => {
     expect(drift.stdout).toContain('would edit .gitignore');
     await runCli(['sync'], repo.root);
     expect(await repo.read('.gitignore')).toBe(
-      '# mine\n*.tmp\n# Generated files and dependencies\nnode_modules/\n',
+      '# mine\n*.tmp\n# Generated files and dependencies\nnode_modules/\n*.log\n',
     );
     expect(await repo.read('README.md')).toBe(ODD_README);
   });

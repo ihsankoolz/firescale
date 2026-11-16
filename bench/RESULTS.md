@@ -2,6 +2,42 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## 0.5.2: suppression codes, failure messages and renamed tests (ADR 0063)
+
+Measured on 2026-11-16 on Windows 11, debug builds. "Before" is `main` at `d337ed4`; "after" is branch `fix052-tamper`: at `73272c6`, the first version of the fix, for the course project, and at `d5c72b1`, the final code, for the held-out cheats.
+
+### The course project's 150 commits
+
+`fscale tamper --json --head c --base c^` for each `c` of `git rev-list -n 150 main` in the course project (read-only clone; merges included, as in the review's step 3a, so one change is counted again on each merge that carries it).
+
+| Kind                | Before | After | What changed                                                                                                                                                                                                                                                     |
+| ------------------- | -----: | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `suppression-added` |     58 |    43 | the 15 words of the comment after `# noqa: E402` (5 words × 3 commits) are gone; the 43 left are the ones the review labelled true                                                                                                                               |
+| `expected-changed`  |      3 |     0 | all 3 were false in the review (two changed messages, one pair across two tests)                                                                                                                                                                                 |
+| `assertion-removed` |      0 |     2 | both in merge `01458325`, both in renamed tests: `assert upstream.calls == 1` (the review's case) and `assert served[0] is served[1]` in `test_auth_client_lifespan.py`, which the review had not seen. I read both diffs: each assertion is gone from its test. |
+| All                 |     61 |    45 |                                                                                                                                                                                                                                                                  |
+
+The "before" total and kinds match the review exactly. The labels of the two new findings are mine, from the diff, not a person's.
+
+### The held-out cheats: the gate for this change
+
+`node bench/tamper-misses.mjs --bin <fscale>` over `bench/tamper-cheats.json` (held out: its cases were not read or tuned on), the same script and cases for both binaries, on 2026-11-16, Windows 11, debug builds:
+
+| Binary                                         | Caught | Needs approval only | Missed, of 98 |
+| ---------------------------------------------- | -----: | ------------------: | ------------: |
+| Before: `main` at `d337ed4` (0.5.1)            |     47 |                   8 |            43 |
+| After: `fix052-tamper` at `d5c72b1` (the code) |     47 |                   8 |            43 |
+
+The same 43 cases are missed on both sides, and the same 8 need approval only (the lists were compared line by line). The miss count is not higher than `main`'s, which was the condition to merge.
+
+Limits: 98 cases, written by one subagent in one sitting (M26), in JavaScript, TypeScript, Python, Rust and config only. The readers this change touched most for Java, Kotlin, C#, Go and Swift (JUnit 4's message, FluentAssertions, gomega, `guard`) have no held-out cases, so "no new miss" holds for these 98 cases, not in general. M32 measured 42 missed on a Linux release build; `main` at `d337ed4` already misses 43 here, before this change. Which case changed between M32 and `d337ed4` was not looked into.
+
+### Not measured again for 0.5.2
+
+- **The rates on real commits were not re-measured for 0.5.2.** M26 and M32 measured the false-positive rate with `bench/tamper-history.mjs` over 17 public repos, every finding labelled by a fresh labeller. Doing it again means running both binaries over about 2,350 commits and labelling every new finding. On this machine, shared with other builds, one local benchmark run took over 2.5 hours and was stopped, and the owner chose to finish the 0.5.2 run without it. The rates above under M32 and M26 are for the guard before 0.5.2. `.github/workflows/tamper-bench.yml` (ADR 0067), started by hand, runs both binaries over the same recorded commits on CI and uploads the findings; it has not been run yet, and its findings still need labels.
+- **The labelled corpus was not run through `bench/tamper-rates.mjs`** for the same reason. Every corpus case also runs in `packages/cli/src/tamper.test.ts`, which CI runs on Linux for this change: a green run means each case gives exactly the kinds of its label. The cases added for 0.5.2 (the review's 10 and the later ones) fail on `main`, as the DECISIONS.md block "Pull request 2" records with their messages.
+- **The course project's 150 commits** above were counted on the first version of the change (`73272c6`), not on the final one.
+
 ## M32: the tamper guard in Java, Kotlin, Swift, Dart, C, C++, C# and Go
 
 Measured on 2026-11-14 on the build machine (Linux x64, 4 cores), release build. Method, limits and what was fixed: ADR 0052. **Read the limits before the numbers**: the method of M26 (ADR 0046); one repo per language, so a rate is that repo's more than its language's; each finding labelled once by a fresh subagent that saw the commit's diff and a neutral statement of the claim (not the guard's code or reasoning), twelve labellers, 756 labels, no second labeller and no human check; the "after" rate is on the commits the fixes were developed against, so it is optimistic.

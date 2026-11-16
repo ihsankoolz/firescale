@@ -45,7 +45,9 @@ use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
 use super::recover;
-use super::{Assertion, Suppression, TestCase, TestFile};
+use super::{
+    failed_when, labelled_arguments, without, Assertion, Messages, Suppression, TestCase, TestFile,
+};
 use crate::imports::{parse, text, walk};
 
 /// What the C# grammar calls the nodes [`reach`] looks at.
@@ -373,6 +375,78 @@ fn chain_has(node: Node<'_>, src: &[u8], names: &[&str]) -> bool {
         }
     }
     false
+}
+
+/// The failure messages of NUnit's and MSTest's `Assert` (ADR 0063): the
+/// `string message` after the values each takes (`Assert.AreEqual(expected,
+/// actual, message)`, `Assert.That(actual, constraint, message)`) and
+/// xUnit's `userMessage` of `Assert.True` and `Assert.False`; `Assert.Fail`
+/// and `Assert.Inconclusive` are all message. xUnit's `Assert.Equal` takes
+/// none.
+const ASSERT_MESSAGES: Messages = Messages {
+    all: &["Fail", "Inconclusive"],
+    from: &[
+        ("True", 1),
+        ("False", 1),
+        ("IsTrue", 1),
+        ("IsFalse", 1),
+        ("IsNull", 1),
+        ("IsNotNull", 1),
+        ("IsEmpty", 1),
+        ("IsNotEmpty", 1),
+        ("That", 1),
+        ("AreEqual", 2),
+        ("AreNotEqual", 2),
+        ("AreSame", 2),
+        ("AreNotSame", 2),
+        ("Greater", 2),
+        ("GreaterOrEqual", 2),
+        ("Less", 2),
+        ("LessOrEqual", 2),
+        ("IsInstanceOf", 1),
+    ],
+    labels: &["message"],
+};
+
+/// FluentAssertions' `because` (and its `becauseArgs`) after the values
+/// each assertion takes: `x.Should().Be(3, "because …")`.
+const FLUENT_MESSAGES: Messages = Messages {
+    all: &[],
+    from: &[
+        ("BeTrue", 0),
+        ("BeFalse", 0),
+        ("BeNull", 0),
+        ("NotBeNull", 0),
+        ("BeEmpty", 0),
+        ("NotBeEmpty", 0),
+        ("Be", 1),
+        ("NotBe", 1),
+        ("HaveCount", 1),
+        ("BeGreaterThan", 1),
+        ("BeGreaterThanOrEqualTo", 1),
+        ("BeLessThan", 1),
+        ("BeLessThanOrEqualTo", 1),
+    ],
+    labels: &["because"],
+};
+
+/// What an assertion checks, without its failure message (see
+/// [`ASSERT_MESSAGES`] and [`FLUENT_MESSAGES`]); for `Assert.Fail(…)`, the
+/// condition of the `if` around it.
+fn checked(call: Node<'_>, src: &[u8]) -> Option<String> {
+    let (receiver, name) = callee(call, src)?;
+    let list = call.child_by_field_name("arguments")?;
+    let arguments = labelled_arguments(list, src);
+    let assert_class =
+        receiver.is_some_and(|receiver| ASSERT_CLASSES.contains(&last_segment(receiver, src)));
+    if assert_class {
+        let message = ASSERT_MESSAGES.of(name, &arguments, src);
+        if ASSERT_MESSAGES.all.contains(&name) {
+            return failed_when(call, src, &message);
+        }
+        return without(call, src, &message);
+    }
+    without(call, src, &FLUENT_MESSAGES.of(name, &arguments, src))
 }
 
 /// True for a call that is an assertion.
@@ -949,6 +1023,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .map_or(1, |test| test.weight),
                     test,
                     conditional,
+                    checked: checked(node, src),
                 });
                 false
             }

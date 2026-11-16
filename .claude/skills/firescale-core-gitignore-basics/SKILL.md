@@ -11,24 +11,26 @@ description: Fixes violations of the firescale rule core/gitignore-basics by cre
 
 Inside a git repo, the root `.gitignore` exists and ignores the generated folders of each detected language: `node_modules` for JavaScript and TypeScript, `target` for Rust, `__pycache__` and `.venv` for Python. Forms such as `node_modules/`, `/node_modules` and `**/node_modules/` all count. The languages are those of the repo root and of every project `fscale facts` finds in a subfolder.
 
-Without these entries, dependencies and build output get committed by accident. That bloats the repo and slows every clone.
+It also ignores log files, `*.log`, whatever the languages. A line that ignores a `.log` file at the root counts, for example `/*.log` or `**/*.log`. `*.log` has no slash, so git reads it in every folder: `verify.log` and `backend/api/debug.log` are both ignored.
+
+Without these entries, dependencies and build output get committed by accident. That bloats the repo and slows every clone. An untracked log, such as a saved `verify.log`, also counts as a change for `fscale verify --affected` and makes every project run; an ignored one is no change.
 
 ## Manual fix
 
 1. Create `.gitignore` at the repo root if it is missing.
-2. Add one line for each reported entry, for example `node_modules/`.
-3. If the folder was already committed, run `git rm -r --cached <folder>` and commit.
+2. Add one line for each reported entry, for example `node_modules/`. Add log files as `*.log`, without a slash: `*.log/` would ignore folders only.
+3. If the folder was already committed, run `git rm -r --cached <folder>` and commit. A log file git already tracks stays tracked: run `git rm --cached <file>` for it.
 
 ## Agent fix instructions
 
 ### DETERMINISTIC
 
-Create `.gitignore` if it is missing. Append the missing entries as `name/` under one comment line. Keep existing lines and the file's line endings (CRLF stays CRLF). Do not add entries that are already covered. An entry counts as covered only if the last line matching it is not a negation, so `node_modules/` followed by `!node_modules/` is not covered and the entry is appended again after it.
+Create `.gitignore` if it is missing. Append the missing entries under one comment line: each folder as `name/`, then `*.log` as it is. Keep existing lines and the file's line endings (CRLF stays CRLF). Do not add entries that are already covered. An entry counts as covered only if the last line matching it is not a negation, so `node_modules/` followed by `!node_modules/` is not covered and the entry is appended again after it.
 
 ### REPORT
 
 - The entries that were added.
-- Any reported folder that is already tracked by git. Tell the user to untrack it with `git rm -r --cached`; do not do it silently.
+- Any reported folder, or `.log` file, that is already tracked by git. Tell the user to untrack it with `git rm -r --cached`; do not do it silently.
 
 ## Verify
 

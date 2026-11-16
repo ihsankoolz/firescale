@@ -263,10 +263,142 @@ fn eslint_settings(rest: &str) -> Vec<String> {
         .collect()
 }
 
-/// Codes after `noqa:` or in `[…]`: split at commas and white space.
-fn codes(list: &str) -> Vec<String> {
+/// The codes at the head of a list split at commas and white space, up to
+/// the first word that `is_code` does not take: the words after it are a
+/// comment (`# noqa: E402  (after the backend is chosen)`), never codes
+/// (finding 3 of the 0.5.1 review, ADR 0063).
+fn codes(list: &str, is_code: fn(&str) -> bool) -> Vec<String> {
     list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .take_while(|word| is_code(word))
         .map(str::to_owned)
+        .collect()
+}
+
+/// Any word: a list in `[…]` or a quoted value ends where its brackets or
+/// quotes do.
+fn any_word(_: &str) -> bool {
+    true
+}
+
+/// A Ruff or flake8 rule code: upper-case ASCII letters, then digits
+/// (`E402`, `F401`, `PLC0415`). Ruff's docs: "sequences of uppercase ASCII
+/// characters followed by ASCII digits … The list ends at the last valid
+/// code." Ruff also reads two codes with no delimiter (`F401F841`).
+fn ruff_code(word: &str) -> bool {
+    word.starts_with(|c: char| c.is_ascii_uppercase())
+        && word.ends_with(|c: char| c.is_ascii_digit())
+        && word
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+}
+
+/// Bandit's tests named by one word (its docs' plugin and blacklist
+/// lists); every other test name holds a `_` (`assert_used`).
+const BANDIT_ONE_WORD: [&str; 13] = [
+    "ciphers",
+    "eval",
+    "ftplib",
+    "hashlib",
+    "httpsconnection",
+    "input",
+    "marshal",
+    "md5",
+    "pickle",
+    "random",
+    "telnetlib",
+    "tempnam",
+    "trojansource",
+];
+
+/// A Bandit test after `nosec`: an id (`B602`) or a test's name
+/// (`assert_used`, `xml_bad_cElementTree`, `pickle`). Bandit reads every
+/// word of its list (`(?:(B\d+|[a-z\d_]+),?)+`, case ignored), logs one it
+/// does not know and goes on, and a `nosec` that names no test it knows
+/// turns every test off.
+fn bandit_code(word: &str) -> bool {
+    let id = word
+        .strip_prefix(['B', 'b'])
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()));
+    let name = word.contains('_')
+        && word.starts_with(|c: char| c.is_ascii_alphabetic())
+        && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    id || name || BANDIT_ONE_WORD.contains(&word)
+}
+
+/// Every word of a list, split at commas and white space, that `is_code`
+/// takes: the tool reads on past a word that is no code (pylint, bandit),
+/// so a code after a comment's word is still one (ADR 0063).
+fn every_code(list: &str, is_code: fn(&str) -> bool) -> Vec<String> {
+    list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty() && is_code(word))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// pylint's message names and checker (group) names of one word; every
+/// other message name holds a `-` (`unused-import`).
+const PYLINT_ONE_WORD: [&str; 19] = [
+    "all",
+    "basic",
+    "classes",
+    "design",
+    "exceptions",
+    "fixme",
+    "format",
+    "imports",
+    "logging",
+    "miscellaneous",
+    "newstyle",
+    "refactoring",
+    "similarities",
+    "spelling",
+    "stdlib",
+    "string",
+    "threading",
+    "typecheck",
+    "variables",
+];
+
+/// A pylint message, group or category: a message id (`C0114`), a
+/// category letter (`C`), a name with `-` or `_` (`unused-import`), or one of
+/// [`PYLINT_ONE_WORD`] (`fixme`, `typecheck`, `all`). A word of prose is none
+/// of these, so the words of a comment after the list are left out.
+fn pylint_code(word: &str) -> bool {
+    let id = word.starts_with(['C', 'R', 'W', 'E', 'F', 'I'])
+        && word[1..].chars().all(|c| c.is_ascii_digit());
+    let name = word.starts_with(|c: char| c.is_ascii_lowercase())
+        && word.contains(['-', '_'])
+        && word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    id || name || PYLINT_ONE_WORD.contains(&word)
+}
+
+/// A pylint message id in lower case (`w0612`): pylint upper-cases an id
+/// before it looks it up, so it is the id `W0612` (review of pull request
+/// 66). A lone letter in lower case is a word, not a category.
+fn pylint_lower_id(word: &str) -> bool {
+    word.len() > 1
+        && word.starts_with(['c', 'r', 'w', 'e', 'f', 'i'])
+        && word[1..].chars().all(|c| c.is_ascii_digit())
+}
+
+/// The messages of `# pylint: disable=a, b`: every word shaped like one, up to
+/// a `;`, where pylint's own reader stops. pylint reads every word of the
+/// list, so `disable=unused-import unused-variable` is two (ADR 0063). An id
+/// is keyed in upper case, as pylint reads it.
+fn pylint_codes(list: &str) -> Vec<String> {
+    let list = list.split(';').next().unwrap_or_default();
+    list.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| {
+            if pylint_lower_id(word) {
+                Some(word.to_ascii_uppercase())
+            } else {
+                pylint_code(word).then(|| word.to_owned())
+            }
+        })
         .collect()
 }
 
@@ -314,7 +446,10 @@ fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
                 keys.push("mypy-file:*".to_owned());
             } else if let Some(list) = rest.strip_prefix("disable-error-code") {
                 let list = list.trim_start().trim_start_matches('=').trim();
-                keys.extend(keyed("mypy-file", codes(list.trim_matches(['"', '\'']))));
+                keys.extend(keyed(
+                    "mypy-file",
+                    codes(list.trim_matches(['"', '\'']), any_word),
+                ));
             }
         } else if let Some(rest) = part.strip_prefix("pylint:").map(str::trim_start) {
             if directive(rest, "skip-file").is_some() {
@@ -325,21 +460,45 @@ fn python_comment(raw: &str, module_top: bool) -> Vec<String> {
                 .iter()
                 .find_map(|form| rest.strip_prefix(form));
             if let Some(list) = list {
-                keys.extend(keyed("pylint", codes(list)));
+                keys.extend(keyed("pylint", pylint_codes(list)));
             }
         } else if let Some(rest) = directive(part, "nosec") {
-            keys.extend(keyed("nosec", codes(rest)));
+            // Bandit also reads `# nosec: B101`.
+            let rest = rest.trim_start().strip_prefix(':').unwrap_or(rest);
+            keys.extend(keyed("nosec", every_code(rest, bandit_code)));
         }
     }
     keys
 }
 
-/// `noqa`, `noqa: E501, F401` or `noqa:E501`.
+/// `noqa`, `noqa: E501, F401` or `noqa:E501`. A word of the list that is
+/// a code but for its case or a mark after it (`e501`, `E402.`) is still a
+/// code, keyed as written, and a mark ends the list. A list whose first word
+/// is no code (`noqa: because`) is keyed `noqa:?`: a suppression when it is
+/// added, but not one that turned every code off, so removing it does not
+/// cover a code added elsewhere (review of pull request 66).
 fn noqa(tool: &str, rest: &str) -> Vec<String> {
-    match rest.trim_start().strip_prefix(':') {
-        Some(list) => keyed(tool, codes(list)),
-        None => keyed(tool, Vec::new()),
+    let Some(list) = rest.trim_start().strip_prefix(':') else {
+        return keyed(tool, Vec::new());
+    };
+    let mut found = Vec::new();
+    for word in list
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+    {
+        let bare = word.trim_end_matches(|c: char| c.is_ascii_punctuation());
+        if !ruff_code(&bare.to_ascii_uppercase()) {
+            break;
+        }
+        found.push(word.to_owned());
+        if bare.len() < word.len() {
+            break;
+        }
     }
+    if found.is_empty() && !list.trim().is_empty() {
+        found.push("?".to_owned());
+    }
+    keyed(tool, found)
 }
 
 /// `ignore` or `ignore[code, other]`.
@@ -348,7 +507,10 @@ fn bracketed(tool: &str, rest: &str) -> Vec<String> {
         .trim_start()
         .strip_prefix('[')
         .and_then(|list| list.split(']').next());
-    keyed(tool, inside.map(codes).unwrap_or_default())
+    keyed(
+        tool,
+        inside.map(|list| codes(list, any_word)).unwrap_or_default(),
+    )
 }
 
 /// The lints a Rust attribute allows: `#[allow(a, clippy::b)]`,
@@ -494,6 +656,65 @@ subprocess.call(cmd, shell=True)  # nosec B602
                 "mypy-file:*",
                 "mypy-file:attr-defined",
                 "nosec:B602",
+            ]
+        );
+    }
+
+    #[test]
+    fn pylint_and_bandit_read_every_word_shaped_like_a_code() {
+        // Both tools read on past a word that is not a code (ADR 0063):
+        // stopping there would hide the codes after it.
+        let source = r##"
+import os  # pylint: disable=unused-import unused-variable
+x = f()  # pylint: disable=invalid-name, kept for old callers
+y = g()  # pylint: disable=fixme,W0611 see below
+subprocess.call(cmd, shell=True)  # nosec B602 and B607
+tree = parse(text)  # nosec xml_bad_cElementTree for the old parser
+"##;
+        assert_eq!(
+            keys(source, Language::Python),
+            [
+                "pylint:unused-import",
+                "pylint:unused-variable",
+                "pylint:invalid-name",
+                "pylint:fixme",
+                "pylint:W0611",
+                "nosec:B602",
+                "nosec:B607",
+                "nosec:xml_bad_cElementTree",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_words_of_a_comment_after_the_codes_are_not_codes() {
+        // Finding 3 of the 0.5.1 review (docs/diagrams/15-lmsr.py:43).
+        let source = r##"
+import matplotlib.pyplot as plt  # noqa: E402  (after the backend is chosen)
+from core import lmsr  # noqa: E402
+import os  # noqa: F401, PLC0415 kept for the plugin loader
+# ruff: noqa: E501 long tables below
+x = f()  # pylint: disable=unused-import, too-many-locals  kept for the old callers
+y = g()  # pylint: disable=C0114  see the module docs
+subprocess.call(cmd, shell=True)  # nosec B602, B607 the command is fixed in config
+assert yaml.load("{}") == []  # nosec assert_used because the test needs it
+z = h()  # nosec the data is ours
+"##;
+        assert_eq!(
+            keys(source, Language::Python),
+            [
+                "noqa:E402",
+                "noqa:E402",
+                "noqa:F401",
+                "noqa:PLC0415",
+                "noqa-file:E501",
+                "pylint:unused-import",
+                "pylint:too-many-locals",
+                "pylint:C0114",
+                "nosec:B602",
+                "nosec:B607",
+                "nosec:assert_used",
+                "nosec:*",
             ]
         );
     }

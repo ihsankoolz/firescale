@@ -143,8 +143,25 @@ fn split_arguments(tree: Node<'_>) -> Vec<Vec<Node<'_>>> {
         inner = &inner[..inner.len() - 1];
     }
     let mut arguments: Vec<Vec<Node<'_>>> = vec![Vec::new()];
+    // A macro's tokens are flat, so `<…>` of a turbofish (`get::<_, String>`)
+    // or of a qualified path at an argument's start (`<T as F>::f()`) holds
+    // commas of its own (ADR 0063). A `<` anywhere else is a comparison.
+    let mut angle = 0usize;
+    let mut previous: Option<&str> = None;
     for node in inner {
-        if !node.is_named() && node.kind() == "," {
+        let token = (!node.is_named()).then(|| node.kind());
+        match token {
+            Some("<")
+                if angle > 0 || previous == Some("::") || previous.is_none_or(|p| p == ",") =>
+            {
+                angle += 1;
+            }
+            Some(">") if angle > 0 => angle -= 1,
+            Some(">>") if angle > 0 => angle = angle.saturating_sub(2),
+            _ => {}
+        }
+        previous = Some(token.unwrap_or("value"));
+        if !node.is_named() && node.kind() == "," && angle == 0 {
             arguments.push(Vec::new());
         } else if let Some(argument) = arguments.last_mut() {
             argument.push(*node);
@@ -260,6 +277,42 @@ fn assertion_name<'s>(invocation: Node<'_>, src: &'s [u8]) -> Option<&'s str> {
         || name.starts_with("debug_assert")
         || name.starts_with("prop_assert"))
     .then_some(name)
+}
+
+/// The failure message of an assertion macro (ADR 0063): what follows the
+/// values it checks, as `std`'s `assert!(cond, "fmt", args…)`,
+/// `assert_eq!(left, right, "fmt", args…)` and their `debug_`, `_ne`,
+/// `_matches` and `prop_` forms write it. The first argument there must be
+/// a string (the format); other macros are left whole.
+fn message_parts<'t>(invocation: Node<'t>, name: &str, src: &[u8]) -> Vec<Node<'t>> {
+    let checked = if matches!(name, "assert" | "debug_assert" | "prop_assert") {
+        1
+    } else if ["_eq", "_ne", "_matches"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+    {
+        2
+    } else {
+        return Vec::new();
+    };
+    let mut cursor = invocation.walk();
+    let Some(tree) = invocation
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "token_tree")
+    else {
+        return Vec::new();
+    };
+    let arguments = split_arguments(tree);
+    let Some(format) = arguments.get(checked) else {
+        return Vec::new();
+    };
+    let starts_as_string = format
+        .first()
+        .is_some_and(|first| super::string_like(text(*first, src)));
+    if !starts_as_string {
+        return Vec::new();
+    }
+    arguments[checked..].iter().flatten().copied().collect()
 }
 
 /// True for an assertion that cannot fail: it checks only literals, and
@@ -510,6 +563,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .map_or(1, |test| test.weight),
                     test,
                     conditional: false,
+                    checked: super::without(node, src, &message_parts(node, name, src)),
                 });
                 // What is inside is a token tree: no more macro calls.
                 false

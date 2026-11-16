@@ -57,7 +57,7 @@ use tree_sitter::{Language, Node};
 use super::reach::{self, Grammar};
 use super::recover;
 use super::suppress::{keyed, shown};
-use super::{Assertion, Suppression, TestCase, TestFile};
+use super::{failed_when, string_like, without, Assertion, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
 
 /// What the C and C++ grammars call the nodes [`reach`] looks at.
@@ -1281,8 +1281,49 @@ impl Reader<'_> {
                 .map_or(1, |test| test.weight),
             test,
             conditional,
+            checked: checked(node, name, self.src),
         });
     }
+}
+
+/// What a C or C++ assertion checks, without its failure message (ADR
+/// 0063): the last argument of Unity's `…_MESSAGE` forms
+/// (`TEST_ASSERT_EQUAL_MESSAGE(expected, actual, message)`), the format of
+/// Check's `ck_assert_msg(expr, …)`; for a failure with no check of its own
+/// (`FAIL("…")`, `TEST_FAIL_MESSAGE("…")`, `fail_msg("…")`), the condition of
+/// the `if` around it. GoogleTest's `<< "…"` is outside the call already.
+fn checked(node: Node<'_>, name: &str, src: &[u8]) -> Option<String> {
+    let list = node.child_by_field_name("arguments")?;
+    let mut cursor = list.walk();
+    let arguments: Vec<Node<'_>> = list
+        .named_children(&mut cursor)
+        .filter(|argument| !argument.is_extra() && !argument.kind().contains("comment"))
+        .collect();
+    let name = bare(name);
+    if matches!(
+        name,
+        "FAIL"
+            | "FAIL_CHECK"
+            | "TEST_FAIL"
+            | "TEST_FAIL_MESSAGE"
+            | "fail_msg"
+            | "ck_abort"
+            | "ck_abort_msg"
+    ) {
+        return failed_when(node, src, &arguments);
+    }
+    let message = if name.ends_with("_MESSAGE") {
+        arguments.len().checked_sub(1)
+    } else if name == "ck_assert_msg" {
+        Some(1)
+    } else {
+        None
+    }?;
+    let first = arguments.get(message)?;
+    if !string_like(text(*first, src)) {
+        return None;
+    }
+    without(node, src, &arguments[message..])
 }
 
 /// True for the name of an assertion macro or function.

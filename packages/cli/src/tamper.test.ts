@@ -257,6 +257,54 @@ describe('what a finding says', () => {
     ]);
   });
 
+  // Finding 3 of the 0.5.1 review: the words after `# noqa: E402` were
+  // counted as five more codes ("0 on the base, 7 now").
+  it('counts the codes after # noqa, not the words of a comment after them', async () => {
+    const labelled = corpus.cases.find(
+      (c) => c.name === 'py: two # noqa added, one with a comment after its code',
+    );
+    if (!labelled) throw new Error('corpus case missing');
+    const root = await caseRepo(labelled.base, labelled.head);
+    const { tamper: report } = await tamper(root);
+    expect(report?.findings).toEqual([
+      {
+        kind: 'suppression-added',
+        file: 'docs/diagrams/15-lmsr.py',
+        line: 11,
+        onBase: false,
+        what: '# noqa: E402 (after the backend is chosen) (noqa:E402)',
+      },
+      {
+        kind: 'suppression-added',
+        file: 'docs/diagrams/15-lmsr.py',
+        line: 16,
+        onBase: false,
+        what: '# noqa: E402 (noqa:E402)',
+      },
+    ]);
+    const text = await runCli(['verify', '--no-cache'], root);
+    expect(text.stdout).toContain('Lint suppressions in the changed files: 0 on the base, 2 now.');
+  });
+
+  // Finding 4 of the 0.5.1 review: an assert of a renamed test was paired
+  // with one of a new, different test, and reported as a changed value.
+  it('names the assert a renamed test lost, in that test, not a changed value', async () => {
+    const labelled = corpus.cases.find(
+      (c) => c.name === 'py: a renamed test lost an assert while a new test has a like one',
+    );
+    if (!labelled) throw new Error('corpus case missing');
+    const { tamper: report } = await tamper(await caseRepo(labelled.base, labelled.head));
+    expect(report?.findings).toEqual([
+      {
+        kind: 'assertion-removed',
+        file: 'tests/test_trade.py',
+        line: 14,
+        onBase: true,
+        what: 'assert upstream.calls == 1 (in test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service, renamed test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy)',
+      },
+    ]);
+  });
+
   it('makes a file it cannot parse a finding of its own, which blocks when enforced', async () => {
     const labelled = corpus.cases.find((c) => c.name === 'ts: a test deleted');
     if (!labelled) throw new Error('corpus case missing');
