@@ -2363,6 +2363,18 @@ fn followed_losses(
     elsewhere: &Elsewhere,
 ) -> Vec<Finding> {
     let mut found = Vec::new();
+    // The assertions of new tests that follow no gone test: one of them may
+    // hold a lost check with a literal now named by a variable.
+    let before_ids: BTreeSet<&str> = before.tests.iter().map(|t| t.id.as_str()).collect();
+    let mut gained: Vec<Option<&Assertion>> = after
+        .assertions
+        .iter()
+        .filter(|a| {
+            let id = test_of(after, a);
+            !id.is_empty() && !before_ids.contains(id) && !followed.of_new.contains_key(id)
+        })
+        .map(Some)
+        .collect();
     for (olds, nows) in &followed.groups {
         let in_old = |a: &&Assertion| {
             let id = test_of(before, a);
@@ -2428,6 +2440,27 @@ fn followed_losses(
                 _ => named.push(a),
             }
         }
+        // Reworded into a new test that follows none: the same check with a
+        // literal named by a variable (`parse("x") is None` → `bad = "x"`,
+        // `parse(bad) is None`; review of pull request 66). A value that
+        // changed is not reworded, so `upstream.calls == 1` is still lost
+        // beside a new test's `upstream.calls == 0`.
+        let named: Vec<&Assertion> = named
+            .into_iter()
+            .filter(|a| {
+                let slot = gained
+                    .iter_mut()
+                    .find(|b| b.is_some_and(|b| named_by_a_variable(a.checked(), b.checked())));
+                match slot {
+                    Some(slot) => {
+                        *slot = None;
+                        short = short.saturating_sub(a.weight);
+                        false
+                    }
+                    None => true,
+                }
+            })
+            .collect();
         let now = nows.join(", ");
         for a in named {
             if short == 0 {
@@ -2450,6 +2483,51 @@ fn followed_losses(
         }
     }
     found
+}
+
+/// The tokens of an assertion's text without white space: a string
+/// literal, a run of letters, digits and `_`, or one other character.
+fn tokens(shape: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = shape.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let start = at;
+        let c = bytes[at];
+        if matches!(c, b'"' | b'\'' | b'`') {
+            at += 1;
+            while at < bytes.len() && bytes[at] != c {
+                at += if bytes[at] == b'\\' { 2 } else { 1 };
+            }
+            at = (at + 1).min(bytes.len());
+        } else if c.is_ascii_alphanumeric() || c == b'_' {
+            while at < bytes.len() && (bytes[at].is_ascii_alphanumeric() || bytes[at] == b'_') {
+                at += 1;
+            }
+        } else {
+            at += shape[at..].chars().next().map_or(1, char::len_utf8);
+        }
+        out.push(shape.get(start..at).unwrap_or_default());
+    }
+    out
+}
+
+/// True when `now` is `old` with one literal or more each named by a
+/// variable, and nothing else changed: `parse("x")isNone` and
+/// `parse(bad)isNone`. Two literals that differ are a changed value, not
+/// this.
+fn named_by_a_variable(old: &str, now: &str) -> bool {
+    let literal = |token: &str| {
+        token.starts_with(['"', '\'', '`']) || token.starts_with(|c: char| c.is_ascii_digit())
+    };
+    let variable = |token: &str| token.starts_with(|c: char| c.is_alphabetic() || c == '_');
+    let (old, now) = (tokens(old), tokens(now));
+    old.len() == now.len()
+        && old != now
+        && old
+            .iter()
+            .zip(&now)
+            .all(|(a, b)| a == b || (literal(a) && variable(b)))
 }
 
 /// A suppression key's tool family, how far it reaches (0: a line or an
