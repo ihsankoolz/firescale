@@ -429,6 +429,9 @@ struct Names {
     /// The local names of testify's and gotest.tools' `assert` and
     /// `require` packages.
     asserts: BTreeSet<String>,
+    /// The local names of testify's own `assert` and `require` packages:
+    /// gotest.tools' take other arguments (ADR 0063).
+    testify: BTreeSet<String>,
     /// The local names of quicktest.
     quicktest: BTreeSet<String>,
     /// Variables assigned `assert.New(t)` or `require.New(t)`.
@@ -485,6 +488,9 @@ impl Names {
             let name = import_name(spec, &path, src);
             match import_name_bare(&path).as_str() {
                 "assert" | "require" => {
+                    if path.starts_with("github.com/stretchr/testify/") {
+                        names.testify.insert(name.clone());
+                    }
                     names.asserts.insert(name);
                 }
                 "quicktest" => {
@@ -658,13 +664,19 @@ const TESTIFY: Messages = Messages {
 /// and the like (every argument a message), the condition of the `if`
 /// around it; for testify, the values before `msgAndArgs`; for gomega,
 /// the matcher before the optional description. `None` when it has none.
-fn checked(call: Node<'_>, check: Check, src: &[u8]) -> Option<String> {
+fn checked(call: Node<'_>, check: Check, src: &[u8], names: &Names) -> Option<String> {
     let all = arguments(call);
     match check {
         Check::Fails => failed_when(call, src, &all),
         Check::Gomega => without(call, src, all.get(1..).unwrap_or_default()),
         Check::Package | Check::Object => {
-            let (_, method) = method_call(call, src)?;
+            let (operand, method) = method_call(call, src)?;
+            // Only testify's package functions take `msgAndArgs`: gotest.tools'
+            // `assert.Error(t, err, "boom")` checks its last argument. An
+            // object (`assert.New(t)`) or a suite is testify's.
+            if check == Check::Package && !names.testify.contains(text(operand, src)) {
+                return None;
+            }
             // `assert.Equal(t, …)`: the values start after `t`.
             let skip = usize::from(check == Check::Package);
             let rest: Vec<(Option<&str>, Node<'_>)> = all
@@ -1331,7 +1343,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .map_or(1, |test| test.weight),
                     test,
                     conditional: false,
-                    checked: checked(node, check, src),
+                    checked: checked(node, check, src, &names),
                 });
                 false
             }

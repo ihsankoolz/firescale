@@ -39,9 +39,10 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use tree_sitter::{Language, Node};
 
 use super::java::{
-    assertion, assign, assumes_false, children, comment_body, in_test_folder, library_receiver,
-    passes, same_package, split_path, squeezed, starts_with_test, syntax_errors, text_block_rows,
-    Literal, CONDITIONS, DOES_NOTHING, NOT_FOUND_CLASS, NOT_FOUND_METHOD, SKIPS, SKIPS_FIRST,
+    assertion, assign, assumes_false, children, comment_body, in_test_folder, junit4,
+    leading_message, library_receiver, passes, same_package, split_path, squeezed,
+    starts_with_test, syntax_errors, text_block_rows, Literal, CONDITIONS, DOES_NOTHING,
+    NOT_FOUND_CLASS, NOT_FOUND_METHOD, SKIPS, SKIPS_FIRST,
 };
 use super::reach::{self, Grammar};
 use super::suppress::{directive, keyed, shown};
@@ -216,7 +217,7 @@ const MESSAGES: Messages = Messages {
 
 /// What a Kotlin assertion checks, without its failure message (see
 /// [`MESSAGES`]); for `fail(…)`, the condition of the `if` around it.
-fn checked(node: Node<'_>, src: &[u8]) -> Option<String> {
+fn checked(node: Node<'_>, src: &[u8], junit4: bool) -> Option<String> {
     let mut message: Vec<Node<'_>> = Vec::new();
     for link in chain(node) {
         let name = call_name(link, src);
@@ -236,6 +237,8 @@ fn checked(node: Node<'_>, src: &[u8]) -> Option<String> {
         } else if MESSAGES.all.contains(&name) && link == node {
             let all: Vec<Node<'_>> = arguments.iter().map(|(_, value)| *value).collect();
             return failed_when(node, src, &all);
+        } else if junit4 {
+            message.extend(leading_message(&MESSAGES, name, &arguments, src));
         } else {
             message.extend(MESSAGES.of(name, &arguments, src));
         }
@@ -1046,6 +1049,7 @@ fn spec_tests(walker: &mut SpecWalk<'_>, body: Node<'_>, path: &[String], skippe
 
 /// Reads the tests, skips and assertions of a Kotlin test file.
 pub(super) fn read(source: &str) -> TestFile {
+    let junit4 = junit4(source.as_bytes());
     let language: Language = tree_sitter_kotlin_ng::LANGUAGE.into();
     let Some(tree) = parse(source, &language) else {
         return TestFile {
@@ -1155,7 +1159,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     && !cannot_fail(&links, src)
                 {
                     file.assertions.push(Assertion {
-                        checked: checked(node, src),
+                        checked: checked(node, src, junit4),
                         ..assertion(node, src)
                     });
                     starts.push(node.start_byte());

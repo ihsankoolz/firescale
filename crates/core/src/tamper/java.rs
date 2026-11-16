@@ -36,7 +36,8 @@ use super::reach::{self, Grammar};
 use super::recover;
 use super::suppress::{directive, keyed, shown};
 use super::{
-    failed_when, labelled_arguments, without, Assertion, Messages, Suppression, TestCase, TestFile,
+    failed_when, labelled_arguments, string_like, without, Assertion, Messages, Suppression,
+    TestCase, TestFile,
 };
 use crate::imports::{parse, text, walk};
 
@@ -235,7 +236,7 @@ const DESCRIPTIONS: [&str; 4] = [
 /// after `:` of an `assert`, the arguments of an AssertJ description, a
 /// JUnit message (see [`JUNIT`]); for `fail(…)`, the condition of the `if`
 /// around it.
-pub(super) fn checked(node: Node<'_>, src: &[u8]) -> Option<String> {
+pub(super) fn checked(node: Node<'_>, src: &[u8], junit4: bool) -> Option<String> {
     if node.kind() == "assert_statement" {
         return without(node, src, children(node).get(1..).unwrap_or_default());
     }
@@ -254,11 +255,48 @@ pub(super) fn checked(node: Node<'_>, src: &[u8]) -> Option<String> {
         } else if JUNIT.all.contains(&name) && link == node {
             let all: Vec<Node<'_>> = arguments.iter().map(|(_, argument)| *argument).collect();
             return failed_when(node, src, &all);
+        } else if junit4
+            && link
+                .child_by_field_name("object")
+                .is_none_or(|object| text(object, src) != "Assertions")
+        {
+            message.extend(leading_message(&JUNIT, name, &arguments, src));
         } else {
             message.extend(JUNIT.of(name, &arguments, src));
         }
     }
     without(node, src, &message)
+}
+
+/// True for a file that imports JUnit 4's `org.junit.Assert`, whose
+/// assertions take their message first (ADR 0063).
+pub(super) fn junit4(src: &[u8]) -> bool {
+    String::from_utf8_lossy(src).contains("org.junit.Assert")
+}
+
+/// JUnit 4's message: the first argument, when the call has one more than
+/// the values it checks (`assertEquals(message, expected, actual)`) and it is
+/// written as a string. `table` gives the values each call checks.
+pub(super) fn leading_message<'t>(
+    table: &Messages,
+    name: &str,
+    arguments: &[(Option<&str>, Node<'t>)],
+    src: &[u8],
+) -> Vec<Node<'t>> {
+    let Some(values) = table
+        .from
+        .iter()
+        .find(|(called, _)| *called == name)
+        .map(|(_, values)| *values)
+    else {
+        return Vec::new();
+    };
+    match arguments.first() {
+        Some((None, first)) if arguments.len() > values && string_like(text(*first, src)) => {
+            vec![*first]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Gives each assertion the test whose node holds it, and that test's
@@ -814,6 +852,7 @@ fn test_case(method: Node<'_>, src: &[u8], around: &Around<'_>) -> Option<TestCa
 
 /// Reads the tests, skips and assertions of a Java test file.
 pub(super) fn read(source: &str) -> TestFile {
+    let junit4 = junit4(source.as_bytes());
     let language: Language = tree_sitter_java::LANGUAGE.into();
     let Some(tree) = parse(source, &language) else {
         return TestFile {
@@ -898,7 +937,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     && !cannot_fail(&links, src)
                 {
                     file.assertions.push(Assertion {
-                        checked: checked(node, src),
+                        checked: checked(node, src, junit4),
                         ..assertion(node, src)
                     });
                     starts.push(node.start_byte());
@@ -908,7 +947,7 @@ pub(super) fn read(source: &str) -> TestFile {
             "assert_statement" => {
                 if dead.why(node).is_none() && !statement_cannot_fail(node, src) {
                     file.assertions.push(Assertion {
-                        checked: checked(node, src),
+                        checked: checked(node, src, junit4),
                         ..assertion(node, src)
                     });
                     starts.push(node.start_byte());
