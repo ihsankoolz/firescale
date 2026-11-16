@@ -2,6 +2,27 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
+
+**Pull request 5: this repo's CI**
+
+- **Item 1 (where the Windows time goes), measured before any change.** From the step times of the API and the job logs of the last three pull request runs that passed, with the Linux push runs of the same commits (ADR 0066 has every number, with run and job ids):
+
+  | Commit 74eccc6 (push 43794633022, PR 43794639420 attempt 2) | Linux node 24 | macOS          | Windows        |
+  | ----------------------------------------------------------- | ------------- | -------------- | -------------- |
+  | Job, start to end                                           | 279 s         | 554 s          | 1608 s         |
+  | Queue / setup and post steps                                | 2 / 23 s      | 3 / 28 s       | 3 / 70 s       |
+  | Build / Lint / Typecheck                                    | 18 / 24 / 4 s | 16 / 19 / 4 s  | 41 / 36 / 3 s  |
+  | `cargo test`: compile / firescale_core / firescale_rules    | 24 / 34 / 5 s | 27 / 38 / 20 s | 36 / 47 / 90 s |
+  | Vitest, wall time / sum of the 53 files                     | 141 / 378 s   | 397 / 773 s    | 1277 / 2687 s  |
+  | `tamper.test.ts` (479 tests)                                | 64 s          | 153 s          | 871 s          |
+  | `config-affects.test.ts` / `blame.test.ts`                  | 46 / 22 s     | 139 / 69 s     | 316 / 180 s    |
+
+  The other two runs (36ad227: Windows job 2072 s, Vitest 1674 s, tamper 1107 s; e6e31f8: 1586 s, 1236 s, 848 s) say the same. Vitest is 85 % of the Windows job. Its tail is one file: `tamper.test.ts` runs 479 cases one after the other (1.7 s each on Windows, 0.13 s on Linux), Vitest starts it 388 to 567 s into the run because it is a small file, and for the last 506 to 713 s it is the only file still running, on one of three workers (10 to 47 s on Linux and macOS). Under that, every process costs more on Windows: the suites that start the most processes grow most (`firescale_rules` 18 times Linux, `tamper.test.ts` 13 times), and one `fscale verify --json` of a corpus case starts 53 `git` processes. The fixtures, base-run worktrees and Rust temp files are written under `TEMP`, which is on `C:`, while the checkout is on the faster `D:`. Queue time (2 to 4 s), the pnpm cache and `pnpm install` (1 to 2 s) are not where the time goes, and `pnpm test` rebuilds nothing that Build made.
+
+- **A docs-only pull request today:** #60 added one file under `docs/reviews/`. Its runs took 27.2 minutes of Linux jobs, 72.6 of Windows and 39.0 of macOS, and its first Windows attempt failed on a test timeout and was run again.
+- **The three timeouts (item 4):** `verify.test.ts` "rejects a project folder that does not exist, and a malformed projects section" (30,110 ms, run 43685125688 attempt 1, 2026-11-15), `agent-runner.test.ts` "a protected glob that can match no path stops the run" (30,798 ms, run 43720192980, 2026-11-15) and `config-affects.test.ts` "keeps the whole-file rule for a firescale.config.ts" (30,169 ms, run 43794639420 attempt 1, 2026-11-16). The first two were fixed at the cause in the 0.5.1 run (8531c25, 5e6a3cc) and now take 0.7 to 5.2 s and 8.3 to 15.5 s on Windows. The third is not fixed: 14.9 to 26.1 s when it passes.
+
 ## 0.5.1 — fixes after running 0.5.0 on the course project (run of 2026-11-15, second)
 
 You ran 0.5.0 on the course project on Windows: a full verify took over 1h 33m and was stopped. This run is five pull requests from that. For each item: a test that failed first, then the fix; an item that could not be reproduced was left alone and says what was tried. The pull requests were built side by side and merged as each was ready, so they are in the order they merged, under the numbers you gave them.
