@@ -3275,4 +3275,32 @@ mod tests {
             Vec::<String>::new()
         );
     }
+
+    #[test]
+    fn a_check_reworded_into_a_new_test_split_off_is_not_lost() {
+        // Review of pull request 66, (b1): an honest split whose moved
+        // check names its value another way. 0.5.1 gave nothing: the count
+        // is the same.
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_parse.py",
+                    "def test_parse():\n    assert parse(\"1\") == 1\n    assert parse(\"x\") is None\n"
+                )],
+                &[(
+                    "tests/test_parse.py",
+                    "def test_parse_number():\n    assert parse(\"1\") == 1\n\n\ndef test_rejects_garbage():\n    bad = \"x\"\n    assert parse(bad) is None\n"
+                )]
+            ),
+            Vec::<String>::new()
+        );
+        // The course project's renamed test that lost `upstream.calls == 1`
+        // is still named: the new test checks another value.
+        let base = "async def test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the gate's call\"\n    assert upstream.calls == 1\n    assert trade.state_version == 1\n";
+        let head = "async def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the refresh\"\n    assert trade.state_version == 1\n\n\nasync def test_a_suspended_trader_hears_about_the_suspension_not_the_market():\n    with pytest.raises(AccountSuspended):\n        await buy(upstream, suspended=True)\n    assert upstream.calls == 0\n";
+        assert_eq!(
+            guarded(&[("tests/test_trade.py", base)], &[("tests/test_trade.py", head)]),
+            vec!["AssertionRemoved tests/test_trade.py:5 assert upstream.calls == 1 (in test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service, renamed test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy)"]
+        );
+    }
 }
