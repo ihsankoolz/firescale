@@ -754,7 +754,7 @@ describe('fscale sync', () => {
     expect(drift.stdout).toContain('would edit .gitignore');
     await runCli(['sync'], repo.root);
     expect(await repo.read('.gitignore')).toBe(
-      '# mine\n*.tmp\n# Generated files and dependencies\nnode_modules/\n',
+      '# mine\n*.tmp\n# Generated files and dependencies\nnode_modules/\n*.log\n',
     );
     expect(await repo.read('README.md')).toBe(ODD_README);
   });

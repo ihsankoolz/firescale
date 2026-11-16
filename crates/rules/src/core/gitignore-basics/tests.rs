@@ -317,4 +317,23 @@ mod log_files {
         .unwrap();
         assert_eq!(messages(&f).len(), 1);
     }
+
+    #[test]
+    fn a_folder_only_line_does_not_count() {
+        let f = Fixture::new(
+            &[
+                ("package.json", PKG),
+                (".gitignore", "node_modules/\n*.log/\n"),
+            ],
+            Track::All,
+        )
+        .unwrap();
+        assert_eq!(messages(&f).len(), 1);
+        f.fix(&GitignoreBasics, &Options::new()).unwrap();
+        assert!(f
+            .read(".gitignore")
+            .unwrap()
+            .ends_with("*.log/\n# Generated files and dependencies\n*.log\n"));
+        assert!(messages(&f).is_empty());
+    }
 }

@@ -3,6 +3,7 @@ dist/
 target/
 coverage/
 *.tsbuildinfo
+*.log
 .firescale/
 .env
 .env.*
