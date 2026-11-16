@@ -3143,4 +3143,22 @@ mod tests {
             Vec::<String>::new()
         );
     }
+
+    #[test]
+    fn a_junit_4_assert_called_on_its_class_after_a_wildcard_import_keeps_its_values() {
+        // `import org.junit.*;` names no `org.junit.Assert`, and
+        // `Assert.assertEquals` takes its message first (JUnit 4).
+        let junit4 = |message: &str, value: &str| {
+            format!("import org.junit.*;\n\npublic class UserTest {{\n    @Test\n    public void name() {{\n        Assert.assertEquals(\"{message}\", user.getName(), \"{value}\");\n    }}\n}}\n")
+        };
+        let path = "src/test/java/UserTest.java";
+        assert_eq!(
+            changed(path, &junit4("name", "alice"), &junit4("name", "bob")).len(),
+            1
+        );
+        assert_eq!(
+            changed(path, &junit4("name", "alice"), &junit4("the name", "alice")),
+            Vec::<String>::new()
+        );
+    }
 }
