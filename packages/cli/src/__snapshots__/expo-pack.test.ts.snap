@@ -2,6 +2,7 @@
 
 exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > .gitignore 1`] = `
 "# Generated files and dependencies
+*.log
 # Expo
 .expo/
 dist/

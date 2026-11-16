@@ -90,7 +90,7 @@ fscale sync --check    # CI: exit 1 if sync would change something
 
 `sync` needs a firescale config. Without one it tells you to run `adopt` or `init`.
 
-Drift is anything a fix would repair again: a generated file that is gone from disk and from git, a `.gitignore` that lost a required line. A file that is deleted from disk but still tracked is not recreated (see above); `git rm` it, or `git restore` it. `sync --check` is a dry run of `sync` whose exit code is 1 when there is at least one change, and it prints the changes as a diff.
+Drift is anything a fix would repair again: a generated file that is gone from disk and from git, a `.gitignore` that lost a required line. A new version can ask for a line an older one did not: from 0.5.2, `core/gitignore-basics` asks for `*.log`, so on a repo adopted with an older version `sync --check` exits 1 once and shows `+*.log` in the diff for `.gitignore`. Run `fscale sync` and commit the change. A file that is deleted from disk but still tracked is not recreated (see above); `git rm` it, or `git restore` it. `sync --check` is a dry run of `sync` whose exit code is 1 when there is at least one change, and it prints the changes as a diff.
 
 Whatever packs are on, `sync` also moves an older pin firescale wrote in an agent's stop hook (`npx --yes firescale@<version> hooks run --agent <name>`) to its own version, and says so under `agent hooks`. No other command in those files is changed ([hooks.md](hooks.md), ADR 0064).
 

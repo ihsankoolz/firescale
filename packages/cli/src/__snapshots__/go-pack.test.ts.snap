@@ -2,6 +2,7 @@
 
 exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > .gitignore 1`] = `
 "# Generated files and dependencies
+*.log
 # Go
 /app
 *.exe
