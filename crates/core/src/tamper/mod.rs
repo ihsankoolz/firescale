@@ -3174,4 +3174,24 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn a_value_changed_in_a_test_whose_following_was_not_seen_is_still_an_expected_change() {
+        // test_a is followed by test_b; test_c took one of its checks with
+        // another value, and its name is not test_a's. Before ADR 0063 any
+        // gone test paired with any new one, and this was found.
+        assert_eq!(
+            guarded(
+                &[(
+                    "tests/test_parts.py",
+                    "def test_a():\n    assert x() == 1\n    assert y() == 2\n"
+                )],
+                &[(
+                    "tests/test_parts.py",
+                    "def test_b():\n    assert x() == 1\n    assert z() == 3\n\n\ndef test_c():\n    assert y() == 5\n"
+                )]
+            ),
+            vec!["ExpectedChanged tests/test_parts.py:7 assert y() == 5 (on the base: assert y() == 2, line 3)"]
+        );
+    }
 }
