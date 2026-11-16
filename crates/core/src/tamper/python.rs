@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::reach::{self, Grammar};
-use super::{without, Assertion, Messages, TestCase, TestFile};
+use super::{failed_when, without, Assertion, Messages, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
 
 /// How deep a dotted name is followed: real code never comes near it.
@@ -858,23 +858,25 @@ const MESSAGES: Messages = Messages {
     labels: &["msg", "err_msg"],
 };
 
-/// The parts of an assertion that are its failure message: what follows
-/// the comma of an `assert`, every argument of `pytest.fail` and
-/// `self.fail`, and the message of a unittest or numpy assertion.
-fn message_parts<'t>(node: Node<'t>, src: &[u8], names: &Names<'_>) -> Vec<Node<'t>> {
+/// What an assertion checks, without its failure message: what follows
+/// the comma of an `assert`, the message of a unittest or numpy assertion;
+/// for `pytest.fail` and `self.fail`, whose every argument is the message,
+/// the condition of the `if` around them. `None` when it has no message.
+fn checked(node: Node<'_>, src: &[u8], names: &Names<'_>) -> Option<String> {
     if node.kind() == "assert_statement" {
-        return children(node).into_iter().skip(1).collect();
+        let message: Vec<Node<'_>> = children(node).into_iter().skip(1).collect();
+        return without(node, src, &message);
     }
     let (Some(function), Some(list)) = (
         node.child_by_field_name("function"),
         node.child_by_field_name("arguments"),
     ) else {
-        return Vec::new();
+        return None;
     };
     if list.kind() != "argument_list" {
-        return Vec::new();
+        return None;
     }
-    let arguments: Vec<(Option<&str>, Node<'t>)> = children(list)
+    let arguments: Vec<(Option<&str>, Node<'_>)> = children(list)
         .into_iter()
         .map(|argument| {
             let label = (argument.kind() == "keyword_argument")
@@ -889,16 +891,17 @@ fn message_parts<'t>(node: Node<'t>, src: &[u8], names: &Names<'_>) -> Vec<Node<
             || matches!(&path[..], [receiver, method] if receiver == "self" && method == "fail")
     });
     if fails {
-        return arguments.into_iter().map(|(_, node)| node).collect();
+        let all: Vec<Node<'_>> = arguments.into_iter().map(|(_, node)| node).collect();
+        return failed_when(node, src, &all);
     }
     let last = match function.kind() {
         "identifier" => text(function, src),
         "attribute" => function
             .child_by_field_name("attribute")
             .map_or("", |name| text(name, src)),
-        _ => return Vec::new(),
+        _ => return None,
     };
-    MESSAGES.of(last, &arguments, src)
+    without(node, src, &MESSAGES.of(last, &arguments, src))
 }
 
 /// True for an `assert` statement that can fail: its condition does not
@@ -1272,7 +1275,7 @@ pub(super) fn read(source: &str) -> TestFile {
                             .map_or(1, |test| test.weight),
                         test,
                         conditional: false,
-                        checked: without(node, src, &message_parts(node, src, &names)),
+                        checked: checked(node, src, &names),
                     });
                 }
             }

@@ -45,7 +45,7 @@ use super::java::{
 };
 use super::reach::{self, Grammar};
 use super::suppress::{directive, keyed, shown};
-use super::{Suppression, TestCase, TestFile};
+use super::{failed_when, without, Assertion, Messages, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
 
 /// What the Kotlin grammar calls the nodes [`reach`] looks at. Its `if`
@@ -189,6 +189,58 @@ fn argument<'t>(value_argument: Node<'t>, src: &[u8]) -> (Option<String>, Option
     } else {
         (None, parts.last().copied())
     }
+}
+
+/// The failure messages of kotlin.test assertions (ADR 0063): the
+/// `message: String? = null` after the values each takes
+/// (`assertEquals(expected, actual, message)`), by place or by name; AssertJ's
+/// descriptions; `fail(message)`, which is all message.
+const MESSAGES: Messages = Messages {
+    all: &["fail"],
+    from: &[
+        ("assertTrue", 1),
+        ("assertFalse", 1),
+        ("assertNull", 1),
+        ("assertNotNull", 1),
+        ("assertIs", 1),
+        ("assertIsNot", 1),
+        ("assertEquals", 2),
+        ("assertNotEquals", 2),
+        ("assertSame", 2),
+        ("assertNotSame", 2),
+        ("assertContentEquals", 2),
+        ("assertContains", 2),
+    ],
+    labels: &["message"],
+};
+
+/// What a Kotlin assertion checks, without its failure message (see
+/// [`MESSAGES`]); for `fail(…)`, the condition of the `if` around it.
+fn checked(node: Node<'_>, src: &[u8]) -> Option<String> {
+    let mut message: Vec<Node<'_>> = Vec::new();
+    for link in chain(node) {
+        let name = call_name(link, src);
+        let arguments: Vec<(Option<String>, Node<'_>)> = value_arguments(link)
+            .into_iter()
+            .map(|value| (argument(value, src).0, value))
+            .collect();
+        let arguments: Vec<(Option<&str>, Node<'_>)> = arguments
+            .iter()
+            .map(|(label, value)| (label.as_deref(), *value))
+            .collect();
+        if matches!(
+            name,
+            "as" | "describedAs" | "withFailMessage" | "overridingErrorMessage"
+        ) {
+            message.extend(arguments.iter().map(|(_, value)| *value));
+        } else if MESSAGES.all.contains(&name) && link == node {
+            let all: Vec<Node<'_>> = arguments.iter().map(|(_, value)| *value).collect();
+            return failed_when(node, src, &all);
+        } else {
+            message.extend(MESSAGES.of(name, &arguments, src));
+        }
+    }
+    without(node, src, &message)
 }
 
 /// The value as a [`Literal`], or `None` when it is not one.
@@ -1102,7 +1154,10 @@ pub(super) fn read(source: &str) -> TestFile {
                     && !never(node)
                     && !cannot_fail(&links, src)
                 {
-                    file.assertions.push(assertion(node, src));
+                    file.assertions.push(Assertion {
+                        checked: checked(node, src),
+                        ..assertion(node, src)
+                    });
                     starts.push(node.start_byte());
                 }
                 true

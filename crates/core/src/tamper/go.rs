@@ -53,7 +53,7 @@ use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
 use super::recover;
-use super::{Assertion, Suppression, TestCase, TestFile};
+use super::{failed_when, without, Assertion, Messages, Suppression, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
 
 /// The import spec of a name that comes from the package under test: the
@@ -583,6 +583,108 @@ enum Check {
     Object,
     /// `Expect(…).To(…)`.
     Gomega,
+}
+
+/// The failure messages of testify's assertions (ADR 0063): its
+/// `msgAndArgs ...interface{}` after the values each one takes
+/// (pkg.go.dev/github.com/stretchr/testify/assert), and the format of its
+/// `…f` forms. `Fail` and `FailNow` take only a message.
+const TESTIFY: Messages = Messages {
+    all: &["Fail", "FailNow"],
+    from: &[
+        ("True", 1),
+        ("False", 1),
+        ("Nil", 1),
+        ("NotNil", 1),
+        ("Empty", 1),
+        ("NotEmpty", 1),
+        ("Zero", 1),
+        ("NotZero", 1),
+        ("NoError", 1),
+        ("Error", 1),
+        ("Panics", 1),
+        ("NotPanics", 1),
+        ("Positive", 1),
+        ("Negative", 1),
+        ("Condition", 1),
+        ("FileExists", 1),
+        ("NoFileExists", 1),
+        ("DirExists", 1),
+        ("NoDirExists", 1),
+        ("Equal", 2),
+        ("NotEqual", 2),
+        ("EqualValues", 2),
+        ("NotEqualValues", 2),
+        ("Exactly", 2),
+        ("Same", 2),
+        ("NotSame", 2),
+        ("Contains", 2),
+        ("NotContains", 2),
+        ("Subset", 2),
+        ("NotSubset", 2),
+        ("ElementsMatch", 2),
+        ("NotElementsMatch", 2),
+        ("Len", 2),
+        ("Greater", 2),
+        ("GreaterOrEqual", 2),
+        ("Less", 2),
+        ("LessOrEqual", 2),
+        ("IsType", 2),
+        ("IsNotType", 2),
+        ("Implements", 2),
+        ("ErrorIs", 2),
+        ("NotErrorIs", 2),
+        ("ErrorAs", 2),
+        ("ErrorContains", 2),
+        ("EqualError", 2),
+        ("Regexp", 2),
+        ("NotRegexp", 2),
+        ("JSONEq", 2),
+        ("YAMLEq", 2),
+        ("PanicsWithValue", 2),
+        ("PanicsWithError", 2),
+        ("EqualExportedValues", 2),
+        ("InDelta", 3),
+        ("InEpsilon", 3),
+        ("WithinDuration", 3),
+        ("WithinRange", 3),
+        ("Eventually", 3),
+        ("Never", 3),
+    ],
+    labels: &[],
+};
+
+/// What a check verifies, without its failure message: for `t.Errorf(…)`
+/// and the like (every argument a message), the condition of the `if`
+/// around it; for testify, the values before `msgAndArgs`; for gomega,
+/// the matcher before the optional description. `None` when it has none.
+fn checked(call: Node<'_>, check: Check, src: &[u8]) -> Option<String> {
+    let all = arguments(call);
+    match check {
+        Check::Fails => failed_when(call, src, &all),
+        Check::Gomega => without(call, src, all.get(1..).unwrap_or_default()),
+        Check::Package | Check::Object => {
+            let (_, method) = method_call(call, src)?;
+            // `assert.Equal(t, …)`: the values start after `t`.
+            let skip = usize::from(check == Check::Package);
+            let rest: Vec<(Option<&str>, Node<'_>)> = all
+                .into_iter()
+                .skip(skip)
+                .map(|node| (None, node))
+                .collect();
+            let known = |name: &str| TESTIFY.from.iter().any(|(called, _)| *called == name);
+            let name = method
+                .strip_suffix('f')
+                .filter(|plain| known(plain) || TESTIFY.all.contains(plain))
+                .unwrap_or(method);
+            let message = TESTIFY.of(name, &rest, src);
+            if TESTIFY.all.contains(&name) {
+                failed_when(call, src, &message)
+            } else {
+                without(call, src, &message)
+            }
+        }
+    }
 }
 
 /// How a call is an assertion, or `None`. `suite` is the receiver of the
@@ -1229,7 +1331,7 @@ pub(super) fn read(source: &str) -> TestFile {
                         .map_or(1, |test| test.weight),
                     test,
                     conditional: false,
-                    checked: None,
+                    checked: checked(node, check, src),
                 });
                 false
             }

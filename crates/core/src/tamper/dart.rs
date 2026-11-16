@@ -36,7 +36,9 @@ use tree_sitter::{Language, Node};
 use super::reach::{self, Grammar};
 use super::recover;
 use super::suppress::{keyed, shown};
-use super::{Assertion, Suppression, TestCase, TestFile};
+use super::{
+    failed_when, labelled_arguments, without, Assertion, Messages, Suppression, TestCase, TestFile,
+};
 use crate::imports::{parse, text, walk};
 
 const TEST_NAMES: [&str; 3] = ["test", "testWidgets", "testGoldens"];
@@ -177,6 +179,30 @@ const LITERALS: [&str; 18] = [
     "template_chars_double",
     "escape_sequence",
 ];
+
+/// The failure messages of `package:test` (ADR 0063): the `reason:` of
+/// `expect(actual, matcher, {reason, skip})` and `expectLater`, and
+/// `fail(message)`, which is all message.
+const MESSAGES: Messages = Messages {
+    all: &["fail"],
+    from: &[("expect", 2), ("expectLater", 2)],
+    labels: &["reason"],
+};
+
+/// What an assertion checks, without its failure message (see
+/// [`MESSAGES`]); for `fail(…)`, the condition of the `if` around it.
+fn checked(call: Node<'_>, whole: Node<'_>, src: &[u8]) -> Option<String> {
+    let name = callee(call, src)?;
+    let message = call
+        .child_by_field_name("arguments")
+        .map(|list| MESSAGES.of(name, &labelled_arguments(list, src), src))
+        .unwrap_or_default();
+    if MESSAGES.all.contains(&name) {
+        failed_when(whole, src, &message)
+    } else {
+        without(whole, src, &message)
+    }
+}
 
 /// The name a call calls when it is a plain identifier (`test`, `expect`).
 fn callee<'s>(call: Node<'_>, src: &'s [u8]) -> Option<&'s str> {
@@ -577,7 +603,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 weight: 1,
                 test,
                 conditional: false,
-                checked: None,
+                checked: checked(node, whole, src),
             });
             return true;
         }

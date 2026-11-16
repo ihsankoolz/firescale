@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::{Language, Node};
 
 use super::reach::{self, Grammar};
-use super::{labelled_arguments, without, Assertion, Messages, TestCase, TestFile};
+use super::{failed_when, labelled_arguments, without, Assertion, Messages, TestCase, TestFile};
 use crate::imports::{js_dialect, js_string, parse, text, walk, JsDialect};
 
 /// The failure messages of JS and TS assertions (ADR 0063): Vitest's and
@@ -46,19 +46,26 @@ const MESSAGES: Messages = Messages {
     labels: &[],
 };
 
-/// The failure message of the call that opens an assertion: the
-/// arguments [`MESSAGES`] names.
-fn message_parts<'t>(call: Node<'t>, function: Node<'_>, src: &[u8]) -> Vec<Node<'t>> {
+/// What an assertion checks, without the failure message of the call that
+/// opens it (the arguments [`MESSAGES`] names); for `assert.fail`, the
+/// condition of the `if` around it. `None` when it has no message.
+fn checked(call: Node<'_>, whole: Node<'_>, function: Node<'_>, src: &[u8]) -> Option<String> {
     let name = match function.kind() {
         "identifier" => text(function, src),
         "member_expression" => function
             .child_by_field_name("property")
             .map_or("", |property| text(property, src)),
-        _ => return Vec::new(),
+        _ => return None,
     };
-    call.child_by_field_name("arguments")
+    let message = call
+        .child_by_field_name("arguments")
         .map(|list| MESSAGES.of(name, &labelled_arguments(list, src), src))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if MESSAGES.all.contains(&name) {
+        failed_when(whole, src, &message)
+    } else {
+        without(whole, src, &message)
+    }
 }
 
 const TEST_NAMES: [&str; 5] = ["it", "test", "xit", "xtest", "fit"];
@@ -497,7 +504,7 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
                     .join(" "),
                 test: inside.and_then(|block| block.test),
                 conditional: false,
-                checked: without(whole, src, &message_parts(node, function, src)),
+                checked: checked(node, whole, function, src),
                 weight: inside.map_or(1, |block| block.weight),
             });
             return true;
