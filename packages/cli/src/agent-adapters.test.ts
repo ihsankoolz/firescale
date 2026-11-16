@@ -240,6 +240,11 @@ describe('fscale fix --agent codex', () => {
     });
     const result = await runCli(['fix', '--agent', 'codex', '--rule', RULE], root, env);
     expect(result.code, result.stderr + result.stdout).toBe(EXIT_OK);
+    // What was not confirmed from Codex itself is in the output (ADR 0048).
+    expect(result.stdout).toContain('Agent: codex 9.9.9 (stand-in)');
+    expect(result.stdout).toContain(
+      'unverified (ADR 0048, check by hand): `--sandbox workspace-write`',
+    );
     const logged = await calls();
     expect(logged.map((call) => call.args.slice(0, 2).join(' '))).toEqual([
       '--version',
