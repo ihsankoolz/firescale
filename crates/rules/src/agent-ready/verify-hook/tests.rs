@@ -140,10 +140,10 @@ mod fixed_repo {
                 ".cursor/hooks.json"
             ]
         );
-        assert!(f
-            .read(".codex/hooks.json")
-            .unwrap()
-            .contains("\"npx firescale hooks run --agent codex\""));
+        assert!(f.read(".codex/hooks.json").unwrap().contains(&format!(
+            "\"npx --yes firescale@{} hooks run --agent codex\"",
+            firescale_core::version()
+        )));
         assert!(check(&f, &Options::new()).is_empty());
         let again = f.fix(&VerifyHook, &Options::new()).unwrap();
         assert!(again.changed_files.is_empty());

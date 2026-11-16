@@ -91,7 +91,10 @@ mod fixed_repo {
             .iter()
             .any(|d| d.as_str().unwrap_or("").contains("example")));
         let allow = claude["permissions"]["allow"].as_array().unwrap();
-        assert!(allow.contains(&Value::from("Bash(npx firescale verify *)")));
+        assert!(allow.contains(&Value::from(format!(
+            "Bash(npx --yes firescale@{} verify *)",
+            firescale_core::version()
+        ))));
         assert!(allow.contains(&Value::from("Bash(npm run test *)")));
         assert_eq!(f.read(CODEX_CONFIG).unwrap(), codex_config());
         assert!(codex_config().contains("\"**/.env\" = \"deny\""));

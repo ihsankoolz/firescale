@@ -20,18 +20,22 @@ use firescale_core::config::{
 };
 use firescale_core::configkey;
 use firescale_core::diff::unified_diff;
-use firescale_core::doctor::{format_doctor_human, format_doctor_json, run_doctor, ThisMachine};
+use firescale_core::doctor::{
+    add_checks, format_doctor_human, format_doctor_json, run_doctor, ThisMachine,
+};
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
 use firescale_core::fixloop::{
     plan_order, run_fix_loop, LoopFailure, LoopReport, LoopRule, MAX_PASSES,
 };
 use firescale_core::graph::{
-    affected, affected_except, build_graph, format_graph_human, format_graph_json, Graph,
+    affected_except, build_graph, format_graph_human, format_graph_json, Graph,
 };
 use firescale_core::hooks::{
-    block_summary, decide, install_hook, max_blocks_from_env, parse_hook_input, reply, Agent,
-    AGENTS,
+    block_summary, check_path, check_start, decide, default_bin, has_fscale_script, hook_command,
+    hook_file_changes, install_hook, installed_prefixes, launch_note, max_blocks_from_env,
+    may_start, no_download, not_downloaded, not_started, parse_hook_input, pinned_answer,
+    pinned_version, probe_line, reply, start_verdict, Agent, HookFileChanges, AGENTS,
 };
 use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
@@ -78,17 +82,18 @@ Usage:
   fscale explain <rule>        Print what a rule checks and how to fix it
   fscale facts [--json]        Print detected repo facts
   fscale graph [--explain]     Print the project graph; --explain says where each edge comes from
-  fscale doctor [--json]       Check this machine: tools, env variables, dependencies, services
+  fscale doctor [--json]       Check this machine: tools, env variables, dependencies, services,
+                               agent hooks
   fscale add <generator> --json <input> [--dry-run]
                                Scaffold new files from JSON input (package, rule)
   fscale schema [<generator>]  Print a generator's input JSON Schema, or list the generators
   fscale hooks install         Make an agent run verify before it may stop (--agent, --all)
-  fscale --version             Print the firescale version
+  fscale --version [--json]    Print the firescale version (--json: with its name)
   fscale --help                Print this help
 
 Options:
   --rules <glob>   check, fix: only matching rules, e.g. \"core/*\" (comma-separated)
-  --json           check, verify, facts, graph, doctor, ledger: print JSON (see docs/)
+  --json           check, verify, facts, graph, doctor, ledger, --version: print JSON (see docs/)
   --sarif          check: print SARIF 2.1.0 (see docs/sarif.md)
   --affected       check, verify: only what changed, and projects that depend on it
   --base <ref>     With --affected: also count commits since the merge base with <ref>;
@@ -114,7 +119,9 @@ Options:
   --rule <id>      fix --agent: the rule to fix (default: the first with violations a
                    deterministic fix cannot repair)
   --all            hooks install: every supported agent
-  --bin <command>  hooks install: how the hook starts fscale (default: fscale)
+  --bin <command>  hooks install: how the hook starts fscale (default: the repo's own
+                   fscale package script, else the firescale it installs, else
+                   npx --yes firescale@<this version>)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
   --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
                    took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is
@@ -948,7 +955,8 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
         )));
     }
     let facts = detect_facts(root)?;
-    let report = run_doctor(root, &facts, &ThisMachine);
+    let mut report = run_doctor(root, &facts, &ThisMachine);
+    add_checks(&mut report, hook_findings(root));
     let text = if args.json {
         format_doctor_json(&report)
     } else {
@@ -1114,16 +1122,32 @@ fn verify_plan(
         && matches!(&changed, Changed::Files(_))
         && configkey::ignored_config(root)
             .is_some_and(|digest| stepcache::ignored_config_changed(root, &digest));
+    // An agent hook file that changed only inside its hook entries, and
+    // that no project reads by its path, reaches only the units whose key
+    // holds the root. A change outside the hook entries (Claude Code gives
+    // the `env` of its settings to every command it starts) reaches every
+    // project (ADR 0064).
+    let hook_changes = match &changed {
+        Changed::Files(files) => hook_file_changes(root, base, files, &graph),
+        Changed::Everything | Changed::Shallow(_) => HookFileChanges::default(),
+    };
     let mut set = match &config_effect {
         Some(effect) => {
-            let mut set = affected_except(&graph, &changed, &[JSON_CONFIG]);
+            let mut settled = hook_changes.settled.clone();
+            settled.push(JSON_CONFIG);
+            let mut set = affected_except(&graph, &changed, &settled);
             if set.everything.is_none() {
                 set.everything.clone_from(&effect.everything);
             }
             set
         }
-        None => affected(&graph, &changed),
+        None => affected_except(&graph, &changed, &hook_changes.settled),
     };
+    if let Some(first) = hook_changes.outside.first() {
+        set.everything = Some(format!(
+            "{first} changed outside the stop hook entry firescale writes, and what is there reaches every step (Claude Code gives its env to every command it starts, and another hook can set that env)"
+        ));
+    }
     let mut notes = Vec::new();
     match &changed {
         Changed::Everything => notes.push(
@@ -1178,6 +1202,23 @@ fn verify_plan(
     }
     if ignored_config_changed {
         configkey::mark_file_readers(&mut plan, &graph, configkey::IGNORED_READ_AS_A_FILE_REASON);
+    }
+    if let [first, rest @ ..] = hook_changes.settled.as_slice() {
+        let named = match rest.len() {
+            0 => (*first).to_owned(),
+            more => format!("{first} and {more} more"),
+        };
+        let reason = format!(
+            "{named} changed, and these steps can read every file of the repo, the agent hook files among them"
+        );
+        let read = configkey::mark_file_readers(&mut plan, &graph, &reason);
+        if !read && set.everything.is_none() {
+            notes.push(if rest.is_empty() {
+                format!("1 changed file ({first}) is an agent hook file, which only a step that can read every file of the repo could read, and no such step runs here, so it runs nothing; the check still covers it.")
+            } else {
+                format!("{} changed files ({first} and {} more) are agent hook files, which only a step that can read every file of the repo could read, and no such step runs here, so they run nothing; the check still covers them.", rest.len() + 1, rest.len())
+            });
+        }
     }
     if let Some(affected) = plan.affected.as_mut() {
         affected.notes = notes;
@@ -1754,6 +1795,215 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     })
 }
 
+/// What the check found for one command of a hook file (ADR 0064).
+#[derive(Debug, Clone)]
+enum HookStart {
+    /// It gave firescale's answer, with this version.
+    Starts(String),
+    /// Why it cannot start on this machine.
+    Cannot(String),
+    /// Not started: it is not a command fscale writes. Why, and what to do.
+    NotStarted(String),
+    /// Not started by `fscale doctor`, which runs no script of the repo and
+    /// downloads nothing, though fscale writes the command. Why.
+    Skipped(String),
+}
+
+/// Checks the stop hooks in the files of `agents`: starts each command in
+/// them that fscale writes itself (`allowed`, the first being the one it
+/// writes here, and any pin a release wrote), once, the way an agent starts
+/// it, after saying on stderr what it runs. Any other command came from the
+/// repo's files and is never started (review of ADR 0064). For `doctor`, a
+/// pin is started with npx's `--no`, which downloads nothing, and a command
+/// that runs the repo's `fscale` script is not started (second review).
+/// One result for each command of each file.
+fn hook_starts(
+    root: &Path,
+    agents: &[Agent],
+    allowed: &[&str],
+    doctor: bool,
+) -> Vec<(Agent, String, HookStart)> {
+    let found: Vec<(Agent, String)> = agents
+        .iter()
+        .flat_map(|agent| {
+            installed_prefixes(root, *agent)
+                .into_iter()
+                .map(move |prefix| (*agent, prefix))
+        })
+        .collect();
+    let (path, dropped) = check_path(root);
+    let path_note = match dropped.as_slice() {
+        [] => String::new(),
+        [one] => format!(
+            " It leaves out of the PATH the folder a package manager put there for its own run ({one}), which an agent does not have."
+        ),
+        more => format!(
+            " It leaves out of the PATH the {} folders a package manager put there for its own run ({}), which an agent does not have.",
+            more.len(),
+            more.join(", ")
+        ),
+    };
+    let mut done: Vec<(String, HookStart)> = Vec::new();
+    let mut results = Vec::new();
+    for (agent, prefix) in &found {
+        if !may_start(prefix, allowed) {
+            let why = not_started(*agent, prefix, allowed.first().copied().unwrap_or_default());
+            results.push((*agent, prefix.clone(), HookStart::NotStarted(why)));
+            continue;
+        }
+        if let Some((_, result)) = done.iter().find(|(started, _)| started == prefix) {
+            results.push((*agent, prefix.clone(), result.clone()));
+            continue;
+        }
+        let pin = pinned_version(prefix);
+        if doctor && pin.is_none() && has_fscale_script(root) {
+            let why = format!(
+                "it runs this repo's own `fscale` package script, and doctor runs no script of the repo. Check it yourself: `{}`.",
+                probe_line(prefix)
+            );
+            done.push((prefix.clone(), HookStart::Skipped(why.clone())));
+            results.push((*agent, prefix.clone(), HookStart::Skipped(why)));
+            continue;
+        }
+        let started = match pin {
+            Some(version) if doctor => no_download(version),
+            _ => prefix.clone(),
+        };
+        // Claude Code sets CLAUDE_PROJECT_DIR for the commands it starts.
+        let claude = found
+            .iter()
+            .any(|(other, same)| *other == Agent::Claude && same == prefix);
+        let _ = writeln!(
+            std::io::stderr(),
+            "fscale: checking that the hook can start: running `{}` in the repo root, as an agent would.{}{path_note}",
+            probe_line(&started),
+            launch_note(&started)
+        );
+        let mut check = check_start(root, &started, path.as_deref(), claude, !doctor);
+        if let Some(version) = pin {
+            check = pinned_answer(version, check);
+        }
+        let result = match (pin, start_verdict(&started, &check)) {
+            (_, Ok(answer)) => HookStart::Starts(answer),
+            (Some(version), Err(_)) if doctor && not_downloaded(&check) => {
+                HookStart::Skipped(format!(
+                    "firescale {version} is not downloaded yet, and doctor downloads nothing. The agent's first stop downloads it through `{prefix}`, which needs the network."
+                ))
+            }
+            (_, Err(why)) => HookStart::Cannot(why),
+        };
+        done.push((prefix.clone(), result.clone()));
+        results.push((*agent, prefix.clone(), result));
+    }
+    results
+}
+
+/// After `hooks install`: checks the stop hooks of the files in `files`
+/// ([`hook_starts`]) and says on `out` whether each starts. True when each
+/// command was started and gave firescale's answer.
+fn check_hook_starts(root: &Path, files: &[&str], allowed: &[&str], out: &mut String) -> bool {
+    let agents: Vec<Agent> = AGENTS
+        .into_iter()
+        .filter(|agent| files.contains(&agent.config_file()))
+        .collect();
+    let mut all_start = true;
+    let mut cannot = false;
+    let mut said: Vec<String> = Vec::new();
+    for (agent, prefix, result) in hook_starts(root, &agents, allowed, false) {
+        match result {
+            HookStart::NotStarted(why) | HookStart::Skipped(why) => {
+                all_start = false;
+                out.push_str(&format!(
+                    "The hook in {} was not started: {why}\n",
+                    agent.config_file()
+                ));
+            }
+            _ if said.contains(&prefix) => {}
+            HookStart::Starts(answer) => {
+                let other = if answer == version() {
+                    String::new()
+                } else {
+                    format!(
+                        " That is not this fscale ({}): the agent will run firescale {answer}.",
+                        version()
+                    )
+                };
+                out.push_str(&format!(
+                    "The hook starts on this machine: `{}` answered firescale {answer}.{other}\n",
+                    probe_line(&prefix)
+                ));
+                said.push(prefix);
+            }
+            HookStart::Cannot(why) => {
+                all_start = false;
+                cannot = true;
+                out.push_str(&format!("The hook cannot start on this machine: {why}\n"));
+                said.push(prefix);
+            }
+        }
+    }
+    if cannot {
+        out.push_str(
+            "An agent whose stop hook cannot start stops without verify having run: Claude Code, Codex and Cursor take it as a hook error, not as a reason to keep working (docs/hooks.md). The hook files are written, since the command may start on another machine. Make the command work here (npx comes with Node.js; a package script needs the repo's dependencies installed), or use another one: edit it in the files above, or remove the hook and run this again with --bin \"<a command that starts fscale here>\", for example --bin fscale when fscale is on the PATH.\n",
+        );
+    }
+    all_start
+}
+
+/// `fscale doctor`'s checks of the agent hooks: each stop hook in the
+/// repo's hook files that fscale would write here is started the same way
+/// as after `hooks install`, on this machine (ADR 0064).
+fn hook_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
+    use firescale_core::doctor::{Finding, Status as Health};
+    let writes = default_bin(root);
+    hook_starts(root, &AGENTS, &[writes.as_str()], true)
+        .into_iter()
+        .map(|(agent, prefix, result)| {
+            // What doctor started: a pin without a download.
+            let started = pinned_version(&prefix).map_or_else(|| prefix.clone(), no_download);
+            let (status, detail, fix) = match result {
+                HookStart::Starts(answer) if answer == version() => (
+                    Health::Ok,
+                    format!(
+                        "the stop hook starts: `{}` answered firescale {answer}.",
+                        probe_line(&started)
+                    ),
+                    None,
+                ),
+                HookStart::Starts(answer) => (
+                    Health::Warning,
+                    format!(
+                        "the stop hook starts: `{}` answered firescale {answer}, which is not this fscale ({}): the agent runs firescale {answer}.",
+                        probe_line(&started),
+                        version()
+                    ),
+                    None,
+                ),
+                HookStart::Cannot(why) => (
+                    Health::Problem,
+                    format!("the stop hook cannot start: {why}"),
+                    Some(format!(
+                        "make `{prefix}` start on this machine (npx comes with Node.js; a package script needs the repo's dependencies installed). Until then the agent stops without verify having run."
+                    )),
+                ),
+                HookStart::NotStarted(why) | HookStart::Skipped(why) => (
+                    Health::Warning,
+                    format!("the stop hook was not started: {why}"),
+                    None,
+                ),
+            };
+            Finding {
+                section: "hooks",
+                project: None,
+                subject: agent.config_file().to_owned(),
+                status,
+                detail,
+                fix,
+            }
+        })
+        .collect()
+}
+
 /// `fscale hooks install` and `fscale hooks run`.
 fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
     // The stop hook decides whether an agent may stop: a run that leaves
@@ -1777,7 +2027,14 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                     ));
                 }
             };
-            let bin = args.bin.as_deref().unwrap_or("fscale");
+            // A command given with --bin is written as it is. Otherwise the
+            // repo decides, never this machine's PATH (ADR 0064).
+            let writes = default_bin(root);
+            let bin = args.bin.clone().unwrap_or_else(|| writes.clone());
+            let bin = bin.as_str();
+            // The check starts only a command fscale writes: this one, or
+            // the repo's default (review of ADR 0064).
+            let allowed = [bin, writes.as_str()];
             let mut out = String::new();
             let mut notes = Vec::new();
             let mut ready = Vec::new();
@@ -1801,23 +2058,50 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                     ready.push(agent.config_file());
                 }
             }
-            if refused.is_empty() {
+            // A hook already installed keeps its own command: the agent runs
+            // that one, not `bin` (second review of ADR 0064).
+            let kept: Vec<String> = AGENTS
+                .into_iter()
+                .filter(|agent| ready.contains(&agent.config_file()))
+                .flat_map(|agent| {
+                    installed_prefixes(root, agent)
+                        .into_iter()
+                        .filter(|prefix| prefix != bin)
+                        .map(move |prefix| {
+                            format!("`{}` in {}", hook_command(&prefix, agent), agent.config_file())
+                        })
+                })
+                .collect();
+            if refused.is_empty() && kept.is_empty() {
                 out.push_str(&format!(
                     "\nEach agent now runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n"
                 ));
-                return Ok(Output { stdout: out, notes, code: EXIT_OK });
-            }
-            out.push_str(&format!(
-                "\nNot every hook is installed. Refused and left as it was: {}. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.\n",
-                refused.join(", ")
-            ));
-            if !ready.is_empty() {
+            } else if refused.is_empty() {
                 out.push_str(&format!(
-                    "The hook is in {}: there the agent runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n",
-                    ready.join(", ")
+                    "\nEach agent now runs the stop hook in its file before it stops, and keeps working while `fscale verify` fails. A hook already there keeps its command: {}.\n",
+                    kept.join(", ")
                 ));
+            } else {
+                out.push_str(&format!(
+                    "\nNot every hook is installed. Refused and left as it was: {}. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.\n",
+                    refused.join(", ")
+                ));
+                if !ready.is_empty() {
+                    out.push_str(&format!(
+                        "The hook is in {}: there the agent runs `{bin} hooks run --agent <name>` before it stops, and keeps working while `fscale verify` fails.\n",
+                        ready.join(", ")
+                    ));
+                }
             }
-            Ok(Output { stdout: out, notes, code: EXIT_USAGE })
+            let starts = check_hook_starts(root, &ready, &allowed, &mut out);
+            let code = if !refused.is_empty() {
+                EXIT_USAGE
+            } else if starts {
+                EXIT_OK
+            } else {
+                EXIT_VIOLATIONS
+            };
+            Ok(Output { stdout: out, notes, code })
         }
         [action] if action == "run" => {
             let Some(name) = &args.agent else {
@@ -1943,6 +2227,12 @@ fn run() -> Result<Output> {
     }
 
     if args.version {
+        // With --json, a name only firescale gives: what the check of a
+        // hook's command asks for (ADR 0064).
+        if args.json {
+            let answer = serde_json::json!({ "name": "firescale", "version": version() });
+            return Ok(Output::ok(format!("{answer}\n")));
+        }
         return Ok(Output::ok(format!("{}\n", version())));
     }
     let Some((command, rest)) = args.positionals.split_first() else {

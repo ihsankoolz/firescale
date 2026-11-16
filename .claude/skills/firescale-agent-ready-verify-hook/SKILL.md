@@ -18,10 +18,10 @@ The hook runs `fscale verify` when the agent is about to stop and sends it back 
 ## Manual fix
 
 1. Run `fscale sync`, or `fscale hooks install --all`, or `fscale hooks install --agent <claude|codex|cursor>` for one agent.
-2. If `fscale` is not on the `PATH` of your teammates and CI, say how to start it with `--bin`, for example `fscale hooks install --all --bin "npx firescale"`.
+2. Without `--bin`, the hook starts fscale the way the repo does (below), which needs no `fscale` on the `PATH`. To start it another way on every machine, pass `--bin`, for example `fscale hooks install --all --bin fscale` when `fscale` is on every teammate's `PATH`. `hooks install` then starts the command once and says whether it starts on this machine; `fscale doctor` does the same on any machine.
 3. Commit the files it wrote, so every teammate's agent gets the hook.
 
-`fscale sync` and `fscale hooks install` work the same way. `fscale sync` adds the hook for every agent (or the agents in the `agents` option) with the command that starts fscale in this repo: its own `fscale` package script when it has one, else `npx firescale`. A settings file that exists keeps everything in it; the hook goes in as new lines. A file that is not valid JSON, or whose lists are written on one line, is left for you: `fscale hooks install --agent <name>` then prints what to add by hand.
+`fscale sync` and `fscale hooks install` work the same way. `fscale sync` adds the hook for every agent (or the agents in the `agents` option) with the command that starts fscale in this repo: its own `fscale` package script when it has one, else the firescale it lists among its dependencies, else `npx --yes firescale@<version>` with the version of the fscale that wrote it. A settings file that exists keeps everything in it; the hook goes in as new lines. A file that is not valid JSON, or whose lists are written on one line, is left for you: `fscale hooks install --agent <name>` then prints what to add by hand.
 
 Codex runs a project's hooks only in a trusted project, and only after you approve the hook in Codex.
 

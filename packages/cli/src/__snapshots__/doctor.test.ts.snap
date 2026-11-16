@@ -2,7 +2,7 @@
 
 exports[`fscale doctor > prints JSON that matches its schema 1`] = `
 "{
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "ok": false,
   "problems": 7,
   "warnings": 0,

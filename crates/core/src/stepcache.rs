@@ -113,6 +113,11 @@ pub struct Snapshot {
     /// it, because it ignores it: the file is among `files` all the same,
     /// read from disk, and no commit has a copy of it (ADR 0058).
     config_unlisted: bool,
+    /// What each agent hook file at the root holds apart from its hook
+    /// entries ([`crate::hooks::outside_hooks`]), read from disk whether or
+    /// not git lists the file: in every key by value (ADR 0064). Empty in a
+    /// snapshot that was not captured, where every file counts as absent.
+    outside_hooks: Vec<(&'static str, String)>,
 }
 
 fn abs(root: &Path, rel: &str) -> PathBuf {
@@ -285,6 +290,7 @@ impl Snapshot {
                     problem: Some(problem),
                     taken: Some(taken),
                     config_unlisted: false,
+                    outside_hooks: Vec::new(),
                 }
             }
         };
@@ -341,13 +347,23 @@ impl Snapshot {
                 problem: Some("the files could not all be hashed".to_owned()),
                 taken: Some(taken),
                 config_unlisted,
+                outside_hooks: Vec::new(),
             };
         }
+        let outside_hooks = crate::hooks::AGENTS
+            .iter()
+            .map(|agent| {
+                let file = agent.config_file();
+                let bytes = fs::read(abs(root, file)).ok();
+                (file, crate::hooks::outside_hooks(*agent, bytes.as_deref()))
+            })
+            .collect();
         Self {
             files: hashed.into_iter().collect(),
             problem: None,
             taken: Some(taken),
             config_unlisted,
+            outside_hooks,
         }
     }
 
@@ -516,6 +532,15 @@ fn covers(scope: &Scope, owned: &[String], path: &str) -> bool {
     if scope.folders.iter().any(|folder| inside(path, folder)) {
         return true;
     }
+    // The agents' hook files (`.claude/settings.json` and the like) are a
+    // file only of a unit whose folders hold them: the repo root's own
+    // steps (`prettier --check .`), or a project that reads one by its path
+    // (`require('../.claude/settings.json')`, a shared node of the graph).
+    // For every other unit, what such a file holds apart from its hook
+    // entries is in the key by value ([`files_digest`], ADR 0064).
+    if crate::hooks::is_agent_hook_file(path) {
+        return false;
+    }
     let unowned = !owned.iter().any(|folder| inside(path, folder));
     // A file directly in the repo root that no project owns and that is a
     // picture, a document, an archive, media, Markdown or a licence (a
@@ -559,6 +584,18 @@ fn files_digest(snapshot: &Snapshot, scope: &Scope, owned: &[String]) -> Result<
             _ => "file",
         };
         hasher.update(format!("{marker}\0{path}\0{shown}\n").as_bytes());
+    }
+    // What the agent hook files hold apart from their hook entries reaches
+    // every step: Claude Code gives the `env` of `.claude/settings.json` to
+    // every command it starts. In every key, by value (ADR 0064).
+    for agent in crate::hooks::AGENTS {
+        let file = agent.config_file();
+        let outside = snapshot
+            .outside_hooks
+            .iter()
+            .find(|(path, _)| *path == file)
+            .map_or("{}", |(_, value)| value.as_str());
+        hasher.update(format!("outside-hooks\0{file}\0{outside}\n").as_bytes());
     }
     Ok(hasher.finalize().to_hex().to_string())
 }
@@ -1583,6 +1620,17 @@ impl<'a> StepCache<'a> {
         if self.key(folder, kind, step, command, dir).is_err() {
             return false;
         }
+        // A changed agent hook file is a difference for every unit, whatever
+        // part of it changed: a step that reads it, or that the `env` it
+        // sets reaches, must not take its head result for the base's
+        // (review of ADR 0064). It costs a base run on a branch that edits
+        // one.
+        if changed
+            .iter()
+            .any(|path| crate::hooks::is_agent_hook_file(path))
+        {
+            return false;
+        }
         // For a unit that does not hold the repo root, the config is in the
         // key by value, not as a file. The step is the same only if the
         // config's difference from the base's does not reach it (ADR 0058).
@@ -1649,7 +1697,9 @@ impl<'a> StepCache<'a> {
         let mut files = blake3::Hasher::new();
         files.update(format!("base\0{commit}\0{environment}\n").as_bytes());
         for (path, id) in &tree {
-            if covers(&scope, owned, path) {
+            // A hook file of the base is in every unit's base key: what it
+            // holds apart from its hook entries reaches every step.
+            if covers(&scope, owned, path) || crate::hooks::is_agent_hook_file(path) {
                 files.update(format!("{path}\0{id}\n").as_bytes());
             }
         }
@@ -2116,6 +2166,7 @@ mod tests {
             problem: None,
             taken: None,
             config_unlisted: false,
+            outside_hooks: Vec::new(),
         };
         let reason = UnitDigests::new(None)
             .digest(&snapshot, &Scope::whole_repo())
@@ -2126,6 +2177,7 @@ mod tests {
             problem: Some("git ls-files failed".to_owned()),
             taken: None,
             config_unlisted: false,
+            outside_hooks: Vec::new(),
         };
         assert!(UnitDigests::new(None)
             .digest(&unlisted, &Scope::whole_repo())
@@ -2369,6 +2421,180 @@ mod tests {
             Track::NoGit,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn the_agent_hook_files_are_files_only_in_the_key_of_a_unit_that_holds_the_repo_root() {
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let project = || {
+            cache_over(root, Some(graph.clone()), &machine, "one")
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let root_steps = || {
+            cache_over(root, Some(graph.clone()), &machine, "one")
+                .key(None, None, "test", "node -e 0", root)
+                .unwrap()
+                .key
+        };
+        let (first, first_root) = (project(), root_steps());
+        // The three files `fscale hooks install --all` writes (ADR 0064).
+        for file in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".cursor/hooks.json",
+        ] {
+            fixture.write(file, "{\n  \"hooks\": {}\n}\n").unwrap();
+        }
+        assert_eq!(project(), first);
+        let with_hooks = root_steps();
+        assert_ne!(with_hooks, first_root);
+        // Any other file in those folders is still in every key, as any
+        // file no project owns.
+        fixture.write(".claude/hooks/check.sh", "exit 0\n").unwrap();
+        assert_ne!(project(), first);
+        assert_ne!(root_steps(), with_hooks);
+        // A hook file inside a project is that project's file.
+        let before = project();
+        fixture.write("api/.claude/settings.json", "{}\n").unwrap();
+        assert_ne!(project(), before);
+    }
+
+    /// Review of ADR 0064, finding 1 (fixture fixA): `web`'s test reads
+    /// `.claude/settings.json` by its path, so the graph has a shared node
+    /// `.claude` that `web` depends on.
+    fn a_project_reads_the_hook_file() -> Fixture {
+        Fixture::new(
+            &[
+                ("api/package.json", "{\"name\":\"api\"}\n"),
+                ("web/package.json", "{\"name\":\"web\"}\n"),
+                (
+                    "web/test.js",
+                    "const settings = require('../.claude/settings.json');\n",
+                ),
+                (".claude/settings.json", "{}\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_hook_file_is_a_file_of_every_unit_whose_folders_hold_it() {
+        let machine = NoTools;
+        let fixture = a_project_reads_the_hook_file();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let key = |folder: &str| {
+            cache_over(root, Some(graph.clone()), &machine, "")
+                .key(
+                    Some(folder),
+                    Some("node"),
+                    "test",
+                    "node test.js",
+                    &abs(root, folder),
+                )
+                .unwrap()
+                .key
+        };
+        let (web, api) = (key("web"), key("api"));
+        // A change inside the hook entries only: `web` reads the file, so
+        // its key changes; `api` does not read it.
+        fixture
+            .write(
+                ".claude/settings.json",
+                "{ \"hooks\": { \"Stop\": [ { \"hooks\": [] } ] } }\n",
+            )
+            .unwrap();
+        assert_ne!(key("web"), web);
+        assert_eq!(key("api"), api);
+        // And the base run never takes its head result for the base's.
+        let changed = BTreeSet::from([".claude/settings.json".to_owned()]);
+        let cache = cache_over(root, Some(graph.clone()), &machine, "");
+        assert!(!cache.same_on_base(
+            Some("web"),
+            Some("node"),
+            "test",
+            "node test.js",
+            &abs(root, "web"),
+            &changed
+        ));
+        // Nor for a project that does not read it (review of ADR 0064: a
+        // changed hook file is a difference for every unit).
+        assert!(!cache.same_on_base(
+            Some("api"),
+            Some("node"),
+            "test",
+            "node test.js",
+            &abs(root, "api"),
+            &changed
+        ));
+    }
+
+    #[test]
+    fn what_is_outside_the_hook_entries_is_in_every_key_by_value() {
+        let machine = NoTools;
+        let fixture = two_projects_below_the_root();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let api = abs(root, "api");
+        let project = || {
+            cache_over(root, Some(graph.clone()), &machine, "")
+                .key(Some("api"), Some("python"), "test", "node -e 0", &api)
+                .unwrap()
+                .key
+        };
+        let none = project();
+        for file in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".cursor/hooks.json",
+        ] {
+            // Only hook entries: as if there were no file.
+            fixture.write(file, "{\"hooks\":{\"Stop\":[]}}\n").unwrap();
+            assert_eq!(project(), none, "{file}");
+            // A hook entry firescale did not write, here a SessionStart
+            // hook (it can set what verify sees): in every key, by value
+            // (second review of ADR 0064).
+            fixture
+                .write(
+                    file,
+                    "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"echo hi\"}]}],\"sessionStart\":[{\"command\":\"echo hi\"}]}}\n",
+                )
+                .unwrap();
+            assert_ne!(project(), none, "{file}");
+            // Anything else in it (Claude Code gives `env` to every command
+            // it starts): in every key, by value.
+            fixture
+                .write(file, "{\"env\":{\"A\":\"1\"},\"hooks\":{}}\n")
+                .unwrap();
+            let with_env = project();
+            assert_ne!(with_env, none, "{file}");
+            // By value: the order of the keys and the spacing do not count.
+            fixture
+                .write(
+                    file,
+                    "{\n  \"hooks\": {\"Stop\": []},\n  \"env\": {\"A\": \"1\"}\n}\n",
+                )
+                .unwrap();
+            assert_eq!(project(), with_env, "{file}");
+            // A file that is not JSON counts whole, as any other file.
+            fixture.write(file, "{ not json\n").unwrap();
+            let broken = project();
+            assert_ne!(broken, none, "{file}");
+            fixture.write(file, "{ not json either\n").unwrap();
+            assert_ne!(project(), broken, "{file}");
+            std::fs::remove_file(abs(root, file)).unwrap();
+            assert_eq!(project(), none, "{file}");
+        }
     }
 
     #[test]

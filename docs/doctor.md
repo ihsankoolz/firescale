@@ -95,18 +95,35 @@ Local services the repo expects, read by the same code as verify's "service not 
 
 Each one is **reachable** or **not reachable**. **Reachable means only that something accepts a connection on that host and port**: not that it is the right database, that the database the tests use exists, or that the user and password in your settings can log in. A wrong login shows up when the tests run, and verify reports it as setup needed (see [verify.md](verify.md)). Only the service name, the host and the port are shown. User names, passwords, database names and connection strings are never kept, so they cannot be printed; a test proves it, for `.env.example`, `.env` and `.env.local` alike.
 
+### Agent hooks
+
+The stop hook in each agent hook file at the repo root (`.claude/settings.json`, `.codex/hooks.json`, `.cursor/hooks.json`), started the way `fscale hooks install` checks it after writing (see [hooks.md](hooks.md)): `<command> --version --json` in the repo root, through `cmd /D /S /C` or `sh -c`, with stdin closed, without the PATH folders a package manager put there for its own run, and with `CLAUDE_PROJECT_DIR` set for Claude Code's file. Before it starts one, doctor says on stderr what it runs. Each distinct command is started once.
+
+Doctor runs no script of the repo and downloads nothing here either:
+
+- **A pin** (`npx --yes firescale@<version>`, the default where the repo has no fscale of its own) is started as `npx --no -- firescale@<version>`: npx runs firescale only when it is installed or already in its cache. When it is not, the check is a **warning**, `firescale <version> is not downloaded yet, and doctor downloads nothing`: the agent's first stop downloads it, which needs the network.
+- **The repo's own `fscale` package script** is never started, whatever runs it (`pnpm --silent fscale`, `npm run --silent fscale --`, ...): a **warning** gives the command to run yourself.
+- **The fscale the repo installs** (`pnpm exec fscale`, `npx --no -- fscale`, `yarn --silent fscale`, `bun run --silent fscale`, when the repo has no `fscale` script) is started as it is.
+
+- **ok** when it answers this firescale; **warning** when it answers another version, the one the agent runs.
+- **problem** when it cannot start, exits with an error or answers something that is not firescale's answer: the agent would stop without verify having run.
+- **warning** for a command that is not the one fscale writes in this repo: it is text from the repo, so doctor prints it and does not start it.
+- **warning** for a pin not downloaded yet, and for the repo's own package script, as above.
+
+The check runs on whichever machine runs doctor, so a teammate whose machine cannot start the hook finds out, not only the person who installed it (ADR 0064).
+
 ## JSON
 
 `fscale doctor --json` prints the same checks. The schema is [`packages/cli/schemas/doctor-output.schema.json`](../packages/cli/schemas/doctor-output.schema.json).
 
 | Field              | Meaning                                                                                    |
 | ------------------ | ------------------------------------------------------------------------------------------ |
-| `schemaVersion`    | Always `1`. Changes only on a breaking change.                                             |
+| `schemaVersion`    | Always `2`. Changes only on a breaking change. Version 2 added the section `hooks`.        |
 | `ok`               | `true` when no check is a problem. The exit code is 0 when true.                           |
 | `problems`         | How many checks are problems.                                                              |
 | `warnings`         | How many checks are warnings.                                                              |
-| `checks`           | Every check, in the order tools, env, dependencies, services.                              |
-| `checks[].section` | `tools`, `env`, `dependencies` or `services`.                                              |
+| `checks`           | Every check, in the order tools, env, dependencies, services, hooks.                       |
+| `checks[].section` | `tools`, `env`, `dependencies`, `services` or `hooks`.                                     |
 | `checks[].project` | The project's folder, as `fscale facts` prints it. Absent for checks about the whole repo. |
 | `checks[].subject` | What was checked: `node`, `backend/.env.example`, `PostgreSQL on localhost:5432`.          |
 | `checks[].status`  | `ok`, `problem` or `warning`.                                                              |

@@ -21,6 +21,7 @@ use firescale_core::config::{
 };
 use firescale_core::fixloop::{LoopChange, LoopReport};
 use firescale_core::git::{run_git, Git};
+use firescale_core::hooks::{move_pins, AGENTS};
 use firescale_core::model::Fixable;
 use firescale_core::node::NodeHost;
 use firescale_core::report::CheckReport;
@@ -39,6 +40,8 @@ const INIT_PACKS: [&str; 2] = ["core", "agent-ready"];
 const ADOPT_PACKS: [&str; 1] = ["core"];
 /// The heading under which the config file appears in the list of changes.
 const SETUP: &str = "firescale";
+/// The heading under which `sync`'s move of a stop hook's pin appears.
+const HOOK_PINS: &str = "agent hooks";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Command {
@@ -371,6 +374,55 @@ fn render_left(
     out
 }
 
+/// `(heading, note)` lines for the "To review" part of the output.
+type Notes = Vec<(String, String)>;
+
+/// `fscale sync` moves an older pin firescale wrote in an agent's stop
+/// hook to this version, and only that ([`move_pins`]; the owner's
+/// decision on ADR 0064). A hook file that is a symbolic link is left as
+/// it is. A change per file moved, and a note per pin.
+fn move_hook_pins(root: &Path) -> Result<(Vec<LoopChange>, Notes)> {
+    let mut changes = Vec::new();
+    let mut notes: Notes = Vec::new();
+    for agent in AGENTS {
+        let file = agent.config_file();
+        let path = root.join(file);
+        if fs::symlink_metadata(&path).map_or(true, |meta| !meta.is_file()) {
+            continue;
+        }
+        let Ok(before) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some((after, moved)) = move_pins(&before, agent) else {
+            continue;
+        };
+        fs::write(&path, &after).map_err(|error| {
+            Error::user(format!(
+                "Could not write {file} ({error}) to move the stop hook's firescale pin. Check the file's permissions, then run `fscale sync` again."
+            ))
+        })?;
+        notes.extend(moved.iter().map(|pin| {
+                (
+                    HOOK_PINS.to_owned(),
+                    format!(
+                        "{file}: the stop hook firescale wrote ran firescale {} (`npx --yes firescale@{}`); sync moves its pin to firescale {}. sync changes no other command.",
+                        pin.from, pin.from, pin.to
+                    ),
+                )
+        }));
+        changes.push(LoopChange {
+            pass: 0,
+            rule: HOOK_PINS.to_owned(),
+            change: Change::Write {
+                file: file.to_owned(),
+                before: Some(before),
+                after,
+            },
+        });
+    }
+    Ok((changes, notes))
+}
+
 fn run(job: Job<'_>) -> Result<Output> {
     let Job {
         command,
@@ -429,8 +481,15 @@ fn run(job: Job<'_>) -> Result<Output> {
             },
         });
     }
+    let mut setup_notes: Vec<(String, String)> = Vec::new();
+    if command == Command::Sync {
+        let (changes, notes) = move_hook_pins(work_root)?;
+        setup.extend(changes);
+        setup_notes.extend(notes);
+    }
     let with_setup = |mut report: LoopReport| {
         report.changes.splice(0..0, setup.iter().cloned());
+        report.notes.splice(0..0, setup_notes.iter().cloned());
         report
     };
 
