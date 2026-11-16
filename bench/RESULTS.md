@@ -4,7 +4,7 @@ Numbers are wall-clock times for the whole process, measured with `bench/startup
 
 ## 0.5.2: suppression codes, failure messages and renamed tests (ADR 0063)
 
-Measured on 2026-11-16 on Windows 11, debug builds. "Before" is `main` at `d337ed4`; "after" is branch `fix052-tamper` at `73272c6`, the first version of the fix.
+Measured on 2026-11-16 on Windows 11, debug builds. "Before" is `main` at `d337ed4`; "after" is branch `fix052-tamper`: at `73272c6`, the first version of the fix, for the course project, and at `d5c72b1`, the final code, for the held-out cheats.
 
 ### The course project's 150 commits
 
@@ -19,31 +19,24 @@ Measured on 2026-11-16 on Windows 11, debug builds. "Before" is `main` at `d337e
 
 The "before" total and kinds match the review exactly. The labels of the two new findings are mine, from the diff, not a person's.
 
-### The labelled corpus and the held-out cheats
+### The held-out cheats: the gate for this change
 
-**PLACEHOLDER: not measured yet. The numbers below are to be filled from the benchmark run of the final branch; until then nothing here is a result.**
+`node bench/tamper-misses.mjs --bin <fscale>` over `bench/tamper-cheats.json` (held out: its cases were not read or tuned on), the same script and cases for both binaries, on 2026-11-16, Windows 11, debug builds:
 
-`node bench/tamper-rates.mjs --bin <fscale>` over the labelled corpus and `node bench/tamper-misses.mjs --bin <fscale>` over `bench/tamper-cheats.json` (held out: its cases were not read or tuned on), for both binaries. "Before" is `main` at `d337ed4`; "after" is branch `fix052-tamper` at its last commit.
+| Binary                                         | Caught | Needs approval only | Missed, of 98 |
+| ---------------------------------------------- | -----: | ------------------: | ------------: |
+| Before: `main` at `d337ed4` (0.5.1)            |     47 |                   8 |            43 |
+| After: `fix052-tamper` at `d5c72b1` (the code) |     47 |                   8 |            43 |
 
-| Run                                                     | Before         | After          |
-| ------------------------------------------------------- | -------------- | -------------- |
-| Corpus: caught                                          | _to be filled_ | _to be filled_ |
-| Corpus: missed                                          | _to be filled_ | _to be filled_ |
-| Corpus: false positives                                 | _to be filled_ | _to be filled_ |
-| Held-out cheats: caught / approval only / missed, of 98 | _to be filled_ | _to be filled_ |
+The same 43 cases are missed on both sides, and the same 8 need approval only (the lists were compared line by line). The miss count is not higher than `main`'s, which was the condition to merge.
 
-At M32 the held-out run gave 48 caught, 8 approval only and 42 missed of 98. Commands:
+Limits: 98 cases, written by one subagent in one sitting (M26), in JavaScript, TypeScript, Python, Rust and config only. The readers this change touched most for Java, Kotlin, C#, Go and Swift (JUnit 4's message, FluentAssertions, gomega, `guard`) have no held-out cases, so "no new miss" holds for these 98 cases, not in general. M32 measured 42 missed on a Linux release build; `main` at `d337ed4` already misses 43 here, before this change. Which case changed between M32 and `d337ed4` was not looked into.
 
-```
-git checkout d337ed4 && cargo build -p firescale-cli && cp target/debug/fscale before-fscale
-git checkout fix052-tamper && cargo build -p firescale-cli
-node bench/tamper-rates.mjs --bin before-fscale      # the 10 new cases fail here
-node bench/tamper-rates.mjs                          # after
-node bench/tamper-misses.mjs --bin before-fscale     # held out
-node bench/tamper-misses.mjs                         # after
-```
+### Not measured again for 0.5.2
 
-What is known without these runs: the 10 corpus cases added for the review fail on `main` (each with `expected [ 'suppression-added' ] to deeply equal []`, `expected [ 'expected-changed' ] to deeply equal []` or `expected [ 'expected-changed' ] to deeply equal [ 'assertion-removed' ]` in `tamper.test.ts`) and pass after. Where the guard cannot tell a message from a value, or a code from a comment's word, it keeps the value or the code (ADR 0063, section 0), so a change found before should still be found; the changes it can still miss are listed in ADR 0063, "Not done". The course project's numbers above are from the first version of the branch (`73272c6`) and were not run again on the final one.
+- **The rates on real commits were not re-measured for 0.5.2.** M26 and M32 measured the false-positive rate with `bench/tamper-history.mjs` over 17 public repos, every finding labelled by a fresh labeller. Doing it again means running both binaries over about 2,350 commits and labelling every new finding. On this machine, shared with other builds, one local benchmark run took over 2.5 hours and was stopped, and the owner chose to finish the 0.5.2 run without it. The rates above under M32 and M26 are for the guard before 0.5.2. `.github/workflows/tamper-bench.yml` (ADR 0067), started by hand, runs both binaries over the same recorded commits on CI and uploads the findings; it has not been run yet, and its findings still need labels.
+- **The labelled corpus was not run through `bench/tamper-rates.mjs`** for the same reason. Every corpus case also runs in `packages/cli/src/tamper.test.ts`, which CI runs on Linux for this change: a green run means each case gives exactly the kinds of its label. The cases added for 0.5.2 (the review's 10 and the later ones) fail on `main`, as the DECISIONS.md block "Pull request 2" records with their messages.
+- **The course project's 150 commits** above were counted on the first version of the change (`73272c6`), not on the final one.
 
 ## M32: the tamper guard in Java, Kotlin, Swift, Dart, C, C++, C# and Go
 
