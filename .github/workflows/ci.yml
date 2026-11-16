@@ -16,9 +16,13 @@ on:
 
 # A new push to a branch, or to a pull request, cancels the run still in
 # progress for it. Push runs and pull request runs are separate groups, so
-# they never cancel each other.
+# they never cancel each other. Each push to main has a group of its own (its
+# run id), so its run is never cancelled, nor dropped while queued: the
+# `changes` job compares a push to main with the commit before it, and a
+# docs-only merge must not cancel the Linux run of the code merge before it
+# (ADR 0066).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
