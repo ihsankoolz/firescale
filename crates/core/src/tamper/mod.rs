@@ -404,56 +404,81 @@ pub(super) fn without(node: Node<'_>, src: &[u8], cut: &[Node<'_>]) -> Option<St
 }
 
 /// What a call whose every argument is its message checks
-/// (`pytest.fail("…")`, `t.Errorf("…")`, `XCTFail("…")`): the condition of
-/// the `if` whose branch it is (`!(…)` in an `else`), then the call without
-/// its arguments. The expected value is in the condition (`if got != 3`),
-/// so a changed condition pairs as a changed value and a changed message
-/// does not (ADR 0063).
+/// (`pytest.fail("…")`, `t.Errorf("…")`, `XCTFail("…")`), when it is the
+/// branch of something that holds its expected value: the condition of an
+/// `if` (`!(…)` in an `else`) or a Swift `guard`, or the exception an
+/// `except` or `catch` names; then the call without its arguments. So a
+/// changed condition pairs as a changed value and a changed message does
+/// not (ADR 0063). Anywhere else (a `switch`, a `match`, a loop, the test's
+/// own body) `None`: the call is compared with its message, as before,
+/// since the message may be the only place its value is written.
 pub(super) fn failed_when(call: Node<'_>, src: &[u8], arguments: &[Node<'_>]) -> Option<String> {
-    let bare = without(call, src, arguments);
+    let squeeze = |start: usize, end: usize| -> String {
+        String::from_utf8_lossy(&src[start..end])
+            .split_whitespace()
+            .collect()
+    };
+    let inside = |outer: Node<'_>| {
+        outer.start_byte() <= call.start_byte() && call.end_byte() <= outer.end_byte()
+    };
+    let bare = || {
+        without(call, src, arguments).unwrap_or_else(|| squeeze(call.start_byte(), call.end_byte()))
+    };
     let mut child = call;
     for _ in 0..6 {
-        let Some(parent) = child.parent() else {
-            break;
-        };
+        let parent = child.parent()?;
         let kind = parent.kind();
-        if kind.starts_with("if_") || kind == "elif_clause" {
-            let Some(condition) = parent.child_by_field_name("condition") else {
-                return bare;
-            };
-            if condition.start_byte() <= call.start_byte()
-                && call.end_byte() <= condition.end_byte()
-            {
-                return bare;
+        if kind.starts_with("if_") || kind == "elif_clause" || kind == "guard_statement" {
+            let mut cursor = parent.walk();
+            let conditions: Vec<Node<'_>> = parent
+                .children_by_field_name("condition", &mut cursor)
+                .collect();
+            let (first, last) = (conditions.first()?, conditions.last()?);
+            if conditions.iter().any(|condition| inside(*condition)) {
+                return None;
             }
-            let squeezed: String =
-                String::from_utf8_lossy(&src[condition.start_byte()..condition.end_byte()])
-                    .split_whitespace()
-                    .collect();
+            let condition = squeeze(first.start_byte(), last.end_byte());
             let otherwise = parent
                 .child_by_field_name("alternative")
-                .is_some_and(|branch| {
-                    branch.start_byte() <= call.start_byte() && call.end_byte() <= branch.end_byte()
-                });
-            let condition = if otherwise {
-                format!("!({squeezed})")
+                .is_some_and(&inside);
+            let word = if kind == "guard_statement" {
+                "guard"
             } else {
-                squeezed
+                "if"
             };
-            let call: String = bare.unwrap_or_else(|| {
-                String::from_utf8_lossy(&src[call.start_byte()..call.end_byte()])
-                    .split_whitespace()
-                    .collect()
-            });
-            return Some(format!("if({condition}):{call}"));
+            let condition = if otherwise {
+                format!("!({condition})")
+            } else {
+                condition
+            };
+            return Some(format!("{word}({condition}):{}", bare()));
         }
-        // Only statements and blocks lie between an `if` and its branch.
-        if !(kind.contains("statement") || kind.contains("block") || kind.contains("else")) {
-            break;
+        if kind == "except_clause" || kind == "catch_clause" {
+            let mut cursor = parent.walk();
+            let body = parent
+                .named_children(&mut cursor)
+                .find(|part| part.kind().contains("block") && inside(*part))?;
+            let header = squeeze(parent.start_byte(), body.start_byte());
+            return Some(format!("{header}:{}", bare()));
+        }
+        // Only a block, a statement around the call, or an `else` lies
+        // between such a branch and the call.
+        let wrapper = kind.contains("block")
+            || kind.contains("else")
+            || matches!(
+                kind,
+                "expression_statement"
+                    | "statement_list"
+                    | "statements"
+                    | "control_structure_body"
+                    | "compound_statement"
+            );
+        if !wrapper {
+            return None;
         }
         child = parent;
     }
-    bare
+    None
 }
 
 /// Which arguments of an assertion call are its failure message, by the

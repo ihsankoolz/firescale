@@ -143,8 +143,25 @@ fn split_arguments(tree: Node<'_>) -> Vec<Vec<Node<'_>>> {
         inner = &inner[..inner.len() - 1];
     }
     let mut arguments: Vec<Vec<Node<'_>>> = vec![Vec::new()];
+    // A macro's tokens are flat, so `<…>` of a turbofish (`get::<_, String>`)
+    // or of a qualified path at an argument's start (`<T as F>::f()`) holds
+    // commas of its own (ADR 0063). A `<` anywhere else is a comparison.
+    let mut angle = 0usize;
+    let mut previous: Option<&str> = None;
     for node in inner {
-        if !node.is_named() && node.kind() == "," {
+        let token = (!node.is_named()).then(|| node.kind());
+        match token {
+            Some("<")
+                if angle > 0 || previous == Some("::") || previous.is_none_or(|p| p == ",") =>
+            {
+                angle += 1;
+            }
+            Some(">") if angle > 0 => angle -= 1,
+            Some(">>") if angle > 0 => angle = angle.saturating_sub(2),
+            _ => {}
+        }
+        previous = Some(token.unwrap_or("value"));
+        if !node.is_named() && node.kind() == "," && angle == 0 {
             arguments.push(Vec::new());
         } else if let Some(argument) = arguments.last_mut() {
             argument.push(*node);
