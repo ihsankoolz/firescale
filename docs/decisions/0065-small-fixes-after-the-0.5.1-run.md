@@ -22,17 +22,17 @@ Not changed: names read only by `frontend/` still go into the root `.env.example
 
 The line now reads as the Node line does: `all 16 packages in backend/audit_service/requirements-dev.txt are installed`, and `the 1 package in backend/one_service/requirements.txt is installed` for one. It read `all 16 packages are in ... installed`. No snapshot held the old text, so no snapshot changed. The JSON format and schema are unchanged; only `detail` changed.
 
-### 3. `'fscale' is not recognized` from `npx firescale`: a limit of `cmd.exe`, not firescale
+### 3. `'fscale' is not recognized` from `npx firescale`: a cause outside firescale gives the same message
 
-Nothing in firescale was changed for it. What was found, all on the owner's machine (Windows 11, Node 22.19.0, npm 10.9.3, the same as the review):
+A cause that gives the exact message and exit code was reproduced; that it is what happened at 09:07 is not proven. Nothing in firescale was changed for it. What was found, all on the owner's machine (Windows 11, Node 22.19.0, npm 10.9.3, the same as the review):
 
 - **Why `fscale`, not `firescale`.** npm's `getBinFromManifest` (libnpmexec) takes the first `bin` key when every bin points at the same file. The `firescale` package lists `fscale` and `firescale`, both `./bin/fscale.js`, so `npx firescale@x` runs `fscale`. npx runs it through `cmd.exe /d /s /c`.
-- **Not two npx processes on one folder.** The review's npx folder, `_npx/8cf7aca27e22ba4e`, was still as installed at 08:56:39: every file under it, `.bin/fscale.cmd` and `node_modules/.package-lock.json` included, had that time. A second install rewrites both. So nothing reinstalled it at 09:07, when the failures were seen. npx installs a package with an exact version only when its folder does not have it. 38 runs of `npx --yes firescale@0.5.1 --version` at once or staggered, after removing only that folder, all printed `0.5.1`.
+- **Not two npx processes on one folder.** The review's npx folder, `_npx/8cf7aca27e22ba4e`, was still as installed at 08:56:39: every file under it, `.bin/fscale.cmd` and `node_modules/.package-lock.json` included, had that time. Every install npx makes there (an Arborist reify) writes `node_modules/.package-lock.json` (`await this.actualTree.meta.save()` in `@npmcli/arborist/lib/arborist/reify.js`, npm 10.9.3). So nothing reinstalled it at 09:07, when the failures were seen. npx installs a package with an exact version only when its folder does not have it (`missingFromTree` in libnpmexec). 38 runs of `npx --yes firescale@0.5.1 --version` at once or staggered, after removing only that folder, all printed `0.5.1`.
 - **`cmd.exe` ignores a `PATH` longer than about 8,191 characters.** With the npx bin folder first in `PATH`, `cmd /d /s /c "fscale --version"` found `fscale` with a `PATH` of 8,020 characters and printed `'fscale' is not recognized as an internal or external command, operable program or batch file.` with exit 1 at 8,196 and above.
-- **npx makes `PATH` longer**: its bin folder, then `node_modules\.bin` of the current folder and of every folder above it, then npm's `node-gyp-bin`, then the caller's `PATH`.
+- **npx makes `PATH` longer**: its bin folder, then `node_modules\.bin` of the current folder and of every folder above it, then npm's `node-gyp-bin`, then the caller's `PATH` (`@npmcli/run-script/lib/set-path.js`).
 - **On this machine `PATH` grows on each `cd`.** The owner's `~/.bashrc` runs `eval "$(mise activate bash)"`. In Git Bash each `cd` to another folder adds about 2,000 characters to `PATH` (3,567, then 5,544, 7,619, 9,792, 12,063, 14,432 for five `cd`s). In one shell: after one `cd` into a scratch folder, `npx --yes firescale@0.5.1 --version` printed `0.5.1`; after two more `cd`s, ending in the same folder, the same command printed the reported message and exited 1. In a folder where it failed, the same command with a short `PATH` printed `0.5.1`.
 
-The review's own commands are not kept, so it is not proven that this is what happened at 09:07. It gives the exact message and exit code, on the same machine, with the npx folder untouched, and it clears with a new shell. That fits "failed 7 times, then worked".
+The review's own commands are not kept, so it is not proven that this is what happened at 09:07: the cause is a candidate, not a finding. It gives the exact message and exit code, on the same machine, with the npx folder untouched, and it clears with a new shell. That fits "failed 7 times, then worked".
 
 `docs/install.md` ("Problems") now names the message and the limit. No launcher change: the launcher never runs when `cmd.exe` cannot find it, and renaming or reordering the bins would only change the name in the message.
 
@@ -44,5 +44,5 @@ The review's own commands are not kept, so it is not proven that this is what ha
 
 ## Not done
 
-- Doctor's Node line still says `all 1 packages in package.json are installed` for a project with one package.
+- Doctor's Node line still says `all 1 packages in package.json are installed` for a project with one package, and the Python and Node problem lines say `1 of 1 packages in ... are not installed`.
 - `core/env-example` does not read which bundler a project uses; `import.meta.env` in a project that is not built by Vite (or a tool on it) would have its five names skipped too.
