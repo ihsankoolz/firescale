@@ -35,7 +35,9 @@ use tree_sitter::{Language, Node};
 use super::reach::{self, Grammar};
 use super::recover;
 use super::suppress::{directive, keyed, shown};
-use super::{Assertion, Suppression, TestCase, TestFile};
+use super::{
+    failed_when, labelled_arguments, without, Assertion, Messages, Suppression, TestCase, TestFile,
+};
 use crate::imports::{parse, text, walk};
 
 /// What the Java grammar calls the nodes [`reach`] looks at.
@@ -191,6 +193,72 @@ pub(super) fn assertion(node: Node<'_>, src: &[u8]) -> Assertion {
         conditional: false,
         checked: None,
     }
+}
+
+/// The failure messages of JUnit 5 and TestNG assertions (ADR 0063): the
+/// `String message` (or `Supplier`) after the values each takes
+/// (`Assertions.assertEquals(expected, actual, message)`). JUnit 4 puts it
+/// first (`assertEquals(message, expected, actual)`): that one is not left
+/// out, since a value can be a string too. `fail(message)` is all message.
+const JUNIT: Messages = Messages {
+    all: &["fail"],
+    from: &[
+        ("assertTrue", 1),
+        ("assertFalse", 1),
+        ("assertNull", 1),
+        ("assertNotNull", 1),
+        ("assertDoesNotThrow", 1),
+        ("assertEquals", 2),
+        ("assertNotEquals", 2),
+        ("assertSame", 2),
+        ("assertNotSame", 2),
+        ("assertArrayEquals", 2),
+        ("assertIterableEquals", 2),
+        ("assertLinesMatch", 2),
+        ("assertInstanceOf", 2),
+        ("assertThrows", 2),
+        ("assertTimeout", 2),
+    ],
+    labels: &[],
+};
+
+/// AssertJ's descriptions, which a failure prints and nothing checks:
+/// `assertThat(x).as("…").isEqualTo(3)`.
+const DESCRIPTIONS: [&str; 4] = [
+    "as",
+    "describedAs",
+    "withFailMessage",
+    "overridingErrorMessage",
+];
+
+/// What a Java assertion checks, without its failure message: the message
+/// after `:` of an `assert`, the arguments of an AssertJ description, a
+/// JUnit message (see [`JUNIT`]); for `fail(…)`, the condition of the `if`
+/// around it.
+pub(super) fn checked(node: Node<'_>, src: &[u8]) -> Option<String> {
+    if node.kind() == "assert_statement" {
+        return without(node, src, children(node).get(1..).unwrap_or_default());
+    }
+    let mut message: Vec<Node<'_>> = Vec::new();
+    for link in chain(node) {
+        let (Some(name), Some(list)) = (
+            link.child_by_field_name("name"),
+            link.child_by_field_name("arguments"),
+        ) else {
+            continue;
+        };
+        let name = text(name, src);
+        let arguments = labelled_arguments(list, src);
+        if DESCRIPTIONS.contains(&name) {
+            message.extend(arguments.iter().map(|(_, argument)| *argument));
+        } else if JUNIT.all.contains(&name) && link == node {
+            let all: Vec<Node<'_>> = arguments.iter().map(|(_, argument)| *argument).collect();
+            return failed_when(node, src, &all);
+        } else {
+            message.extend(JUNIT.of(name, &arguments, src));
+        }
+    }
+    without(node, src, &message)
 }
 
 /// Gives each assertion the test whose node holds it, and that test's
@@ -829,14 +897,20 @@ pub(super) fn read(source: &str) -> TestFile {
                     && dead.why(node).is_none()
                     && !cannot_fail(&links, src)
                 {
-                    file.assertions.push(assertion(node, src));
+                    file.assertions.push(Assertion {
+                        checked: checked(node, src),
+                        ..assertion(node, src)
+                    });
                     starts.push(node.start_byte());
                 }
                 true
             }
             "assert_statement" => {
                 if dead.why(node).is_none() && !statement_cannot_fail(node, src) {
-                    file.assertions.push(assertion(node, src));
+                    file.assertions.push(Assertion {
+                        checked: checked(node, src),
+                        ..assertion(node, src)
+                    });
                     starts.push(node.start_byte());
                 }
                 true
