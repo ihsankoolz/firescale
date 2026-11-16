@@ -268,10 +268,16 @@ pub(super) fn checked(node: Node<'_>, src: &[u8], junit4: bool) -> Option<String
     without(node, src, &message)
 }
 
-/// True for a file that imports JUnit 4's `org.junit.Assert`, whose
-/// assertions take their message first (ADR 0063).
+/// True for a file that imports JUnit 4's `org.junit.Assert`, by name or
+/// with `import org.junit.*`, whose assertions take their message first
+/// (ADR 0063).
 pub(super) fn junit4(src: &[u8]) -> bool {
-    String::from_utf8_lossy(src).contains("org.junit.Assert")
+    let source = String::from_utf8_lossy(src);
+    source.contains("org.junit.Assert")
+        || source.lines().any(|line| {
+            let words: String = line.split_whitespace().collect();
+            words.starts_with("importorg.junit.*")
+        })
 }
 
 /// JUnit 4's message: the first argument, when the call has one more than
