@@ -5727,6 +5727,127 @@
       "head": {
         "src/test/kotlin/calc/CalcTest.kt": "package calc\n\nimport org.assertj.core.api.Assertions.assertThat\nimport org.junit.jupiter.api.Test\n\nclass CalcTest {\n    @Test\n    fun adds() {\n        with(assertThat(add(1, 2))) { isEqualTo(3) }\n    }\n}\n"
       }
+    },
+    {
+      "name": "py: two # noqa added, one with a comment after its code",
+      "expect": ["suppression-added"],
+      "note": "Finding 3 of the 0.5.1 review (docs/diagrams/15-lmsr.py, commit 27f301a6): the keys are noqa:E402 twice; the words after the code are a comment, not codes.",
+      "base": {
+        "docs/diagrams/15-lmsr.py": "\"\"\"Draws the LMSR price curves.\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\nfrom pathlib import Path\n\nimport matplotlib\n\nmatplotlib.use(\"Agg\")\n\nHERE = Path(__file__).resolve().parent\n"
+      },
+      "head": {
+        "docs/diagrams/15-lmsr.py": "\"\"\"Draws the LMSR price curves.\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\nfrom pathlib import Path\n\nimport matplotlib\n\nmatplotlib.use(\"Agg\")\nimport matplotlib.pyplot as plt  # noqa: E402  (after the backend is chosen)\n\nHERE = Path(__file__).resolve().parent\nREPO = HERE.parents[1]\nsys.path.insert(0, str(REPO / \"backend\" / \"ledger_service\"))\nfrom core import lmsr  # noqa: E402\n"
+      }
+    },
+    {
+      "name": "py: a comment added after the code of a # noqa",
+      "expect": [],
+      "note": "Finding 3 of the 0.5.1 review: \"(after the backend is chosen)\" is not five codes.",
+      "base": {
+        "docs/diagrams/15-lmsr.py": "\"\"\"Draws the LMSR price curves.\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\nfrom pathlib import Path\n\nimport matplotlib\n\nmatplotlib.use(\"Agg\")\nimport matplotlib.pyplot as plt  # noqa: E402\n\nHERE = Path(__file__).resolve().parent\nREPO = HERE.parents[1]\nsys.path.insert(0, str(REPO / \"backend\" / \"ledger_service\"))\nfrom core import lmsr  # noqa: E402\n"
+      },
+      "head": {
+        "docs/diagrams/15-lmsr.py": "\"\"\"Draws the LMSR price curves.\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\nfrom pathlib import Path\n\nimport matplotlib\n\nmatplotlib.use(\"Agg\")\nimport matplotlib.pyplot as plt  # noqa: E402  (after the backend is chosen)\n\nHERE = Path(__file__).resolve().parent\nREPO = HERE.parents[1]\nsys.path.insert(0, str(REPO / \"backend\" / \"ledger_service\"))\nfrom core import lmsr  # noqa: E402\n"
+      }
+    },
+    {
+      "name": "py: a reason added after a # nosec code and a # pylint: disable",
+      "expect": [],
+      "note": "Bandit reads only test ids and names after nosec; the words of a reason are not codes. A pylint list goes on only after a comma.",
+      "base": {
+        "app/run.py": "import subprocess\n\n\ndef run(cmd):  # pylint: disable=invalid-name\n    return subprocess.call(cmd, shell=True)  # nosec B602\n"
+      },
+      "head": {
+        "app/run.py": "import subprocess\n\n\ndef run(cmd):  # pylint: disable=invalid-name  kept for the old callers\n    return subprocess.call(cmd, shell=True)  # nosec B602 the command is fixed in config\n"
+      }
+    },
+    {
+      "name": "py: only the text pytest.fail prints changed",
+      "expect": [],
+      "note": "Finding 4 of the 0.5.1 review (test_connection_slots.py, commit 6abde8bb): one word of the message changed; no expected value did.",
+      "base": {
+        "app/__init__.py": "",
+        "app/slots.py": "async def stall_two():\n    return None\n\n\nasync def commit_one():\n    return None\n",
+        "tests/test_connection_slots.py": "import asyncio\n\nimport pytest\n\nfrom app.slots import commit_one, stall_two\n\n\nasync def test_a_stalled_publish_does_not_hold_the_market_s_slot():\n    stalled = await stall_two()\n    try:\n        async with asyncio.timeout(5):\n            await commit_one()\n    except TimeoutError:\n        pytest.fail(\n            \"a third request waited for a slot while two publishes stalled: \"\n            \"the publish runs inside the market's slot\"\n        )\n    finally:\n        await stalled.release()\n"
+      },
+      "head": {
+        "tests/test_connection_slots.py": "import asyncio\n\nimport pytest\n\nfrom app.slots import commit_one, stall_two\n\n\nasync def test_a_stalled_publish_does_not_hold_the_market_s_slot():\n    stalled = await stall_two()\n    try:\n        async with asyncio.timeout(5):\n            await commit_one()\n    except TimeoutError:\n        pytest.fail(\n            \"a third request waited for a slot while two publishes stalled: \"\n            \"a publish runs inside the market's slot\"\n        )\n    finally:\n        await stalled.release()\n"
+      }
+    },
+    {
+      "name": "py: only an assert's message changed",
+      "expect": [],
+      "note": "Finding 4 of the 0.5.1 review (test_trade.py:1026, commit 01458325): the expected value is 0 on both sides.",
+      "base": {
+        "app/__init__.py": "",
+        "app/trade.py": "class Upstream:\n    def __init__(self):\n        self.calls = 0\n        self.closed = False\n\n    def closes(self):\n        self.closed = True\n\n\nclass Trade:\n    state_version = 1\n\n\nclass AccountSuspended(Exception):\n    pass\n\n\nasync def buy(upstream, seen, suspended=False):\n    if suspended:\n        raise AccountSuspended()\n    upstream.calls += 1\n    seen.append({\"session in a transaction\": False})\n    return Trade()\n\n\nasync def idle_in_transaction():\n    return 0\n",
+        "tests/test_trade.py": "from app.trade import Upstream, buy, idle_in_transaction\n\n\nasync def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    upstream = Upstream()\n    seen = []\n    trade = await buy(upstream, seen)\n    idle = await idle_in_transaction()\n    assert seen == [{\"session in a transaction\": False}]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the gate's call\"\n    assert trade.state_version == 1\n"
+      },
+      "head": {
+        "tests/test_trade.py": "from app.trade import Upstream, buy, idle_in_transaction\n\n\nasync def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    upstream = Upstream()\n    seen = []\n    trade = await buy(upstream, seen)\n    idle = await idle_in_transaction()\n    assert seen == [{\"session in a transaction\": False}]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the refresh\"\n    assert trade.state_version == 1\n"
+      }
+    },
+    {
+      "name": "py: an assert's expected value and message changed",
+      "expect": ["expected-changed"],
+      "note": "Leaving the message out never hides a changed value.",
+      "base": {
+        "app/__init__.py": "",
+        "app/trade.py": "class Upstream:\n    def __init__(self):\n        self.calls = 0\n        self.closed = False\n\n    def closes(self):\n        self.closed = True\n\n\nclass Trade:\n    state_version = 1\n\n\nclass AccountSuspended(Exception):\n    pass\n\n\nasync def buy(upstream, seen, suspended=False):\n    if suspended:\n        raise AccountSuspended()\n    upstream.calls += 1\n    seen.append({\"session in a transaction\": False})\n    return Trade()\n\n\nasync def idle_in_transaction():\n    return 0\n",
+        "tests/test_trade.py": "from app.trade import Upstream, buy, idle_in_transaction\n\n\nasync def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    upstream = Upstream()\n    seen = []\n    trade = await buy(upstream, seen)\n    idle = await idle_in_transaction()\n    assert seen == [{\"session in a transaction\": False}]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the gate's call\"\n    assert trade.state_version == 1\n"
+      },
+      "head": {
+        "tests/test_trade.py": "from app.trade import Upstream, buy, idle_in_transaction\n\n\nasync def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    upstream = Upstream()\n    seen = []\n    trade = await buy(upstream, seen)\n    idle = await idle_in_transaction()\n    assert seen == [{\"session in a transaction\": False}]\n    assert idle == 1, f\"{idle} backend(s) idle in transaction across the refresh\"\n    assert trade.state_version == 1\n"
+      }
+    },
+    {
+      "name": "py: a renamed test lost an assert while a new test has a like one",
+      "expect": ["assertion-removed"],
+      "note": "Finding 4 of the 0.5.1 review (test_trade.py:1265, commit 01458325): assert upstream.calls == 1 went with the rename; assert upstream.calls == 0 is in a new, different test. Not a changed expected value.",
+      "base": {
+        "app/__init__.py": "",
+        "app/trade.py": "class Upstream:\n    def __init__(self):\n        self.calls = 0\n        self.closed = False\n\n    def closes(self):\n        self.closed = True\n\n\nclass Trade:\n    state_version = 1\n\n\nclass AccountSuspended(Exception):\n    pass\n\n\nasync def buy(upstream, seen, suspended=False):\n    if suspended:\n        raise AccountSuspended()\n    upstream.calls += 1\n    seen.append({\"session in a transaction\": False})\n    return Trade()\n\n\nasync def idle_in_transaction():\n    return 0\n",
+        "tests/test_trade.py": "import pytest\n\nfrom app.trade import AccountSuspended, Upstream, buy, idle_in_transaction\n\n\nasync def test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service():\n    upstream = Upstream()\n    seen = []\n    trade = await buy(upstream, seen)\n    idle = await idle_in_transaction()\n    clean = {\"session in a transaction\": False}\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the gate's call\"\n    assert upstream.calls == 1\n    assert trade.state_version == 1\n"
+      },
+      "head": {
+        "tests/test_trade.py": "import pytest\n\nfrom app.trade import AccountSuspended, Upstream, buy, idle_in_transaction\n\n\nasync def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    upstream = Upstream()\n    seen = []\n    trade = await buy(upstream, seen)\n    idle = await idle_in_transaction()\n    clean = {\"session in a transaction\": False}\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the refresh\"\n    assert trade.state_version == 1\n\n\nasync def test_a_suspended_trader_hears_about_the_suspension_not_the_market():\n    upstream = Upstream()\n    upstream.closes()\n\n    with pytest.raises(AccountSuspended):\n        await buy(upstream, [], suspended=True)\n\n    assert upstream.calls == 0\n"
+      }
+    },
+    {
+      "name": "ts: only the message given to expect changed",
+      "expect": [],
+      "note": "expect(value, message): Vitest's second argument is what a failure prints.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20]), \"the total of two items\").toBe(30);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { total } from \"./cart\";\n\nit(\"adds the items\", () => {\n  expect(total([10, 20]), \"two items add up\").toBe(30);\n});\n"
+      }
+    },
+    {
+      "name": "js: only the message of node's assert changed",
+      "expect": [],
+      "note": "assert.equal(actual, expected, message) and assert.ok(value, message).",
+      "base": {
+        "cart.js": "exports.total = (items) => items.reduce((a, b) => a + b, 0);\n",
+        "__tests__/cart.test.js": "const assert = require(\"node:assert\");\nconst { total } = require(\"../cart\");\n\ntest(\"adds the items\", () => {\n  assert.equal(total([10, 20]), 30, \"adds two\");\n  assert.ok(total([]) === 0, \"adds two of none\");\n});\n"
+      },
+      "head": {
+        "__tests__/cart.test.js": "const assert = require(\"node:assert\");\nconst { total } = require(\"../cart\");\n\ntest(\"adds the items\", () => {\n  assert.equal(total([10, 20]), 30, \"sums two\");\n  assert.ok(total([]) === 0, \"sums two of none\");\n});\n"
+      }
+    },
+    {
+      "name": "rs: only the message of assert_eq! and assert! changed",
+      "expect": [],
+      "note": "The format arguments after the values are what a failure prints.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"calc\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3, \"one and two make three\");\n        assert!(add(0, 0) == 0, \"{} and {}: one and two make three\", 0, 0);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3, \"the sum of one and two\");\n        assert!(add(0, 0) == 0, \"{} and {}: the sum of one and two\", 0, 0);\n    }\n}\n"
+      }
     }
   ]
 }

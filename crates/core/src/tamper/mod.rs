@@ -2105,4 +2105,119 @@ mod tests {
         assert!(!covers("allow:clippy::all", "allow:dead_code"));
         assert!(!covers("noqa:*", "type-ignore:*"));
     }
+
+    /// The `what` of each `expected-changed` finding between two versions
+    /// of one test file.
+    fn changed(path: &str, base: &str, head: &str) -> Vec<String> {
+        let language = Language::of(path).expect("a language the guard reads");
+        expected_changes(
+            path,
+            &read_test_file(base, language),
+            &read_test_file(head, language),
+        )
+        .into_iter()
+        .map(|finding| finding.what)
+        .collect()
+    }
+
+    #[test]
+    fn a_failure_message_that_changed_is_not_an_expected_value() {
+        // Finding 4 of the 0.5.1 review: test_connection_slots.py:409.
+        let fail = |word: &str| {
+            format!(
+                "import pytest\n\n\nasync def test_a_stalled_publish_does_not_hold_the_market_s_slot():\n    try:\n        await commit()\n    except TimeoutError:\n        pytest.fail(\n            \"a third request waited for a slot while two publishes stalled: \"\n            \"{word} publish runs inside the market's slot\"\n        )\n"
+            )
+        };
+        assert_eq!(
+            changed("tests/test_slots.py", &fail("the"), &fail("a")),
+            Vec::<String>::new()
+        );
+        // test_trade.py:1026: the message after the comma of an assert.
+        let idle = |place: &str| {
+            format!(
+                "async def test_idle():\n    idle = await idle_in_transaction()\n    assert idle == 0, f\"{{idle}} backend(s) idle in transaction across {place}\"\n"
+            )
+        };
+        assert_eq!(
+            changed(
+                "tests/test_trade.py",
+                &idle("the gate's call"),
+                &idle("the refresh")
+            ),
+            Vec::<String>::new()
+        );
+        // unittest's msg, positional or named, and self.fail.
+        let unit = |message: &str| {
+            format!(
+                "import unittest\n\n\nclass TestCart(unittest.TestCase):\n    def test_total(self):\n        self.assertEqual(total([1, 2]), 3, \"{message}\")\n        self.assertTrue(total([]) == 0, msg=\"{message}\")\n        self.assertAlmostEqual(mean([1, 2]), 1.5, 7, \"{message}\")\n        if broken():\n            self.fail(\"{message}\")\n"
+            )
+        };
+        assert_eq!(
+            changed("tests/test_cart.py", &unit("adds"), &unit("sums")),
+            Vec::<String>::new()
+        );
+        // A value that changed is still one, message or not.
+        assert_eq!(
+            changed(
+                "tests/test_trade.py",
+                &idle("the gate's call"),
+                &idle("the gate's call").replace("idle == 0", "idle == 1")
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_failure_message_is_not_an_expected_value_in_javascript_and_rust() {
+        let ts = |message: &str| {
+            format!(
+                "import assert from \"node:assert\";\n\nit(\"adds\", () => {{\n  expect(total([10, 20]), \"{message}\").toBe(30);\n  assert.equal(total([1]), 1, \"{message}\");\n  assert.strictEqual(total([2]), 2, \"{message}\");\n  assert.ok(total([]) === 0, \"{message}\");\n  assert(total([3]) === 3, \"{message}\");\n  if (broken()) assert.fail(\"{message}\");\n}});\n"
+            )
+        };
+        assert_eq!(
+            changed("src/cart.test.ts", &ts("adds"), &ts("sums")),
+            Vec::<String>::new()
+        );
+        let rs = |message: &str| {
+            format!(
+                "#[test]\nfn adds() {{\n    assert_eq!(add(1, 2), 3, \"{message}\");\n    assert_ne!(add(1, 2), 4, \"{message}: {{}}\", 4);\n    assert!(add(0, 0) == 0, \"{message}\");\n    debug_assert_eq!(add(2, 2), 4, \"{message}\");\n}}\n"
+            )
+        };
+        assert_eq!(
+            changed("tests/add.rs", &rs("adds"), &rs("sums")),
+            Vec::<String>::new()
+        );
+        // The values still count.
+        assert_eq!(
+            changed(
+                "tests/add.rs",
+                &rs("adds"),
+                &rs("adds").replace("add(1, 2), 3", "add(1, 2), 4")
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_assertion_is_never_paired_with_one_of_a_different_test() {
+        // Finding 4 of the 0.5.1 review: test_trade.py:1265 against line
+        // 932. The base's test was renamed and lost `upstream.calls == 1`;
+        // `upstream.calls == 0` is in a new test the base does not have.
+        let base = "async def test_a_trade_holds_no_connection_while_the_gate_waits_on_market_service():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the gate's call\"\n    assert upstream.calls == 1\n    assert trade.state_version == 1\n";
+        let head = "async def test_a_trade_holds_no_connection_while_the_gate_refreshes_the_copy():\n    trade = await buy(upstream)\n    assert seen == [clean]\n    assert idle == 0, f\"{idle} backend(s) idle in transaction across the refresh\"\n    assert trade.state_version == 1\n\n\nasync def test_a_suspended_trader_hears_about_the_suspension_not_the_market():\n    with pytest.raises(AccountSuspended):\n        await buy(upstream, suspended=True)\n    assert upstream.calls == 0\n";
+        assert_eq!(
+            changed("tests/test_trade.py", base, head),
+            Vec::<String>::new()
+        );
+        // A renamed test whose value changed is still followed.
+        let one = |name: &str, value: u8| {
+            format!("def test_{name}():\n    assert total([10, 20]) == {value}\n    assert total([]) == 0\n")
+        };
+        assert_eq!(
+            changed("tests/test_cart.py", &one("adds", 30), &one("sums", 31)).len(),
+            1
+        );
+    }
 }
