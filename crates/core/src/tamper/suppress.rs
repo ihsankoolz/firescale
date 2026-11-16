@@ -499,6 +499,39 @@ subprocess.call(cmd, shell=True)  # nosec B602
     }
 
     #[test]
+    fn the_words_of_a_comment_after_the_codes_are_not_codes() {
+        // Finding 3 of the 0.5.1 review (docs/diagrams/15-lmsr.py:43).
+        let source = r##"
+import matplotlib.pyplot as plt  # noqa: E402  (after the backend is chosen)
+from core import lmsr  # noqa: E402
+import os  # noqa: F401, PLC0415 kept for the plugin loader
+# ruff: noqa: E501 long tables below
+x = f()  # pylint: disable=unused-import, too-many-locals  kept for the old callers
+y = g()  # pylint: disable=C0114  see the module docs
+subprocess.call(cmd, shell=True)  # nosec B602, B607 the command is fixed in config
+assert yaml.load("{}") == []  # nosec assert_used because the test needs it
+z = h()  # nosec the input is ours
+"##;
+        assert_eq!(
+            keys(source, Language::Python),
+            [
+                "noqa:E402",
+                "noqa:E402",
+                "noqa:F401",
+                "noqa:PLC0415",
+                "noqa-file:E501",
+                "pylint:unused-import",
+                "pylint:too-many-locals",
+                "pylint:C0114",
+                "nosec:B602",
+                "nosec:B607",
+                "nosec:assert_used",
+                "nosec:*",
+            ]
+        );
+    }
+
+    #[test]
     fn python_look_alikes_are_not_suppressions() {
         let source = r##"
 # Do not add noqa here: fix the import.
