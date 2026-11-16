@@ -155,7 +155,7 @@ core/ci-exists
 +          GH_TOKEN: \${{ github.token }}
 +          REPO: \${{ github.repository }}
 +          PR: \${{ github.event.pull_request.number }}
-+      - run: npx --yes firescale@0.5.1 tamper --pr-base --approvals "$RUNNER_TEMP/reviews.json"
++      - run: npx --yes firescale@0.5.2 tamper --pr-base --approvals "$RUNNER_TEMP/reviews.json"
 +# firescale-workflow: 2752656d39c761eca2f00e5461d40d67
 
 core/gitignore-basics
