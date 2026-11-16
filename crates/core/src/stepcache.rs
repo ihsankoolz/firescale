@@ -2561,6 +2561,16 @@ mod tests {
             // Only hook entries: as if there were no file.
             fixture.write(file, "{\"hooks\":{\"Stop\":[]}}\n").unwrap();
             assert_eq!(project(), none, "{file}");
+            // A hook entry firescale did not write, here a SessionStart
+            // hook (it can set what verify sees): in every key, by value
+            // (second review of ADR 0064).
+            fixture
+                .write(
+                    file,
+                    "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"echo hi\"}]}],\"sessionStart\":[{\"command\":\"echo hi\"}]}}\n",
+                )
+                .unwrap();
+            assert_ne!(project(), none, "{file}");
             // Anything else in it (Claude Code gives `env` to every command
             // it starts): in every key, by value.
             fixture

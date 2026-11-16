@@ -958,6 +958,71 @@ mod tests {
     }
 
     #[test]
+    fn a_pin_firescale_wrote_is_its_own_command_whatever_the_version() {
+        assert_eq!(pinned_version("npx --yes firescale@0.5.0"), Some("0.5.0"));
+        assert_eq!(
+            pinned_version("npx --yes firescale@0.6.0-rc.1"),
+            Some("0.6.0-rc.1")
+        );
+        assert_eq!(pinned_version("npx --yes firescale@latest"), None);
+        assert_eq!(pinned_version("npx --yes firescale@0.5.0 && echo"), None);
+        assert_eq!(pinned_version("npx --yes firescale@0.5.0;echo"), None);
+        assert_eq!(pinned_version("npx firescale@0.5.0"), None);
+        assert!(may_start(
+            "npx --yes firescale@0.5.0",
+            &["pnpm --silent fscale"]
+        ));
+        assert!(!may_start("npx --yes firescale@0.5.0 &&", &[]));
+    }
+
+    #[test]
+    fn only_the_entries_firescale_writes_are_set_aside() {
+        let none = outside_hooks(Agent::Claude, None);
+        let ours = |agent: Agent| {
+            let command = format!(
+                "npx --yes firescale@0.5.0 hooks run --agent {}",
+                agent.name()
+            );
+            match agent {
+                Agent::Cursor => {
+                    json!({ "version": 1, "hooks": { "stop": [{ "command": command }] } })
+                }
+                _ => {
+                    json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": command }] }] } })
+                }
+            }
+        };
+        for agent in AGENTS {
+            let text = |value: &Value| serde_json::to_vec(value).unwrap();
+            assert_eq!(
+                outside_hooks(agent, Some(&text(&ours(agent)))),
+                none,
+                "{agent:?}"
+            );
+            // Another hook entry, of the stop event or of any other: what
+            // it does reaches verify (a SessionStart hook can set its env).
+            let mut other = ours(agent);
+            let (stop, start) = match agent {
+                Agent::Cursor => ("stop", "sessionStart"),
+                _ => ("Stop", "SessionStart"),
+            };
+            let entry = match agent {
+                Agent::Cursor => json!({ "command": "echo API_MODE=strict" }),
+                _ => json!({ "hooks": [{ "type": "command", "command": "echo API_MODE=strict" }] }),
+            };
+            other["hooks"][start] = json!([entry.clone()]);
+            assert_ne!(outside_hooks(agent, Some(&text(&other))), none, "{agent:?}");
+            let mut beside = ours(agent);
+            beside["hooks"][stop].as_array_mut().unwrap().push(entry);
+            assert_ne!(
+                outside_hooks(agent, Some(&text(&beside))),
+                none,
+                "{agent:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_command_is_the_one_the_repo_decides() {
         let facts = |manager: Option<&str>| crate::facts::RepoFacts {
             package_manager: manager.map(str::to_owned),
@@ -978,7 +1043,9 @@ mod tests {
             (Some("pnpm"), "pnpm exec fscale"),
             (Some("yarn"), "yarn --silent fscale"),
             (Some("bun"), "bun run --silent fscale"),
-            (None, "npx --no fscale"),
+            // `--` ends npx's own options: with `npx --no fscale --version`,
+            // npm 10 printed its own version (second review of ADR 0064).
+            (None, "npx --no -- fscale"),
         ] {
             assert_eq!(fscale_command(&facts(manager), Some(&installed)), command);
         }
@@ -987,7 +1054,7 @@ mod tests {
                 &facts(None),
                 Some(&json!({ "dependencies": { "firescale": "0.5.1" } }))
             ),
-            "npx --no fscale"
+            "npx --no -- fscale"
         );
         assert_eq!(
             fscale_command(&facts(Some("pnpm")), Some(&script)),
