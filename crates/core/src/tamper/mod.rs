@@ -1477,12 +1477,8 @@ pub fn guard_at(
             (Some(before), Some(after)) => successors(before, after, &elsewhere),
             _ => Successors::default(),
         };
-        // Assertions that changed only in their values, file by file (M26).
-        if let (Some(before), Some(after)) = (base_file, head_file) {
-            if !allows(path, Kind::ExpectedChanged) {
-                approval_findings.extend(expected_changes(path, before, after, &renamed));
-            }
-        }
+        // What followed tests lost (ADR 0063), found below.
+        let mut file_losses: Vec<Finding> = Vec::new();
         let count_tests = !allows(path, Kind::TestDeleted);
         let count_skips = !allows(path, Kind::TestSkipped);
         let count_assertions = !allows(path, Kind::AssertionRemoved);
@@ -1548,16 +1544,18 @@ pub fn guard_at(
                     .filter_map(|index| read.tests.get(*index))
                     .map(|test| test.id.as_str())
                     .collect();
-                lost_in_renames.extend(followed_losses(
-                    path,
-                    read,
-                    after,
-                    &renamed,
-                    &excused_ids,
-                    &elsewhere,
-                ));
+                file_losses =
+                    followed_losses(path, read, after, &renamed, &excused_ids, &elsewhere);
             }
         }
+        // Assertions that changed only in their values, file by file (M26).
+        if let (Some(before), Some(after)) = (base_file, head_file) {
+            if !allows(path, Kind::ExpectedChanged) {
+                let lost: BTreeSet<usize> = file_losses.iter().map(|lost| lost.line).collect();
+                approval_findings.extend(expected_changes(path, before, after, &renamed, &lost));
+            }
+        }
+        lost_in_renames.extend(file_losses);
         // A file whose every test is skipped on the base and now (the whole
         // file under `#if canImport(…)`, `@TestOn(…)`, a platform's name): a
         // new test in it is no more skipped than the others were (found on
@@ -2238,6 +2236,7 @@ fn expected_changes(
     before: &TestFile,
     after: &TestFile,
     followed: &Successors,
+    lost: &BTreeSet<usize>,
 ) -> Vec<Finding> {
     let mut left: BTreeMap<&str, usize> = BTreeMap::new();
     for assertion in &after.assertions {
@@ -2305,7 +2304,33 @@ fn expected_changes(
         .zip(&new_ids)
         .map(|(a, id)| (id.as_str(), a.checked()))
         .collect();
-    approval::pairs(&gone_shapes, &new_shapes)
+    let mut paired = approval::pairs(&gone_shapes, &new_shapes);
+    // What is left of gone tests and new tests pairs as before ADR 0063,
+    // any gone test with any new one, but for an assertion named lost
+    // (`lost`, base lines: [`followed_losses`]). So a value changed in
+    // tests whose following was not seen is still a change, and the
+    // review's `upstream.calls == 1`, named lost in its renamed test, is not
+    // paired with another test's `upstream.calls == 0`.
+    let (old_used, new_used): (BTreeSet<usize>, BTreeSet<usize>) = (
+        paired.iter().map(|(old, _)| *old).collect(),
+        paired.iter().map(|(_, now)| *now).collect(),
+    );
+    let in_gone_test = |id: &str| id.starts_with('\u{0}');
+    let rest_gone: Vec<usize> = (0..gone.len())
+        .filter(|i| !old_used.contains(i) && in_gone_test(&gone_ids[*i]))
+        .filter(|i| !lost.contains(&gone[*i].line))
+        .collect();
+    let rest_new: Vec<usize> = (0..new.len())
+        .filter(|i| !new_used.contains(i) && in_gone_test(&new_ids[*i]))
+        .collect();
+    let any: Vec<(&str, &str)> = rest_gone.iter().map(|i| ("", gone[*i].checked())).collect();
+    let any_new: Vec<(&str, &str)> = rest_new.iter().map(|i| ("", new[*i].checked())).collect();
+    paired.extend(
+        approval::pairs(&any, &any_new)
+            .into_iter()
+            .map(|(old, now)| (rest_gone[old], rest_new[now])),
+    );
+    paired
         .into_iter()
         .map(|(old, now)| Finding {
             kind: Kind::ExpectedChanged,
@@ -2698,15 +2723,22 @@ mod tests {
             read_test_file(base, language),
             read_test_file(head, language),
         );
-        expected_changes(
+        let followed = successors(&before, &after, &Elsewhere::default());
+        let lost: BTreeSet<usize> = followed_losses(
             path,
             &before,
             &after,
-            &successors(&before, &after, &Elsewhere::default()),
+            &followed,
+            &BTreeSet::new(),
+            &Elsewhere::default(),
         )
-        .into_iter()
-        .map(|finding| finding.what)
-        .collect()
+        .iter()
+        .map(|lost| lost.line)
+        .collect();
+        expected_changes(path, &before, &after, &followed, &lost)
+            .into_iter()
+            .map(|finding| finding.what)
+            .collect()
     }
 
     #[test]
