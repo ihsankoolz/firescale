@@ -1281,6 +1281,7 @@ impl Reader<'_> {
                 .map_or(1, |test| test.weight),
             test,
             conditional,
+            checked: None,
         });
     }
 }

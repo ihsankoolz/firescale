@@ -577,6 +577,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 weight: 1,
                 test,
                 conditional: false,
+                checked: None,
             });
             return true;
         }

@@ -446,9 +446,7 @@ fn bracketed(tool: &str, rest: &str) -> Vec<String> {
         .and_then(|list| list.split(']').next());
     keyed(
         tool,
-        inside
-            .map(|list| codes(list, any_word))
-            .unwrap_or_default(),
+        inside.map(|list| codes(list, any_word)).unwrap_or_default(),
     )
 }
 

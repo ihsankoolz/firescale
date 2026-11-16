@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::reach::{self, Grammar};
-use super::{Assertion, TestCase, TestFile};
+use super::{without, Assertion, Messages, TestCase, TestFile};
 use crate::imports::{parse, text, walk};
 
 /// How deep a dotted name is followed: real code never comes near it.
@@ -813,6 +813,94 @@ fn call_assertion(call: Node<'_>, src: &[u8], names: &Names<'_>) -> Option<bool>
     Some(!passes)
 }
 
+/// The failure messages of Python assertions (ADR 0063): unittest's `msg`
+/// (docs.python.org, `unittest.TestCase`), numpy's `err_msg`
+/// (`numpy.testing`), and `pytest.fail(reason)` and `self.fail(msg)`, whose
+/// every argument is the message.
+const MESSAGES: Messages = Messages {
+    all: &[],
+    from: &[
+        ("assertTrue", 1),
+        ("assertFalse", 1),
+        ("assertIsNone", 1),
+        ("assertIsNotNone", 1),
+        ("assertEqual", 2),
+        ("assertEquals", 2),
+        ("assertNotEqual", 2),
+        ("assertNotEquals", 2),
+        ("assertIs", 2),
+        ("assertIsNot", 2),
+        ("assertIn", 2),
+        ("assertNotIn", 2),
+        ("assertIsInstance", 2),
+        ("assertNotIsInstance", 2),
+        ("assertGreater", 2),
+        ("assertGreaterEqual", 2),
+        ("assertLess", 2),
+        ("assertLessEqual", 2),
+        ("assertRegex", 2),
+        ("assertNotRegex", 2),
+        ("assertCountEqual", 2),
+        ("assertMultiLineEqual", 2),
+        ("assertSequenceEqual", 2),
+        ("assertListEqual", 2),
+        ("assertTupleEqual", 2),
+        ("assertSetEqual", 2),
+        ("assertDictEqual", 2),
+        ("assertAlmostEqual", 2),
+        ("assertNotAlmostEqual", 2),
+        ("assert_equal", 2),
+        ("assert_array_equal", 2),
+        ("assert_almost_equal", 2),
+        ("assert_array_almost_equal", 2),
+        ("assert_allclose", 2),
+    ],
+    labels: &["msg", "err_msg"],
+};
+
+/// The parts of an assertion that are its failure message: what follows
+/// the comma of an `assert`, every argument of `pytest.fail` and
+/// `self.fail`, and the message of a unittest or numpy assertion.
+fn message_parts<'t>(node: Node<'t>, src: &[u8], names: &Names<'_>) -> Vec<Node<'t>> {
+    if node.kind() == "assert_statement" {
+        return children(node).into_iter().skip(1).collect();
+    }
+    let (Some(function), Some(list)) = (
+        node.child_by_field_name("function"),
+        node.child_by_field_name("arguments"),
+    ) else {
+        return Vec::new();
+    };
+    if list.kind() != "argument_list" {
+        return Vec::new();
+    }
+    let arguments: Vec<(Option<&str>, Node<'t>)> = children(list)
+        .into_iter()
+        .map(|argument| {
+            let label = (argument.kind() == "keyword_argument")
+                .then(|| argument.child_by_field_name("name"))
+                .flatten()
+                .map(|name| text(name, src));
+            (label, argument)
+        })
+        .collect();
+    let fails = dotted(function, src).is_some_and(|path| {
+        names.is_pytest(&path, &["fail"])
+            || matches!(&path[..], [receiver, method] if receiver == "self" && method == "fail")
+    });
+    if fails {
+        return arguments.into_iter().map(|(_, node)| node).collect();
+    }
+    let last = match function.kind() {
+        "identifier" => text(function, src),
+        "attribute" => function
+            .child_by_field_name("attribute")
+            .map_or("", |name| text(name, src)),
+        _ => return Vec::new(),
+    };
+    MESSAGES.of(last, &arguments, src)
+}
+
 /// True for an `assert` statement that can fail: its condition does not
 /// certainly pass. The message after the comma is not looked at. `assert
 /// False` can: it is how a test says "never reach here".
@@ -1184,6 +1272,7 @@ pub(super) fn read(source: &str) -> TestFile {
                             .map_or(1, |test| test.weight),
                         test,
                         conditional: false,
+                        checked: without(node, src, &message_parts(node, src, &names)),
                     });
                 }
             }
