@@ -366,6 +366,41 @@ describe('fscale doctor', () => {
     expect(report.checks.map((c) => c.subject)).toContain('virtual environment (active)');
   });
 
+  // Finding 8 of the 0.5.1 run on the course project: the line read
+  // "all 16 packages are in backend/audit_service/requirements-dev.txt installed".
+  it('says that all the packages in a requirements file are installed, as the Node line does', async () => {
+    // As in the course project: requirements-dev.txt takes in requirements.txt
+    // with -r, so the install command names requirements-dev.txt.
+    const names = Array.from({ length: 16 }, (_, i) => `example-pkg-${String(i + 1)}`);
+    const pins = (list: string[]) => list.map((n) => `${n}==1.0.0\n`).join('');
+    const repo = await fixtures.create({
+      files: {
+        'backend/audit_service/requirements.txt': pins(names.slice(0, 10)),
+        'backend/audit_service/requirements-dev.txt': `-r requirements.txt\n${pins(names.slice(10))}`,
+        'backend/audit_service/main.py': '',
+        'backend/one_service/requirements.txt': 'requests==2.31.0\n',
+        'backend/one_service/main.py': '',
+      },
+    });
+    const audit = await makeVenv(path.join(repo.root, 'backend', 'audit_service'));
+    for (const name of names) {
+      await mkdir(path.join(audit, `${name.replaceAll('-', '_')}-1.0.0.dist-info`));
+    }
+    const one = await makeVenv(path.join(repo.root, 'backend', 'one_service'));
+    await mkdir(path.join(one, 'requests-2.31.0.dist-info'));
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await writeVersionTools(tools, {});
+    const result = await runCli(['doctor'], repo.root, toolPath(tools));
+    const lines = result.stdout
+      .split(/\r?\n/)
+      .filter((line) => line.includes(' packages: '))
+      .map((line) => line.trim());
+    expect(lines).toEqual([
+      'ok       backend/audit_service packages: all 16 packages in backend/audit_service/requirements-dev.txt are installed',
+      'ok       backend/one_service packages: the 1 package in backend/one_service/requirements.txt is installed',
+    ]);
+  });
+
   it('exits 0 on this repo on a machine that can build it', async () => {
     const result = await runCli(['doctor'], REPO);
     expect(result.stdout).toContain('doctor: OK');
