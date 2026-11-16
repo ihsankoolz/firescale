@@ -3789,6 +3789,31 @@ fn shared_setup_reasons(report: &VerifyReport) -> Vec<(&str, Vec<usize>)> {
     groups
 }
 
+/// At most this many failing tests of one step are named in the summary;
+/// `--json` has every one (ADR 0062).
+const FAILING_TESTS_SHOWN: usize = 20;
+
+/// The failing tests of a step, by name as its runner gives them, the first
+/// [`FAILING_TESTS_SHOWN`], then how many more.
+fn failing_tests_list(step: &StepReport, place: &str) -> String {
+    let tests = &step.failed_tests;
+    let mut out = format!(
+        "\nFailing tests of {}{place} ({}):\n",
+        step.name,
+        tests.len()
+    );
+    for test in tests.iter().take(FAILING_TESTS_SHOWN) {
+        out.push_str(&format!("  {}\n", test.id));
+    }
+    if tests.len() > FAILING_TESTS_SHOWN {
+        out.push_str(&format!(
+            "  and {} more; `fscale verify --json` lists every one under failedTests\n",
+            tests.len() - FAILING_TESTS_SHOWN
+        ));
+    }
+    out
+}
+
 /// One block for several steps that need the same setup: the reason once,
 /// then each step with its own setup command and the command to run again.
 /// Only the first step's last lines are shown; `--json` has every step's.
@@ -3935,6 +3960,7 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             .map_or_else(String::new, |project| {
                 format!(" in {}", place_name(project))
             });
+        let mut named_tests = false;
         match failure.label {
             Some(crate::blame::Label::PreExisting) => {
                 let how = match failure.base.as_ref().map(|base| base.source) {
@@ -4000,9 +4026,19 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
                     for test in &new_tests {
                         out.push_str(&format!("  {test}\n"));
                     }
+                    named_tests = true;
                 }
             }
             _ => {}
+        }
+        // Each failing test by name, so it is plain how many failed and
+        // which; the last lines below show how (ADR 0062). Not when the
+        // new ones were just listed: the others are counted there.
+        if !named_tests
+            && matches!(failure.status, StepStatus::Failed | StepStatus::TimedOut)
+            && !failure.failed_tests.is_empty()
+        {
+            out.push_str(&failing_tests_list(failure, &place));
         }
         if !failure.output_tail.is_empty() {
             out.push_str(&format!("\nLast lines of {}{place}:\n", failure.name));
