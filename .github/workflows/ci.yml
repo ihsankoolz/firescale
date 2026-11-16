@@ -54,20 +54,26 @@ jobs:
           BEFORE: ${{ github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          # Only documentation, read by no build and no test. Narrow on
-          # purpose: docs/rules.md is read by a Rust test, docs/schemas by a
-          # Vitest test, README.md and AGENTS.md by the rules `fscale check`
-          # runs on this repo, and nothing under crates/ or packages/ counts
-          # (each rule's SKILL.md is compiled into the binary).
+          # Only documentation, read by no build and no test: a .md file
+          # under docs/ or at the root. Narrow on purpose: docs/rules.md is
+          # read by a Rust test, docs/schemas by a Vitest test, README.md and
+          # AGENTS.md by the rules `fscale check` runs on this repo (in any
+          # case: core/readme-setup finds readme.md too), and nothing under
+          # crates/ or packages/ counts (each rule's SKILL.md is compiled
+          # into the binary).
           docs_only() {
             case "$1" in
               docs/rules.md | docs/schemas/*) return 1 ;;
-              docs/*) return 0 ;;
-              README.md | AGENTS.md | CLAUDE.md) return 1 ;;
+              docs/*.md) return 0 ;;
               */*) return 1 ;;
-              *.md) return 0 ;;
-              *) return 1 ;;
             esac
+            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+              readme.md | agents.md | claude.md) return 1 ;;
+            esac
+            case "$1" in
+              *.md) return 0 ;;
+            esac
+            return 1
           }
           everything() {
             echo "Every job runs: $1."
