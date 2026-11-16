@@ -215,9 +215,59 @@ const MESSAGES: Messages = Messages {
     labels: &["message"],
 };
 
+/// Where a Kotlin file's assertions take their message.
+struct Order {
+    /// The file imports JUnit 4's `Assert` ([`junit4`]): its calls take
+    /// their message first.
+    junit4: bool,
+    /// The names an unqualified call takes from kotlin.test, whose message
+    /// is last: those it imports by name, and `*` for `import
+    /// kotlin.test.*` when nothing is imported from `org.junit.Assert` by
+    /// name or by `*`. Kotlin prefers an import by name to one by `*`, and
+    /// `import org.junit.*` brings in the class `Assert`, not its methods.
+    kotlin_test: BTreeSet<String>,
+}
+
+impl Order {
+    fn of(source: &str) -> Self {
+        let imports: Vec<String> = source
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("import "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(|path| path.trim_end_matches(';').to_owned())
+            .collect();
+        let junit_assert = imports
+            .iter()
+            .any(|import| import.starts_with("org.junit.Assert."));
+        let kotlin_test = imports
+            .iter()
+            .filter_map(|import| import.strip_prefix("kotlin.test."))
+            .filter(|name| *name != "*" || !junit_assert)
+            .filter(|name| !name.contains('.'))
+            .map(str::to_owned)
+            .collect();
+        Self {
+            junit4: junit4(source.as_bytes()),
+            kotlin_test,
+        }
+    }
+
+    /// True when `link`, a call named `name`, takes JUnit 4's order: the
+    /// file imports JUnit 4, no argument is named (Kotlin passes no named
+    /// argument to a Java method, so `message =` is kotlin.test's), and an
+    /// unqualified call's name is not imported from kotlin.test (review of
+    /// pull request 66).
+    fn junit4(&self, link: Node<'_>, name: &str, arguments: &[(Option<&str>, Node<'_>)]) -> bool {
+        let unqualified = callee(link).is_some_and(|called| called.kind() == "identifier");
+        self.junit4
+            && arguments.iter().all(|(label, _)| label.is_none())
+            && !(unqualified && (self.kotlin_test.contains(name) || self.kotlin_test.contains("*")))
+    }
+}
+
 /// What a Kotlin assertion checks, without its failure message (see
 /// [`MESSAGES`]); for `fail(…)`, the condition of the `if` around it.
-fn checked(node: Node<'_>, src: &[u8], junit4: bool) -> Option<String> {
+fn checked(node: Node<'_>, src: &[u8], order: &Order) -> Option<String> {
     let mut message: Vec<Node<'_>> = Vec::new();
     for link in chain(node) {
         let name = call_name(link, src);
@@ -237,7 +287,7 @@ fn checked(node: Node<'_>, src: &[u8], junit4: bool) -> Option<String> {
         } else if MESSAGES.all.contains(&name) && link == node {
             let all: Vec<Node<'_>> = arguments.iter().map(|(_, value)| *value).collect();
             return failed_when(node, src, &all);
-        } else if junit4 {
+        } else if order.junit4(link, name, &arguments) {
             message.extend(leading_message(&MESSAGES, name, &arguments, src));
         } else {
             message.extend(MESSAGES.of(name, &arguments, src));
@@ -1049,7 +1099,7 @@ fn spec_tests(walker: &mut SpecWalk<'_>, body: Node<'_>, path: &[String], skippe
 
 /// Reads the tests, skips and assertions of a Kotlin test file.
 pub(super) fn read(source: &str) -> TestFile {
-    let junit4 = junit4(source.as_bytes());
+    let order = Order::of(source);
     let language: Language = tree_sitter_kotlin_ng::LANGUAGE.into();
     let Some(tree) = parse(source, &language) else {
         return TestFile {
@@ -1159,7 +1209,7 @@ pub(super) fn read(source: &str) -> TestFile {
                     && !cannot_fail(&links, src)
                 {
                     file.assertions.push(Assertion {
-                        checked: checked(node, src, junit4),
+                        checked: checked(node, src, &order),
                         ..assertion(node, src)
                     });
                     starts.push(node.start_byte());
