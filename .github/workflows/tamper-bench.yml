@@ -66,6 +66,11 @@ jobs:
       # bench/tamper-history-m32.json (M32: 125 commits, --all-parents for
       # the repos that merge branches), at the heads recorded there, so the
       # commits are the ones already labelled.
+      #
+      # This repo's own 150 commits of M26 are not in the matrix: the head
+      # recorded for them (18bdbe7) was the tip of a branch that was merged
+      # and deleted, so GitHub no longer serves it ("not our ref"; run
+      # 44128788594). The rates over "all public repos" never counted it.
       matrix:
         include:
           - {
@@ -108,13 +113,6 @@ jobs:
               language: ts,
               commits: 150,
               head: f6fbaf0299c48eea9e656e03e2ffe7ac755e8823,
-              all: false,
-            }
-          - {
-              repo: ihsankoolz/firescale,
-              language: this,
-              commits: 150,
-              head: 18bdbe7a04f94bc7820112791eacc785d553a901,
               all: false,
             }
           - {
