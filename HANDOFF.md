@@ -4,7 +4,16 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**Nothing in progress.** The 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`) is merged. Each fix had a failing test first. Blocks per pull request are in DECISIONS.md "0.5.2":
+**The overnight run of 2026-11-18 is in progress** (DECISIONS.md, "0.5.3 — the overnight run of 2026-11-18"). Its stages, in order:
+
+0. The tamper benchmark, started: [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594), before `v0.5.1`, after `v0.5.2`. Nobody waits for it; Stage 3 reads it.
+1. The README (this pull request), then doctor: a variable listed in a `.env.example` and set nowhere becomes a warning, with a config setting to make it a problem again. **Not started.** It must paste the README's doctor block again (`node scripts/readme-output.mjs`).
+2. `real-repos.yml`, about 15 public repos, and `docs/reviews/real-repos-0.5.3.md`. Not started.
+3. The benchmark's labels and rates in `bench/RESULTS.md` and the README. Not started.
+4. The project-type table (audit part C): build, open the pull request, do not merge. Not started.
+5. Version 0.5.3, after Stages 1 to 3. No tag. Not started.
+
+Before this run: the 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`) is merged. Each fix had a failing test first. Blocks per pull request are in DECISIONS.md "0.5.2":
 
 1. The base run: quickest base step first, a step known to take longer than the budget left is not started, the version note, failing tests by name (ADR 0062). Merged as [#63](https://github.com/ihsankoolz/firescale/pull/63).
 2. Tamper guard: suppression codes end at the first word that is not a code; `expected-changed` ignores failure messages; tests followed through renames, moves, merges and splits (ADR 0063). Merged as [#66](https://github.com/ihsankoolz/firescale/pull/66). Gate: the held-out cheats, 43 missed of 98 before and after. The rates on real commits were not measured again (bench/RESULTS.md says why); `tamper-bench.yml` can.
@@ -16,7 +25,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged and released. The 0.5.2 run ended with its version pull request. Do not start M36 or the project-type table without the owner's word.
 
-- **Version:** 0.5.2 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **No `v0.5.2` tag exists**; the owner pushes it when ready (`RELEASING.md`). 0.5.1 is released: the tag `v0.5.1` is on commit `62b795b` (2026-11-16) and it is npm's latest. Until 0.5.2 is on npm, the hook command `hooks install` writes (`npx --yes firescale@0.5.2 ...`) does not resolve, and `fscale sync` moves a 0.5.1 pin to it.
+- **Version:** 0.5.2 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **0.5.2 is released**: the tag `v0.5.2` is on commit `c9d8ffc` and it is npm's latest (seen on 2026-11-18).
 - **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run; `fscale doctor` says PROBLEM for a `.env` that is a symbolic link when its variables are set nowhere else; `hooks install` no longer prints the note about the Cursor hook format.
 - **Verify's JSON is schema version 7** (`notRun`, `budgetMs`, the step status `over-budget`).
 - **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
@@ -234,7 +243,6 @@ Notes for M13 (agent files), written before it, which stands on M9 like M11 did:
 
 ## Left for the owner to do by hand
 
-- Tag `v0.5.2` on `main` and push the tag when you are ready to release (`RELEASING.md`). The release builds without any cache, so it takes longer. `v0.5.1` is tagged and is npm's latest.
 - After 0.5.0 is on npm: M22's manual check (a fixture repo on GitHub with `--shared-cache`), and M25's and M26's checks of the `Tamper guard` workflow on a real pull request (DECISIONS.md, "Review of the long run").
 - Run 0.5.2 on the course project: DECISIONS.md, "0.5.2 on the course project: what you should see change".
 - Start `tamper-bench.yml` by hand (before `main` at `v0.5.1`, after `v0.5.2`) and label its new findings, to measure the 0.5.2 tamper guard on real commits (bench/RESULTS.md, "Not measured again for 0.5.2").
