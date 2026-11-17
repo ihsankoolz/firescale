@@ -1,7 +1,5 @@
 # Installing firescale
 
-> Not published yet. These instructions describe how it works once the packages are on npm. Until then, see "From a checkout" below.
-
 ## With npm, pnpm or yarn
 
 ```

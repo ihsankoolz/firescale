@@ -2,6 +2,42 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## 0.5.3 — the overnight run of 2026-11-18
+
+**Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings still need labels (Stage 3).
+
+**Pull request 1: the README, for a reader who has 2 minutes**
+
+README.md is rewritten for a student team lead and for an engineer reading a CV: what it is in two lines, a quick start, five ideas with one output block each, "One real project", "Measured, with limits", "What it does not do", "Known limits", install and links.
+
+- **Every output block is real.** `scripts/readme-output.mjs` (new) writes three of this repo's test fixtures to the temp folder and runs the built `fscale` on them: the course-project fixture (`packages/cli/src/course-fixture.ts`), the blame fixture of `packages/cli/src/blame.test.ts`, and the case `ts: a test skipped with it.skip` of `bench/tamper-corpus.json`. The blocks were pasted from one run on Windows 11 with a debug build of 0.5.2. The doctor block has the lines of four services cut and marked `...`; nothing else is cut.
+- **Numbers** come only from `bench/RESULTS.md` and the block "0.5.0: the release binary's size" below, each with its limit beside it.
+- **`docs/install.md`** lost its "Not published yet" line: 0.5.2 is npm's latest (`npm view firescale version` on 2026-11-18).
+- `fscale check` on this repo: `OK: 14 rules checked, no violations.`
+
+**A fresh subagent checked every claim and number** against the code, the bench files and the docs, and ran the script again. No number was wrong. Changed after it:
+
+- **"With `--budget 10m` it takes about 5 minutes" is not recorded anywhere, so the README does not say it.** No `--budget` run on the course project exists (`docs/reviews/cs464-0.5.1.md`, "Step 4 ... was not done"). What the review's kept times do show: a budget of 10 minutes leaves out the two suites of 31m 26s and 1h 36m, and the steps left add up to 5m 26s. The README says that: "The steps that are left took about 5 minutes in that run, added up." **For you:** if you measured a real `--budget 10m` run, say so and the line can give its time.
+- "The run then says `PARTIAL`" became "never says `OK`": beside a failing step the headline is `FAILED ...; 1 step not run`, and the course project's frontend test fails.
+- "Only a `new` failure blocks" now also names a failure the base run could not judge, which is what happened on the course project.
+- "`check` changes nothing" became "changes none of your files; it keeps a cache in `.firescale/`".
+- The hooks sentence says the agent may stop after three blocks in a row.
+- "names only, never a value" became "never the value of a variable, a password or a connection string": doctor prints the host and port of a local database URL.
+- Limits added to the table: 11 of the 98 cheats are of kinds the guard does not try to catch, and a Linux release build missed 42; 306 of the 517 findings are one repo's; the 14.5% is optimistic too; the Windows runner's `check` times; "one run each" was not in the source for this repo's own verify.
+- "Slow suites need `--budget`" says a budget only leaves out a step after one run has recorded its time.
+
+**Decided on your behalf** (no ADR: docs only):
+
+- The five ideas: a rule is a check, a fix and a page; one command means done; blame the change; the tamper guard; is this machine ready. Agent files and hooks are a sentence under the second.
+- The opening quote about hot metal is gone from the README, because it holds a word you asked never to see there in any letter case. SPEC.md keeps it.
+- The dev setup table and the layout list are gone from the README; AGENTS.md has the commands.
+
+**Not done:**
+
+- The doctor block shows `PROBLEM` for the env variables; the doctor pull request of this run changes it and must paste the block again.
+- `docs/install.md` gives `npx firescale check` without `@latest` and states no Node version. Not changed.
+- The blocks are from Windows. On macOS and Linux the doctor block's paths differ.
+
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
 **Pull request 7: `*.log` in core/gitignore-basics**
