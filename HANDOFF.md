@@ -8,10 +8,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 **The run could not move to the cloud** (DECISIONS.md, "Blocked: the run could not move to the cloud"): GitHub is not connected to the owner's Claude account. From the laptop, only work that runs on GitHub was done. The stages that need a local build wait for a cloud session.
 
-0. The tamper benchmark: done. [Run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594), before `v0.5.1`, after `v0.5.2`, 17 public repos passed; this repo's own job was taken out ([#70](https://github.com/ihsankoolz/firescale/pull/70)). Not started again; Stage 3 reads its artifacts (kept until 2026-12-01).
+0. The tamper benchmark: done. [Run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594), before `v0.5.1`, after `v0.5.2`, 16 public repos passed; this repo's own job was taken out ([#70](https://github.com/ihsankoolz/firescale/pull/70)). Not started again; Stage 3 reads its artifacts (kept until 2026-12-01).
 1. The README: merged as [#69](https://github.com/ihsankoolz/firescale/pull/69). **Doctor: not started** (a variable listed in a `.env.example` and set nowhere becomes a warning, with a config setting to make it a problem again). It must paste the README's doctor block again (`node scripts/readme-output.mjs`).
 2. `real-repos.yml` (this pull request), 15 public repos. Its runs and `docs/reviews/real-repos-0.5.3.md` follow. Bug fixes from it: not started.
-3. The benchmark's labels and rates in `bench/RESULTS.md` and the README. Not started.
+3. The benchmark's labels and rates: done (`bench/tamper-history-0.5.2.json`, `bench/RESULTS.md`, the README's table). 0.5.1: 11.6% false; 0.5.2: 12.4%; AI labels.
 4. The project-type table (audit part C): not started.
 5. Version 0.5.3: not started; it waits for Stages 1 to 3.
 

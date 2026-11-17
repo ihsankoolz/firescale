@@ -6,10 +6,22 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings still need labels (Stage 3).
 
-**Stage 0, after the run: 17 of 18 jobs passed; this repo's own job is taken out.** Both builds and the 17 public repos passed, and their findings are the run's artifacts (kept 14 days). The job `history / ihsankoolz/firescale` failed in its clone step: `fatal: remote error: upload-pack: not our ref 18bdbe7a04f94bc7820112791eacc785d553a901`. That head, recorded in `bench/tamper-history.json` for M26's 150 commits of this repo, was the tip of a branch that was merged and deleted; no clone has the commit now, so those commits cannot be read again. The job is removed from the matrix, with a comment that says why. No test pins the workflow, so the failed run is the failing proof.
+**Stage 0, after the run: 16 of 17 history jobs passed; this repo's own job is taken out.** Both builds and the 16 public repos passed, and their findings are the run's artifacts (kept 14 days). The job `history / ihsankoolz/firescale` failed in its clone step: `fatal: remote error: upload-pack: not our ref 18bdbe7a04f94bc7820112791eacc785d553a901`. That head, recorded in `bench/tamper-history.json` for M26's 150 commits of this repo, was the tip of a branch that was merged and deleted; no clone has the commit now, so those commits cannot be read again. The job is removed from the matrix, with a comment that says why. No test pins the workflow, so the failed run is the failing proof.
 
-- **Not started again.** The fixed workflow would run the same 17 jobs on the same recorded commits with the same two tags and give the same files, for about 19 more jobs of Actions minutes. Stage 3 reads the artifacts of run 44128788594. **For you:** start it again if you want a run with every job green.
+- **Not started again.** The fixed workflow would run the same 16 jobs on the same recorded commits with the same two tags and give the same files, for about 18 more jobs of Actions minutes. Stage 3 reads the artifacts of run 44128788594. **For you:** start it again if you want a run with every job green.
 - **The rate for "this repo" in M26's table (7.2%) cannot be measured again**, for 0.5.1 or 0.5.2. The rates over all public repos never counted it.
+
+**Stage 3: the rates for 0.5.1 and 0.5.2 on real commits**
+
+From the artifacts of run 44128788594: `bench/tamper-history-0.5.2.json` (new; every finding of both versions with its label, reason and where the label comes from) and the block "0.5.1 and 0.5.2: the tamper guard on real commits, measured on CI" in `bench/RESULTS.md`.
+
+- **False findings: 98 of 842, 11.6% (9.6–14.0%) for 0.5.1; 105 of 844, 12.4% (10.4–14.8%) for 0.5.2**, over 2,045 commits of sixteen public repos. The intervals overlap almost wholly: this run shows no difference between the two versions.
+- **The labels are an AI's, not a person's.** 794 of the 844 findings of 0.5.2 keep the label M26 or M32 gave the same finding. One fresh subagent labelled the others (51 distinct findings over the two versions), once, with the brief of ADR 0046, from the diff and a neutral claim: 28 true, 23 false. It flagged its judgement calls: two `assert flask.request` lines replaced by a stricter check in a rewritten test (called false; a stricter reader could say true), and findings whose named assertion is still there while a neighbouring one went (called false).
+- **A correction to the blocks above:** the benchmark has sixteen public repos, not seventeen (seventeen history jobs with this repo's own, which failed).
+- **Found, not fixed:** `tamper-bench.yml` read 94 of clap's 150 recorded commits and 51 of flask's. Its shallow clone does not reach them all; why was not looked into. The numbers above are over the commits it did read.
+- **Found, not fixed:** three findings in ripgrep name `assert!(v.unwrap_switch(), ...)` lines that the labeller says the diff does not touch and that are not test assertions. Not looked into.
+- The README's table has the two rates in place of the 6.8% and 14.5% of M32 and M26 and of the "not measured" row.
+- No fresh review of this pull request beyond the labeller: it holds data and docs only.
 
 **Blocked: the run could not move to the cloud.** Your rule is "Run in the cloud. Never touch my laptop or the course project." The session that received the brief runs on the laptop. Two ways to the cloud were tried on 2026-11-18:
 
