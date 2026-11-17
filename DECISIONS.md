@@ -11,6 +11,18 @@ A running log, newest milestone first. For each milestone: what was built, decis
 - **Not started again.** The fixed workflow would run the same 17 jobs on the same recorded commits with the same two tags and give the same files, for about 19 more jobs of Actions minutes. Stage 3 reads the artifacts of run 44128788594. **For you:** start it again if you want a run with every job green.
 - **The rate for "this repo" in M26's table (7.2%) cannot be measured again**, for 0.5.1 or 0.5.2. The rates over all public repos never counted it.
 
+**Blocked: the run could not move to the cloud.** Your rule is "Run in the cloud. Never touch my laptop or the course project." The session that received the brief runs on the laptop. Two ways to the cloud were tried on 2026-11-18:
+
+- An agent asked for in a remote environment was started on the laptop instead, in a worktree of the laptop's checkout. It saw that, changed nothing and stopped.
+- A cloud routine cannot clone this repo: GitHub is not connected to your Claude account. Connecting it is yours to do (`/web-setup`, or https://claude.ai/connect-github). Nothing was created.
+
+What was done instead, so that the night is not lost and the laptop is left alone as far as it can be:
+
+- Only work that runs on GitHub: workflows started with `gh`, files written in one scratch worktree (`C:Usersihsans-readme`), nothing in your own checkout and nothing of the course project. The README pull request had built fscale once in that worktree before the rule arrived; no build or test ran on the laptop after it.
+- **So every stage that needs fscale built and tested locally is not done:** the doctor change (Stage 1, second half), bug fixes from the real repos (Stage 2), the project-type table (Stage 4) and the version (Stage 5, which waits for them). Each is listed under "Not done" where it belongs.
+
+**For you:** connect GitHub to Claude, then give the same brief to a cloud session; HANDOFF.md "In progress" says where it stands.
+
 **Pull request 1: the README, for a reader who has 2 minutes**
 
 README.md is rewritten for a student team lead and for an engineer reading a CV: what it is in two lines, a quick start, five ideas with one output block each, "One real project", "Measured, with limits", "What it does not do", "Known limits", install and links.
