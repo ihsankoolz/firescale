@@ -1,0 +1,321 @@
+name: Real repos
+
+# fscale on real public repos, one per ecosystem that M31 to M35 claim
+# (docs/reviews/real-repos-0.5.3.md). Started by hand only.
+#
+# It builds fscale from the ref it is started on, for Linux and macOS. Each
+# job then installs one repo's toolchain, clones the repo at a pinned commit
+# (read-only: nothing is pushed anywhere, and nothing of theirs is committed
+# here), and runs, in this order:
+#   1. fscale doctor, facts, graph --explain, check, verify --dry-run and
+#      verify --budget 15m --json, before anything of the repo is installed;
+#   2. the repo's own test command, to compare with;
+#   3. fscale verify --json again, now that the repo's own command has
+#      fetched its dependencies.
+# Every output, exit code and time is uploaded.
+#
+# `--budget` is refused in CI (ADR 0057), so step 1 runs that one command
+# with `CI` and `GITHUB_ACTIONS` taken out of its environment.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Run only the repos whose name holds this text (empty: all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build release binary
+        run: cargo build --release -p firescale-cli
+
+      - name: Keep the binary and its commit
+        run: |
+          mkdir -p out
+          cp target/release/fscale out/fscale
+          git rev-parse HEAD > out/fscale.commit
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fscale-${{ matrix.os }}
+          path: out/
+          retention-days: 14
+
+  repo:
+    needs: build
+    name: ${{ matrix.ecosystem }} / ${{ matrix.repo }}
+    if: ${{ always() && needs.build.result == 'success' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      # Each repo at the head of its default branch on 2026-11-17. `test` is
+      # the repo's own test command, run in `dir`.
+      matrix:
+        include:
+          - {
+              ecosystem: swift package,
+              repo: apple/swift-algorithms,
+              sha: 8fdd7fe21dc07a4538d6b3b7c873f497ab4d60fe,
+              os: macos-latest,
+              dir: '.',
+              test: swift test,
+            }
+          - {
+              ecosystem: swift package,
+              repo: apple/swift-argument-parser,
+              sha: d7b6cebecb27311771a3249275259edaccf61972,
+              os: macos-latest,
+              dir: '.',
+              test: swift test,
+            }
+          - {
+              ecosystem: xcode,
+              repo: SwiftyJSON/SwiftyJSON,
+              sha: 3d2544101a03f22b2217d464dc7d359eeb86e159,
+              os: macos-latest,
+              dir: '.',
+              test: 'xcodebuild test -workspace SwiftyJSON.xcworkspace -scheme "SwiftyJSON macOS" -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO',
+            }
+          - {
+              ecosystem: dotnet,
+              repo: ardalis/GuardClauses,
+              sha: 514f157e91f55694742487d19e1f62f07bbd0657,
+              os: ubuntu-latest,
+              dir: '.',
+              test: dotnet test,
+            }
+          - {
+              ecosystem: dotnet,
+              repo: serilog/serilog,
+              sha: 43105b35095337d77f022561a8f2d3db2f9a7937,
+              os: ubuntu-latest,
+              dir: '.',
+              test: dotnet test,
+            }
+          - {
+              ecosystem: flutter,
+              repo: rrousselGit/provider,
+              sha: 3ed4c6d6b1700c08256f25a034bb93f943bd7236,
+              os: ubuntu-latest,
+              dir: packages/provider,
+              test: flutter pub get && flutter test,
+            }
+          - {
+              ecosystem: dart,
+              repo: google/quiver-dart,
+              sha: db16ce8976db5303c4e1396347e64422bf905a5e,
+              os: ubuntu-latest,
+              dir: '.',
+              test: dart pub get && dart test,
+            }
+          - {
+              ecosystem: go,
+              repo: spf13/cobra,
+              sha: adbc8813901bba65827259daa8e22ff94ec1f30e,
+              os: ubuntu-latest,
+              dir: '.',
+              test: go test ./...,
+            }
+          - {
+              ecosystem: go,
+              repo: gorilla/mux,
+              sha: db9d1d0073d27a0a2d9a8c1bc52aa0af4374d265,
+              os: ubuntu-latest,
+              dir: '.',
+              test: go test ./...,
+            }
+          - {
+              ecosystem: maven,
+              repo: apache/commons-cli,
+              sha: 03b21f541501ef8c13cb3ad4a2aa96dd600d2b45,
+              os: ubuntu-latest,
+              dir: '.',
+              test: mvn -B test,
+            }
+          - {
+              ecosystem: maven,
+              repo: google/gson,
+              sha: e67037d17f94415179066c8301fee4a610d9515e,
+              os: ubuntu-latest,
+              dir: '.',
+              test: mvn -B test,
+            }
+          - {
+              ecosystem: gradle kotlin,
+              repo: square/moshi,
+              sha: 889013ec2edb8d8034902662a1dc8c4f3b3f8111,
+              os: ubuntu-latest,
+              dir: '.',
+              test: ./gradlew test,
+            }
+          - {
+              ecosystem: gradle android,
+              repo: JakeWharton/timber,
+              sha: 542d02d8365481e32de402647cece04c90256d51,
+              os: ubuntu-latest,
+              dir: '.',
+              test: ./gradlew test,
+            }
+          - {
+              ecosystem: cmake,
+              repo: DaveGamble/cJSON,
+              sha: 6d9f2443ab071f86e5d9b43025a40929ec41c46c,
+              os: ubuntu-latest,
+              dir: '.',
+              test: cmake -S . -B build-own && cmake --build build-own && ctest --test-dir build-own,
+            }
+          - {
+              ecosystem: cmake,
+              repo: fmtlib/fmt,
+              sha: 14ac0d5a9d40aef14f50954069c1e10971abb0b2,
+              os: ubuntu-latest,
+              dir: '.',
+              test: cmake -S . -B build-own && cmake --build build-own -j 4 && ctest --test-dir build-own,
+            }
+    steps:
+      - name: Skip repos the run was not asked for
+        id: wanted
+        env:
+          REPO: ${{ matrix.repo }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          case "$REPO" in
+            *"$ONLY"*) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "run=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # Swift and Xcode come with the macOS runner; CMake, a C and a C++
+      # compiler with the Linux one.
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        if: steps.wanted.outputs.run == 'true' && matrix.ecosystem == 'dotnet'
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      # Flutter has no setup action of its own; this is the one its docs name.
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        if: steps.wanted.outputs.run == 'true' && matrix.ecosystem == 'flutter'
+        with:
+          channel: stable
+
+      - uses: dart-lang/setup-dart@2286a0c042b44434fe26d292bbce8d34f7ec662b # v1.8.2
+        if: steps.wanted.outputs.run == 'true' && matrix.ecosystem == 'dart'
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        if: steps.wanted.outputs.run == 'true' && matrix.ecosystem == 'go'
+        with:
+          go-version: stable
+          cache: false
+
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        if: steps.wanted.outputs.run == 'true' && (matrix.ecosystem == 'maven' || startsWith(matrix.ecosystem, 'gradle'))
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.wanted.outputs.run == 'true'
+        with:
+          name: fscale-${{ matrix.os }}
+          path: bin
+
+      - name: Clone the repo at its pinned commit (shallow, read-only)
+        if: steps.wanted.outputs.run == 'true'
+        env:
+          REPO: ${{ matrix.repo }}
+          SHA: ${{ matrix.sha }}
+        run: |
+          chmod +x bin/fscale
+          git init --quiet repo
+          git -C repo fetch --quiet --depth 1 "https://github.com/$REPO.git" "$SHA"
+          git -C repo checkout --quiet --detach FETCH_HEAD
+          # No remote is kept, so nothing can be pushed from here.
+          mkdir -p out
+          cp bin/fscale.commit out/
+          printf '%s %s\n' "$REPO" "$SHA" > out/repo.txt
+          slug=$(printf '%s' "$REPO" | tr '/' '_')
+          echo "SLUG=$slug" >> "$GITHUB_ENV"
+
+      - name: 'fscale, before anything is installed'
+        if: steps.wanted.outputs.run == 'true'
+        timeout-minutes: 30
+        continue-on-error: true
+        working-directory: repo
+        run: |
+          fscale="$GITHUB_WORKSPACE/bin/fscale"
+          out="$GITHUB_WORKSPACE/out"
+          run() {
+            name=$1
+            shift
+            start=$(date +%s)
+            code=0
+            "$@" > "$out/$name.stdout.txt" 2> "$out/$name.stderr.txt" || code=$?
+            echo "$name: exit $code after $(( $(date +%s) - start )) s" | tee -a "$out/summary.txt"
+          }
+          run 1-doctor "$fscale" doctor
+          run 1-facts "$fscale" facts --json
+          run 1-graph "$fscale" graph --explain
+          run 1-check "$fscale" check
+          run 1-verify-dry-run "$fscale" verify --dry-run
+          run 1-verify-budget env -u CI -u GITHUB_ACTIONS "$fscale" verify --budget 15m --json --jobs 2
+
+      - name: "The repo's own test command"
+        if: steps.wanted.outputs.run == 'true'
+        timeout-minutes: 30
+        continue-on-error: true
+        working-directory: repo/${{ matrix.dir }}
+        env:
+          TEST: ${{ matrix.test }}
+        run: |
+          out="$GITHUB_WORKSPACE/out"
+          printf '%s\n' "$TEST" > "$out/2-own-test.command.txt"
+          start=$(date +%s)
+          code=0
+          bash -c "$TEST" > "$out/2-own-test.stdout.txt" 2> "$out/2-own-test.stderr.txt" || code=$?
+          echo "2-own-test: exit $code after $(( $(date +%s) - start )) s" | tee -a "$out/summary.txt"
+          tail -n 30 "$out/2-own-test.stdout.txt"
+
+      - name: 'fscale verify again, after the own command'
+        if: steps.wanted.outputs.run == 'true'
+        timeout-minutes: 30
+        continue-on-error: true
+        working-directory: repo
+        run: |
+          fscale="$GITHUB_WORKSPACE/bin/fscale"
+          out="$GITHUB_WORKSPACE/out"
+          start=$(date +%s)
+          code=0
+          env -u CI -u GITHUB_ACTIONS "$fscale" verify --no-cache --json --jobs 2 \
+            > "$out/3-verify-again.stdout.txt" 2> "$out/3-verify-again.stderr.txt" || code=$?
+          echo "3-verify-again: exit $code after $(( $(date +%s) - start )) s" | tee -a "$out/summary.txt"
+
+      - name: Show the summary
+        if: always() && steps.wanted.outputs.run == 'true'
+        run: cat out/summary.txt || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.wanted.outputs.run == 'true'
+        with:
+          name: real-${{ env.SLUG }}
+          path: out/
+          retention-days: 30

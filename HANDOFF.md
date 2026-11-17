@@ -6,12 +6,14 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 **The overnight run of 2026-11-18 is in progress** (DECISIONS.md, "0.5.3 — the overnight run of 2026-11-18"). Its stages, in order:
 
-0. The tamper benchmark, started: [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594), before `v0.5.1`, after `v0.5.2`. Nobody waits for it; Stage 3 reads it.
-1. The README (this pull request), then doctor: a variable listed in a `.env.example` and set nowhere becomes a warning, with a config setting to make it a problem again. **Not started.** It must paste the README's doctor block again (`node scripts/readme-output.mjs`).
-2. `real-repos.yml`, about 15 public repos, and `docs/reviews/real-repos-0.5.3.md`. Not started.
+**The run could not move to the cloud** (DECISIONS.md, "Blocked: the run could not move to the cloud"): GitHub is not connected to the owner's Claude account. From the laptop, only work that runs on GitHub was done. The stages that need a local build wait for a cloud session.
+
+0. The tamper benchmark: done. [Run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594), before `v0.5.1`, after `v0.5.2`, 17 public repos passed; this repo's own job was taken out ([#70](https://github.com/ihsankoolz/firescale/pull/70)). Not started again; Stage 3 reads its artifacts (kept until 2026-12-01).
+1. The README: merged as [#69](https://github.com/ihsankoolz/firescale/pull/69). **Doctor: not started** (a variable listed in a `.env.example` and set nowhere becomes a warning, with a config setting to make it a problem again). It must paste the README's doctor block again (`node scripts/readme-output.mjs`).
+2. `real-repos.yml` (this pull request), 15 public repos. Its runs and `docs/reviews/real-repos-0.5.3.md` follow. Bug fixes from it: not started.
 3. The benchmark's labels and rates in `bench/RESULTS.md` and the README. Not started.
-4. The project-type table (audit part C): build, open the pull request, do not merge. Not started.
-5. Version 0.5.3, after Stages 1 to 3. No tag. Not started.
+4. The project-type table (audit part C): not started.
+5. Version 0.5.3: not started; it waits for Stages 1 to 3.
 
 Before this run: the 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`) is merged. Each fix had a failing test first. Blocks per pull request are in DECISIONS.md "0.5.2":
 
