@@ -23,6 +23,34 @@ From the artifacts of run 44128788594: `bench/tamper-history-0.5.2.json` (new; e
 - The README's table has the two rates in place of the 6.8% and 14.5% of M32 and M26 and of the "not measured" row.
 - No fresh review of this pull request beyond the labeller: it holds data and docs only.
 
+**Stage 2: fscale on 15 real public repos** (`docs/reviews/real-repos-0.5.3.md`)
+
+`real-repos.yml` ran once on `main` ([run 44133697663](https://github.com/ihsankoolz/firescale/actions/runs/44133697663)); two macOS jobs were cancelled by GitHub after 15 minutes without a runner and passed when run again.
+
+- **Right in 8 of 15, wrong in 6, not judged in 1.** Detection was right in all 15.
+- `fscale verify` has now run real commands for Swift, Xcode (`xcodebuild build`), .NET (`dotnet format`), Flutter (`flutter analyze`), Dart, Go, Maven, Gradle and CMake. **`dotnet test`, `flutter test` and `xcodebuild test` have still run on no real repo**: the lint step failed first in the .NET and Flutter repos.
+- **Five bugs found, none fixed** (the review lists each with the failing test it needs): a guessed lint the repo does not hold itself to fails and keeps the tests from running (4 repos); Dart packages not fetched read as a lint failure, and doctor says OK; doctor does not look for the linter verify will run (swiftlint); `mvn -B test` for a Maven build that documents `mvn clean verify`; a CMake build folder not named `build` is read as a project.
+- **Needs your decision:** what a guessed linter may do. Today `dotnet format --verify-no-changes`, `swift format lint --strict` and `flutter analyze` are steps like any other, and their failure stops the unit before its tests. On repos that never adopted them this made 4 of 15 results wrong.
+- **Not done:** the fixes, and so the "after" half of the table and the second run. They need fscale built and tested, which this run did not do on the laptop.
+- The README's "Known limits" says what ran and what did not, with the 8 and the 6.
+- "Right" is an AI's judgement from the outputs, not a person's.
+
+**Not done in this run, in one place:**
+
+- Stage 1, doctor: a missing env variable as a warning. Not started.
+- Stage 2: the five bug fixes above.
+- Stage 4, the project-type table: not started.
+- Stage 5, version 0.5.3: not started; it waits for Stage 1.
+- No scheduled check-in was kept: the session stayed in one turn, and no cloud session could be started to schedule one for.
+- No fresh review of the workflow pull requests (#70, #71) or of the two data-and-docs ones (#72 and this one), beyond the labeller and the README's fact-check.
+
+**Morning list for you:**
+
+1. Connect GitHub to Claude (`/web-setup`), then give the same brief to a cloud session. HANDOFF.md "In progress" says where it stands.
+2. Decide what a guessed linter may do (above). It is the main thing the real repos showed.
+3. If you measured a real `--budget 10m` run on the course project, say so: the README does not claim "about 5 minutes" as a measured time.
+4. `C:Usersihsans-readme` on the laptop is this run's scratch worktree (with a `target` folder from one build). Remove it with `git worktree remove --force ../fs-readme` from your checkout when you like. Your own checkout was not touched.
+
 **Blocked: the run could not move to the cloud.** Your rule is "Run in the cloud. Never touch my laptop or the course project." The session that received the brief runs on the laptop. Two ways to the cloud were tried on 2026-11-18:
 
 - An agent asked for in a remote environment was started on the laptop instead, in a worktree of the laptop's checkout. It saw that, changed nothing and stopped.
