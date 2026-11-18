@@ -120,9 +120,10 @@ pub struct Tool {
 pub struct Ecosystem {
     /// The project kind, as `fscale facts` reports it.
     pub kind: &'static str,
-    /// Every file this entry reads to recognise the folder, to name the
-    /// project and to choose its commands and tools, by its path in the
-    /// project's folder (`*` for any name): the cache inputs of the rules
+    /// The files this entry reads to recognise the folder, to name the
+    /// project and to choose its commands and tools, by their path in the
+    /// project's folder (`*` for any name; for Xcode, a file inside each
+    /// bundle folder stands for the folder): the cache inputs of the rules
     /// that read facts ([`input_globs`], ADR 0069). A new read in `marks`,
     /// `name`, `found` or `doctor` gets its file added here.
     pub inputs: &'static [&'static str],
@@ -159,9 +160,11 @@ pub struct Ecosystem {
 }
 
 /// The inputs of every entry, as globs for any folder of the repo
-/// (`**/go.mod`), sorted and without repeats: cache inputs of every rule
-/// that reads facts, so a file that appears or changes invalidates a cached
-/// result. Built from the table, so no list is kept by hand (ADR 0069).
+/// (`**/go.mod`), sorted and without repeats: cache inputs of the rules
+/// that write what facts found into a file (`agent-ready/agents-md`,
+/// `agent-ready/agent-permissions`, `core/gitignore-basics`), so one of
+/// these files appearing or changing invalidates their cached result,
+/// unless git ignores the file. Built from the table, so no list is kept by hand (ADR 0069).
 #[must_use]
 pub fn input_globs() -> Vec<String> {
     let mut globs: Vec<String> = ECOSYSTEMS
@@ -469,6 +472,8 @@ const GRADLE: Ecosystem = Ecosystem {
         "gradlew",
         "gradlew.bat",
         "gradle.lockfile",
+        // Any Kotlin build script makes the build a Kotlin one.
+        "*.gradle.kts",
     ],
     marks: |f| GRADLE_FILES.iter().any(|name| f.has(name)),
     yields_to: &[],
@@ -760,6 +765,7 @@ const XCODE: Ecosystem = Ecosystem {
         "*.xcodeproj/xcshareddata/xcschemes/*.xcscheme",
         "*.xcworkspace/xcshareddata/xcschemes/*.xcscheme",
         "Podfile",
+        "Podfile.lock",
         ".swiftlint.yml",
         ".swiftlint.yaml",
         ".swift-format",

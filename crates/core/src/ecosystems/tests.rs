@@ -78,6 +78,8 @@ fn the_cache_inputs_are_built_from_the_table() {
         "**/*.xcodeproj/xcshareddata/xcschemes/*.xcscheme",
         "**/mvnw",
         "**/gradlew",
+        "**/Podfile.lock",
+        "**/*.gradle.kts",
     ] {
         assert!(globs.iter().any(|glob| glob == new), "{new} is missing");
     }
