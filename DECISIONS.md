@@ -109,6 +109,16 @@ Build idea 11, the test only.
 - **Two wait for you** (ADR 0077, "Needs your decision"), each pinned by a test: a document that belongs to no project is in every key and affects nothing (ADR 0034 against ADR 0043); with a project at the root, a file in no project below it affects the root project only, and is in the keys of the projects below. Widening the second made two existing tests fail, so I took it back and left those tests alone.
 - **Failing test first:** three of three fixtures failed in WSL before any change.
 
+**Pull request 7: an ambiguous Python import is an edge to every place that could hold it (ADR 0077)**
+
+Build idea 6, item 2. Adds edges only.
+
+- Before, the first folder above the project that had the module won. Now every folder above that has it, and every other Python project with it as a top-level package, gets an edge when a node holds it already, and `fscale graph` warns with the import and the places. The importer's own code still comes first.
+- A project with such an import has more in its key, so its kept passes are not reused once.
+- **Decided on your behalf:** the wording of the warning; `fscale verify` does not print it.
+- **Failing test first:** two tests in `crates/core/src/graph.rs` failed in WSL before the change (no edge to the second place).
+- **The fresh review found that my first form narrowed**: a second place made a new shared node, and a shared node takes its files out of every other project's key. Reworked before merge, two tests seen failing first: a second place never makes a node.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

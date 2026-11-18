@@ -358,6 +358,20 @@ struct Builder<'a> {
     shared: BTreeMap<String, bool>,
     edges: BTreeMap<(String, String), BTreeSet<EdgeSource>>,
     warnings: BTreeSet<String>,
+    /// Python imports with more places that could hold them, to link once
+    /// every node is known (ADR 0077).
+    more_places: Vec<MorePlaces>,
+}
+
+/// A Python import, the nodes it led to with the place that led to each,
+/// and the other places that could hold the module.
+struct MorePlaces {
+    importer: Importer,
+    file: String,
+    line: usize,
+    text: String,
+    places: BTreeMap<String, String>,
+    more: Vec<String>,
 }
 
 impl<'a> Builder<'a> {
@@ -382,6 +396,7 @@ impl<'a> Builder<'a> {
             shared: BTreeMap::new(),
             edges: BTreeMap::new(),
             warnings: BTreeSet::new(),
+            more_places: Vec::new(),
         }
     }
 
@@ -905,23 +920,39 @@ impl<'a> Builder<'a> {
     ) {
         let dir = parent(file).to_owned();
         for import in &imports.imports {
-            for target in python_targets(
+            let found = python_targets(
                 self.root,
                 &dir,
                 importer,
                 &import.module,
                 &import.names,
                 &self.projects,
-            ) {
-                let detail = import.text.clone();
-                self.link(
-                    importer,
-                    &target,
-                    Source::PythonImport,
-                    file,
-                    Some(import.line),
-                    &detail,
-                );
+            );
+            // The nodes the places lead to, with the first place that leads
+            // to each: two places in one project are one place.
+            let mut places: BTreeMap<String, String> = BTreeMap::new();
+            for target in &found.paths {
+                for to in self.targets(importer, target, Source::PythonImport) {
+                    self.add(
+                        &importer.id,
+                        &to,
+                        Source::PythonImport,
+                        file,
+                        Some(import.line),
+                        import.text.clone(),
+                    );
+                    places.entry(to).or_insert_with(|| target.clone());
+                }
+            }
+            if found.any_of {
+                self.more_places.push(MorePlaces {
+                    importer: importer.clone(),
+                    file: file.to_owned(),
+                    line: import.line,
+                    text: import.text.clone(),
+                    places,
+                    more: found.more,
+                });
             }
         }
         for call in &imports.dynamic {
@@ -998,7 +1029,69 @@ impl<'a> Builder<'a> {
                 root_fallback = true;
             }
         }
+        self.link_more_places();
         self.dynamic_imports(&dynamic, sources);
+    }
+
+    /// Links each Python import to the other places that could hold its
+    /// module, and warns when the places are more than one (ADR 0077). A
+    /// place gets an edge only when a node holds it already: a project, or
+    /// a shared folder something else made. It never makes a shared node,
+    /// because that would take the folder's files out of the files that
+    /// belong to no project, which every key holds.
+    fn link_more_places(&mut self) {
+        for import in std::mem::take(&mut self.more_places) {
+            let MorePlaces {
+                importer,
+                file,
+                line,
+                text,
+                mut places,
+                more,
+            } = import;
+            for target in &more {
+                let owners: Vec<String> = self
+                    .owners(target)
+                    .into_iter()
+                    .map(|project| project.id.clone())
+                    .collect();
+                let nodes: Vec<String> = if !owners.is_empty() {
+                    owners.into_iter().filter(|id| *id != importer.id).collect()
+                } else if importer.is_root_project || inside(target, &importer.root) {
+                    Vec::new()
+                } else {
+                    let path = if is_dir(self.root, target) {
+                        target.clone()
+                    } else {
+                        self.narrow(reach(&importer.root, target), target)
+                    };
+                    if self.shared.contains_key(&path) {
+                        vec![shared_id(&path)]
+                    } else {
+                        Vec::new()
+                    }
+                };
+                for to in nodes {
+                    self.add(
+                        &importer.id,
+                        &to,
+                        Source::PythonImport,
+                        &file,
+                        Some(line),
+                        text.clone(),
+                    );
+                    places.entry(to).or_insert_with(|| target.clone());
+                }
+            }
+            let named: BTreeSet<&str> = places.values().map(String::as_str).collect();
+            if named.len() > 1 {
+                self.warnings.insert(format!(
+                    "{file}:{line}: `{text}` could come from {} places in the repo ({}), and firescale cannot tell which one Python picks. It counts as depending on each.",
+                    named.len(),
+                    named.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
     }
 
     /// A dynamic import may load any Python code: the importer depends on
@@ -1253,10 +1346,34 @@ fn deepest(root: &Path, start: String, names: &[&str]) -> String {
     path
 }
 
+/// Where a Python import leads.
+struct PythonTargets {
+    /// Repo-relative paths outside the importer's own code.
+    paths: Vec<String>,
+    /// With `any_of`: the other places the module could come from, beside
+    /// the one in `paths` that was always followed.
+    more: Vec<String>,
+    /// True when the paths are the places one module could come from, of
+    /// which Python picks one by an import path the repo does not state
+    /// (ADR 0077). False when each path is imported.
+    any_of: bool,
+}
+
+impl PythonTargets {
+    fn each(paths: Vec<String>) -> Self {
+        Self {
+            paths,
+            more: Vec::new(),
+            any_of: false,
+        }
+    }
+}
+
 /// Where a Python import leads, as repo-relative paths outside the importer's
 /// own code. An import the importer resolves itself, or that resolves to
 /// nothing in the repo (the standard library, an installed package), gives
-/// nothing.
+/// nothing. A module that more than one place could hold gives every place
+/// (ADR 0077).
 fn python_targets(
     root: &Path,
     dir: &str,
@@ -1264,7 +1381,7 @@ fn python_targets(
     module: &str,
     names: &[String],
     projects: &[ProjectNode],
-) -> Vec<String> {
+) -> PythonTargets {
     let dots = module.chars().take_while(|c| *c == '.').count();
     let rest: Vec<&str> = module[dots..]
         .split('.')
@@ -1275,23 +1392,25 @@ fn python_targets(
         let mut base = dir.to_owned();
         for _ in 1..dots {
             if base == "." {
-                return Vec::new();
+                return PythonTargets::each(Vec::new());
             }
             base = parent(&base).to_owned();
         }
         if rest.is_empty() {
-            return names
-                .iter()
-                .filter(|name| name.as_str() != "*")
-                .map(|name| python_module_at(root, &base, name).unwrap_or_else(|| base.clone()))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
+            return PythonTargets::each(
+                names
+                    .iter()
+                    .filter(|name| name.as_str() != "*")
+                    .map(|name| python_module_at(root, &base, name).unwrap_or_else(|| base.clone()))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+            );
         }
-        return vec![deepest(root, base, &rest)];
+        return PythonTargets::each(vec![deepest(root, base, &rest)]);
     }
     let Some(first) = rest.first() else {
-        return Vec::new();
+        return PythonTargets::each(Vec::new());
     };
     // The importer's own code: the file's folder and the folders above it up
     // to the importer's folder, and its `src/`.
@@ -1312,10 +1431,14 @@ fn python_targets(
         // Found from the importer's own folders: its own code, unless the
         // path leads into another project (the repo root's project importing
         // `services.auth.client`). The caller tells the two apart.
-        return vec![deepest(root, start, &rest[1..])];
+        return PythonTargets::each(vec![deepest(root, start, &rest[1..])]);
     }
     // A folder above the importer's own: `backend/` holding `shared/` for
     // services that run with `backend/` on the import path.
+    // Every folder above that has the module. The first was always
+    // followed; the others are places it could also come from, since which
+    // one Python picks depends on an import path the repo does not state.
+    let mut places: Vec<String> = Vec::new();
     let mut above = importer.root.clone();
     while above != "." {
         above = parent(&above).to_owned();
@@ -1327,18 +1450,37 @@ fn python_targets(
             }
             if inside(&found, &importer.root) {
                 // The importer's own package, reached from a folder above it.
-                return Vec::new();
+                if places.is_empty() {
+                    return PythonTargets::each(Vec::new());
+                }
+                continue;
             }
-            return vec![found];
+            places.push(found);
         }
     }
     // Another Python project's top-level package.
-    projects
+    let packages = projects
         .iter()
         .filter(|project| project.kind == "python" && project.id != importer.id)
         .filter(|project| python_packages(root, &project.root).contains(*first))
-        .map(|project| project.root.clone())
-        .collect()
+        .map(|project| project.root.clone());
+    if places.is_empty() {
+        return PythonTargets {
+            paths: packages.collect(),
+            more: Vec::new(),
+            any_of: true,
+        };
+    }
+    // A project that holds a place found above is that same place.
+    let packages: Vec<String> = packages
+        .filter(|project| !places.iter().any(|place| inside(place, project)))
+        .collect();
+    let more = places.split_off(1).into_iter().chain(packages).collect();
+    PythonTargets {
+        paths: places,
+        more,
+        any_of: true,
+    }
 }
 
 /// True when a folder has a `.py` file in it or in a subfolder, three levels
@@ -2643,6 +2785,156 @@ mod tests {
             .map(|e| e.to.as_str())
             .collect();
         assert_eq!(targets, ["python:lib", "shared:shared"]);
+    }
+
+    // An import with more than one place that could hold it (ADR 0077).
+
+    #[test]
+    fn a_python_import_that_two_folders_above_could_hold_is_an_edge_to_each_with_a_warning() {
+        let fixture = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            (
+                "backend/svc/main.py",
+                "import os\nfrom shared.db import URL\n",
+            ),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("shared/db.py", "URL = 2\n"),
+            // Another project imports the root's `shared`, so it is a node.
+            ("tools/job/requirements.txt", "x\n"),
+            ("tools/job/main.py", "from shared import db\n"),
+        ]);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "backend/shared")),
+            [Source::PythonImport]
+        );
+        // Not only the first folder above that has the module.
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "shared")),
+            [Source::PythonImport]
+        );
+        assert_eq!(
+            graph.warnings,
+            ["backend/svc/main.py:2: `from shared.db import URL` could come from 2 places in the repo (backend/shared/db.py, shared/db.py), and firescale cannot tell which one Python picks. It counts as depending on each."]
+        );
+        // A change in either place reaches the importer.
+        assert_eq!(
+            affected_projects(&graph, &["backend/shared/db.py"]),
+            ["backend/svc"]
+        );
+        assert_eq!(
+            affected_projects(&graph, &["shared/db.py"]),
+            ["backend/svc", "tools/job"]
+        );
+    }
+
+    /// From the fresh review: a new shared node takes its files out of the
+    /// files that belong to no project, which every key holds and which
+    /// affect everything. A second place must never do that.
+    #[test]
+    fn a_second_place_that_is_no_node_stays_a_file_of_no_project() {
+        let files = [
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared.db import URL\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("shared/db.py", "URL = 2\n"),
+            ("web/package.json", r#"{"name":"web"}"#),
+            ("web/src/app.ts", "export const app = 1;\n"),
+        ];
+        let graph = graph_of(&fixture(&files));
+        assert!(
+            graph.nodes.iter().all(|node| node.path != "shared"),
+            "{:?}",
+            graph.nodes
+        );
+        assert!(edge(&graph, "backend/svc", "backend/shared").is_some());
+        // As before: it affects everything, the importer included.
+        let set = affected(&graph, &changed(&["shared/db.py"]));
+        assert!(set.everything.is_some(), "{set:?}");
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
+    }
+
+    /// From the fresh review: the repo root's project holding the package
+    /// is the same place as the package found in the folder above.
+    #[test]
+    fn a_package_of_the_root_project_found_from_above_is_one_place() {
+        let graph = graph_of(&fixture(&[
+            ("pyproject.toml", "[project]\nname = \"mono\"\n"),
+            ("common/__init__.py", ""),
+            ("common/x.py", "X = 1\n"),
+            ("services/a/requirements.txt", "x\n"),
+            ("services/a/main.py", "from common import x\n"),
+        ]));
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .all(|node| node.path != "." || node.node_type == NodeType::Project),
+            "{:?}",
+            graph.nodes
+        );
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
+    }
+
+    #[test]
+    fn a_python_import_that_a_folder_above_and_another_project_could_hold_is_an_edge_to_each() {
+        let fixture = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared import db\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("lib/pyproject.toml", "[project]\nname = \"lib\"\n"),
+            ("lib/shared/__init__.py", ""),
+            ("lib/shared/db.py", "URL = 2\n"),
+        ]);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "backend/shared")),
+            [Source::PythonImport]
+        );
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "lib")),
+            [Source::PythonImport]
+        );
+        assert_eq!(graph.warnings.len(), 1, "{:?}", graph.warnings);
+        assert!(
+            graph.warnings[0].starts_with(
+                "backend/svc/main.py:1: `from shared import db` could come from 2 places in the repo (backend/shared, lib)"
+            ),
+            "{:?}",
+            graph.warnings
+        );
+    }
+
+    #[test]
+    fn a_python_import_with_one_place_or_in_the_importer_s_own_code_has_no_warning() {
+        // One place above: as before, one edge and nothing said.
+        let one = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared.db import URL\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+        ]);
+        let graph = graph_of(&one);
+        assert!(edge(&graph, "backend/svc", "backend/shared").is_some());
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
+        // The importer's own code comes first on Python's path: no edge,
+        // whatever folders above also have the name.
+        let own = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared.db import URL\n"),
+            ("backend/svc/shared/db.py", "URL = 0\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("shared/db.py", "URL = 2\n"),
+        ]);
+        let graph = graph_of(&own);
+        assert!(
+            graph
+                .edges
+                .iter()
+                .all(|edge| edge.from != "python:backend/svc"),
+            "{:?}",
+            graph.edges
+        );
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
     }
 
     #[test]

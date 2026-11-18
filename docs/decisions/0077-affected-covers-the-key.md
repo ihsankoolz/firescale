@@ -1,4 +1,4 @@
-# 0077 — Affected covers the key: a property test, and one widening
+# 0077 — Affected covers the key: a property test, one widening, and every owner of an ambiguous import
 
 Status: accepted (2026-11-18, Track A of the run after 0.5.4; the owner's brief). Adds to ADR 0034 (what a changed file affects) and ADR 0036 (what a step's key holds).
 
@@ -18,7 +18,19 @@ Status: accepted (2026-11-18, Track A of the run after 0.5.4; the owner's brief)
 
 **Fixed: the repo root's own steps now run when a project below the root changed.** Their key holds every file of the repo. Before, with a project at the root and a Python or Rust project below it, a change in the project below ran that project only. Now the root's steps run too, with the reason `the repo root's commands run from the repo root and can read every file below it, and a project below it changed`. This only adds runs. `limit_to_affected` in `crates/core/src/verify.rs`.
 
+**An ambiguous Python import is an edge to every place that could hold it, with a warning** (build idea 6, item 2; added in its own pull request). Before, the first folder above the project that had the module won, and a second folder above, or another project's package of the same name, got no edge. A change there then affected nothing and left the importer's key as it was. Now `python_targets` in `crates/core/src/graph.rs` gives every folder above that has the module and every other Python project that has it as a top-level package. The first place is followed as before. Each other place gets an edge when a node holds it already: a project, or a shared folder that something else made. When the places with an edge are more than one, the graph has a warning:
+
+```
+backend/svc/main.py:2: `from shared.db import URL` could come from 2 places in the repo (backend/shared/db.py, shared/db.py), and firescale cannot tell which one Python picks. It counts as depending on each.
+```
+
+**A second place never makes a shared node.** A shared node takes its files out of the files that belong to no project. Those files are in every key and, with no project at the root, affect everything. A new node there would take a file out of other projects' keys. So a second place that no node holds stays as it is: no edge, no warning, and a change to it reaches the importer the way it did before.
+
+This adds edges only. The importer's own code still comes first and gives no edge, as Python's own path has it. An edge is in the step's key and in `--affected`, so both get wider together.
+
 ## Consequences
+
+- A project whose import could come from two places now has more in its key: its kept passes from before are not reused once, and a change in either place runs it.
 
 - With a project at the repo root and other projects below it, `--affected` runs the root's own steps more often than before. It applies wherever the root has steps of its own that are tied to projects (package scripts, Cargo) and verify also runs a project below. The course project has no steps at the root, so nothing changes there.
 - The property is now checked on every test run, 4 fixtures by 60 seeds, in about 7 seconds.
@@ -52,20 +64,28 @@ Until you decide, the property test counts a case as a known gap only when the g
 - The fixtures have no git repo, so the snapshot walks the folder. Ignored files are not part of the test.
 - The test calls `affected`. The CLI calls `affected_except` with the agent hook files and the config's own effect set apart (ADR 0058), which needs a git base; that path is not in the property.
 - A unit the change made, or one whose key the change took away, is not compared.
+- Ambiguous imports: only Python, where the first match won. JavaScript imports resolve by a path or a declared package and had no first-wins rule.
+- With a project at the repo root, a second place that no node holds is the root project's file only (known gap 2 above): the importer is not reached. It was so before.
+- The warning names every place of the first match and of the nodes linked. It does not check that a second folder has the submodule (`shared/` with no `db`).
+- The warning is printed by `fscale graph`. `fscale verify` does not print it.
 - The opposite property (a unit that is affected has a key that differs) is not tested and is not meant to hold: affected may run more.
 
 ## From the fresh review
 
 It found no narrowing in `limit_to_affected`. It found that the test's known gaps were too wide: any case with an inert file among its changes was excused, also when another change was the cause. Fixed: a case is a known gap only when the other changes, made alone, leave the key as it was. It found one sentence here that said too much ("nothing changes with no project at the root"); corrected. The rest is under "Not done".
 
+The review of the ambiguous-import change found that its first form could narrow: it made a shared node for a second place, which took that folder's files out of other projects' keys and out of "affects everything". It also made a shared node for the whole repo when the repo root's project held the package, and could print "1 places". Reworked, with two tests seen failing first: a second place gets an edge only to a node that exists, and a project that holds a place found above is that same place.
+
 ## Later
 
 - The same property over the 15 real repos of the nightly run.
 - More kinds of change: a rename, a new project, a changed import.
 - Shrinking a failing case to its smallest change.
+- Build idea 6, item 1: a report-only rule for a cross-project import with no manifest dependency behind it. Item 3: string imports as tier-4 edges.
 
 ## Tests
 
 - `crates/core/src/affected_covers_key.rs`, written first. Seen failing in WSL before any change: three of three fixtures failed. The cause in those three was mostly the generator changing files under `node_modules` and other folders that hold no source, and gap 1. With those set apart and the fourth fixture added, `every_unit_whose_key_differs_is_affected_below_a_root_project` failed with 39 cases; 11 of them (14 as the test counts now) were the repo root's own steps, which the fix closes.
 - `the_roots_own_steps_run_when_a_project_below_the_root_changed`: the fix by itself.
 - The two `known_gap_` tests.
+- Ambiguous imports, in `crates/core/src/graph.rs`, written first: `a_python_import_that_two_folders_above_could_hold_is_an_edge_to_each_with_a_warning` and `a_python_import_that_a_folder_above_and_another_project_could_hold_is_an_edge_to_each` were seen failing in WSL (no edge to the second place). `a_python_import_with_one_place_or_in_the_importer_s_own_code_has_no_warning` passed before and after: it guards what must not change. After the review: `a_second_place_that_is_no_node_stays_a_file_of_no_project` and `a_package_of_the_root_project_found_from_above_is_one_place`, both seen failing on the first form.
