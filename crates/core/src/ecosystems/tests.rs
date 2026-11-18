@@ -101,6 +101,99 @@ fn go_is_unchanged_by_the_move() {
     assert_eq!(project.commands.lint.as_deref(), Some("go vet ./..."));
 }
 
+// google/gson (docs/reviews/real-repos-0.5.3.md, bug 4): a module that tests
+// the packaged jar of another module cannot compile under `mvn test`, which
+// stops before `package`. The repo's own command is `mvn verify`.
+#[test]
+fn a_maven_build_with_modules_tests_with_verify() {
+    let project = only_project(&[
+        (
+            "pom.xml",
+            "<project>
+  <artifactId>gson-parent</artifactId>
+  <modules>
+    <module>gson</module>
+    <module>test-jpms</module>
+  </modules>
+</project>
+",
+        ),
+        (
+            "gson/pom.xml",
+            "<project><artifactId>gson</artifactId></project>
+",
+        ),
+        (
+            "test-jpms/pom.xml",
+            "<project><artifactId>test-jpms</artifactId></project>
+",
+        ),
+    ]);
+    assert_eq!(project.commands.test.as_deref(), Some("mvn -B verify"));
+    assert_eq!(
+        project.commands.build.as_deref(),
+        Some("mvn -B package -DskipTests")
+    );
+
+    // With the wrapper, and with the modules in a profile.
+    let project = only_project(&[
+        (
+            "pom.xml",
+            "<project><artifactId>parent</artifactId><profiles><profile><modules>
+<module>api</module></modules></profile></profiles></project>
+",
+        ),
+        (
+            "mvnw",
+            "#!/bin/sh
+",
+        ),
+        (
+            "api/pom.xml",
+            "<project><artifactId>api</artifactId></project>
+",
+        ),
+    ]);
+    assert_eq!(
+        project.commands.test,
+        Some(format!("{} -B verify", wrapper("mvnw")))
+    );
+
+    // A build with no modules keeps `mvn test` (apache/commons-cli), also
+    // when the word is only in a comment, or is a plugin's own setting
+    // (the EAR plugin lists what it packs under `<modules>`).
+    for pom in [
+        "<project><artifactId>app-ear</artifactId><build><plugins><plugin><artifactId>maven-ear-plugin</artifactId><configuration><modules>
+<webModule><artifactId>web</artifactId></webModule></modules></configuration></plugin></plugins></build></project>
+",
+        "<project><artifactId>commons-cli</artifactId>
+<!--> <modules><module>old</module></modules> -->
+</project>
+",
+        "<project><artifactId>commons-cli</artifactId></project>
+",
+        "<project><artifactId>commons-cli</artifactId>
+<!-- <modules><module>old</module></modules> -->
+</project>
+",
+        "<project><artifactId>commons-cli</artifactId>
+<!--
+  <modules>
+    <module>old</module>
+  </modules>
+-->
+</project>
+",
+    ] {
+        let project = only_project(&[("pom.xml", pom)]);
+        assert_eq!(
+            project.commands.test.as_deref(),
+            Some("mvn -B test"),
+            "{pom}"
+        );
+    }
+}
+
 #[test]
 fn maven_with_its_wrapper_a_linter_and_kotlin() {
     let project = only_project(&[

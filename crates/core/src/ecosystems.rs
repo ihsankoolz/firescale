@@ -361,6 +361,32 @@ fn maven_name(f: &Folder) -> Option<String> {
     (!name.is_empty() && !name.contains("${")).then(|| name.to_owned())
 }
 
+/// A `pom.xml` without its `<!-- -->` comments.
+fn without_xml_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        let body = &rest[start + "<!--".len()..];
+        match body.find("-->") {
+            Some(end) => rest = &body[end + "-->".len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// True when a `pom.xml` lists modules of the build: a `<modules>` element
+/// whose first child is a `<module>`, outside comments. A plugin's own
+/// `<modules>` (the EAR plugin's holds `<ejbModule>`, `<webModule>`) is not
+/// one.
+fn has_maven_modules(pom: &str) -> bool {
+    let text = without_xml_comments(pom);
+    text.match_indices("<modules>")
+        .any(|(at, tag)| text[at + tag.len()..].trim_start().starts_with("<module>"))
+}
+
 const MAVEN: Ecosystem = Ecosystem {
     kind: "maven",
     inputs: &["pom.xml", "mvnw", "mvnw.cmd"],
@@ -399,7 +425,16 @@ const MAVEN: Ecosystem = Ecosystem {
             tools: Vec::new(),
             commands: Commands {
                 build: Some(format!("{mvn} -B package -DskipTests")),
-                test: Some(format!("{mvn} -B test")),
+                // A build with modules is tested with `verify`: a module can
+                // test the packaged jar of another, and `test` stops before
+                // `package` (ADR 0071).
+                test: Some(
+                    if has_maven_modules(&f.text("pom.xml").unwrap_or_default()) {
+                        format!("{mvn} -B verify")
+                    } else {
+                        format!("{mvn} -B test")
+                    },
+                ),
                 lint,
                 ..Commands::default()
             },

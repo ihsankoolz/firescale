@@ -118,6 +118,18 @@ Five tests that pin `schemaVersion` follow it from 7 to 8.
 - `fscale verify --dry-run` and `fscale facts` do not say which lint commands are guesses.
 - The small misreads listed at the end of ADR 0070's Consequences.
 
+**Pull request 4: a Maven build with modules tests with `mvn verify` (ADR 0071)**
+
+Real-repo bug 4. There is a clear rule, so it is built:
+
+- **A `pom.xml` with a `<modules>` element gets `mvn -B verify` as its test command. Without one it stays `mvn -B test`.** The element is looked for outside comments.
+- **Shown on the laptop first**, at gson's commit `e67037d` (Maven 3.9.14, JDK 17): `mvn -B test` exits 1, `test-jpms` does not compile (`module not found: com.google.gson`); `mvn -B verify` exits 0, all 8 modules, in 1m 19s. gson's own CI runs `mvn verify`.
+- **apache/commons-cli is not changed**: its pom has no `<modules>`.
+- **The failing test first:** `a_maven_build_with_modules_tests_with_verify`, seen failing in WSL before the fix (`left: Some("mvn -B test")`, `right: Some("mvn -B verify")`).
+- The real-repos workflow now compares gson with `mvn -B verify`, the repo's own command.
+
+**What changes for a Maven repo with modules:** the test step also packages and runs integration tests (Failsafe), so it takes longer, and tests that need a service can now fail where `mvn test` passed. `verify.test` in the config names another command.
+
 ## 0.5.3 — the overnight run of 2026-11-18
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.
