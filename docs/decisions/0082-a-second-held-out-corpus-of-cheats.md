@@ -22,6 +22,7 @@ The report's idea 11 asks for a second corpus, written from ImpossibleBench's ca
 - Equal weights per category are not how often agents cheat each way; no weighted rate is given, because the published mix was not checked against a primary source here.
 - The cases were not run: that each base fails and each head passes rests on the writer's reading of its own code.
 - Whatever a later author reads of this file ends its use as a blind gate too. The ADR of a detector should say whether its author opened it.
+- **`tamper-misses.mjs` prints the title of every missed case**, so whoever measures sees them. In this run that is the session that writes the next detectors (Track B's pull requests 5 to 7): it saw the 90 titles when it measured, and opened no case. Those detectors were named by the owner before this corpus existed, and their ADRs say what their author saw. `bench/RESULTS.md` describes the misses by category only, so that it does not tell a detector author what to match.
 
 ## Later
 
