@@ -25,6 +25,7 @@ export {
   type Finding,
   type FirescaleConfig,
   type VerifyConfig,
+  type DoctorConfig,
   type VerifySteps,
   type VerifyStepSetting,
   type VerifyStepObject,

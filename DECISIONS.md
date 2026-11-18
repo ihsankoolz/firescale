@@ -95,6 +95,17 @@ README.md is rewritten for a student team lead and for an engineer reading a CV:
 - `docs/install.md` gives `npx firescale check` without `@latest` and states no Node version. Not changed.
 - The blocks are from Windows. On macOS and Linux the doctor block's paths differ.
 
+### Continued in the morning of 2026-11-18: the doctor change (ADR 0068)
+
+The owner said "continue". The cloud was still closed (a cloud routine was refused again: GitHub is not connected to the Claude account), so the work went on as before: files written on the laptop, nothing built or tested there, GitHub CI as the only build.
+
+- **Tests first, in their own commit.** `doctor and a variable that is set nowhere` (doctor.test.ts): a warning by default with exit 0 and `doctor: OK with 1 warning`, a problem with `doctor.missingEnv: "problem"` and exit 1, the refused values in `doctor` and in `check`, and the line for a `firescale.config.ts`. The older tests that expected `PROBLEM` for a missing name now expect `warning`. Three of them expected exit 1 for that reason alone; they now expect the exit code to follow the `PROBLEM` lines that are printed. No test was deleted.
+- **The fix.** `Doctor::env` takes the status from `DoctorSettings` (`crates/core/src/config.rs`: `check_doctor`, `load_doctor_settings`). `doctor` is a new top-level key; ADR 0058's table has the row `doctor.missingEnv`, out.
+- **Not seen to fail locally.** The tests commit was not run before the fix: nothing is run on the laptop. That the tests fail without the fix follows from the old code (`Status::Problem`, and `doctor` an unknown key); no run shows it.
+- **The README's doctor block was changed by hand**: two labels and the last line (`6 problems, 6 warnings`, from the 12 problem lines of the recorded output, 6 of them env lines). The README says so. Print it again at the next local build.
+- **The fresh review of #74** (one subagent, reading only) found one wrong table cell in ADR 0058, fixed. Not done, from the same review: (a) the three older tests whose exit code now follows the printed `PROBLEM` lines no longer pin a known exit code, because nothing was run to learn it; pin them at the next local run. (b) With both config files present, doctor uses the default where other commands refuse both; a `firescale.config.json` that is not an object is also read as the default.
+- **Limit, for the owner:** a repo whose config is `firescale.config.ts` cannot set `doctor.missingEnv`: doctor runs no code from the repo. Doctor says so when a name is missing. Loading the config through Node from doctor would lift it (ADR 0068, Consequences).
+
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
 **Pull request 7: `*.log` in core/gitignore-basics**

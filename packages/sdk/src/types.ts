@@ -166,6 +166,19 @@ export interface FirescaleConfig {
   protectedPaths?: string[];
   /** Settings for `fscale verify`. See docs/verify.md. */
   verify?: VerifyConfig;
+  /** Settings for `fscale doctor`. See docs/doctor.md. */
+  doctor?: DoctorConfig;
+}
+
+/** The `doctor` section of the config. */
+export interface DoctorConfig {
+  /**
+   * What a variable that a `.env.example` names and that is set nowhere is:
+   * a `warning` (the default; doctor still exits 0) or a `problem` (doctor
+   * exits 1). Read from `firescale.config.json` only: doctor does not run a
+   * `firescale.config.ts` (ADR 0068).
+   */
+  missingEnv?: 'warning' | 'problem';
 }
 
 /**

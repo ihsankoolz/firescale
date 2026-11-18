@@ -23,7 +23,7 @@ Write `npx firescale`, not `npx fscale`: `fscale` on npm is another package. Aft
 
 ## Usage: the five ideas
 
-Each block below is what `fscale` printed on a test fixture of this repo. `node scripts/readme-output.mjs` prints them all again (build first). They were made on Windows 11 with a debug build of 0.5.2. Commit ids change from run to run. The tool versions and Windows paths in the doctor block are that machine's.
+Each block below is what `fscale` printed on a test fixture of this repo. `node scripts/readme-output.mjs` prints them all again (build first). They were made on Windows 11 with a debug build of 0.5.2. Commit ids change from run to run. The tool versions and Windows paths in the doctor block are that machine's. In the doctor block, the two `warning` labels and the last line were changed by hand for 0.5.3 to what its tests expect; that block was not printed again.
 
 ### 1. A rule is a check, a fix and a page that explains it
 
@@ -119,7 +119,7 @@ It only reports, until the base commit sets `verify.tamper` to `enforced`. It mi
 
 ### 5. Is this machine ready?
 
-`fscale doctor` checks the tools the repo declares, the variables its `.env.example` files name, the installed dependencies and the local services. Each problem comes with the next step. It never prints the value of a variable, a password or a connection string. The fixture has six projects and nothing installed. The lines for four of its services are cut here and marked `...`:
+`fscale doctor` checks the tools the repo declares, the variables its `.env.example` files name, the installed dependencies and the local services. Each problem comes with the next step. A variable that is set nowhere is a warning, not a problem, unless the config says otherwise. It never prints the value of a variable, a password or a connection string. The fixture has six projects and nothing installed. The lines for four of its services are cut here and marked `...`:
 
 ```
 $ fscale doctor
@@ -128,9 +128,9 @@ Tools
   ok       npm: npm 10.9.3
 
 Environment variables
-  PROBLEM  .env.example: 1 of 1 variables are not set in the environment, and there is no .env: EXAMPLE_DATABASE_URL.
+  warning  .env.example: 1 of 1 variables are not set in the environment, and there is no .env: EXAMPLE_DATABASE_URL.
            next: copy .env.example to .env and fill in the values (or set the variables in your shell)
-  PROBLEM  backend/audit_service/.env.example: 1 of 1 variables are not set in the environment, and there is no backend/audit_service/.env, nor a .env in a folder above it: EXAMPLE_SERVICE_URL.
+  warning  backend/audit_service/.env.example: 1 of 1 variables are not set in the environment, and there is no backend/audit_service/.env, nor a .env in a folder above it: EXAMPLE_SERVICE_URL.
            next: copy backend/audit_service/.env.example to backend/audit_service/.env and fill in the values (or set the variables in your shell)
   ...
 
@@ -141,7 +141,7 @@ Dependencies
   PROBLEM  frontend node_modules: the dependencies of frontend/package.json are not installed.
            next: in frontend: npm ci
 
-doctor: 12 problems - run the `next:` commands above, then `fscale doctor` again.
+doctor: 6 problems, 6 warnings - run the `next:` commands above, then `fscale doctor` again.
 ```
 
 ## One real project

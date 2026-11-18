@@ -220,7 +220,7 @@ describe('loading the config file', () => {
     const result = await runCli(['check'], repo.root);
     expect(result.code).toBe(EXIT_USAGE);
     expect(result.stderr).toBe(
-      'fscale: firescale.config.json: unknown key "rulez". Allowed keys: packs, rules, protectedPaths, verify, agent.\n',
+      'fscale: firescale.config.json: unknown key "rulez". Allowed keys: packs, rules, protectedPaths, verify, agent, doctor.\n',
     );
   });
 });

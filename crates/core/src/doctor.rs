@@ -32,6 +32,7 @@ use std::time::{Duration, SystemTime};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::config::{DoctorSettings, MissingEnv, TS_CONFIG};
 use crate::facts::{
     parse_toml, read_requirements, requirement_name, venv_python, RepoFacts, VENV_DIRS,
 };
@@ -468,6 +469,7 @@ struct Doctor<'a> {
     root: &'a Path,
     facts: &'a RepoFacts,
     machine: &'a dyn Machine,
+    settings: DoctorSettings,
     findings: Vec<Finding>,
 }
 
@@ -1532,8 +1534,13 @@ impl Doctor<'_> {
     /// A local env file that is a symbolic link is not read: it can point
     /// at a file outside the root, which doctor never reads, and the base
     /// run does not copy one either (`blame::env_files`). A name that is
-    /// then found nowhere is a problem that names the link.
+    /// then found nowhere is reported, and the line names the link.
+    ///
+    /// A name found nowhere is a warning, or a problem when the config
+    /// says so (`doctor.missingEnv`, ADR 0068): a `.env.example` often
+    /// lists names that only some work needs.
     fn env(&mut self) {
+        let mut any_missing = false;
         for folder in self.folders() {
             let dir = dir_of(self.root, &folder);
             let Some(text) = read(&dir.join(ENV_EXAMPLE)) else {
@@ -1636,6 +1643,7 @@ impl Doctor<'_> {
                 );
                 continue;
             }
+            any_missing = true;
             let target = shown(&folder, ".env");
             // "There is no <target>" is not said of a link of that name.
             let no_target = if links.contains(&target) {
@@ -1696,7 +1704,10 @@ impl Doctor<'_> {
                 "env",
                 project,
                 example,
-                Status::Problem,
+                match self.settings.missing_env {
+                    MissingEnv::Warning => Status::Warning,
+                    MissingEnv::Problem => Status::Problem,
+                },
                 format!(
                     "{} of {} variables are not set in {where_looked}: {}.{not_read}",
                     missing.len(),
@@ -1704,6 +1715,18 @@ impl Doctor<'_> {
                     list(&missing)
                 ),
                 Some(fix),
+            );
+        }
+        // The setting cannot be read from a config that is code, and
+        // doctor runs no code from the repo: say so where it matters.
+        if any_missing && self.root.join(TS_CONFIG).exists() {
+            self.add(
+                "env",
+                None,
+                TS_CONFIG,
+                Status::Warning,
+                format!("doctor does not run {TS_CONFIG} (it is code), so doctor.missingEnv in it is not read: a variable that is set nowhere is a warning."),
+                None,
             );
         }
     }
@@ -1854,13 +1877,25 @@ pub(crate) fn installed_python_packages(venv: &Path) -> BTreeMap<String, String>
     found
 }
 
-/// Runs every check.
+/// Runs every check, with the default settings.
 #[must_use]
 pub fn run_doctor(root: &Path, facts: &RepoFacts, machine: &dyn Machine) -> DoctorReport {
+    run_doctor_with(root, facts, machine, DoctorSettings::default())
+}
+
+/// Runs every check, with the `doctor` settings of the config.
+#[must_use]
+pub fn run_doctor_with(
+    root: &Path,
+    facts: &RepoFacts,
+    machine: &dyn Machine,
+    settings: DoctorSettings,
+) -> DoctorReport {
     let mut doctor = Doctor {
         root,
         facts,
         machine,
+        settings,
         findings: Vec::new(),
     };
     doctor.node();
@@ -2111,7 +2146,7 @@ mod tests {
             [(
                 "env",
                 ".env.example",
-                Status::Problem,
+                Status::Warning,
                 "1 of 1 variables are not set in the environment: LINKED_NAME. .env is a symbolic link, so it was not read.",
                 Some("replace .env with a real file that sets LINKED_NAME, or set the variables in your shell (see .env.example for what each one is)"),
             )]
@@ -2154,6 +2189,75 @@ mod tests {
         );
         let text = format_doctor_human(&report) + &format_doctor_json(&report);
         assert!(!text.contains("made-up"), "{text}");
+    }
+
+    /// A machine with no tool, no variable set and no service listening.
+    struct Empty;
+    impl Machine for Empty {
+        fn run(&self, _: &Path, _: &str, _: &[&str]) -> Option<String> {
+            None
+        }
+        fn env_set(&self, _: &str) -> bool {
+            false
+        }
+        fn listening(&self, _: &str, _: u16) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_variable_set_nowhere_is_a_warning_unless_the_config_makes_it_a_problem() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        fs::write(root.join(".env.example"), "UNSET_NAME=\n").unwrap();
+        let env_checks = |report: &DoctorReport| -> Vec<(String, Status)> {
+            report
+                .checks
+                .iter()
+                .filter(|check| check.section == "env")
+                .map(|check| (check.subject.clone(), check.status))
+                .collect()
+        };
+
+        let report = run_doctor(root, &RepoFacts::default(), &Empty);
+        assert_eq!(
+            env_checks(&report),
+            [(".env.example".to_owned(), Status::Warning)]
+        );
+        assert!(report.ok);
+        assert_eq!((report.problems, report.warnings), (0, 1));
+        assert!(format_doctor_human(&report)
+            .ends_with("\ndoctor: OK with 1 warning - read them above.\n"));
+
+        let problem = DoctorSettings {
+            missing_env: MissingEnv::Problem,
+        };
+        let report = run_doctor_with(root, &RepoFacts::default(), &Empty, problem);
+        assert_eq!(
+            env_checks(&report),
+            [(".env.example".to_owned(), Status::Problem)]
+        );
+        assert!(!report.ok);
+        assert_eq!((report.problems, report.warnings), (1, 0));
+
+        // A config that is code is not run: the default stands, and doctor
+        // says that the setting in it is not read.
+        fs::write(root.join(TS_CONFIG), "export default {};\n").unwrap();
+        let report = run_doctor(root, &RepoFacts::default(), &Empty);
+        assert_eq!(
+            env_checks(&report),
+            [
+                (".env.example".to_owned(), Status::Warning),
+                (TS_CONFIG.to_owned(), Status::Warning)
+            ]
+        );
+        // Nothing missing, nothing to say about the config.
+        fs::write(root.join(".env"), "UNSET_NAME=made-up-value-864\n").unwrap();
+        let report = run_doctor(root, &RepoFacts::default(), &Empty);
+        assert_eq!(
+            env_checks(&report),
+            [(".env.example".to_owned(), Status::Ok)]
+        );
     }
 
     #[test]
