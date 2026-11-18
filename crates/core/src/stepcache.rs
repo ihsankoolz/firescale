@@ -998,8 +998,9 @@ const MAX_DECLARED_ENTRIES: usize = 50_000;
 
 /// The files under `base` that `glob` names, as one digest: each file's
 /// path from `base` and the hash of its bytes, also for a file git ignores
-/// (ADR 0076). A link counts by where it points and is not followed. `.git`
-/// is never entered.
+/// (ADR 0076). A glob that names a folder names every file in it. A link
+/// counts by where it points and is not followed, also a link among the
+/// folders on the way. `.git` is never entered.
 ///
 /// # Errors
 ///
@@ -1015,14 +1016,43 @@ fn declared_files_digest(base: &Path, glob: &str) -> Result<String, String> {
         .split('/')
         .take_while(|part| !part.contains(['*', '?', '[', '{']))
         .collect();
-    let mut found: Vec<(String, String)> = Vec::new();
-    let mut seen = 0usize;
-    let mut queue: Vec<String> = vec![plain.join("/")];
-    while let Some(rel) = queue.pop() {
-        let path = rel
-            .split('/')
+    let at = |rel: &str| {
+        rel.split('/')
             .filter(|part| !part.is_empty())
-            .fold(base.to_path_buf(), |path, part| path.join(part));
+            .fold(base.to_path_buf(), |path, part| path.join(part))
+    };
+    let link = |rel: &str| -> Result<String, String> {
+        let target = fs::read_link(at(rel))
+            .map_err(|error| format!("its input \"{glob}\": {rel} could not be read ({error})"))?;
+        Ok(format!(
+            "link\0{}",
+            target.to_string_lossy().replace('\\', "/")
+        ))
+    };
+    let mut found: Vec<(String, String)> = Vec::new();
+    // A link among the glob's plain first parts is not walked through: it
+    // counts by where it points, and nothing behind it is read.
+    let mut start = Some(plain.join("/"));
+    let mut so_far = String::new();
+    for part in &plain {
+        if !so_far.is_empty() {
+            so_far.push('/');
+        }
+        so_far.push_str(part);
+        let linked =
+            fs::symlink_metadata(at(&so_far)).is_ok_and(|meta| meta.file_type().is_symlink());
+        if linked {
+            found.push((so_far.clone(), link(&so_far)?));
+            start = None;
+            break;
+        }
+    }
+    let mut seen = 0usize;
+    // Each entry with whether a folder above it is named by the glob: then
+    // everything in that folder counts (`dist` is all of `dist`).
+    let mut queue: Vec<(String, bool)> = start.into_iter().map(|rel| (rel, false)).collect();
+    while let Some((rel, inside)) = queue.pop() {
+        let path = at(&rel);
         let Ok(meta) = fs::symlink_metadata(&path) else {
             continue;
         };
@@ -1032,31 +1062,37 @@ fn declared_files_digest(base: &Path, glob: &str) -> Result<String, String> {
                 "its input \"{glob}\" is in a folder with more than {MAX_DECLARED_ENTRIES} files and folders"
             ));
         }
+        let named = inside || (!rel.is_empty() && matcher.is_match(&rel));
         if meta.is_dir() {
             let entries = fs::read_dir(&path).map_err(|error| {
                 format!("its input \"{glob}\": {rel} could not be listed ({error})")
             })?;
-            for entry in entries.filter_map(std::result::Result::ok) {
-                let name = entry.file_name().to_string_lossy().into_owned();
+            for entry in entries {
+                let entry = entry.map_err(|error| {
+                    format!("its input \"{glob}\": {rel} could not be listed ({error})")
+                })?;
+                // A name that is not text cannot be matched or put in the
+                // digest by its path: the step is not cached.
+                let name = entry.file_name().into_string().map_err(|_| {
+                    format!("its input \"{glob}\": a file name in {rel} is not valid UTF-8")
+                })?;
                 if name == ".git" {
                     continue;
                 }
-                queue.push(if rel.is_empty() {
+                let child = if rel.is_empty() {
                     name
                 } else {
                     format!("{rel}/{name}")
-                });
+                };
+                queue.push((child, named));
             }
             continue;
         }
-        if rel.is_empty() || !matcher.is_match(&rel) {
+        if !named {
             continue;
         }
         let state = if meta.file_type().is_symlink() {
-            let target = fs::read_link(&path).map_err(|error| {
-                format!("its input \"{glob}\": {rel} could not be read ({error})")
-            })?;
-            format!("link\0{}", target.to_string_lossy().replace('\\', "/"))
+            link(&rel)?
         } else if meta.is_file() {
             let bytes = fs::read(&path).map_err(|error| {
                 format!("its input \"{glob}\": {rel} could not be read ({error})")
@@ -2666,7 +2702,7 @@ mod tests {
         assert_eq!(line(Some("never-shown")), changed);
         // `*` stays in one folder; a plain path names one file; nothing is fine.
         let digest = |glob: &str| declared_files_digest(&root.join("api"), glob).unwrap();
-        assert_ne!(digest("dist/*"), digest("dist/**"));
+        assert_ne!(digest("dist/*.js"), digest("dist/**"));
         assert_ne!(digest("dist/a.js"), digest("dist/nothing.js"));
         assert_eq!(digest("nowhere/**"), digest("dist/nothing.js"));
         // The whole folder, without `.git`.

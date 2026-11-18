@@ -1112,6 +1112,7 @@ fn verify_plan(
 ) -> Result<(VerifyPlan, Option<Graph>)> {
     let base = args.base.as_deref();
     let mut plan = plan_verify(root, facts, verify_config, args.affected, base);
+    firescale_core::verify::check_project_inputs(verify_config, &plan)?;
     if !args.affected {
         return Ok((plan, None));
     }

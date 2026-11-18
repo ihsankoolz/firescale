@@ -538,7 +538,8 @@ fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepSe
                     }
                     other => {
                         return Err(Error::user(format!(
-                            "{name}: unknown key \"{other}\" in {key}.{step}. Allowed keys: command, timeout."
+                            "{name}: unknown key \"{other}\" in {key}.{step}. Allowed keys: command, timeout{}.",
+                            if key == "verify" { "" } else { ", inputs" }
                         )));
                     }
                 }

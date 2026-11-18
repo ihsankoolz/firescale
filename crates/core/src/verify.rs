@@ -781,6 +781,21 @@ pub fn check_project_folders(root: &Path, config: &VerifyConfig) -> Result<()> {
     Ok(())
 }
 
+/// Checks that every folder with `inputs` under `verify.projects` is a
+/// project of the plan: inputs named for any other folder would be part of
+/// no step's key, while their writer believes a stale pass is prevented
+/// (ADR 0076).
+pub fn check_project_inputs(config: &VerifyConfig, plan: &VerifyPlan) -> Result<()> {
+    for folder in config.project_inputs.keys() {
+        if !plan.projects.iter().any(|project| &project.root == folder) {
+            return Err(Error::user(format!(
+                "verify.projects[\"{folder}\"] names inputs, but verify runs no project in that folder, so they would be part of no key. Name the project's own folder, in the letter case `fscale facts` prints it, or give the folder a command."
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Chooses a command for each step.
 ///
 /// At the repo root the order of preference is: the config, Nx, Turborepo,

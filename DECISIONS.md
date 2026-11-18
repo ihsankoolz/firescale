@@ -89,6 +89,8 @@ Build idea 2, first step only.
 - **Schema and docs:** `packages/sdk/src/types.ts`, `docs/verify.md`, `docs/config.md`.
 - **Not done (ADR 0076):** `--affected` and the stop hook do not see a change to a named ignored file or variable, as they see no ignored file. `runtime` inputs are under "Later".
 - **Failing test first:** `packages/cli/src/step-cache-inputs.test.ts`, 9 of 9 failed in WSL before the change.
+- **The fresh review** found nothing that removes or weakens an input. It found inputs that did nothing without saying so; fixed test first: a glob that names a folder now names its files, a link on the way is not walked through, and inputs for a folder that is no project are an error. Logged, not fixed: a kept base result is not keyed on the named inputs (ADR 0076, "Not done").
+- **One full local run had a test file fail with no failing test in it** (10 skipped instead of 4); the same tests passed when run again (60 files, 1469 passed). I did not find which file. Linux CI is the gate.
 
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
