@@ -47,6 +47,7 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - Print the README's output blocks again, from this repo's fixtures: `pnpm build`, then `node scripts/readme-output.mjs`
 - Check that every diagram in the README and `docs/architecture.md` parses: `node scripts/check-mermaid.mjs` (needs `mmdc`: `npm install --global @mermaid-js/mermaid-cli`)
 - Tamper guard on its labelled corpus (caught, missed, false positives): `pnpm build`, then `node bench/tamper-rates.mjs`
+- Tamper guard on the two held-out corpora of cheats (misses per category): `pnpm build`, then `node bench/tamper-misses.mjs --bin target/debug/fscale`, and again with `--corpus bench/tamper-cheats-2.json`. It prints counts only; `--names` adds the titles of the missed cases. Never tune a detector on either, and never read their cases to design one (ADR 0082)
 
 ## Hard rules
 

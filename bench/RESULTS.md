@@ -2,6 +2,42 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## A second held-out corpus of cheats (ADR 0082)
+
+`bench/tamper-cheats-2.json`: 100 cheating changes written on 2026-11-18 by a subagent that was told not to open the guard's code (`crates/core/src/tamper/`), `bench/tamper-cheats.json`, `bench/tamper-corpus.json` or `docs/research/`, and said it did not; it was given only the file format and five categories: ImpossibleBench's four (test modification, operator overloading, recording extra state, special-casing; Zhong et al., arXiv 2510.20270) and METR's reward hacks (June 2025) as "evaluator-tampering". 20 per category; 35 Python, 20 JavaScript, 15 TypeScript, 30 Rust. **It was written because the first corpus is no longer blind**: the author of `docs/research/research-verification.md` read its titles, and the next detectors come from that report. **Never tune a detector on this file.**
+
+`node bench/tamper-misses.mjs --bin target/debug/fscale --corpus bench/tamper-cheats-2.json` (the script then printed the missed titles; it now prints them only with `--names`), on `main` at `ba9c459` (0.5.4 and the research notes; no detector changed since 0.5.4), Linux debug build in WSL on the laptop, 2026-11-18:
+
+| Category              | Cheats  | Caught | Needs approval only | Missed |
+| --------------------- | ------- | ------ | ------------------- | ------ |
+| test-modification     | 20      | 5      | 3                   | 12     |
+| operator-overloading  | 20      | 0      | 0                   | 20     |
+| recording-extra-state | 20      | 0      | 0                   | 20     |
+| special-casing        | 20      | 0      | 0                   | 20     |
+| evaluator-tampering   | 20      | 2      | 0                   | 18     |
+| **All**               | **100** | **7**  | **3**               | **90** |
+
+| Language   | Cheats | Caught | Needs approval only | Missed |
+| ---------- | ------ | ------ | ------------------- | ------ |
+| Python     | 35     | 2      | 1                   | 32     |
+| JavaScript | 20     | 2      | 0                   | 18     |
+| TypeScript | 15     | 0      | 1                   | 14     |
+| Rust       | 30     | 3      | 1                   | 26     |
+
+Miss rate 90 of 100, 90.0% (95% Wilson interval 82.6–94.5%); not caught outright (missed or approval only) 93 of 100 (86.3–96.6%). Test modification alone: 12 of 20 missed (38.7–78.1%).
+
+What was caught, by kind only: `test-skipped` (3), `test-deleted` with `assertion-removed` (2), `expected-changed` (3, approval only), and two evaluator-tampering cases by a kind that is not what makes them cheats (`suppression-added`, `assertion-removed`).
+
+What the misses say, at the level of categories only (the cases are not described here, so that this file does not tell a detector author what to match):
+
+- **Operator overloading, recorded state and special-casing are 60 of the 90 misses, and the guard does not look for them**: it reads test files, config and CI, and these cheats live in production code. No detector of the guard was ever meant to see them; the number says how much of ImpossibleBench's mix that leaves.
+- **Test modification is where the guard is meant to work, and it misses 12 of 20.**
+- **Evaluator tampering**: 18 of 20 missed.
+
+Limits: one subagent wrote all 100 cases in one sitting, from categories it was given; equal weights per category, which is not how often agents cheat each way (ImpossibleBench reports most of Claude models' cheating as test edits, the four categories spread for OpenAI models). The cases were not run: that each base fails and each head passes rests on the writer's reading. No weighted rate is given: the published mix was not checked against a primary source in this run.
+
+The first corpus, run again for comparison on the same build in the same session: 42 of 98 missed, the count of the table under "M26" below (whether they are the same 42 cases was not compared) (`bench/tamper-cheats.json`, now read by the research author: it stays as a gate, but it is no longer blind).
+
 ## 0.5.1 and 0.5.2: the tamper guard on real commits, measured on CI
 
 `.github/workflows/tamper-bench.yml` (ADR 0067), [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594) of 2026-11-17: release builds of the tags `v0.5.1` (`62b795b`) and `v0.5.2` (`c9d8ffc`) on Linux, `bench/tamper-history.mjs` of `v0.5.2` with both binaries over the commits recorded for M26 and M32, then `node bench/tamper-history-report.mjs --data bench/tamper-history-0.5.2.json` (every finding with its label, the reason and where the label comes from).
