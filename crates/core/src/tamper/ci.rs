@@ -289,7 +289,7 @@ pub(crate) fn logical_lines(script: &str) -> Vec<(usize, String)> {
 
 /// The commands of a logical line, split at `&&`, `||`, `;` and `|`
 /// outside quotes, each with the text that follows it.
-fn commands(line: &str) -> Vec<(String, String)> {
+pub(crate) fn commands(line: &str) -> Vec<(String, String)> {
     let mut quote: Option<char> = None;
     let bytes: Vec<char> = line.chars().collect();
     let mut cuts: Vec<(usize, usize)> = Vec::new(); // (end of command, start of next)
@@ -330,7 +330,7 @@ fn commands(line: &str) -> Vec<(String, String)> {
 /// Why what follows a command makes it unable to fail: `|| true`, `|| :`,
 /// `|| exit 0`, `|| echo …`. (`; true` is not: with GitHub's `bash -e` the
 /// step stops at the failing command before it.)
-fn swallowed(rest: &str) -> Option<String> {
+pub(crate) fn swallowed(rest: &str) -> Option<String> {
     let tail = rest.trim_start().strip_prefix("||")?;
     let next: Vec<&str> = tail.split_whitespace().take(2).collect();
     let swallow = matches!(
@@ -341,7 +341,7 @@ fn swallowed(rest: &str) -> Option<String> {
 }
 
 /// Script names that run checks.
-fn is_check_script(name: &str) -> bool {
+pub(crate) fn is_check_script(name: &str) -> bool {
     let base = name.split([':', '-', '_', '.']).next().unwrap_or(name);
     matches!(
         base,

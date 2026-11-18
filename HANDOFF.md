@@ -9,7 +9,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 1. A second held-out corpus of cheats, `bench/tamper-cheats-2.json` (ADR 0082): 90 of 100 missed on `main`. Never tune a detector on it. Merged as [#88](https://github.com/ihsankoolz/firescale/pull/88).
 2. The stop hook's time limit: `hooks install` writes `timeout` on Claude Code's entry, `doctor` warns when the kept step times exceed it (ADR 0083). Merged as [#90](https://github.com/ihsankoolz/firescale/pull/90).
 3. A way out for agents: the stop hook's block message and the AGENTS.md block say to name a wrong test and stop, not edit it (ADR 0084). `fscale sync` updates existing blocks. Merged as [#94](https://github.com/ihsankoolz/firescale/pull/94).
-4. Doctor follows the verify plan: each step's program is looked up as the step would start it (ADR 0085).
+4. Doctor follows the verify plan: each step's program is looked up as the step would start it (ADR 0085). Merged as [#97](https://github.com/ihsankoolz/firescale/pull/97).
+5. A runner made unable to fail: `runner-weakened`, report only (ADR 0086). Second corpus 90 to 89 missed, first 42 to 40, no new false finding.
 
 **Track A (cache and verify), the run of 2026-11-18 after 0.5.4** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
 

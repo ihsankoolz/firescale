@@ -131,6 +131,8 @@ const DETECTORS: Record<string, string> = {
   'nv:': 'no-verify',
   'lint:': 'rule-disabled',
   'appr:': 'snapshot-changed',
+  // A test runner made unable to fail (ADR 0086): report only.
+  'run:': 'runner-weakened',
 };
 
 describe('the tamper guard on the labelled corpus', () => {
@@ -351,6 +353,55 @@ describe('the policy comes from the base commit', () => {
     const human = await runCli(['verify', '--no-cache'], root);
     expect(human.stdout.split('\n')[0]).toBe('verify: FAILED at the tamper guard (2 findings)');
     expect(human.stdout).toContain('verify.tamper is "enforced" on the base commit');
+  });
+
+  it('reports a runner made unable to fail, and never blocks on it, even when the base enforces the guard (ADR 0086)', async () => {
+    const labelled = corpus.cases.find((c) => c.name === 'run: the test script gains || true');
+    if (!labelled) throw new Error('corpus case missing');
+    const root = await caseRepo(labelled.base, labelled.head, { base: 'enforced' });
+    const { code, tamper: report } = await tamper(root);
+    expect(report?.policy).toBe('enforced');
+    expect(kinds(report)).toEqual(['runner-weakened']);
+    expect(code).toBe(EXIT_OK);
+    const human = await runCli(['verify', '--no-cache'], root);
+    expect(human.stdout).toContain(
+      'runner weakened: package.json:6: test: vitest run || true [report only: it never fails verify; a reviewer judges it]',
+    );
+    // An enforced guard with only report-only findings does not say it fails.
+    expect(human.stdout).toContain(
+      'Tamper guard (report only: these findings never fail verify, even with verify.tamper "enforced" on the base commit):',
+    );
+    // Nor does `fscale tamper`'s headline say it needs an approval.
+    const alone = await runCli(['tamper', '--base', 'main'], root);
+    expect(alone.stdout.split('\n')[0]).toBe('tamper: OK - 1 report-only finding');
+  });
+
+  it('does not say "enforced" makes a runner-weakened finding fail (ADR 0086)', async () => {
+    const labelled = corpus.cases.find((c) => c.name === 'run: the test script gains || true');
+    if (!labelled) throw new Error('corpus case missing');
+    const root = await caseRepo(labelled.base, labelled.head);
+    const human = await runCli(['verify', '--no-cache'], root);
+    expect(human.stdout).toContain(
+      'Tamper guard (report only: these findings never fail verify, even when verify.tamper is "enforced"):',
+    );
+  });
+
+  it('still blocks on the other findings of a change that also weakens a runner (ADR 0086)', async () => {
+    const runner = corpus.cases.find((c) => c.name === 'run: the test script gains || true');
+    const deleted = corpus.cases.find((c) => c.name === 'ts: a test deleted');
+    if (!runner || !deleted) throw new Error('corpus case missing');
+    const root = await caseRepo(
+      { ...runner.base, ...deleted.base },
+      { ...runner.head, ...deleted.head },
+      { base: 'enforced' },
+    );
+    const { code, tamper: report } = await tamper(root);
+    expect(kinds(report)).toEqual(['assertion-removed', 'runner-weakened', 'test-deleted']);
+    expect(code).toBe(EXIT_VIOLATIONS);
+    const human = await runCli(['verify', '--no-cache'], root);
+    expect(human.stdout).toContain(
+      'Tamper guard (fails verify: verify.tamper is "enforced" on the base commit):',
+    );
   });
 
   it('does not enforce what only the change enforces', async () => {

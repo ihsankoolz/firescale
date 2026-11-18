@@ -4910,6 +4910,10 @@ pub fn format_tamper_human(tamper: &crate::tamper::TamperReport) -> String {
             format!("tamper: OK - nothing weakened, compared with the base commit {base}")
         }
         Policy::Enforced if tamper.blocks() => format!("tamper: FAILED - {count} finding{plural}"),
+        // Nothing to approve: every finding is report only (ADR 0086).
+        Policy::Enforced if tamper.findings.iter().all(|f| f.kind.reports_only()) => {
+            format!("tamper: OK - {count} report-only finding{plural}")
+        }
         Policy::Enforced => format!(
             "tamper: OK - {count} finding{plural} that need{} or have a person's approval, which CI checks",
             if count == 1 { "s" } else { "" }
@@ -4971,8 +4975,11 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
         return out;
     }
     if !tamper.findings.is_empty() {
+        let only_reports = tamper.findings.iter().all(|f| f.kind.reports_only());
         let how = match tamper.policy {
+            Policy::Enforced if only_reports => "report only: these findings never fail verify, even with verify.tamper \"enforced\" on the base commit",
             Policy::Enforced => "fails verify: verify.tamper is \"enforced\" on the base commit",
+            _ if only_reports => "report only: these findings never fail verify, even when verify.tamper is \"enforced\"",
             _ => "report only; verify.tamper on the base commit decides, and \"enforced\" makes this fail",
         };
         out.push_str(&format!(
@@ -4984,7 +4991,9 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
             } else {
                 format!("{}:{}", finding.file, finding.line)
             };
-            let approval = if !finding.kind.needs_approval() {
+            let approval = if finding.kind.reports_only() {
+                " [report only: it never fails verify; a reviewer judges it]".to_owned()
+            } else if !finding.kind.needs_approval() {
                 String::new()
             } else {
                 match &tamper.approvals {

@@ -5848,6 +5848,131 @@
       "head": {
         "src/lib.rs": "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn adds() {\n        assert_eq!(add(1, 2), 3, \"the sum of one and two\");\n        assert!(add(0, 0) == 0, \"{} and {}: the sum of one and two\", 0, 0);\n    }\n}\n"
       }
+    },
+    {
+      "name": "run: the test script gains || true",
+      "expect": ["runner-weakened"],
+      "note": "npm test can no longer fail.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p .\",\n    \"test\": \"vitest run\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p .\",\n    \"test\": \"vitest run || true\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: the lint script gains || exit 0",
+      "expect": ["runner-weakened"],
+      "note": "The linter runs, and its result is thrown away.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"test\": \"jest --ci\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"lint\": \"eslint . || exit 0\",\n    \"test\": \"jest --ci\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: a test script gains ; exit 0",
+      "expect": ["runner-weakened"],
+      "note": "npm runs scripts with sh, without -e: the last command decides.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test:unit\": \"jest --ci\",\n    \"test\": \"npm run test:unit\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test:unit\": \"jest --ci; exit 0\",\n    \"test\": \"npm run test:unit\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: the test script of a workspace package gains || true",
+      "expect": ["runner-weakened"],
+      "note": "Every package.json is read, not only the root one.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"pnpm -r test\"\n  }\n}\n",
+        "packages/core/package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"vitest run --coverage\"\n  }\n}\n"
+      },
+      "head": {
+        "packages/core/package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"vitest run --coverage || true\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: conftest.py gains a top-level sys.exit",
+      "expect": ["runner-weakened"],
+      "note": "Pytest imports conftest.py first: the run ends there with the code it gives.",
+      "base": {
+        "tests/conftest.py": "import pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n",
+        "tests/test_app.py": "def test_app(client):\n    assert client\n"
+      },
+      "head": {
+        "tests/conftest.py": "import sys\n\nimport pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n\nsys.exit(0)\n"
+      }
+    },
+    {
+      "name": "run: conftest.py gains a pytest_sessionfinish that sets the exit status",
+      "expect": ["runner-weakened"],
+      "note": "The hook runs after the tests and rewrites their result.",
+      "base": {
+        "conftest.py": "import pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n",
+        "test_app.py": "def test_app(client):\n    assert client\n"
+      },
+      "head": {
+        "conftest.py": "import pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n\n\ndef pytest_sessionfinish(session, exitstatus):\n    session.exitstatus = 0\n"
+      }
+    },
+    {
+      "name": "run: || true on a clean-up before the tests",
+      "expect": [],
+      "note": "The command that cannot fail checks nothing; the tests still decide.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"vitest run\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"rm -rf coverage || true && vitest run\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: || true already on the base, and another script changed",
+      "expect": [],
+      "note": "Nothing new cannot fail.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p .\",\n    \"test\": \"vitest run || true\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p tsconfig.build.json\",\n    \"test\": \"vitest run || true\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: a build script gains || true",
+      "expect": [],
+      "note": "Only scripts that check (test, lint, typecheck and their kin) are read.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p .\",\n    \"test\": \"vitest run\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"tsc -p . || true\",\n    \"test\": \"vitest run\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: || true taken away from the test script",
+      "expect": [],
+      "note": "Stricter than the base.",
+      "base": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"vitest run || true\"\n  }\n}\n"
+      },
+      "head": {
+        "package.json": "{\n  \"name\": \"app\",\n  \"private\": true,\n  \"scripts\": {\n    \"test\": \"vitest run\"\n  }\n}\n"
+      }
+    },
+    {
+      "name": "run: conftest.py with sys.exit in a function and a session hook that reads the status",
+      "expect": [],
+      "note": "Not at the top level, and nothing sets exitstatus.",
+      "base": {
+        "conftest.py": "import pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n",
+        "test_app.py": "def test_app(client):\n    assert client\n"
+      },
+      "head": {
+        "conftest.py": "import sys\n\nimport pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n\n\ndef _abort(reason):\n    print(reason)\n    sys.exit(2)\n\n\ndef pytest_sessionfinish(session, exitstatus):\n    if exitstatus == 0:\n        print(\"all passed\")\n"
+      }
     }
   ]
 }

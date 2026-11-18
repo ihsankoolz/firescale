@@ -68,6 +68,7 @@ const kinds = [
   'rule-disabled',
   'snapshot-changed',
   'expected-changed',
+  'runner-weakened',
   'not-checked',
 ];
 const languages = {
@@ -88,6 +89,7 @@ const languages = {
   nv: 'Hook skips',
   lint: 'Lint config',
   appr: 'Needs approval',
+  run: 'Runner scripts',
 };
 const tally = Object.fromEntries(kinds.map((kind) => [kind, { cases: 0, caught: 0, missed: 0 }]));
 const byLanguage = Object.fromEntries(

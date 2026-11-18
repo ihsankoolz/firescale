@@ -38,6 +38,21 @@ Limits: one subagent wrote all 100 cases in one sitting, from categories it was 
 
 The first corpus, run again for comparison on the same build in the same session: 42 of 98 missed, the count of the table under "M26" below (whether they are the same 42 cases was not compared) (`bench/tamper-cheats.json`, now read by the research author: it stays as a gate, but it is no longer blind).
 
+## runner-weakened (ADR 0086)
+
+`node bench/tamper-misses.mjs --bin target/debug/fscale` on both held-out corpora and `node bench/tamper-rates.mjs`, Linux debug builds in WSL on the laptop, 2026-11-18: before on `main` at `0d5c2ac`, after on the pull request rebased on it. Missed of all cases (caught / approval only):
+
+| Corpus                                        | Before      | After       |
+| --------------------------------------------- | ----------- | ----------- |
+| First held-out (`tamper-cheats.json`, 98)     | 42 (48 / 8) | 40 (50 / 8) |
+| Second held-out (`tamper-cheats-2.json`, 100) | 90 (7 / 3)  | 89 (8 / 3)  |
+
+Case by case (`--json` rows compared by position, counts only): first corpus, category "other", 2 missed to caught; second corpus, test modification, 1 missed to caught. No case changed the other way. Every other category is unchanged.
+
+Labelled corpus (`bench/tamper-corpus.json`): before, 0 false positives and 0 of 186 not-a-finding cases with any finding; after, 0 and 0 of 191, with 11 new "Runner scripts" cases (6 caught, 5 not a finding).
+
+Limits: the labelled cases were written with the detector, so they are fixtures, not a rate. The gains on the held-out corpora are three cases. This session saw the titles of the 90 cases the second corpus missed on `main` before writing the detector (ADR 0082); it opened no case. The new kind is report only, so a case it catches is "caught" in these tables but never fails verify.
+
 ## 0.5.1 and 0.5.2: the tamper guard on real commits, measured on CI
 
 `.github/workflows/tamper-bench.yml` (ADR 0067), [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594) of 2026-11-17: release builds of the tags `v0.5.1` (`62b795b`) and `v0.5.2` (`c9d8ffc`) on Linux, `bench/tamper-history.mjs` of `v0.5.2` with both binaries over the commits recorded for M26 and M32, then `node bench/tamper-history-report.mjs --data bench/tamper-history-0.5.2.json` (every finding with its label, the reason and where the label comes from).
