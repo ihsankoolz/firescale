@@ -480,11 +480,14 @@ describe('fscale verify in a fresh clone of an Nx or Turborepo repo that uses np
   }
 
   it.each([
-    ['nx', { 'nx.json': '{}\n' }],
-    ['turbo', { 'turbo.json': '{"tasks":{"lint":{},"test":{}}}\n' }],
+    // A lint that needs setup does not stop the steps after it (ADR 0070),
+    // so the next step is tried and needs the same setup: nx has a
+    // typecheck, turbo.json here defines only lint and test.
+    ['nx', { 'nx.json': '{}\n' }, 'lint, typecheck'],
+    ['turbo', { 'turbo.json': '{"tasks":{"lint":{},"test":{}}}\n' }, 'lint, test'],
   ])(
     'says SETUP NEEDED when %s is not installed, and never lets npx download it',
-    async (tool, config) => {
+    async (tool, config, steps) => {
       // An npm lockfile and no node_modules: nothing has been installed yet.
       const repo = await fixtures.create({
         files: {
@@ -504,7 +507,7 @@ describe('fscale verify in a fresh clone of an Nx or Turborepo repo that uses np
       const result = await runCli(['verify'], repo.root, env);
       expect(await downloads()).toEqual([]);
       expect(result.code).toBe(EXIT_VIOLATIONS);
-      expect(result.stdout.split('\n')[0]).toBe('verify: SETUP NEEDED for lint');
+      expect(result.stdout.split('\n')[0]).toBe(`verify: SETUP NEEDED for ${steps}`);
       expect(result.stdout).toContain('Do not change code for it.');
       expect(result.stdout).toContain(`Then run again: npx --no ${tool} `);
       expect(result.stdout).not.toContain('Fix the failure');
@@ -568,7 +571,7 @@ describe('fscale verify in a repo with projects in subfolders', () => {
     expect(stable(report)).toMatchSnapshot();
   });
 
-  it('names the project when one of its steps fails, and stops there', async () => {
+  it('names the project when one of its steps fails, and a failing lint does not stop its other steps', async () => {
     const { repo, calls, env } = await courseProject();
     const result = await runCli(['verify', '--json'], repo.root, env('npx'));
     expect(result.code).toBe(EXIT_VIOLATIONS);
@@ -576,9 +579,22 @@ describe('fscale verify in a repo with projects in subfolders', () => {
     expect(report.result).toBe('failed');
     expect([report.failedStep, report.failedProject]).toEqual(['lint', 'frontend']);
     expect(report.rerun).toBe('npx --no oxlint');
-    expect((await calls()).at(-1)).toBe('npx --no oxlint in frontend');
+    // Every npx command fails here. The frontend's lint failed and its
+    // typecheck ran all the same (ADR 0070); the failing typecheck is what
+    // stops its tests.
+    expect((await calls()).slice(-2)).toEqual([
+      'npx --no oxlint in frontend',
+      'npx --no tsc --noEmit in frontend',
+    ]);
+    expect(
+      report.steps
+        .filter((step) => step.project === 'frontend')
+        .map((step) => `${step.name} ${step.status}`),
+    ).toEqual(['lint failed', 'typecheck failed', 'test not-run']);
     const human = await runCli(['verify'], repo.root, env('npx'));
-    expect(human.stdout.startsWith('verify: FAILED at lint in frontend\n')).toBe(true);
+    expect(human.stdout.split('\n')[0]).toBe(
+      'verify: FAILED at lint in frontend, typecheck in frontend',
+    );
     expect(human.stdout).toContain('Fix the failure, then run again in frontend: npx --no oxlint');
   });
 

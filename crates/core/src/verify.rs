@@ -28,7 +28,7 @@ use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
 use crate::steptimes::{Outcome, StepTimes};
 
 /// Version of the `fscale verify --json` format.
-pub const VERIFY_SCHEMA_VERSION: u32 = 7;
+pub const VERIFY_SCHEMA_VERSION: u32 = 8;
 
 /// Errors with no test passed and none failed before a test step is stopped
 /// as likely setup, by default (ADR 0035).
@@ -265,6 +265,69 @@ pub struct VerifyPlan {
     pub root_whole_repo: bool,
     /// Set by [`limit_to_affected`] for `--affected`: which units run.
     pub affected: Option<AffectedPlan>,
+    /// The units whose lint command is a guess that only reports (ADR 0070).
+    pub guessed_lint: Vec<GuessedLint>,
+}
+
+/// A unit whose lint command fscale chose without the repo asking for it:
+/// the command runs and is shown, and never fails the run (ADR 0070).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuessedLint {
+    /// The project's folder; `None` for the repo root's own steps.
+    pub project: Option<String>,
+    pub kind: Option<String>,
+    /// Why it is a guess, with what was looked for.
+    pub reason: String,
+}
+
+/// The units of a plan whose lint command is detected, not set in the
+/// config, and not declared by the repo (`lintsource::guessed`).
+fn guessed_lint(
+    root: &Path,
+    config: &VerifyConfig,
+    steps: &[(String, Planned)],
+    projects: &[ProjectPlan],
+) -> Vec<GuessedLint> {
+    let lint_of = |steps: &[(String, Planned)]| {
+        steps.iter().find_map(|(name, planned)| match planned {
+            Planned::Command(command) if name == "lint" => Some(command.clone()),
+            _ => None,
+        })
+    };
+    // A lint command set for the whole repo is the repo's own, and it
+    // replaces every project's.
+    if config.steps.contains_key("lint") {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    if let Some(reason) =
+        lint_of(steps).and_then(|command| crate::lintsource::guessed(root, ".", &command))
+    {
+        found.push(GuessedLint {
+            project: None,
+            kind: None,
+            reason,
+        });
+    }
+    for project in projects {
+        let own = matches!(
+            config.projects.get(&project.root),
+            Some(ProjectOverride::Steps(map)) if map.contains_key("lint")
+        );
+        if own || project.kind.is_none() {
+            continue;
+        }
+        if let Some(reason) = lint_of(&project.steps)
+            .and_then(|command| crate::lintsource::guessed(root, &project.root, &command))
+        {
+            found.push(GuessedLint {
+                project: Some(project.root.clone()),
+                kind: project.kind.clone(),
+                reason,
+            });
+        }
+    }
+    found
 }
 
 /// Which units of a plan an affected run runs, and why (ADR 0032).
@@ -804,6 +867,7 @@ pub fn plan_verify(
         .and_then(|project| project.commands.install.as_deref())
         .map(|install| locked_install(install, root, root));
     let python_from_path = covering.is_some_and(from_path);
+    let guessed_lint = guessed_lint(root, config, &steps, &projects);
     VerifyPlan {
         runner: if all_from_config {
             "config"
@@ -821,6 +885,7 @@ pub fn plan_verify(
         covered: covered.to_owned(),
         root_whole_repo: matches!(detected_runner, "nx" | "turbo") || !overrides.is_empty(),
         affected: None,
+        guessed_lint,
     }
 }
 
@@ -852,6 +917,10 @@ pub enum StepStatus {
     /// `--budget` (ADR 0057). Nothing is known about it from this run: it
     /// is not a pass, not skipped and not `not-run` after a failure.
     OverBudget,
+    /// A lint command fscale guessed, which the repo does not declare
+    /// itself, did not pass (ADR 0070). It is shown and never fails the
+    /// run; the step's `report_only` says why it is a guess.
+    ReportOnly,
 }
 
 impl StepStatus {
@@ -867,6 +936,7 @@ impl StepStatus {
             Self::Off => "off",
             Self::NotAffected => "not affected",
             Self::OverBudget => "NOT RUN",
+            Self::ReportOnly => "failed",
         }
     }
 }
@@ -959,6 +1029,11 @@ pub struct StepReport {
     /// stopped or timed out), so the step takes at least that long.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_known_finished: Option<bool>,
+    /// For a lint step whose command fscale guessed and the repo does not
+    /// declare: why it is a guess. Such a step never fails the run; when
+    /// it does not pass, its status is `report-only` (ADR 0070).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report_only: Option<String>,
 }
 
 /// A failing test of a step (ADR 0038).
@@ -1548,6 +1623,9 @@ struct Unit<'a> {
     /// linked dependency folders resolve to, so it is normalised in test
     /// reasons too (ADR 0043).
     head_root: Option<&'a Path>,
+    /// Why this unit's lint command is a guess that only reports (ADR
+    /// 0070); `None` when the repo declares it or the config names it.
+    guessed_lint: Option<&'a str>,
 }
 
 /// The next step when the environment is not set up: the command that
@@ -2028,6 +2106,7 @@ fn run_step(
                 estimate: None,
                 last_known_ms: Some(known.millis()),
                 last_known_finished: Some(known.finished),
+                report_only: None,
             });
         }
     }
@@ -2206,6 +2285,7 @@ fn run_step(
         estimate: None,
         last_known_ms: None,
         last_known_finished: None,
+        report_only: None,
     };
     let text = || {
         strip_ansi(&format!(
@@ -2564,7 +2644,11 @@ fn blocks(status: StepStatus) -> bool {
 fn ran(status: StepStatus) -> bool {
     matches!(
         status,
-        StepStatus::Passed | StepStatus::Failed | StepStatus::SetupNeeded | StepStatus::TimedOut
+        StepStatus::Passed
+            | StepStatus::Failed
+            | StepStatus::SetupNeeded
+            | StepStatus::TimedOut
+            | StepStatus::ReportOnly
     )
 }
 
@@ -2608,6 +2692,7 @@ fn run_unit(
                 estimate: None,
                 last_known_ms: None,
                 last_known_finished: None,
+                report_only: None,
             })
             .collect());
     }
@@ -2640,6 +2725,7 @@ fn run_unit(
             estimate: None,
             last_known_ms: None,
             last_known_finished: None,
+            report_only: None,
         };
         let report = match planned {
             Planned::Skipped(reason) => idle(StepStatus::Skipped, None, reason),
@@ -2652,7 +2738,23 @@ fn run_unit(
             }
             Planned::Command(command) => cached_or_run(unit, name, command, options)?,
         };
-        failed = !options.every_step && (failed || blocks(report.status));
+        let mut report = report;
+        if let Some(reason) = unit.guessed_lint.filter(|_| name == "lint") {
+            // A guessed lint command only reports (ADR 0070). A step that
+            // was stopped keeps its status: the whole run was stopped.
+            report.report_only = Some(reason.to_owned());
+            if blocks(report.status) && report.status != StepStatus::Stopped {
+                report.status = StepStatus::ReportOnly;
+                report.detail = format!("report-only: {}", report.detail);
+                options.say(&format!(
+                    "{}: report-only, so it does not fail the run (a lint command fscale guessed)",
+                    step_place(&report)
+                ));
+            }
+        }
+        // A lint step never keeps the steps after it from running: its
+        // failure is reported beside the tests' result (ADR 0070).
+        failed = !options.every_step && (failed || (blocks(report.status) && name != "lint"));
         steps.push(report);
     }
     Ok(steps)
@@ -2749,6 +2851,7 @@ pub(crate) fn run_again(
         install: project.and_then(|project| project.install.as_deref()),
         runs: true,
         head_root: None,
+        guessed_lint: None,
     };
     run_step(&unit, name, command, &again)
 }
@@ -2785,6 +2888,7 @@ pub(crate) fn run_base_step(
         install: project.and_then(|project| project.install.as_deref()),
         runs: true,
         head_root: Some(head_root),
+        guessed_lint: None,
     };
     run_step(&unit, name, command, &base)
 }
@@ -2867,6 +2971,7 @@ fn cached_or_run(
                 estimate: None,
                 last_known_ms: None,
                 last_known_finished: None,
+                report_only: None,
         });
     }
     let ran_at = now_secs();
@@ -2963,6 +3068,7 @@ pub fn run_verify_with(
         estimate: None,
         last_known_ms: None,
         last_known_finished: None,
+        report_only: None,
     }];
     let check_failed = !check.ok && !options.every_step;
 
@@ -2977,6 +3083,11 @@ pub fn run_verify_with(
                 .as_ref()
                 .is_none_or(|affected| affected.runs(None)),
             head_root: None,
+            guessed_lint: plan
+                .guessed_lint
+                .iter()
+                .find(|guess| guess.project.is_none())
+                .map(|guess| guess.reason.as_str()),
         },
     ))
     .chain(plan.projects.iter().map(|project| {
@@ -2991,6 +3102,14 @@ pub fn run_verify_with(
                     .as_ref()
                     .is_none_or(|affected| affected.runs(Some(project))),
                 head_root: None,
+                guessed_lint: plan
+                    .guessed_lint
+                    .iter()
+                    .find(|guess| {
+                        guess.project.as_deref() == Some(project.root.as_str())
+                            && guess.kind == project.kind
+                    })
+                    .map(|guess| guess.reason.as_str()),
             },
         )
     }))
@@ -3231,6 +3350,7 @@ pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> Verif
             estimate: None,
             last_known_ms: None,
             last_known_finished: None,
+            report_only: None,
         }],
         skipped: Vec::new(),
         warnings: Vec::new(),
@@ -3325,6 +3445,18 @@ pub fn add_tamper(report: &mut VerifyReport, tamper: crate::tamper::TamperReport
 pub const TAMPER_STEP: &str = "the tamper guard";
 
 /// `test in backend/auth`, or `test` for a step of the repo root.
+/// What happened to a report-only step: it keeps the setup command of a
+/// step that needs setup and the limit of one that timed out.
+fn report_only_verb(step: &StepReport) -> &'static str {
+    if step.timeout_ms.is_some() {
+        "timed out"
+    } else if step.fix.is_some() {
+        "needs setup"
+    } else {
+        "failed"
+    }
+}
+
 fn step_place(step: &StepReport) -> String {
     match &step.project {
         Some(project) => format!("{} in {}", step.name, place_name(project)),
@@ -3337,6 +3469,27 @@ fn step_place(step: &StepReport) -> String {
 /// needs setup.
 fn headline(report: &VerifyReport) -> String {
     let line = cache_headline(report);
+    // A guessed lint that did not pass does not block, and is still in
+    // the headline (ADR 0070).
+    let reported: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|step| step.status == StepStatus::ReportOnly)
+        .map(|step| format!("{} {}", step_place(step), report_only_verb(step)))
+        .collect();
+    let line = if reported.is_empty() {
+        line
+    } else {
+        format!(
+            "{line} - report-only: {} ({} fscale guessed)",
+            reported.join(", "),
+            if reported.len() == 1 {
+                "a lint command"
+            } else {
+                "lint commands"
+            }
+        )
+    };
     // Findings that do not block are still in the headline: a run with
     // them never reads as a plain OK.
     match report
@@ -4155,6 +4308,57 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             out.push_str(&format!(
                 "\nFix the failure, then run again{place}: {command}\n"
             ));
+        }
+    }
+    for step in report
+        .steps
+        .iter()
+        .filter(|step| step.status == StepStatus::ReportOnly)
+    {
+        let place = step.project.as_ref().map_or_else(String::new, |project| {
+            format!(" in {}", place_name(project))
+        });
+        out.push_str(&format!(
+            "\nReport-only: {}{place} {}, and that does not fail this run. {}.\n",
+            step.name,
+            report_only_verb(step),
+            step.report_only.as_deref().unwrap_or_default()
+        ));
+        if let Some(fix) = &step.fix {
+            out.push_str(&format!("Set it up{place}: {fix}\n"));
+        }
+        if let Some(command) = &step.command {
+            out.push_str(&format!(
+                "To make it block, add this to your firescale config: {}\n",
+                crate::lintsource::blocking_config(step.project.as_deref(), command)
+            ));
+            // The setting names a command for a place, and it takes the
+            // place of every lint command fscale found there.
+            let other_lint = |same_place: bool| {
+                report.steps.iter().any(|other| {
+                    other.name == "lint"
+                        && other.command.is_some()
+                        && !std::ptr::eq(other, step)
+                        && (other.project == step.project) == same_place
+                        && (same_place || other.project.is_some())
+                })
+            };
+            match &step.project {
+                None if other_lint(false) => out.push_str(
+                    "That setting is for the whole repo: with it no project runs a lint command of its own.\n",
+                ),
+                Some(project) if other_lint(true) => out.push_str(&format!(
+                    "That setting is for every project in {}: with it they run this one lint command.\n",
+                    place_name(project)
+                )),
+                _ => {}
+            }
+        }
+        if !step.output_tail.is_empty() {
+            out.push_str(&format!("\nLast lines of {}{place}:\n", step.name));
+            for line in &step.output_tail {
+                out.push_str(&format!("  {line}\n"));
+            }
         }
     }
     if report
@@ -5579,7 +5783,8 @@ mod tests {
                 (Some("one"), "lint", StepStatus::Passed),
                 (Some("one"), "typecheck", StepStatus::Skipped),
                 (Some("two/deep"), "lint", StepStatus::Failed),
-                (Some("two/deep"), "test", StepStatus::NotRun),
+                // A failing lint does not keep the tests from running (ADR 0070).
+                (Some("two/deep"), "test", StepStatus::Passed),
             ]
         );
         assert_eq!(report.failed_project.as_deref(), Some("two/deep"));
@@ -5893,7 +6098,12 @@ mod tests {
     #[test]
     fn one_projects_failure_does_not_stop_the_others() {
         let fixture = Fixture::new(
-            &[("a/x.txt", ""), ("b/x.txt", ""), ("c/x.txt", "")],
+            &[
+                ("a/x.txt", ""),
+                ("b/x.txt", ""),
+                ("c/x.txt", ""),
+                ("d/x.txt", ""),
+            ],
             Track::NoGit,
         )
         .unwrap();
@@ -5905,6 +6115,7 @@ mod tests {
                 project("a", &[("lint", &fail), ("test", "echo fine")], None),
                 project("b", &[("lint", "echo fine"), ("test", "echo fine")], None),
                 project("c", &[("lint", "echo fine"), ("test", &fail)], None),
+                project("d", &[("typecheck", &fail), ("test", "echo fine")], None),
             ],
             ..VerifyPlan::default()
         };
@@ -5915,12 +6126,17 @@ mod tests {
                 ("check".to_owned(), StepStatus::Passed),
                 ("lint".to_owned(), StepStatus::Failed),
                 ("lint in a".to_owned(), StepStatus::Failed),
-                // Within a project, the first failure still stops the rest.
-                ("test in a".to_owned(), StepStatus::NotRun),
+                // A failing lint does not keep the tests of its project
+                // from running (ADR 0070).
+                ("test in a".to_owned(), StepStatus::Passed),
                 ("lint in b".to_owned(), StepStatus::Passed),
                 ("test in b".to_owned(), StepStatus::Passed),
                 ("lint in c".to_owned(), StepStatus::Passed),
                 ("test in c".to_owned(), StepStatus::Failed),
+                // Within a project, any other first failure still stops
+                // the rest.
+                ("typecheck in d".to_owned(), StepStatus::Failed),
+                ("test in d".to_owned(), StepStatus::NotRun),
             ]
         );
         assert_eq!(report.result, VerifyResult::Failed);
@@ -5928,7 +6144,7 @@ mod tests {
         assert_eq!(report.failed_project, None);
         let text = format_verify_human(&report);
         assert!(
-            text.starts_with("verify: FAILED at lint, lint in a, test in c\n"),
+            text.starts_with("verify: FAILED at lint, lint in a, test in c, typecheck in d\n"),
             "{text}"
         );
         // Each failure gets its own rerun line.
@@ -5936,6 +6152,7 @@ mod tests {
             "\nFix the failure, then run again: ",
             "\nFix the failure, then run again in a: ",
             "\nFix the failure, then run again in c: ",
+            "\nFix the failure, then run again in d: ",
         ] {
             assert!(text.contains(line), "{line}\n{text}");
         }
@@ -6007,7 +6224,7 @@ mod tests {
         let json = format_verify_json(&report);
         assert!(json.contains("\"result\": \"setup-needed\""), "{json}");
         assert!(json.contains("\"status\": \"setup-needed\""), "{json}");
-        assert!(json.contains("\"schemaVersion\": 7"), "{json}");
+        assert!(json.contains("\"schemaVersion\": 8"), "{json}");
     }
 
     #[test]

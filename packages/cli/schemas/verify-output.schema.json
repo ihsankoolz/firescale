@@ -21,8 +21,8 @@
   ],
   "properties": {
     "schemaVersion": {
-      "description": "Version of this format. Changes only on a breaking change. Version 7 added the step status over-budget, a step's lastKnownMs and lastKnownFinished, and the report's budgetMs and notRun (ADR 0057).",
-      "const": 7
+      "description": "Version of this format. Changes only on a breaking change. Version 8 added the step status report-only and a step's reportOnly (ADR 0070). Version 7 added the step status over-budget, a step's lastKnownMs and lastKnownFinished, and the report's budgetMs and notRun (ADR 0057).",
+      "const": 8
     },
     "version": {
       "description": "The firescale version that produced the report.",
@@ -125,7 +125,7 @@
             ]
           },
           "status": {
-            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it. not-affected: --affected found that no change reaches the step's project, so it was not run (ADR 0032); not the same as skipped. over-budget: the step was not started, because it took longer than --budget when it last ran, or ran at least that long without finishing (ADR 0057); this run says nothing about it, and it is never a pass.",
+            "description": "failed: the command failed. setup-needed: the command could not do its work because the environment is not ready (a dependency is not installed, or a program is not on the PATH); not a problem in the code. timed-out: the command gave no result within its time limit, so it was stopped with every process it started. stopped: verify was stopped while the command ran, so it was stopped with every process it started. skipped: no command was found, so nothing was verified. not-run: an earlier step of the same project (or the check) failed, or verify was stopped, so this one was not started. off: not run on purpose, because the config turns it off or another step covers it. not-affected: --affected found that no change reaches the step's project, so it was not run (ADR 0032); not the same as skipped. over-budget: the step was not started, because it took longer than --budget when it last ran, or ran at least that long without finishing (ADR 0057); this run says nothing about it, and it is never a pass. report-only: a lint command fscale guessed, which the repo does not declare itself, did not pass; it is shown and never fails the run (ADR 0070).",
             "enum": [
               "passed",
               "failed",
@@ -136,7 +136,8 @@
               "not-run",
               "off",
               "not-affected",
-              "over-budget"
+              "over-budget",
+              "report-only"
             ]
           },
           "command": {
@@ -214,6 +215,10 @@
           "lastKnownFinished": {
             "description": "With lastKnownMs: false when that run did not finish (it was stopped or timed out), so the step takes at least that long.",
             "type": "boolean"
+          },
+          "reportOnly": {
+            "description": "For a lint step whose command fscale guessed and the repo does not declare itself: why it is a guess, with what was looked for (ADR 0070). Such a step never fails the run: when its command does not pass, its status is report-only.",
+            "type": "string"
           },
           "notCached": {
             "description": "For a step that passed now: why its pass was not kept for the next run, or could not be looked up in the step cache (ADR 0043).",
