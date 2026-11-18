@@ -2574,9 +2574,8 @@ fn run_step(
         report.output_tail = tail(&finished.stdout, &finished.stderr);
         report.status = StepStatus::Failed;
         let tests = if hidden == 1 { "test" } else { "tests" };
-        report.detail = format!(
-            "{command} (exit 0): the command reported success but {hidden} {tests} failed"
-        );
+        report.detail =
+            format!("{command} (exit 0): the command reported success but {hidden} {tests} failed");
         options.say(&format!(
             "{place}: FAILED after {took} (exit 0, but {hidden} {tests} failed)"
         ));
