@@ -22,13 +22,13 @@ Installing never rewrites a file that has something in it. The hook goes in as n
 
 Claude Code ends a command hook that runs past its `timeout`, in seconds, and its default for a command hook is 600 (code.claude.com, hooks reference, read on 2026-11-18). An agent whose stop hook is ended stops without verify having finished. So `hooks install` writes an explicit `timeout` on the Claude Code entry (ADR 0083):
 
-- with `--timeout <time>` (`30m`, `1h 30m`, or a number of seconds), that;
-- otherwise from the kept step times in `.firescale/step-times.json`: twice the sum of the kept times of every step a full `fscale verify` plans (a new failure is run again, and a step whose pass is not cached runs in full), plus `verify.baseBudget` (5 minutes by default) for the base run, rounded up to whole minutes, and never less than 600;
-- with no kept time yet, 600, Claude Code's default, written out. Run `hooks install --agent claude` again after a verify to set it from the times.
+- with `--timeout <time>` (`30m`, `1h 30m`, or a number of seconds, at most 2147483 seconds, about 24 days), that;
+- otherwise from the kept step times in `.firescale/step-times.json`: twice the sum of the kept times of every step a full `fscale verify` plans (a new failure is run again, and a step whose pass is not cached runs in full), plus `verify.baseBudget` (5 minutes by default) for the base run, rounded up to whole minutes, never less than 600 and never more than 2147483 seconds (the longest a JavaScript timer waits; how Claude Code times a hook is not documented);
+- with no kept time yet, none: Claude Code's default of 600 applies, and the line says so. Run `hooks install --agent claude` again after a verify: the entry then gets its `timeout` as a new line.
 
 The output says which, in one line: `Claude Code's stop hook may run for 45m (`timeout` in .claude/settings.json): twice the 20m the planned steps took when they last ran, and 5m for the base run.`
 
-A stop hook entry that firescale's command already has gets the `timeout` as a new line when it has none (the list says `timeout added`), and every other line stays as it was. **A `timeout` already in the file is never changed**: the line says what firescale would have written, and you edit the value. An entry written on one line cannot take a new line: the output says what to add by hand. `--timeout` with only Codex or Cursor is refused (exit 2): neither has a field firescale writes. `fscale sync` does not write a `timeout`. `fscale doctor` warns when the kept times exceed the limit (see [doctor.md](doctor.md)).
+A stop hook entry that firescale's command already has gets the `timeout` as a new line when it has none (the list says `timeout added`), and every other line stays as it was. **A `timeout` already in the file is never changed**, whatever its value: the line says what firescale would have written, and you edit the value. An entry that cannot take a new line without changing one already there (written on one line, say) is left alone: the output says what to add by hand. `--timeout` with only Codex or Cursor is refused (exit 2): neither has a field firescale writes, and every other command refuses `--timeout` too. `fscale sync` does not write a `timeout`. `fscale doctor` warns when the kept times exceed the limit (see [doctor.md](doctor.md)).
 
 ## `--bin`: how the hook starts fscale
 

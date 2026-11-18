@@ -16,11 +16,12 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 
 **Pull request 2: the stop hook's time limit (verification idea 4, first step, ADR 0083)**
 
-- **`fscale hooks install` writes `timeout` on Claude Code's stop hook entry**: `--timeout <time>`, else twice the kept times of every planned step plus `verify.baseBudget` (5m), in whole minutes, never under 600 s (Claude Code's default). With no kept time, 600, written out. One line of output says the limit and why.
-- **An entry firescale's hook already has gets the `timeout` as a new line** (`timeout added`); a `timeout` in the file is never changed (the line says what it would be). `--timeout` with only Codex or Cursor is refused.
+- **`fscale hooks install` writes `timeout` on Claude Code's stop hook entry**: `--timeout <time>`, else twice the kept times of every planned step plus `verify.baseBudget` (5m), in whole minutes, never under 600 s (Claude Code's default). With no kept time, none (Claude Code's default applies), so that `hooks install` after a verify can add one. At most 2147483 seconds. One line of output says the limit and why.
+- **An entry firescale's hook already has gets the `timeout` as a new line** (`timeout added`); a `timeout` in the file is never changed, whatever its value (the line says what it would be). `--timeout` with only Codex or Cursor, or with any other command, is refused.
 - **`fscale doctor` warns** under `Agent hooks` when the kept times of every planned step add up to more than the limit, and says to work on a branch (the hook then runs what `--affected` would), to give the hook a smaller scope, or to raise the limit.
 - **Failing tests first:** 8 in `hooks.test.ts`, 7 seen failing on `main` in WSL; the eighth guards the quiet case. Four snapshots, the help text and one older test changed on purpose (ADR 0083, "Tests").
-- **Decided on your behalf:** the formula (twice, plus the base budget, at least 600); doctor sums every planned step, the worst case, since it cannot know the next change; `sync` writes no `timeout`.
+- **From the fresh review, fixed:** writing 600 when nothing was known made the advice to install again useless; a `timeout` that is not a whole number counted as none; no ceiling; `--timeout` silently accepted by other commands; the by-hand message's reason. **Not done:** none.
+- **Decided on your behalf:** the formula (twice, plus the base budget, at least 600, at most 2147483 s); doctor sums every planned step, the worst case, since it cannot know the next change; `sync` writes no `timeout`.
 
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
