@@ -11,7 +11,11 @@
 // new detectors come from. Never tune a detector on either file.
 //
 // Usage: node bench/tamper-misses.mjs [--bin target/release/fscale]
-//          [--corpus bench/tamper-cheats-2.json] [--json]
+//          [--corpus bench/tamper-cheats-2.json] [--names] [--json]
+//
+// The titles of missed cases are printed only with --names, and --json
+// holds them: whoever reads them can no longer design a detector blind to
+// that corpus (ADR 0082).
 //
 // Each case becomes a git repo: its `base` files committed on main, its
 // `head` files in the working tree of a branch. `fscale tamper --json` runs
@@ -25,13 +29,18 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
-const binIndex = args.indexOf('--bin');
-const bin = path.resolve(
-  binIndex >= 0 ? args[binIndex + 1] : path.join(here, '..', 'target', 'release', 'fscale'),
-);
-const corpusIndex = args.indexOf('--corpus');
-const corpus =
-  corpusIndex >= 0 ? path.resolve(args[corpusIndex + 1]) : path.join(here, 'tamper-cheats.json');
+const valueOf = (name) => {
+  const index = args.indexOf(name);
+  if (index < 0) return undefined;
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith('--')) {
+    console.error(`${name} needs a value`);
+    process.exit(2);
+  }
+  return value;
+};
+const bin = path.resolve(valueOf('--bin') ?? path.join(here, '..', 'target', 'release', 'fscale'));
+const corpus = path.resolve(valueOf('--corpus') ?? path.join(here, 'tamper-cheats.json'));
 const cheats = JSON.parse(readFileSync(corpus, 'utf8'));
 
 const git = (cwd, ...argv) =>
@@ -115,8 +124,14 @@ if (args.includes('--json')) {
     line('all', rows);
     console.log('');
   }
-  console.log('Missed:');
-  for (const row of rows.filter((r) => !r.caught && !r.approval)) {
-    console.log(`  ${row.name}${row.error ? ` (error: ${row.error.slice(0, 120)})` : ''}`);
+  const missed = rows.filter((r) => !r.caught && !r.approval);
+  const errors = rows.filter((r) => r.error).length;
+  console.log(`Missed: ${missed.length}; the guard could not run on ${errors}.`);
+  if (args.includes('--names')) {
+    for (const row of missed) {
+      console.log(`  ${row.name}${row.error ? ` (error: ${row.error.slice(0, 120)})` : ''}`);
+    }
+  } else {
+    console.log('Their titles are printed with --names (ADR 0082).');
   }
 }

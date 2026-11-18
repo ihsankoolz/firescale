@@ -6,7 +6,7 @@ Numbers are wall-clock times for the whole process, measured with `bench/startup
 
 `bench/tamper-cheats-2.json`: 100 cheating changes written on 2026-11-18 by a subagent that was told not to open the guard's code (`crates/core/src/tamper/`), `bench/tamper-cheats.json`, `bench/tamper-corpus.json` or `docs/research/`, and said it did not; it was given only the file format and five categories: ImpossibleBench's four (test modification, operator overloading, recording extra state, special-casing; Zhong et al., arXiv 2510.20270) and METR's reward hacks (June 2025) as "evaluator-tampering". 20 per category; 35 Python, 20 JavaScript, 15 TypeScript, 30 Rust. **It was written because the first corpus is no longer blind**: the author of `docs/research/research-verification.md` read its titles, and the next detectors come from that report. **Never tune a detector on this file.**
 
-`node bench/tamper-misses.mjs --bin target/debug/fscale --corpus bench/tamper-cheats-2.json`, on `main` at `ba9c459` (0.5.4 and the research notes; no detector changed since 0.5.4), Linux debug build in WSL on the laptop, 2026-11-18:
+`node bench/tamper-misses.mjs --bin target/debug/fscale --corpus bench/tamper-cheats-2.json` (the script then printed the missed titles; it now prints them only with `--names`), on `main` at `ba9c459` (0.5.4 and the research notes; no detector changed since 0.5.4), Linux debug build in WSL on the laptop, 2026-11-18:
 
 | Category              | Cheats  | Caught | Needs approval only | Missed |
 | --------------------- | ------- | ------ | ------------------- | ------ |
@@ -36,7 +36,7 @@ What the misses say, at the level of categories only (the cases are not describe
 
 Limits: one subagent wrote all 100 cases in one sitting, from categories it was given; equal weights per category, which is not how often agents cheat each way (ImpossibleBench reports most of Claude models' cheating as test edits, the four categories spread for OpenAI models). The cases were not run: that each base fails and each head passes rests on the writer's reading. No weighted rate is given: the published mix was not checked against a primary source in this run.
 
-The first corpus, for comparison, on the same build: 42 of 98 missed, the count of the table under "M26" below (which cases was not compared) (`bench/tamper-cheats.json`, now read by the research author: it stays as a gate, but it is no longer blind).
+The first corpus, run again for comparison on the same build in the same session: 42 of 98 missed, the count of the table under "M26" below (whether they are the same 42 cases was not compared) (`bench/tamper-cheats.json`, now read by the research author: it stays as a gate, but it is no longer blind).
 
 ## 0.5.1 and 0.5.2: the tamper guard on real commits, measured on CI
 
