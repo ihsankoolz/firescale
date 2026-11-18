@@ -764,7 +764,7 @@ describe('doctor follows the verify plan (ADR 0085)', () => {
         project: '.',
         subject: 'zzlint',
         status: 'problem',
-        detail: "zzlint is not on the PATH, and verify's lint step runs `zzlint --strict`.",
+        detail: "zzlint is not on the PATH, and verify's lint step runs it.",
         fix: "install zzlint, or change the lint step's command under `verify` in the firescale config",
       },
       {
@@ -778,7 +778,7 @@ describe('doctor follows the verify plan (ADR 0085)', () => {
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const human = await runCli(['doctor'], repo.root, env);
     expect(human.stdout).toContain(
-      "PROBLEM  zzlint: zzlint is not on the PATH, and verify's lint step runs `zzlint --strict`.",
+      "PROBLEM  zzlint: zzlint is not on the PATH, and verify's lint step runs it.",
     );
   });
 
@@ -801,7 +801,7 @@ describe('doctor follows the verify plan (ADR 0085)', () => {
         project: '.',
         subject: 'mvn',
         status: 'problem',
-        detail: "mvn is not on the PATH, and verify's test step runs `mvn -B test`.",
+        detail: "mvn is not on the PATH, and verify's test step runs it.",
         fix: 'install Maven from https://maven.apache.org, or add the Maven wrapper (mvnw) to the project',
       },
     ]);
@@ -823,6 +823,77 @@ describe('doctor follows the verify plan (ADR 0085)', () => {
         detail: "mvn 3.9.6 (verify's test step)",
       },
     ]);
+  });
+
+  it('never prints the command of a step, which may hold a password', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: {
+            test: 'zzdb postgres://shop:Pw0rdInStep@localhost/orders',
+            lint: false,
+            typecheck: false,
+          },
+        }),
+      },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    expect(result.stdout).toContain('zzdb is not on the PATH');
+    expect(result.stdout).not.toContain('Pw0rdInStep');
+  });
+
+  it('never runs a program a step names by its path, and never takes a tool of its own list away for it', async () => {
+    const marker = 'ran.txt';
+    const files: Record<string, string> = {
+      Makefile: 'test:\n\techo ok\n',
+      'firescale.config.json': JSON.stringify({
+        verify: { test: 'tools/make test', lint: false, typecheck: false },
+      }),
+    };
+    if (WINDOWS) {
+      files['tools/make.cmd'] = `@echo off\r\necho ran > ${marker}\r\necho GNU Make 9.9\r\n`;
+    } else {
+      files['tools/make'] = `#!/bin/sh\necho ran > ${marker}\necho "GNU Make 9.9"\n`;
+    }
+    const repo = await fixtures.create({ files });
+    if (!WINDOWS) await chmod(path.join(repo.root, 'tools', 'make'), 0o755);
+    const result = await runCli(['doctor', '--json'], repo.root, await onlyToolsFor(repo.root, {}));
+    const report = await validate(result.stdout);
+    // The list still asks for make on the PATH, as on main.
+    expect(report.checks.filter((c) => c.subject === 'make').map((c) => c.status)).toEqual([
+      'problem',
+    ]);
+    expect(report.checks.find((c) => c.subject === 'tools/make')).toEqual({
+      section: 'tools',
+      project: '.',
+      subject: 'tools/make',
+      status: 'ok',
+      detail: "tools/make was found (verify's test step)",
+    });
+    expect(existsSync(path.join(repo.root, marker))).toBe(false);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+  });
+
+  it('does not judge a step that starts with a builtin of cmd or sh', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: 'copy a.txt b.txt', typecheck: 'md out', test: 'del b.txt' },
+        }),
+      },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    expect((await validate(result.stdout)).checks.filter((c) => c.section === 'tools')).toEqual([]);
+  });
+
+  it('says so when the verify plan cannot be built, instead of checking nothing', async () => {
+    const repo = await fixtures.create({
+      files: { 'firescale.config.json': JSON.stringify({ verify: { compile: 'zzc' } }) },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    const plan = (await validate(result.stdout)).checks.filter((c) => c.subject === 'verify plan');
+    expect(plan.map((c) => c.status)).toEqual(['warning']);
+    expect(plan[0]?.detail).toContain("the programs of verify's steps were not checked");
   });
 
   it('does not judge a step that starts with a shell builtin or sets a variable first', async () => {
