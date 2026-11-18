@@ -116,7 +116,15 @@ pub trait Machine {
     /// on the PATH, or, for a path, relative to `dir`. The step cache's
     /// lookup (ADR 0085).
     fn finds(&self, dir: &Path, program: &str) -> bool {
-        crate::stepcache::locate(dir, program).is_some()
+        if crate::stepcache::locate(dir, program).is_some() {
+            return true;
+        }
+        // `cmd` also looks in the step's folder first, unless this variable
+        // is set (verify passes the environment on as it is).
+        cfg!(windows)
+            && !program.contains(['/', '\\'])
+            && std::env::var_os("NoDefaultCurrentDirectoryInExePath").is_none()
+            && crate::stepcache::locate(dir, &format!(".\\{program}")).is_some()
     }
 }
 
@@ -885,19 +893,17 @@ impl Doctor<'_> {
         }
     }
 
-    /// The programs each marker-file ecosystem needs (ADR 0051): a JDK,
-    /// Maven or Gradle, Swift, Xcode, CMake and a compiler, Meson, the .NET
-    /// SDK, Dart or Flutter, make. One line per program, and per project
-    /// folder; a program found for one folder is not asked again.
     /// The program of each planned step, looked up as the step would start
-    /// it. A known tool is asked its version, as doctor's own list asks it;
-    /// any other program is never run (ADR 0085).
+    /// it. A tool doctor's own list knows, named by its bare name, is asked
+    /// its version as that list asks it; a program named by its path, or
+    /// unknown, is never run (ADR 0085).
     fn planned_programs(&mut self) {
         let Some(plan) = self.plan else {
             return;
         };
-        // Folder, program, the steps that run it, the first such command.
-        let mut programs: Vec<(String, String, Vec<String>, String)> = Vec::new();
+        // Folder, program, the steps that run it. The command itself is
+        // never shown: it may hold a password (review of ADR 0085).
+        let mut programs: Vec<(String, String, Vec<String>)> = Vec::new();
         let units = std::iter::once((".".to_owned(), &plan.steps))
             .chain(plan.projects.iter().map(|p| (p.root.clone(), &p.steps)));
         for (folder, steps) in units {
@@ -913,27 +919,32 @@ impl Doctor<'_> {
                 }
                 match programs
                     .iter_mut()
-                    .find(|(f, p, _, _)| *f == folder && *p == program)
+                    .find(|(f, p, _)| *f == folder && *p == program)
                 {
-                    Some((_, _, names, _)) => names.push(step.clone()),
-                    None => programs.push((
-                        folder.clone(),
-                        program,
-                        vec![step.clone()],
-                        command.clone(),
-                    )),
+                    Some((_, _, names)) => names.push(step.clone()),
+                    None => programs.push((folder.clone(), program, vec![step.clone()])),
                 }
             }
         }
-        for (folder, program, steps, command) in programs {
+        for (folder, program, steps) in programs {
             let stem = crate::stepcache::file_stem(&program);
-            self.planned.insert((folder.clone(), stem.clone()));
+            // A path is the repo's own file, or one outside the PATH: it
+            // never stands for the tool of the list that has its name, and
+            // is never run (review of ADR 0085).
+            let path = program.contains(['/', '\\']);
+            if !path {
+                self.planned.insert((folder.clone(), stem.clone()));
+            }
             let dir = dir_of(self.root, &folder);
-            let tool = self.tool_named(&folder, &stem);
+            let tool = if path {
+                None
+            } else {
+                self.tool_named(&folder, &stem)
+            };
             let runs = steps_phrase(&steps);
             let subject = subject_in(&folder, &program);
             if !self.machine.finds(&dir, &program) {
-                let place = if program.contains(['/', '\\']) {
+                let place = if path {
                     "was not found"
                 } else {
                     "is not on the PATH"
@@ -952,7 +963,7 @@ impl Doctor<'_> {
                     Some(&folder),
                     subject,
                     Status::Problem,
-                    format!("{program} {place}, and {runs} `{command}`."),
+                    format!("{program} {place}, and {runs} it."),
                     Some(fix),
                 );
                 continue;
@@ -963,7 +974,11 @@ impl Doctor<'_> {
                     Some(&folder),
                     subject,
                     Status::Ok,
-                    format!("{program} is on the PATH ({})", steps_owner(&steps)),
+                    format!(
+                        "{program} {} ({})",
+                        if path { "was found" } else { "is on the PATH" },
+                        steps_owner(&steps)
+                    ),
                     None,
                 );
                 continue;
@@ -993,7 +1008,7 @@ impl Doctor<'_> {
                     subject,
                     Status::Problem,
                     format!(
-                        "{program} was found but `{program} {}` failed, and {runs} `{command}`.",
+                        "{program} was found but `{program} {}` failed, and {runs} it.",
                         args.join(" ")
                     ),
                     Some(tool.install.to_owned()),
@@ -1015,6 +1030,10 @@ impl Doctor<'_> {
             .find(|tool| tool.programs.contains(&stem))
     }
 
+    /// The programs each marker-file ecosystem needs (ADR 0051): a JDK,
+    /// Maven or Gradle, Swift, Xcode, CMake and a compiler, Meson, the .NET
+    /// SDK, Dart or Flutter, make. One line per program, and per project
+    /// folder; a program found for one folder is not asked again.
     fn toolchains(&mut self) {
         let projects: Vec<(String, &'static crate::ecosystems::Ecosystem)> = self
             .facts
@@ -1978,19 +1997,22 @@ fn packages_installed(count: usize, source: &str) -> String {
     }
 }
 
-/// `backend/api packages`, or `packages` for the root.
-/// A first word that is not a program to look up: a shell builtin or
-/// keyword, a variable set for the command, or shell syntax. Such a step is
-/// not judged (ADR 0085).
+/// A first word that is not a program to look up: a builtin or keyword of
+/// `sh` or `cmd`, a variable set for the command, shell syntax, a quoted or
+/// `~` path the shell rewrites. Such a step is not judged (ADR 0085).
 fn not_judged(program: &str) -> bool {
     const BUILTINS: &[&str] = &[
-        "cd", "echo", "exit", "export", "set", "unset", "true", "false", "test", "[", ":", ".",
-        "source", "exec", "eval", "if", "for", "while", "until", "case", "time", "command",
-        "builtin", "type", "ulimit", "umask", "trap", "call", "start", "setlocal", "endlocal",
-        "pushd", "popd", "rem", "ver", "title",
+        // sh
+        "cd", "echo", "exit", "export", "set", "unset", "true", "false", "test", "[", "[[", ":",
+        ".", "source", "exec", "eval", "if", "for", "while", "until", "case", "time", "command",
+        "builtin", "type", "ulimit", "umask", "trap", "read", "wait", "let", "local", "shift",
+        // cmd
+        "call", "start", "setlocal", "endlocal", "pushd", "popd", "rem", "ver", "title", "copy",
+        "del", "erase", "md", "mkdir", "rd", "rmdir", "move", "ren", "rename", "cls", "mklink",
+        "chdir", "goto", "path", "assoc", "dir", "vol", "verify", "pause", "prompt", "color",
     ];
     program.contains('=')
-        || program.starts_with(['$', '%', '(', '{', '!'])
+        || program.starts_with(['$', '%', '(', '{', '!', '~', '\''])
         || BUILTINS.contains(&program.to_ascii_lowercase().as_str())
 }
 
@@ -2026,6 +2048,7 @@ fn join_and(items: &[String]) -> String {
     }
 }
 
+/// `backend/api packages`, or `packages` for the root.
 fn subject_in(folder: &str, what: &str) -> String {
     if folder == "." {
         what.to_owned()

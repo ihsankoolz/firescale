@@ -968,10 +968,27 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let settings = load_doctor_settings(root)?;
     // The plan a full verify would run, built as --dry-run builds it: each
     // step's program is checked as the step would start it (ADR 0085).
-    let plan = load_verify_config(root)
-        .ok()
-        .map(|config| plan_verify(root, &facts, &config, false, None));
-    let mut report = run_doctor_with_plan(root, &facts, &ThisMachine, settings, plan.as_ref());
+    let plan =
+        load_verify_config(root).map(|config| plan_verify(root, &facts, &config, false, None));
+    let mut report = run_doctor_with_plan(root, &facts, &ThisMachine, settings, plan.as_ref().ok());
+    // Without the plan nothing says which programs verify's steps need:
+    // say so, rather than check nothing in silence (review of ADR 0085).
+    if let Err(error) = &plan {
+        add_checks(
+            &mut report,
+            vec![firescale_core::doctor::Finding {
+                section: "tools",
+                project: None,
+                subject: "verify plan".to_owned(),
+                status: firescale_core::doctor::Status::Warning,
+                detail: format!(
+                    "the verify plan could not be built, so the programs of verify's steps were not checked: {}",
+                    error.message()
+                ),
+                fix: Some("fix the firescale config, then run fscale doctor again; fscale verify --dry-run shows the plan".to_owned()),
+            }],
+        );
+    }
     add_checks(&mut report, hook_findings(root));
     add_checks(&mut report, hook_limit_findings(root));
     let text = if args.json {
