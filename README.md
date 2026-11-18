@@ -178,7 +178,7 @@ Every number is from [bench/RESULTS.md](bench/RESULTS.md) or [DECISIONS.md](DECI
 
 ## Known limits
 
-- **Some languages' commands have run nowhere yet.** `dotnet test`, `flutter test` and `xcodebuild test` have never run through `fscale verify` on a real project. On 15 public repos the result was right in 8 and wrong in 6 in the first run, and right in 9 and wrong in 5 after three fixes. In four of the five a lint command that fscale guessed failed, and the repo's passing tests were then not run ([the review](docs/reviews/real-repos-0.5.3.md)).
+- **Some languages' commands have run nowhere yet.** `dotnet test`, `flutter test` and `xcodebuild test` have never run through `fscale verify` on a real project. On 15 public repos the result was right in 8 and wrong in 6 in the first run, and right in 9 and wrong in 5 after three fixes (two repos could not be judged in the second run, because their downloads failed, and keep their first verdict). In four of the five a lint command that fscale guessed failed, and the repo's passing tests were then not run ([the review](docs/reviews/real-repos-0.5.3.md)).
 - **Codex is unverified.** Its hook and settings files follow Codex's source code. `fscale fix --agent codex` has had no real run, and the Codex settings file was never loaded by a real Codex. Claude Code had a real run.
 - **Slow suites need `--budget`.** Verify runs the whole test command of every project it runs. A suite that takes an hour takes an hour. `--budget` leaves it out only after one run has recorded how long it takes.
 - **A test moved to another file is not followed.** The tamper guard compares expected values one file at a time. A test that moves to another file with its expected value changed is not reported.

@@ -127,7 +127,7 @@ Limits: doctor only looks for the file; it does not compare it with `pubspec.loc
 
 ### The real repos, run again
 
-[Run 44213743004](https://github.com/ihsankoolz/firescale/actions/runs/44213743004), on `main` after #74 to #77: `docs/reviews/real-repos-0.5.3.md`, "The second run, after three fixes". Bugs 2, 3 and 5 show as fixed on the repos that showed them. 9 right, 5 wrong, 1 not judged (before: 8, 6, 1). gson and timber failed in this run because Maven Central refused the runner's downloads; that is not fscale's, and the first run's verdict is kept for both.
+[Run 44213743004](https://github.com/ihsankoolz/firescale/actions/runs/44213743004), on `main` after #74 to #77: `docs/reviews/real-repos-0.5.3.md`, "The second run, after three fixes". Bugs 2, 3 and 5 show as fixed on the repos that showed them. 9 right, 5 wrong, 1 not judged (before: 8, 6, 1). timber failed in this run because Maven Central answered 429 to the runner; gson failed to resolve a Maven build plugin, with no cause in the output. In both the repo's own test command failed the same way, so neither is read as fscale's, and the first run's verdict is kept for both. The count is 9, 5, 1 only by that rule. The fresh review of #78 (a fact-check against the run's files) found these two points overstated, the provider row too broad, and three older lines of the review out of date; all corrected.
 
 **Not done in Stage 2:** bug 1 (a guessed linter that fails keeps the tests from running; 4 repos; needs the owner's decision) and bug 4 (`mvn -B test` on a build that needs `verify`; it needs a rule for when, and `verify.test` is the way out today).
 
