@@ -1058,6 +1058,106 @@ pub fn step_key(
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// The digest of the files a step's key covers, per project or shared
+/// folder of the graph: what is kept beside a pass to say, on a later miss,
+/// which of them differ (ADR 0075). Digests only: no content, and no path
+/// but the name of a node of the graph (a project's folder, a shared
+/// folder, or a file that is a shared node by itself).
+pub type Manifest = BTreeMap<String, String>;
+
+/// A digest as a manifest holds it.
+fn short_digest(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex()[..16].to_owned()
+}
+
+/// The manifest of a scope's files: one digest per project or shared folder
+/// of the graph that holds a covered file, and one for the covered files
+/// that belong to none.
+fn files_manifest(snapshot: &Snapshot, scope: &Scope, owned: &[String]) -> Manifest {
+    let mut groups: BTreeMap<String, blake3::Hasher> = BTreeMap::new();
+    for (path, (state, _)) in &snapshot.files {
+        if !covers(scope, owned, path) {
+            continue;
+        }
+        let owner = owned
+            .iter()
+            .chain(scope.folders.iter())
+            .filter(|folder| *folder != "." && inside(path, folder))
+            .max_by_key(|folder| folder.len());
+        let name = match owner {
+            // A shared node of the graph can be one file.
+            Some(file) if file == path => file.clone(),
+            Some(folder) => format!("files in {folder}"),
+            None => "files that belong to no project".to_owned(),
+        };
+        groups
+            .entry(name)
+            .or_default()
+            .update(format!("{path}\0{state:?}\n").as_bytes());
+    }
+    groups
+        .into_iter()
+        .map(|(name, hasher)| (name, hasher.finalize().to_hex()[..16].to_owned()))
+        .collect()
+}
+
+/// The manifest of the latest pass of one step, as it is kept.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LastPass {
+    format: u32,
+    /// When the pass ran, in seconds since 1970 (UTC).
+    ran_at: u64,
+    parts: Manifest,
+}
+
+/// Where the manifest of the latest pass of a step is kept: beside the
+/// passes, under a name made from the step, its project and its kind.
+fn last_pass_path(root: &Path, step: &str, folder: Option<&str>, kind: Option<&str>) -> PathBuf {
+    let slot = format!(
+        "{step}\0{}\0{}",
+        folder.unwrap_or("(root)"),
+        kind.unwrap_or("-")
+    );
+    cache_dir(root).join(format!("last-{}.json", short_digest(slot.as_bytes())))
+}
+
+/// The names of the parts that differ between two manifests, or that only
+/// one of them has, sorted.
+#[must_use]
+pub fn differing_parts(before: &Manifest, now: &Manifest) -> Vec<String> {
+    let names: BTreeSet<&String> = before.keys().chain(now.keys()).collect();
+    names
+        .into_iter()
+        .filter(|name| before.get(*name) != now.get(*name))
+        .cloned()
+        .collect()
+}
+
+/// The sentence for a step that was not served from the cache, from what
+/// differs from its last pass. At most six parts are named.
+fn why_text(last: Option<&LastPass>, now: &Manifest) -> String {
+    let Some(last) = last else {
+        return "ran: no pass of it is kept to compare with".to_owned();
+    };
+    let when = format_time(last.ran_at);
+    let differing = differing_parts(&last.parts, now);
+    if differing.is_empty() {
+        return format!(
+            "ran again: no file it reads differs from its last pass ({when}), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept"
+        );
+    }
+    let shown: Vec<&str> = differing.iter().take(6).map(String::as_str).collect();
+    let more = match differing.len() - shown.len() {
+        0 => String::new(),
+        more => format!("; and {more} more"),
+    };
+    format!(
+        "ran again: these differ from its last pass ({when}): {}{more}",
+        shown.join("; ")
+    )
+}
+
 const COMPOSE_NAMES: [&str; 4] = [
     "compose.yaml",
     "compose.yml",
@@ -1422,6 +1522,8 @@ pub struct CacheKey {
     files: String,
     /// The unit's env files when the key was made ([`env_files_line`]).
     env_files: String,
+    /// The digest of each part of the key (ADR 0075).
+    manifest: Manifest,
 }
 
 /// How a step's run uses the cache.
@@ -1595,11 +1697,75 @@ impl<'a> StepCache<'a> {
             .to_hex()
             .to_string();
         let key = self.salted(key);
+        // The files by project and shared folder, to say on a later miss
+        // which of them differ (ADR 0075).
+        let manifest = files_manifest(&snapshot, &scope, &self.digests.owned);
         Ok(CacheKey {
             key,
             files,
             env_files,
+            manifest,
         })
+    }
+
+    /// For a step that is not served from the cache: which projects' and
+    /// shared folders' files differ from its last pass, as the rest of a
+    /// sentence about it ("ran again: these differ ..."). `None` with
+    /// `--no-cache`, which looks nothing up (ADR 0075).
+    #[must_use]
+    pub fn why_ran(
+        &self,
+        folder: Option<&str>,
+        kind: Option<&str>,
+        step: &str,
+        key: &CacheKey,
+    ) -> Option<String> {
+        if !self.read {
+            return None;
+        }
+        let last = if cache_is_linked(&self.root) {
+            None
+        } else {
+            let path = last_pass_path(&self.root, step, folder, kind);
+            (!is_symlink(&path))
+                .then(|| fs::read_to_string(&path).ok())
+                .flatten()
+                .and_then(|text| serde_json::from_str::<LastPass>(&text).ok())
+                .filter(|last| last.format == FORMAT)
+        };
+        Some(why_text(last.as_ref(), &key.manifest))
+    }
+
+    /// Keeps the manifest of a pass that was just stored, as the step's
+    /// last pass. Written like a pass: beside it, to a temporary file
+    /// first, and never through a link.
+    fn remember_manifest(
+        &self,
+        folder: Option<&str>,
+        kind: Option<&str>,
+        key: &CacheKey,
+        entry: &Entry,
+    ) {
+        if cache_is_linked(&self.root) {
+            return;
+        }
+        let path = last_pass_path(&self.root, &entry.step, folder, kind);
+        if is_symlink(&path) {
+            return;
+        }
+        let last = LastPass {
+            format: FORMAT,
+            ran_at: entry.ran_at,
+            parts: key.manifest.clone(),
+        };
+        let Ok(text) = serde_json::to_string_pretty(&last) else {
+            return;
+        };
+        let temp =
+            cache_dir(&self.root).join(format!(".last-{}.{}.tmp", entry.key, std::process::id()));
+        if fs::write(&temp, text).is_ok() && fs::rename(&temp, &path).is_err() {
+            let _ = fs::remove_file(&temp);
+        }
     }
 
     /// The stored pass for `key`, unless reading is off: this machine's,
@@ -1682,7 +1848,10 @@ impl<'a> StepCache<'a> {
         }
         let mut not_stored = None;
         match store(&self.root, &entry) {
-            Ok(()) => self.note(format!("cache: stored {place}")),
+            Ok(()) => {
+                self.note(format!("cache: stored {place}"));
+                self.remember_manifest(folder, kind, key, &entry);
+            }
             Err(error) => {
                 let why = format!("it could not be written to .firescale/steps ({error})");
                 self.note(format!("cache: not stored {place}: {why}"));
@@ -2076,6 +2245,125 @@ mod tests {
     use crate::graph::build_graph;
     use crate::testing::COURSE_SHARED_USERS;
     use crate::testing::{course_project, Fixture, Track};
+
+    #[test]
+    fn a_miss_names_the_parts_that_differ_and_at_most_six_of_them() {
+        let manifest = |pairs: &[(&str, &str)]| -> Manifest {
+            pairs
+                .iter()
+                .map(|(name, digest)| ((*name).to_owned(), (*digest).to_owned()))
+                .collect()
+        };
+        let before = manifest(&[
+            ("files in api", "1"),
+            ("the command", "2"),
+            ("the variable TZ", "3"),
+        ]);
+        // Changed, gone and new parts all differ; the same digest does not.
+        let now = manifest(&[
+            ("files in api", "9"),
+            ("the command", "2"),
+            ("files in web", "4"),
+        ]);
+        assert_eq!(
+            differing_parts(&before, &now),
+            ["files in api", "files in web", "the variable TZ"]
+        );
+        assert_eq!(
+            why_text(None, &now),
+            "ran: no pass of it is kept to compare with"
+        );
+        let last = LastPass {
+            format: FORMAT,
+            ran_at: 0,
+            parts: before.clone(),
+        };
+        assert_eq!(
+            why_text(Some(&last), &now),
+            "ran again: these differ from its last pass (1970-01-01 00:00 UTC): files in api; files in web; the variable TZ"
+        );
+        assert_eq!(
+            why_text(Some(&last), &before),
+            "ran again: no file it reads differs from its last pass (1970-01-01 00:00 UTC), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept"
+        );
+        let many: Vec<(String, String)> = (1..=9)
+            .map(|n| (format!("files in p{n}"), "x".to_owned()))
+            .collect();
+        let many: Manifest = many.into_iter().collect();
+        let text = why_text(
+            Some(&LastPass {
+                format: FORMAT,
+                ran_at: 0,
+                parts: Manifest::new(),
+            }),
+            &many,
+        );
+        assert!(
+            text.ends_with("files in p5; files in p6; and 3 more"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_manifest_of_a_key_has_a_digest_per_folder_of_the_graph_and_no_path() {
+        let fixture = course_project().unwrap();
+        let root = fixture.root();
+        let facts = detect_facts_with(root, None).unwrap();
+        let graph = build_graph(root, &facts);
+        let read_env = |_: &str| None;
+        let settings = CacheSettings {
+            version: "1.0.0",
+            read: true,
+            sets_ci: false,
+            settings: "",
+            machine: &NoTools,
+            read_env: &read_env,
+        };
+        let cache = StepCache::new(root, Some(graph), &settings);
+        let auth = root.join("backend").join("auth_service");
+        let key = || {
+            cache
+                .key(
+                    Some("backend/auth_service"),
+                    Some("python"),
+                    "test",
+                    "node -e 0",
+                    &auth,
+                )
+                .unwrap()
+        };
+        let before = key();
+        let names: Vec<&str> = before.manifest.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                ".env.example",
+                "docker-compose.yml",
+                "files in backend/auth_service",
+                "files in backend/shared",
+                "files that belong to no project"
+            ]
+        );
+        assert!(before
+            .manifest
+            .values()
+            .all(|digest| digest.len() == 16 && digest.chars().all(|c| c.is_ascii_hexdigit())));
+        assert!(!format!("{:?}", before.manifest).contains(".py"));
+        assert_eq!(before.manifest, key().manifest);
+        // A file of the shared folder changes that part alone, and the key.
+        fixture.write("backend/shared/db.py", "URL = 1\n").unwrap();
+        let after = key();
+        assert_eq!(
+            differing_parts(&before.manifest, &after.manifest),
+            ["files in backend/shared"]
+        );
+        assert_ne!(before.key, after.key);
+        // A file of a project it does not use changes nothing of it.
+        fixture
+            .write("backend/audit_service/main.py", "app = 1\n")
+            .unwrap();
+        assert_eq!(after.manifest, key().manifest);
+    }
 
     #[test]
     fn the_env_files_line_holds_a_hash_per_file_and_never_a_value() {

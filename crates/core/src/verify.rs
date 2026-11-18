@@ -1012,6 +1012,11 @@ pub struct StepReport {
     /// `FSCALE_LOG`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_cached: Option<String>,
+    /// For a step that took a minute or more and was not served from the
+    /// cache: what differs from its last pass ([`StepCache::why_ran`],
+    /// ADR 0075). Not in JSON.
+    #[serde(skip)]
+    pub ran_again: Option<String>,
     /// For a step that timed out and printed a percent done: how far it
     /// got and about how long it had left (ADR 0043). Not in JSON.
     #[serde(skip)]
@@ -2103,6 +2108,7 @@ fn run_step(
                 test_results: None,
                 output_digest: None,
                 not_cached: None,
+                ran_again: None,
                 estimate: None,
                 last_known_ms: Some(known.millis()),
                 last_known_finished: Some(known.finished),
@@ -2266,6 +2272,7 @@ fn run_step(
         test_results: None,
         output_digest: None,
         not_cached: None,
+        ran_again: None,
         estimate: None,
         last_known_ms: None,
         last_known_finished: None,
@@ -2720,6 +2727,7 @@ fn run_unit(
                 test_results: None,
                 output_digest: None,
                 not_cached: None,
+                ran_again: None,
                 estimate: None,
                 last_known_ms: None,
                 last_known_finished: None,
@@ -2753,6 +2761,7 @@ fn run_unit(
             test_results: None,
             output_digest: None,
             not_cached: None,
+            ran_again: None,
             estimate: None,
             last_known_ms: None,
             last_known_finished: None,
@@ -2924,6 +2933,10 @@ pub(crate) fn run_base_step(
     run_step(&unit, name, command, &base)
 }
 
+/// A step that ran for at least this long, and was not served from the
+/// cache, says why in the normal output (ADR 0075).
+pub const RAN_AGAIN_NOTE_MS: u64 = 60_000;
+
 /// A step's pass from the cache when nothing it depends on changed since it
 /// last passed; otherwise the step runs, and a pass is kept for the cache.
 fn cached_or_run(
@@ -2999,14 +3012,23 @@ fn cached_or_run(
             test_results: None,
                 output_digest: None,
                 not_cached: None,
+                ran_again: None,
                 estimate: None,
                 last_known_ms: None,
                 last_known_finished: None,
                 report_only: None,
         });
     }
+    // What differs from the step's last pass, by name (ADR 0075).
+    let why = cache.why_ran(folder, kind, name, &key);
+    if let Some(why) = &why {
+        cache.note(format!("cache: why {place} {why}"));
+    }
     let ran_at = now_secs();
     let mut report = run_step(unit, name, command, options)?;
+    if report.duration_ms >= RAN_AGAIN_NOTE_MS && report.status != StepStatus::OverBudget {
+        report.ran_again = why;
+    }
     if report.status == StepStatus::Passed {
         cache.note(format!(
             "cache: miss {place}{}",
@@ -3096,6 +3118,7 @@ pub fn run_verify_with(
         test_results: None,
         output_digest: None,
         not_cached: None,
+        ran_again: None,
         estimate: None,
         last_known_ms: None,
         last_known_finished: None,
@@ -3378,6 +3401,7 @@ pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> Verif
             test_results: None,
             output_digest: None,
             not_cached: None,
+            ran_again: None,
             estimate: None,
             last_known_ms: None,
             last_known_finished: None,
@@ -3498,6 +3522,28 @@ fn step_place(step: &StepReport) -> String {
 /// The first line of the summary. It reads as a clean pass only when every
 /// step ran and passed, and it names every step that failed, timed out or
 /// needs setup.
+/// One line per step that took a minute or more and was not served from
+/// the cache: what differs from its last pass (ADR 0075).
+fn ran_again_lines(report: &VerifyReport) -> String {
+    let lines: Vec<String> = report
+        .steps
+        .iter()
+        .filter_map(|step| {
+            let why = step.ran_again.as_ref()?;
+            Some(format!(
+                "Not from the cache: {} took {} and {why}.\n",
+                step_place(step),
+                format_duration(Duration::from_millis(step.duration_ms))
+            ))
+        })
+        .collect();
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}", lines.concat())
+    }
+}
+
 fn headline(report: &VerifyReport) -> String {
     let line = cache_headline(report);
     // A guessed lint that did not pass does not block, and is still in
@@ -4540,6 +4586,7 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             out.push_str(&line);
         }
     }
+    out.push_str(&ran_again_lines(report));
     for step in report
         .steps
         .iter()
@@ -4986,6 +5033,35 @@ mod tests {
             command: "fscale check".to_owned(),
             violations: Vec::new(),
         }
+    }
+
+    /// ADR 0075: a step that took a minute or more and was not served from
+    /// the cache says what differs from its last pass, in one line.
+    #[test]
+    fn a_step_over_a_minute_that_ran_again_says_why_in_one_line() {
+        let fixture = Fixture::new(&[], Track::NoGit).unwrap();
+        let plan = VerifyPlan {
+            runner: "config".to_owned(),
+            steps: vec![("test".to_owned(), Planned::Command("echo ok".to_owned()))],
+            ..VerifyPlan::default()
+        };
+        let mut report = run_verify(fixture.root(), "0.0.0", passing_check(), &plan).unwrap();
+        assert_eq!(report.steps[1].status, StepStatus::Passed);
+        // A run with no cache gives no reason, and the summary no line.
+        assert_eq!(report.steps[1].ran_again, None);
+        assert!(!format_verify_human(&report).contains("Not from the cache"));
+        report.steps[1].duration_ms = 83_000;
+        report.steps[1].ran_again = Some(
+            "ran again: these differ from its last pass (2026-11-18 10:00 UTC): files in backend/shared"
+                .to_owned(),
+        );
+        let text = format_verify_human(&report);
+        let line = "\nNot from the cache: test took 1m 23s and ran again: these differ from its last pass (2026-11-18 10:00 UTC): files in backend/shared.\n";
+        assert_eq!(text.matches("Not from the cache").count(), 1, "{text}");
+        assert!(text.contains(line), "{text}");
+        // Not in JSON.
+        assert!(!format_verify_json(&report).contains("differ from its last pass"));
+        assert_eq!(RAN_AGAIN_NOTE_MS, 60_000);
     }
 
     /// From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,

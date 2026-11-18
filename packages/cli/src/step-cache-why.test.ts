@@ -1,6 +1,7 @@
 // Why a step ran again (ADR 0075): beside each kept pass, a small manifest
-// of digests, one per part of the step's key. On a miss, the parts that
+// of digests, one per project or shared folder of the graph. On a miss, those that
 // differ from the step's last pass are named under FSCALE_LOG=cache.
+// The first step: the files only, per project and shared folder.
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
@@ -50,34 +51,32 @@ describe('why a step ran again', () => {
       'cache: why test ran: no pass of it is kept to compare with',
     ]);
     const second = await verify();
-    expect(second.stdout.split('\n')[0]).toBe(
-      'verify: OK (2 of 3 steps passed from the cache, not run now)',
-    );
+    expect(second.stdout).toContain('2 passed from the cache');
     expect(why(second.stderr)).toEqual([]);
   });
 
-  it('names a changed file group, a changed env file and a changed variable, each alone', async () => {
+  it('names a changed group of files, and says so when what differs is not a file', async () => {
     const { repo, verify } = await loggingRepo();
     expect((await verify()).code).toBe(EXIT_OK);
 
     await repo.write('src/a.js', 'export const a = 2;\n');
     const files = await verify();
     expect(why(files.stderr)).toEqual([
-      'cache: why lint ran again: these inputs differ from its last pass (WHEN): files that belong to no project',
-      'cache: why test ran again: these inputs differ from its last pass (WHEN): files that belong to no project',
+      'cache: why lint ran again: these differ from its last pass (WHEN): files that belong to no project',
+      'cache: why test ran again: these differ from its last pass (WHEN): files that belong to no project',
     ]);
 
     await writeFile(path.join(repo.root, '.env'), 'API_KEY=sk-test-never-shown-4d5e\n');
     const env = await verify();
     expect(why(env.stderr)).toEqual([
-      'cache: why lint ran again: these inputs differ from its last pass (WHEN): the env files (.env, .env.local)',
-      'cache: why test ran again: these inputs differ from its last pass (WHEN): the env files (.env, .env.local)',
+      'cache: why lint ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
+      'cache: why test ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
     ]);
 
     const zone = await verify({ TZ: 'Asia/Singapore' });
     expect(why(zone.stderr)).toEqual([
-      'cache: why lint ran again: these inputs differ from its last pass (WHEN): the variable TZ',
-      'cache: why test ran again: these inputs differ from its last pass (WHEN): the variable TZ',
+      'cache: why lint ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
+      'cache: why test ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
     ]);
     // Nothing of this is in the normal output of a quick step.
     for (const result of [files, env, zone]) {
@@ -86,7 +85,7 @@ describe('why a step ran again', () => {
     }
   });
 
-  it('names the command when the command changed, and two parts when two changed', async () => {
+  it('names the files when the config file that holds a changed command is one of them', async () => {
     const { repo, verify } = await loggingRepo();
     expect((await verify()).code).toBe(EXIT_OK);
     await repo.write(
@@ -97,10 +96,10 @@ describe('why a step ran again', () => {
     const lines = why(result.stderr);
     // The config file is a file of the repo root's own steps.
     expect(lines[0]).toBe(
-      'cache: why lint ran again: these inputs differ from its last pass (WHEN): files that belong to no project',
+      'cache: why lint ran again: these differ from its last pass (WHEN): files that belong to no project',
     );
     expect(lines[1]).toBe(
-      'cache: why test ran again: these inputs differ from its last pass (WHEN): the command; files that belong to no project',
+      'cache: why test ran again: these differ from its last pass (WHEN): files that belong to no project',
     );
   });
 
@@ -118,7 +117,7 @@ describe('why a step ran again', () => {
     expect(failed.code).not.toBe(EXIT_OK);
     const again = await verify();
     expect(why(again.stderr)).toEqual([
-      'cache: why test ran again: these inputs differ from its last pass (WHEN): the command; files that belong to no project',
+      'cache: why test ran again: these differ from its last pass (WHEN): files that belong to no project',
     ]);
   });
 
@@ -140,10 +139,10 @@ describe('why a step ran again', () => {
     expect(result.code).toBe(EXIT_OK);
     const lines = why(result.stderr);
     expect(lines).toContain(
-      'cache: why test in backend/auth_service ran again: these inputs differ from its last pass (WHEN): files in backend/auth_service; files in backend/shared',
+      'cache: why test in backend/auth_service ran again: these differ from its last pass (WHEN): files in backend/auth_service; files in backend/shared',
     );
     expect(lines).toContain(
-      'cache: why test in backend/ledger_service ran again: these inputs differ from its last pass (WHEN): files in backend/shared',
+      'cache: why test in backend/ledger_service ran again: these differ from its last pass (WHEN): files in backend/shared',
     );
     // A service that does not use the shared folder was a hit.
     expect(lines.filter((line) => line.includes('audit_service'))).toEqual([]);
@@ -164,9 +163,7 @@ describe('why a step ran again', () => {
       expect(text).not.toContain('max-old-space-size');
       expect(text).not.toContain('a.js');
       const manifest = JSON.parse(text) as { parts: Record<string, string>; ranAt: number };
-      expect(Object.keys(manifest.parts)).toContain('files that belong to no project');
-      expect(Object.keys(manifest.parts)).toContain('the env files (.env, .env.local)');
-      expect(Object.keys(manifest.parts)).toContain('the variable NODE_OPTIONS');
+      expect(Object.keys(manifest.parts)).toEqual(['files that belong to no project']);
       for (const digest of Object.values(manifest.parts)) {
         expect(digest).toMatch(/^[0-9a-f]{16}$/);
       }
