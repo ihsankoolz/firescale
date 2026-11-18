@@ -66,6 +66,11 @@ By your word: rebased on main, built, its tests run, and each new test shown to 
 
 At the branch tip the 29 `ecosystems::` tests and the 26 tests of `facts-inputs-cache.test.ts` pass (on Windows), and the whole suite passes on Linux CI.
 
+**From the fresh review of #80, not done:**
+
+- **An agent fix for `agents-md`, `agent-permissions` or `gitignore-basics` may now change more files**, because the agent runner takes a rule's `inputs` as the files the agent may change, and #80 makes that list longer (linter configs, lock files, Gradle Kotlin scripts, the Maven and Gradle wrappers). ADR 0069 says so under Consequences. It widens a gap that was there (`pom.xml` and the like were already allowed). **Needs your decision:** keep the two lists apart, so that an agent may change only the files a rule writes.
+- Only the `agents-md` rule has a test that a new input makes it run again. Taking the table's inputs out of `agent-permissions` or `gitignore-basics` would fail no test.
+
 ## 0.5.3 — the overnight run of 2026-11-18
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.
