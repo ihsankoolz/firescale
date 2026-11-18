@@ -2260,6 +2260,67 @@ mod tests {
         );
     }
 
+    /// A machine where `swift` answers and nothing else does.
+    struct OnlySwift;
+    impl Machine for OnlySwift {
+        fn run(&self, _: &Path, program: &str, _: &[&str]) -> Option<String> {
+            (program == "swift").then(|| "Swift version 6.0.3 (swift-6.0.3-RELEASE)".to_owned())
+        }
+        fn env_set(&self, _: &str) -> bool {
+            false
+        }
+        fn listening(&self, _: &str, _: u16) -> bool {
+            false
+        }
+    }
+
+    // Found on a real repo (docs/reviews/real-repos-0.5.3.md, bug 3): verify
+    // ran `swiftlint lint --strict`, and doctor had not looked for swiftlint.
+    #[test]
+    fn a_swift_package_with_a_swiftlint_config_needs_swiftlint() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        fs::write(root.join("Package.swift"), "// swift-tools-version:6.0\n").unwrap();
+        fs::create_dir_all(root.join("Sources").join("App")).unwrap();
+        fs::write(
+            root.join("Sources").join("App").join("App.swift"),
+            "let x = 1\n",
+        )
+        .unwrap();
+        let tools = |root: &Path| -> Vec<(String, Status, Option<String>)> {
+            let facts = crate::facts::detect_facts_with(root, None).unwrap();
+            run_doctor(root, &facts, &OnlySwift)
+                .checks
+                .into_iter()
+                .filter(|check| check.section == "tools")
+                .map(|check| (check.subject, check.status, check.fix))
+                .collect()
+        };
+        // No linter's config: verify runs no swiftlint, and doctor asks for none.
+        assert_eq!(tools(root), [("swift".to_owned(), Status::Ok, None)]);
+
+        fs::write(root.join(".swiftlint.yml"), "disabled_rules: []\n").unwrap();
+        let facts = crate::facts::detect_facts_with(root, None).unwrap();
+        assert_eq!(
+            facts.projects[0].commands.lint.as_deref(),
+            Some("swiftlint lint --strict")
+        );
+        assert_eq!(
+            tools(root),
+            [
+                ("swift".to_owned(), Status::Ok, None),
+                (
+                    "swiftlint".to_owned(),
+                    Status::Problem,
+                    Some(
+                        "install SwiftLint (https://github.com/realm/SwiftLint; on macOS: brew install swiftlint), or set verify.lint to the lint command the project uses"
+                            .to_owned()
+                    )
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn python_names_and_versions_compare_like_pip() {
         assert_eq!(
