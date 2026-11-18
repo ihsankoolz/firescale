@@ -206,16 +206,44 @@ const NEW_FOLDERS: [&str; 6] = [
     ".github/workflows",
 ];
 
-/// Makes one to three random changes under `root` and gives the paths they
-/// touched.
-fn change(root: &Path, random: &mut Random) -> BTreeSet<String> {
-    let mut touched = BTreeSet::new();
+/// One change: a file and its bytes after the change, `None` when the
+/// change deleted it.
+type Op = (String, Option<Vec<u8>>);
+
+/// The path of `rel` under `root`.
+fn at(root: &Path, rel: &str) -> std::path::PathBuf {
+    rel.split('/')
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+/// Makes the changes again, on a fresh copy of the fixture.
+fn replay(root: &Path, ops: &[&Op]) {
+    for (file, bytes) in ops {
+        let path = at(root, file);
+        match bytes {
+            Some(bytes) => {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, bytes).unwrap();
+            }
+            None => {
+                // An earlier change that is left out may have made the file.
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
+/// The paths a list of changes touched.
+fn touched_by<'a>(ops: impl IntoIterator<Item = &'a Op>) -> BTreeSet<String> {
+    ops.into_iter().map(|(file, _)| file.clone()).collect()
+}
+
+/// Makes one to three random changes under `root` and gives them in order.
+fn change(root: &Path, random: &mut Random) -> Vec<Op> {
+    let mut ops = Vec::new();
     for _ in 0..=random.below(3) {
         let existing = files(root);
-        let at = |rel: &str| {
-            rel.split('/')
-                .fold(root.to_path_buf(), |path, part| path.join(part))
-        };
+        let at = |rel: &str| at(root, rel);
         let rel = match random.below(10) {
             // Edit a file.
             0..=3 => {
@@ -261,9 +289,10 @@ fn change(root: &Path, random: &mut Random) -> BTreeSet<String> {
                 file
             }
         };
-        touched.insert(rel);
+        let bytes = std::fs::read(at(&rel)).ok();
+        ops.push((rel, bytes));
     }
-    touched
+    ops
 }
 
 /// A workspace with a root project: the root's commands run its members.
@@ -399,34 +428,52 @@ fn outcome(name: &str, files: &[(String, String)]) -> Outcome {
         let root = fixture.root();
         let before = state(root, &BTreeSet::new());
         let mut random = Random::new(seed);
-        let touched = change(root, &mut random);
+        let ops = change(root, &mut random);
+        let touched = touched_by(&ops);
         let after = state(root, &touched);
-        let outside_every_project = touched.iter().any(|file| {
-            !after.below.iter().any(|folder| {
+        let below = |file: &str| {
+            after.below.iter().any(|folder| {
                 file.strip_prefix(folder.as_str())
                     .is_some_and(|rest| rest.starts_with('/'))
             })
-        });
+        };
         for (unit, key) in &after.keys {
             // A unit with no key is never served from the cache, so
-            // nothing is compared for it.
+            // nothing is compared for it. Nor is a unit the change made.
             let (Ok(key), Some(Ok(old))) = (key, before.keys.get(unit)) else {
                 continue;
             };
             outcome.compared += 1;
-            if key != old && after.affected.get(unit) != Some(&true) {
-                let case = format!(
-                    "{name}, seed {seed}: the key of {unit:?} differs after {touched:?}, and it is not affected ({:?}); inert: {:?}",
-                    after.affected.get(unit),
-                    after.inert
-                );
-                if !after.inert.is_empty() {
-                    outcome.inert.push(case);
-                } else if after.root_project && unit.0.is_some() && outside_every_project {
-                    outcome.root_files.push(case);
-                } else {
-                    outcome.broken.push(case);
-                }
+            if key == old || after.affected.get(unit) == Some(&true) {
+                continue;
+            }
+            let case = format!(
+                "{name}, seed {seed}: the key of {unit:?} differs after {touched:?}, and it is not affected ({:?}); inert: {:?}",
+                after.affected.get(unit),
+                after.inert
+            );
+            // The changes a known gap covers for this unit. The case is a
+            // known gap only when the other changes of the seed, made alone
+            // on a fresh copy, leave the unit's key as it was: then no
+            // change outside the gaps is why the key differs.
+            let gap_1 = |file: &str| after.inert.iter().any(|inert| inert == file);
+            let gap_2 = |file: &str| after.root_project && unit.0.is_some() && !below(file);
+            let rest: Vec<&Op> = ops
+                .iter()
+                .filter(|(file, _)| !gap_1(file) && !gap_2(file))
+                .collect();
+            let explained = rest.len() < ops.len() && {
+                let control = Fixture::new(&borrowed, Track::NoGit).unwrap();
+                replay(control.root(), &rest);
+                let alone = state(control.root(), &touched_by(rest.iter().copied()));
+                alone.keys.get(unit) == Some(&Ok(old.clone()))
+            };
+            if !explained {
+                outcome.broken.push(case);
+            } else if ops.iter().any(|(file, _)| gap_1(file)) {
+                outcome.inert.push(case);
+            } else {
+                outcome.root_files.push(case);
             }
         }
     }
@@ -573,7 +620,7 @@ fn the_changes_of_a_seed_are_the_same_every_time() {
         .collect();
     let touched = |seed: u64| {
         let fixture = Fixture::new(&borrowed, Track::NoGit).unwrap();
-        change(fixture.root(), &mut Random::new(seed))
+        touched_by(&change(fixture.root(), &mut Random::new(seed)))
     };
     assert_eq!(touched(7), touched(7));
     let distinct: BTreeSet<BTreeSet<String>> = (0..20).map(touched).collect();
