@@ -901,6 +901,93 @@ fn environment_digest(read: &dyn Fn(&str) -> Option<String>) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
+/// What is at the path of an env file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EnvFile {
+    /// Nothing, or something that is not a file: a folder (a virtual
+    /// environment named `.env`), a pipe.
+    Missing,
+    /// A plain file, with the hash of its bytes. The bytes themselves are
+    /// never kept, logged or shown.
+    Plain(String),
+    /// A link, with a hash of where it points and of the bytes there, as
+    /// the snapshot of the tree counts a link ([`read_state`]).
+    Link(String),
+    /// It is there and could not be read.
+    Unreadable,
+}
+
+/// Reads the env file at `path` for its hash alone.
+pub(crate) fn env_file(path: &Path) -> EnvFile {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return EnvFile::Missing,
+        Err(_) => return EnvFile::Unreadable,
+    };
+    if meta.file_type().is_symlink() {
+        let Ok(target) = fs::read_link(path) else {
+            return EnvFile::Unreadable;
+        };
+        let target = target.to_string_lossy().replace('\\', "/");
+        let pointed = match fs::metadata(path) {
+            // A linked folder is a virtual environment, not an env file:
+            // only where the link points is counted.
+            Ok(pointed) if pointed.is_dir() => "folder".to_owned(),
+            Ok(pointed) if pointed.is_file() => match fs::read(path) {
+                Ok(bytes) => blake3::hash(&bytes).to_hex().to_string(),
+                Err(_) => return EnvFile::Unreadable,
+            },
+            Ok(_) => "other".to_owned(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "dangling".to_owned(),
+            Err(_) => return EnvFile::Unreadable,
+        };
+        let both = format!("{target}\0{pointed}");
+        return EnvFile::Link(blake3::hash(both.as_bytes()).to_hex().to_string());
+    }
+    if !meta.is_file() {
+        return EnvFile::Missing;
+    }
+    match fs::read(path) {
+        Ok(bytes) => EnvFile::Plain(blake3::hash(&bytes).to_hex().to_string()),
+        Err(_) => EnvFile::Unreadable,
+    }
+}
+
+/// The env files a unit's steps can read (ADR 0074): `.env` and
+/// `.env.local` at the repo root and in the unit's folder, each by its path
+/// and the hash of its bytes, as one line of the key. Git ignores them, so
+/// the snapshot of the tree does not hold them.
+///
+/// # Errors
+///
+/// Why the step is not cached: an env file cannot be read.
+fn env_files_line(root: &Path, folder: Option<&str>) -> Result<String, String> {
+    let mut folders = vec!["."];
+    if let Some(folder) = folder.filter(|folder| *folder != ".") {
+        folders.push(folder);
+    }
+    let mut line = String::new();
+    for folder in folders {
+        for name in crate::services::LOCAL_ENV_FILES {
+            let rel = if folder == "." {
+                name.to_owned()
+            } else {
+                format!("{folder}/{name}")
+            };
+            let path = rel
+                .split('/')
+                .fold(root.to_path_buf(), |path, part| path.join(part));
+            match env_file(&path) {
+                EnvFile::Missing => {}
+                EnvFile::Plain(hash) => line.push_str(&format!("{rel}\0{hash}\n")),
+                EnvFile::Link(hash) => line.push_str(&format!("link\0{rel}\0{hash}\n")),
+                EnvFile::Unreadable => return Err(format!("{rel} could not be read")),
+            }
+        }
+    }
+    Ok(line)
+}
+
 /// True for a command whose result depends on git history, not only on the
 /// files: `nx affected`, `turbo run --affected`.
 fn uses_history(command: &str) -> bool {
@@ -1333,6 +1420,8 @@ pub struct StepCache<'a> {
 pub struct CacheKey {
     pub key: String,
     files: String,
+    /// The unit's env files when the key was made ([`env_files_line`]).
+    env_files: String,
 }
 
 /// How a step's run uses the cache.
@@ -1500,8 +1589,17 @@ impl<'a> StepCache<'a> {
             &self.tools,
             self.read_env,
         )?;
+        // The env files git ignores, by the hash of their bytes (ADR 0074).
+        let env_files = env_files_line(&self.root, folder)?;
+        let key = blake3::hash(format!("{key}\0env-files\0{env_files}").as_bytes())
+            .to_hex()
+            .to_string();
         let key = self.salted(key);
-        Ok(CacheKey { key, files })
+        Ok(CacheKey {
+            key,
+            files,
+            env_files,
+        })
     }
 
     /// The stored pass for `key`, unless reading is off: this machine's,
@@ -1573,8 +1671,9 @@ impl<'a> StepCache<'a> {
             |project| format!("{} in {project}", entry.step),
         );
         let now = self.fresh();
+        let env_files = env_files_line(&self.root, folder);
         match self.digests.digest(&now, &scope) {
-            Ok(after) if after == key.files => {}
+            Ok(after) if after == key.files && env_files.as_ref() == Ok(&key.env_files) => {}
             _ => {
                 let why = "files it depends on changed while verify ran".to_owned();
                 self.note(format!("cache: not stored {place}: {why}"));
@@ -1977,6 +2076,89 @@ mod tests {
     use crate::graph::build_graph;
     use crate::testing::COURSE_SHARED_USERS;
     use crate::testing::{course_project, Fixture, Track};
+
+    #[test]
+    fn the_env_files_line_holds_a_hash_per_file_and_never_a_value() {
+        let fixture = Fixture::new(
+            &[
+                (".env", "API_KEY=never-shown\n"),
+                ("api/.env.local", "API_KEY=never-shown-either\n"),
+                ("web/.env", "OTHER=1\n"),
+                ("api/.env.test", "NOT_READ=1\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let line = env_files_line(root, Some("api")).unwrap();
+        let hash = |text: &str| blake3::hash(text.as_bytes()).to_hex().to_string();
+        assert_eq!(
+            line,
+            format!(
+                ".env\0{}\napi/.env.local\0{}\n",
+                hash("API_KEY=never-shown\n"),
+                hash("API_KEY=never-shown-either\n")
+            )
+        );
+        assert!(!line.contains("never-shown"));
+        // The root's own steps, and a unit with no env file of its own.
+        let root_only = format!(".env\0{}\n", hash("API_KEY=never-shown\n"));
+        assert_eq!(env_files_line(root, None).unwrap(), root_only);
+        assert_eq!(env_files_line(root, Some(".")).unwrap(), root_only);
+        assert_eq!(env_files_line(root, Some("lib")).unwrap(), root_only);
+        // A folder of that name (a virtual environment) is not an env file.
+        std::fs::create_dir_all(root.join("lib").join(".env")).unwrap();
+        assert_eq!(env_files_line(root, Some("lib")).unwrap(), root_only);
+        assert_eq!(env_file(&root.join("lib").join(".env")), EnvFile::Missing);
+        assert_eq!(env_file(&root.join("nowhere")), EnvFile::Missing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_env_file_that_is_a_link_counts_by_its_target_and_the_bytes_there() {
+        let fixture = Fixture::new(
+            &[
+                ("real.env", "A=1\n"),
+                ("same.env", "A=1\n"),
+                ("venv/pyvenv.cfg", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let link = root.join(".env");
+        let at = |target: &str| {
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(root.join(target), &link).unwrap();
+            env_file(&link)
+        };
+        let first = at("real.env");
+        assert!(matches!(first, EnvFile::Link(_)));
+        assert_eq!(at("real.env"), first);
+        // The same bytes somewhere else, and other bytes at the same place.
+        assert_ne!(at("same.env"), first);
+        fixture.write("real.env", "A=2\n").unwrap();
+        assert_ne!(at("real.env"), first);
+        // A linked folder and a link to nothing are keyed, not refused.
+        assert!(matches!(at("venv"), EnvFile::Link(_)));
+        assert!(matches!(at("nowhere"), EnvFile::Link(_)));
+        assert!(env_files_line(root, None)
+            .unwrap()
+            .starts_with("link\0.env\0"));
+        // A file that is there and cannot be read is never keyed as absent.
+        let _ = std::fs::remove_file(&link);
+        fixture.write(".env", "A=3\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&link, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&link).is_err() {
+            assert_eq!(env_file(&link), EnvFile::Unreadable);
+            assert_eq!(
+                env_files_line(root, None),
+                Err(".env could not be read".to_owned())
+            );
+        }
+        std::fs::set_permissions(&link, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 
     struct NoTools;
     impl Machine for NoTools {
