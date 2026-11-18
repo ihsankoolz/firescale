@@ -6,6 +6,7 @@
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fixtureSet } from '@firescale/sdk/testing';
+import { Ajv } from 'ajv';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EXIT_OK, EXIT_VIOLATIONS, runCli } from './test-helpers.js';
 
@@ -76,6 +77,7 @@ interface Step {
   status: string;
   command?: string;
   reportOnly?: string;
+  fix?: string;
 }
 
 interface Report {
@@ -90,6 +92,13 @@ async function verify(root: string, tools: string) {
   const human = await runCli(['verify', '--no-cache'], root, env);
   const json = await runCli(['verify', '--no-cache', '--json'], root, env);
   const report = JSON.parse(json.stdout) as Report;
+  // Every report here matches the published schema, `report-only` included.
+  const schema = JSON.parse(
+    await readFile(new URL('../schemas/verify-output.schema.json', import.meta.url), 'utf8'),
+  ) as object;
+  const check = new Ajv({ strict: true }).compile(schema);
+  check(report);
+  expect(check.errors ?? []).toEqual([]);
   const step = (name: string, project?: string): Step => {
     const found = report.steps.find((one) => one.name === name && one.project === project);
     if (!found) throw new Error(`no ${name} step in ${json.stdout}`);
@@ -238,6 +247,60 @@ describe('a lint command fscale guessed, in a repo that does not declare it', ()
     );
   });
 
+  it('says "needs setup", with the setup command, when the guessed command cannot run yet', async () => {
+    // rrousselGit/provider before `flutter pub get`: the analyzer cannot
+    // follow a package import. That is not a failed lint, and it does not
+    // fail the run either.
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({ packs: ['core'] }),
+        'packages/provider/pubspec.yaml':
+          'name: provider\ndependencies:\n  flutter:\n    sdk: flutter\n',
+        'packages/provider/lib/provider.dart': "import 'package:flutter/material.dart';\n",
+        'packages/provider/test/provider_test.dart': 'void main() {}\n',
+      },
+    });
+    const tools = await toolsFor(repo.root, {
+      flutter: [
+        {
+          args: 'analyze',
+          code: 1,
+          out: "Analyzing provider...\n\n  error • Target of URI doesn't exist: 'package:flutter/material.dart'. Try creating the file referenced by the URI, or try using a URI for a file that does exist • lib/provider.dart:1:8 • uri_does_not_exist\n\n1 issue found. (ran in 1.2s)\n",
+        },
+        { args: 'test', code: 0, out: 'All tests passed!\n' },
+      ],
+    });
+    const { human, step } = await verify(repo.root, tools);
+    expect(step('lint', 'packages/provider')).toMatchObject({
+      status: 'report-only',
+      fix: 'flutter pub get',
+    });
+    expect(step('test', 'packages/provider').status).toBe('passed');
+    expect(human.code).toBe(EXIT_OK);
+    expect(human.stdout.split('\n')[0]).toBe(
+      'verify: OK - report-only: lint in packages/provider needs setup (a lint command fscale guessed)',
+    );
+    expect(human.stdout).toContain(
+      '\nReport-only: lint in packages/provider needs setup, and that does not fail this run. ',
+    );
+    expect(human.stdout).toContain('\nSet it up in packages/provider: flutter pub get\n');
+  });
+
+  it('says what else the config line changes when other projects have a lint command', async () => {
+    // The .NET solution at the root, and a Go module below it.
+    const repo = await fixtures.create({
+      files: { ...DOTNET_FILES, 'tools/go.mod': 'module example.com/tools\n\ngo 1.22\n' },
+    });
+    const tools = await toolsFor(repo.root, { ...DOTNET_TOOLS, go: [] });
+    const { human, step } = await verify(repo.root, tools);
+    expect(step('lint').status).toBe('report-only');
+    expect(step('lint', 'tools')).toMatchObject({ status: 'passed', command: 'go vet ./...' });
+    expect(human.stdout).toContain(
+      `To make it block, add this to your firescale config: "verify": { "lint": ${JSON.stringify(DOTNET_LINT)} }\n` +
+        'That setting is for the whole repo: with it no project runs a lint command of its own.\n',
+    );
+  });
+
   it('says nothing more when the guessed command passes, but marks the step in the JSON', async () => {
     // spf13/cobra: `go vet ./...` and `go test ./...` pass.
     const repo = await fixtures.create({
@@ -253,7 +316,7 @@ describe('a lint command fscale guessed, in a repo that does not declare it', ()
       status: 'passed',
       command: 'go vet ./...',
       reportOnly:
-        'fscale guessed this command, and nothing in this repo asks for it (looked for `go vet` in a CI file)',
+        'fscale guessed this command, and nothing in this repo asks for it (looked for `go vet` or golangci-lint in a CI file)',
     });
     expect(human.stdout.split('\n')[0]).toBe('verify: OK');
     expect(human.stdout).not.toContain('eport-only');

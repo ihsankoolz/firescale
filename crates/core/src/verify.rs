@@ -2746,7 +2746,6 @@ fn run_unit(
             if blocks(report.status) && report.status != StepStatus::Stopped {
                 report.status = StepStatus::ReportOnly;
                 report.detail = format!("report-only: {}", report.detail);
-                report.fix = None;
                 options.say(&format!(
                     "{}: report-only, so it does not fail the run (a lint command fscale guessed)",
                     step_place(&report)
@@ -3446,6 +3445,18 @@ pub fn add_tamper(report: &mut VerifyReport, tamper: crate::tamper::TamperReport
 pub const TAMPER_STEP: &str = "the tamper guard";
 
 /// `test in backend/auth`, or `test` for a step of the repo root.
+/// What happened to a report-only step: it keeps the setup command of a
+/// step that needs setup and the limit of one that timed out.
+fn report_only_verb(step: &StepReport) -> &'static str {
+    if step.timeout_ms.is_some() {
+        "timed out"
+    } else if step.fix.is_some() {
+        "needs setup"
+    } else {
+        "failed"
+    }
+}
+
 fn step_place(step: &StepReport) -> String {
     match &step.project {
         Some(project) => format!("{} in {}", step.name, place_name(project)),
@@ -3464,13 +3475,13 @@ fn headline(report: &VerifyReport) -> String {
         .steps
         .iter()
         .filter(|step| step.status == StepStatus::ReportOnly)
-        .map(step_place)
+        .map(|step| format!("{} {}", step_place(step), report_only_verb(step)))
         .collect();
     let line = if reported.is_empty() {
         line
     } else {
         format!(
-            "{line} - report-only: {} failed ({} fscale guessed)",
+            "{line} - report-only: {} ({} fscale guessed)",
             reported.join(", "),
             if reported.len() == 1 {
                 "a lint command"
@@ -4308,15 +4319,40 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
             format!(" in {}", place_name(project))
         });
         out.push_str(&format!(
-            "\nReport-only: {}{place} failed, and that does not fail this run. {}.\n",
+            "\nReport-only: {}{place} {}, and that does not fail this run. {}.\n",
             step.name,
+            report_only_verb(step),
             step.report_only.as_deref().unwrap_or_default()
         ));
+        if let Some(fix) = &step.fix {
+            out.push_str(&format!("Set it up{place}: {fix}\n"));
+        }
         if let Some(command) = &step.command {
             out.push_str(&format!(
                 "To make it block, add this to your firescale config: {}\n",
                 crate::lintsource::blocking_config(step.project.as_deref(), command)
             ));
+            // The setting names a command for a place, and it takes the
+            // place of every lint command fscale found there.
+            let other_lint = |same_place: bool| {
+                report.steps.iter().any(|other| {
+                    other.name == "lint"
+                        && other.command.is_some()
+                        && !std::ptr::eq(other, step)
+                        && (other.project == step.project) == same_place
+                        && (same_place || other.project.is_some())
+                })
+            };
+            match &step.project {
+                None if other_lint(false) => out.push_str(
+                    "That setting is for the whole repo: with it no project runs a lint command of its own.\n",
+                ),
+                Some(project) if other_lint(true) => out.push_str(&format!(
+                    "That setting is for every project in {}: with it they run this one lint command.\n",
+                    place_name(project)
+                )),
+                _ => {}
+            }
         }
         if !step.output_tail.is_empty() {
             out.push_str(&format!("\nLast lines of {}{place}:\n", step.name));

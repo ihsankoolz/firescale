@@ -34,13 +34,33 @@ fn first_word(command: &str) -> &str {
     command.split_whitespace().next().unwrap_or_default()
 }
 
-/// True when `line` holds `words` next to each other, as whole words.
-fn has_words(line: &str, words: &[&str]) -> bool {
-    let parts: Vec<&str> = line
-        .split(|c: char| c.is_whitespace() || "\"'`;&|()".contains(c))
+/// The words of a line of a CI file, without quotes and shell punctuation.
+fn words(line: &str) -> Vec<&str> {
+    line.split(|c: char| c.is_whitespace() || "\"'`;&|()".contains(c))
         .filter(|part| !part.is_empty())
-        .collect();
-    parts.windows(words.len()).any(|window| window == words)
+        .collect()
+}
+
+/// True when `line` holds `words` next to each other, as whole words.
+fn has_words(line: &str, wanted: &[&str]) -> bool {
+    words(line)
+        .windows(wanted.len())
+        .any(|window| window == wanted)
+}
+
+/// True for a line that runs clippy: `cargo clippy`, also with a toolchain
+/// or `hack` between the two words (`cargo +nightly clippy`, `cargo hack
+/// clippy`), or one of the actions that run it.
+fn runs_clippy(line: &str) -> bool {
+    let parts = words(line);
+    let by_cargo = parts.iter().enumerate().any(|(at, word)| {
+        *word == "cargo"
+            && parts[at + 1..]
+                .iter()
+                .find(|next| !next.starts_with('+') && **next != "hack")
+                .is_some_and(|next| *next == "clippy")
+    });
+    by_cargo || line.contains("clippy-check") || line.contains("clippy-action")
 }
 
 fn gradle_program(word: &str) -> bool {
@@ -55,18 +75,18 @@ const LINTERS: [Linter; 5] = [
         configs: &["clippy.toml", ".clippy.toml"],
         manifest_lines: &[("Cargo.toml", "[lints"), ("Cargo.toml", "[workspace.lints")],
         modules: false,
-        ci: |line| has_words(line, &["cargo", "clippy"]),
+        ci: runs_clippy,
         looked_for:
             "clippy.toml, a [lints] table in Cargo.toml, and `cargo clippy` in a CI file",
     },
-    // Go: vet.
+    // Go: vet. golangci-lint runs vet's checks unless told not to.
     Linter {
         is: |command| command.starts_with("go vet"),
         configs: &[],
         manifest_lines: &[],
         modules: false,
-        ci: |line| has_words(line, &["go", "vet"]),
-        looked_for: "`go vet` in a CI file",
+        ci: |line| has_words(line, &["go", "vet"]) || line.contains("golangci-lint"),
+        looked_for: "`go vet` or golangci-lint in a CI file",
     },
     // .NET: the formatter in its checking mode. An `.editorconfig` is not
     // a sign: editors read it too, and both .NET repos of the real-repos
@@ -103,47 +123,76 @@ const LINTERS: [Linter; 5] = [
         ],
         modules: true,
         ci: |line| {
-            let mut words = line
-                .split(|c: char| c.is_whitespace() || "\"'`;&|()".contains(c))
-                .filter(|part| !part.is_empty());
+            let mut words = words(line).into_iter();
             words.any(gradle_program)
                 && words.any(|word| {
-                    // `lint`, `lintDebug`, `:app:lint`, `:app:lintRelease`.
-                    word.rsplit(':').next().is_some_and(|task| task.starts_with("lint"))
+                    // `lint`, `lintDebug`, `:app:lint`, `:app:lintRelease`,
+                    // and `check`, which runs the plugin's lint.
+                    word.rsplit(':')
+                        .next()
+                        .is_some_and(|task| task.starts_with("lint") || task == "check")
                 })
         },
         looked_for:
-            "lint.xml and a `lint {` block in a Gradle build file (in the project, a module of it or a folder above), and a Gradle `lint` task in a CI file",
+            "lint.xml and a `lint {` block in a Gradle build file (in the project, a module of it or a folder above), and a Gradle `lint` or `check` task in a CI file",
     },
 ];
 
 /// The CI files of other systems than GitHub Actions, from the repo root.
-const CI_FILES: [&str; 9] = [
+const CI_FILES: [&str; 11] = [
     ".gitlab-ci.yml",
     ".circleci/config.yml",
     "azure-pipelines.yml",
+    "azure-pipelines.yaml",
     "bitbucket-pipelines.yml",
     ".travis.yml",
     "Jenkinsfile",
     ".buildkite/pipeline.yml",
+    ".buildkite/pipeline.yaml",
     "appveyor.yml",
     ".appveyor.yml",
 ];
 
-/// The repo's CI files: every `.yml` and `.yaml` file directly in
-/// `.github/workflows`, and [`CI_FILES`].
-fn ci_files(root: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = Vec::new();
-    if let Ok(entries) = fs::read_dir(root.join(".github").join("workflows")) {
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let path = entry.path();
-            let workflow = path
-                .extension()
+/// The folder that holds the git repo `root` is in: `root` itself, or a
+/// folder above it when the firescale config sits in a subfolder. The CI
+/// files and a workspace's settings are there. `root` when no folder at or
+/// above it has a `.git`.
+fn repo_top(root: &Path) -> PathBuf {
+    root.ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .unwrap_or(root)
+        .to_path_buf()
+}
+
+fn yaml_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
                 .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext == "yml" || ext == "yaml");
-            if workflow && path.is_file() {
-                files.push(path);
-            }
+                .is_some_and(|ext| ext == "yml" || ext == "yaml")
+                && path.is_file()
+        })
+        .collect()
+}
+
+/// The repo's CI files, from the folder [`repo_top`] gives: every `.yml`
+/// and `.yaml` file directly in `.github/workflows`, the `action.yml` of
+/// each action in `.github/actions`, and [`CI_FILES`].
+fn ci_files(root: &Path) -> Vec<PathBuf> {
+    let github = root.join(".github");
+    let mut files = yaml_files(&github.join("workflows"));
+    if let Ok(actions) = fs::read_dir(github.join("actions")) {
+        for action in actions.filter_map(std::result::Result::ok) {
+            files.extend(
+                yaml_files(&action.path())
+                    .into_iter()
+                    .filter(|path| path.file_stem().is_some_and(|stem| stem == "action")),
+            );
         }
     }
     files.sort();
@@ -159,22 +208,32 @@ fn ci_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// True when a line of a CI file runs the linter. A line that is only a
-/// comment does not count.
+/// True when a line of a CI file runs the linter. A comment does not
+/// count: not a line that is one, and not the end of a line after ` #`.
 fn ci_runs(root: &Path, runs: fn(&str) -> bool) -> bool {
-    ci_files(root).iter().any(|file| {
+    ci_files(&repo_top(root)).iter().any(|file| {
         fs::read_to_string(file).is_ok_and(|text| {
             text.lines()
                 .map(str::trim)
                 .filter(|line| !line.starts_with('#') && !line.starts_with("//"))
+                .map(|line| line.split(" #").next().unwrap_or(line))
                 .any(runs)
         })
     })
 }
 
-/// The project's folder and every folder above it, up to the repo root.
+/// The project's folder and every folder above it, up to the top of the
+/// git repo.
 fn folders_up(root: &Path, folder: &str) -> Vec<PathBuf> {
-    let mut dirs = vec![root.to_path_buf()];
+    let top = repo_top(root);
+    let mut dirs: Vec<PathBuf> = root
+        .ancestors()
+        .skip(1)
+        .take_while(|dir| dir.starts_with(&top))
+        .map(Path::to_path_buf)
+        .collect();
+    dirs.reverse();
+    dirs.push(root.to_path_buf());
     if folder != "." {
         let mut dir = root.to_path_buf();
         for part in folder.split('/').filter(|part| !part.is_empty()) {
@@ -227,12 +286,14 @@ pub fn guessed(root: &Path, folder: &str, command: &str) -> Option<String> {
 }
 
 /// The config that makes a guessed lint command block, as the text to add
-/// to `firescale.config.json`: `"verify": { "lint": "go vet ./..." }`, or
-/// the same under `verify.projects` for a project below the root.
+/// to `firescale.config.json`: `"verify": { "lint": "go vet ./..." }` for
+/// the root's own steps, or the same under `verify.projects` for a
+/// project, the one at the repo root (`"."`) included: a lint set for the
+/// whole repo would replace every project's.
 #[must_use]
 pub fn blocking_config(project: Option<&str>, command: &str) -> String {
     let command = serde_json::to_string(command).unwrap_or_else(|_| format!("\"{command}\""));
-    match project.filter(|folder| *folder != ".") {
+    match project {
         Some(folder) => {
             let folder = serde_json::to_string(folder).unwrap_or_else(|_| format!("\"{folder}\""));
             format!("\"verify\": {{ \"projects\": {{ {folder}: {{ \"lint\": {command} }} }} }}")
@@ -294,7 +355,7 @@ mod tests {
                 "cargo clippy --workspace --all-targets -- -D warnings",
                 "clippy.toml, a [lints] table in Cargo.toml, and `cargo clippy` in a CI file",
             ),
-            ("go vet ./...", "`go vet` in a CI file"),
+            ("go vet ./...", "`go vet` or golangci-lint in a CI file"),
             (
                 "dotnet format \"App.sln\" --verify-no-changes",
                 "`dotnet format` in a CI file",
@@ -309,11 +370,11 @@ mod tests {
             ),
             (
                 "./gradlew lint",
-                "lint.xml and a `lint {` block in a Gradle build file (in the project, a module of it or a folder above), and a Gradle `lint` task in a CI file",
+                "lint.xml and a `lint {` block in a Gradle build file (in the project, a module of it or a folder above), and a Gradle `lint` or `check` task in a CI file",
             ),
             (
                 "gradle lint",
-                "lint.xml and a `lint {` block in a Gradle build file (in the project, a module of it or a folder above), and a Gradle `lint` task in a CI file",
+                "lint.xml and a `lint {` block in a Gradle build file (in the project, a module of it or a folder above), and a Gradle `lint` or `check` task in a CI file",
             ),
         ] {
             assert_eq!(
@@ -530,11 +591,105 @@ mod tests {
         );
         assert_eq!(
             blocking_config(Some("."), "dotnet format \"App.sln\" --verify-no-changes"),
-            "\"verify\": { \"lint\": \"dotnet format \\\"App.sln\\\" --verify-no-changes\" }"
+            "\"verify\": { \"projects\": { \".\": { \"lint\": \"dotnet format \\\"App.sln\\\" --verify-no-changes\" } } }"
         );
         assert_eq!(
             blocking_config(Some("packages/app"), "flutter analyze"),
             "\"verify\": { \"projects\": { \"packages/app\": { \"lint\": \"flutter analyze\" } } }"
         );
+    }
+
+    #[test]
+    fn the_forms_ci_files_write_a_linter_in_declare_it() {
+        for (run, command) in [
+            (
+                "cargo +nightly clippy --all-targets",
+                "cargo clippy --all-targets -- -D warnings",
+            ),
+            (
+                "cargo hack clippy --each-feature",
+                "cargo clippy --all-targets -- -D warnings",
+            ),
+            ("./gradlew check", "./gradlew lint"),
+            ("./gradlew :app:check", "./gradlew lint"),
+            ("golangci-lint run", "go vet ./..."),
+        ] {
+            let dir = repo(&[(WORKFLOW, &workflow(run))]);
+            assert_eq!(guessed(dir.path(), ".", command), None, "{run}");
+        }
+        // An action that runs clippy, and a composite action of the repo.
+        let dir = repo(&[(
+            WORKFLOW,
+            "jobs:\n  lint:\n    steps:\n      - uses: actions-rs/clippy-check@v1\n",
+        )]);
+        assert_eq!(
+            guessed(dir.path(), ".", "cargo clippy --all-targets -- -D warnings"),
+            None
+        );
+        let dir = repo(&[(
+            ".github/actions/checks/action.yml",
+            "runs:\n  using: composite\n  steps:\n    - run: go vet ./...\n",
+        )]);
+        assert_eq!(guessed(dir.path(), ".", "go vet ./..."), None);
+        for file in ["azure-pipelines.yaml", ".buildkite/pipeline.yaml"] {
+            let dir = repo(&[(
+                file,
+                "steps:\n  - script: dotnet format --verify-no-changes\n",
+            )]);
+            assert_eq!(
+                guessed(
+                    dir.path(),
+                    ".",
+                    "dotnet format \"A.sln\" --verify-no-changes"
+                ),
+                None,
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_comment_at_the_end_of_a_ci_line_declares_nothing() {
+        let dir = repo(&[(WORKFLOW, &workflow("go test ./... # go vet later"))]);
+        assert!(guessed(dir.path(), ".", "go vet ./...").is_some());
+        let dir = repo(&[(WORKFLOW, &workflow("cargo clippyx"))]);
+        assert!(guessed(dir.path(), ".", "cargo clippy --all-targets -- -D warnings").is_some());
+    }
+
+    // The firescale config can sit in a subfolder of the git repo: the CI
+    // files and a workspace's settings are at the top of the repo.
+    #[test]
+    fn signs_above_the_firescale_root_count_up_to_the_top_of_the_git_repo() {
+        let dir = repo(&[
+            (".git/HEAD", "ref: refs/heads/main\n"),
+            (WORKFLOW, &workflow("cargo clippy")),
+            ("backend/Cargo.toml", "[package]\nname = \"b\"\n"),
+        ]);
+        let root = dir.path().join("backend");
+        assert_eq!(
+            guessed(&root, ".", "cargo clippy --all-targets -- -D warnings"),
+            None
+        );
+
+        let dir = repo(&[
+            (".git/HEAD", "ref: refs/heads/main\n"),
+            ("clippy.toml", "msrv = \"1.80\"\n"),
+            ("backend/api/Cargo.toml", "[package]\nname = \"b\"\n"),
+        ]);
+        let root = dir.path().join("backend");
+        assert_eq!(
+            guessed(&root, "api", "cargo clippy --all-targets -- -D warnings"),
+            None
+        );
+
+        // Above the top of the git repo nothing is read.
+        let dir = repo(&[
+            (WORKFLOW, &workflow("cargo clippy")),
+            ("clippy.toml", "msrv = \"1.80\"\n"),
+            ("repo/.git/HEAD", "ref: refs/heads/main\n"),
+            ("repo/Cargo.toml", "[package]\nname = \"b\"\n"),
+        ]);
+        let root = dir.path().join("repo");
+        assert!(guessed(&root, ".", "cargo clippy --all-targets -- -D warnings").is_some());
     }
 }

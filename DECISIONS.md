@@ -71,6 +71,53 @@ At the branch tip the 29 `ecosystems::` tests and the 26 tests of `facts-inputs-
 - **An agent fix for `agents-md`, `agent-permissions` or `gitignore-basics` may now change more files**, because the agent runner takes a rule's `inputs` as the files the agent may change, and #80 makes that list longer (linter configs, lock files, Gradle Kotlin scripts, the Maven and Gradle wrappers). ADR 0069 says so under Consequences. It widens a gap that was there (`pom.xml` and the like were already allowed). **Needs your decision:** keep the two lists apart, so that an agent may change only the files a rule writes.
 - Only the `agents-md` rule has a test that a new input makes it run again. Taking the table's inputs out of `agent-permissions` or `gitignore-basics` would fail no test.
 
+**Pull request 3: a failing lint never hides the tests, and a guessed lint only reports (ADR 0070)**
+
+Real-repo bug 1, by your decision. The exact list per ecosystem is in ADR 0070; the short form is in `docs/verify.md`, "A lint command fscale guessed only reports".
+
+- **A lint step stops nothing after it.** The project's `typecheck` and `test` run and are reported. A failing lint still fails the run, unless it is a guess.
+- **Five lint commands are guesses**, because fscale runs them for every project of the kind with nothing asked: `cargo clippy`, `go vet`, `dotnet format`, `dart analyze` / `flutter analyze`, and the Android `gradle lint`. Each blocks only when the repo declares it: a config file of the linter (`clippy.toml`, a `[lints]` table, `analysis_options.yaml`, `lint.xml`, a `lint {}` block) or the command in a CI file, read up to the top of the git repo. Every other lint command is found through a script, a build target, a config file or a plugin the repo wrote, so it blocks as before.
+- **The summary says it.** The step reads `failed` with `report-only:`, the headline adds `- report-only: lint failed (a lint command fscale guessed)`, and two lines below give the reason and the config line that makes it block.
+- **Verify's JSON is schema version 8**: the step status `report-only`, and `reportOnly` on every step of a guessed command.
+
+**The failing test first:** `packages/cli/src/guessed-lint.test.ts`, 7 tests (9 now) cut down from the four repos' outputs in the review. Seen failing on main, 7 of 7 (the tests were `not-run`, the lint `failed`), before any code changed.
+
+**Tests changed, none weakened or deleted.** Seven older tests pinned that a failing lint stops the project's tests, which is the behaviour you decided against. Each now pins the new behaviour at the same place, and one checks more than before:
+
+| Test                                                                                            | Was                                          | Is                                                                                                                                             |
+| ----------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `one_projects_failure_does_not_stop_the_others` (`verify.rs`)                                   | project `a`: lint failed, test not run       | project `a`: lint failed, test ran; a new project `d` with a failing typecheck still has its test not run                                      |
+| `project_steps_run_in_the_projects_folder_and_a_failure_names_it` (`verify.rs`)                 | the test after the failing lint was not run  | it ran and passed                                                                                                                              |
+| `reports every project's result when the backend fails, and names every failure` (`python-env`) | `test in backend/auth_service` not run       | no step not run; auth_service reads lint failed, test failed; the headline names both                                                          |
+| `prints a reason that several services share once, …` (`python-env`), with its snapshot         | 4 services share the pytest reason           | 5 do: auth_service's tests now run and need the same setup                                                                                     |
+| `says SETUP NEEDED when nx is not installed, …` and the same for turbo (`verify.test.ts`)       | headline `SETUP NEEDED for lint`             | `SETUP NEEDED for lint, typecheck` (nx) and `for lint, test` (turbo): the next step is tried and needs the same setup                          |
+| `names the project when one of its steps fails, and stops there` (`verify.test.ts`), renamed    | the last command run was the frontend's lint | the frontend's typecheck ran after its failing lint, failed too, and that stopped its tests: `lint failed`, `typecheck failed`, `test not-run` |
+
+Five tests that pin `schemaVersion` follow it from 7 to 8.
+
+**Decided on your behalf (ADR 0070 has each with its reason). Say if any is wrong:**
+
+1. **Ruff found in a project's dependency list counts as declared**, so the course project's Python lint still blocks. Your list of three signs does not name a dependency.
+2. **The tests also run after a lint that needs setup or timed out**, not only after one that failed.
+3. **`.editorconfig` does not declare `dotnet format`.** Both .NET repos of the review have one.
+4. **A config file makes the lint blocking even where the repo's own CI is less strict.** So apple/swift-argument-parser (`.swift-format`) and rrousselGit/provider (`analysis_options.yaml`) should still read `FAILED` at lint, now with their tests run beside it. Only the two .NET repos should turn right from this rule alone. The third real-repo run below says what happened.
+
+5. **`golangci-lint` in a CI file declares `go vet`, and a Gradle `check` task declares the Android lint**, because each runs the other's checks.
+
+**The fresh review found eight things. Fixed:** the config line for a project at the repo root named the whole repo (it now names `"."`); signs above the firescale root were not read (now up to the top of the git repo); `cargo +nightly clippy`, `cargo hack clippy`, the clippy actions, `.yaml` pipeline files and the repo's own composite actions were not seen; a comment at the end of a CI line counted; a guessed lint that needs setup read `failed` and lost its setup command (it now reads `needs setup` and keeps it); no test checked a `report-only` report against the JSON schema; four lines of the docs were out of date.
+
+**Needs your decision, from the review:**
+
+- **Go, Dart, Flutter and a Rust root have no typecheck step, because their lint type-checks.** While that lint is a guess, a type error in a file no test builds is shown and does not fail the run. For Go and Rust the tests compile the package anyway; for Dart a file under `lib/` that no test imports is the gap. Options: keep a guessed lint blocking for compile errors only, or give these kinds a typecheck step (`dart analyze --fatal-warnings` is not it; `dart compile` or `go build ./...` would be).
+- **The config line names a command, so it can replace more than the one step**: `verify.lint` takes the place of every project's lint. The summary now says so when that happens. A switch that makes guesses block without naming a command (for example `"verify": { "guessedLint": "block" }`) would be cleaner. Not built.
+
+**Not done:**
+
+- A lint that CI runs through `make lint`, `just lint` or a script is not seen, so it is a guess until the config names it.
+- Whether the tamper guard reports a deleted `clippy.toml` or `analysis_options.yaml`, which now turns a blocking lint into a report-only one, was not checked.
+- `fscale verify --dry-run` and `fscale facts` do not say which lint commands are guesses.
+- The small misreads listed at the end of ADR 0070's Consequences.
+
 ## 0.5.3 — the overnight run of 2026-11-18
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.
