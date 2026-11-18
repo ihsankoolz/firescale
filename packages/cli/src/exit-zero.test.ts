@@ -4,9 +4,10 @@
 // The stand-ins print what the real runners print for a failing run.
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { EXIT_OK, EXIT_VIOLATIONS, runCli } from './test-helpers.js';
+import { commitAll, EXIT_OK, EXIT_VIOLATIONS, runCli } from './test-helpers.js';
 
 const fixtures = fixtureSet();
 afterEach(() => fixtures.cleanup());
@@ -16,10 +17,16 @@ interface Answer {
   out?: string;
   err?: string;
   junit?: string;
+  /** The exit code on the head (0 when left out), and on the base commit (0 when left out). */
+  code?: number;
+  baseCode?: number;
+  /** Wait this long before answering. */
+  delayMs?: number;
 }
 
 /**
- * Writes a stand-in for `tool` into `dir`. It always exits 0. Each call that
+ * Writes a stand-in for `tool` into `dir`. It exits 0 unless the answer says
+ * otherwise. Each call that
  * is not a version probe is appended to `calls.log` there.
  */
 async function writeTool(dir: string, tool: string, answer: Answer): Promise<void> {
@@ -34,9 +41,10 @@ async function writeTool(dir: string, tool: string, answer: Answer): Promise<voi
     "const words = [...(process.env.PYTEST_ADDOPTS || '').matchAll(/'([^']*)'|(\\S+)/g)].map((m) => m[1] ?? m[2]);",
     "const report = /^--junitxml=(.+)$/.exec(words.find((w) => w.startsWith('--junitxml=')) || '');",
     'if (report && answer.junit) fs.writeFileSync(report[1], answer.junit);',
+    'if (answer.delayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, answer.delayMs);',
     'if (answer.out) process.stdout.write(answer.out);',
     'if (answer.err) process.stderr.write(answer.err);',
-    'process.exit(0);',
+    "process.exit((process.env.FSCALE_BASE_RUN === '1' ? answer.baseCode : answer.code) ?? 0);",
     '',
   ].join('\n');
   await writeFile(path.join(dir, 'tool.cjs'), script);
@@ -65,6 +73,7 @@ interface Step {
   exitCode?: number;
   cache?: object;
   failedTests?: { id: string }[];
+  label?: string;
 }
 
 interface Report {
@@ -172,19 +181,35 @@ const RUNNERS: Runner[] = [
   },
 ];
 
-/** A repo whose only step is `command`, and a folder of stand-ins beside it. */
-async function repoWith(runner: Runner, failing: string[]) {
+/**
+ * A repo whose only step is the runner's command, and a folder of stand-ins
+ * beside it. With `answer`, the stand-in gives that instead; with `branch`,
+ * the repo is on a `feature` branch off `main`, so there is a base commit.
+ */
+async function repoWith(
+  runner: Runner,
+  failing: string[],
+  options: { answer?: Answer; branch?: boolean; command?: string } = {},
+) {
   const repo = await fixtures.create({
     files: {
       'firescale.config.json': JSON.stringify({
         packs: ['core'],
-        verify: { lint: false, typecheck: false, test: runner.command },
+        verify: { lint: false, typecheck: false, test: options.command ?? runner.command },
       }),
       '.gitignore': '.firescale/\n',
+      'notes.txt': 'one\n',
     },
+    ...(options.branch ? { track: 'no-git' as const } : {}),
   });
+  if (options.branch) {
+    expect((await runGit(repo.root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+    await commitAll(repo.root, 'base');
+    expect((await runGit(repo.root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+    await writeFile(path.join(repo.root, 'notes.txt'), 'two\n');
+  }
   const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
-  await writeTool(tools, runner.tool, runner.answer(failing));
+  await writeTool(tools, runner.tool, options.answer ?? runner.answer(failing));
   const current = process.env['PATH'] ?? process.env['Path'] ?? '';
   const env = {
     PATH: `${tools}${path.delimiter}${current}`,
@@ -193,7 +218,9 @@ async function repoWith(runner: Runner, failing: string[]) {
     FSCALE_LOG: 'cache',
   };
   const verify = (...flags: string[]) => runCli(['verify', ...flags], repo.root, env);
-  return { repo, tools, verify };
+  const answer = (next: Answer) =>
+    writeFile(path.join(tools, 'answer.json'), JSON.stringify(next));
+  return { repo, tools, verify, answer };
 }
 
 const testStep = (stdout: string): Step => {
@@ -262,5 +289,74 @@ describe('a test command that exits 0 while its own results hold failing tests',
       'vitest run (exit 0): the command reported success but 1 test failed',
     );
     expect(result.stdout).not.toContain('1 tests failed');
+  });
+  it('does not count a coverage threshold or unhandled errors beside an exit code of 0', async () => {
+    const [, vitestRunner] = RUNNERS;
+    if (!vitestRunner) throw new Error('no Vitest runner');
+    const out =
+      '⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯\nVitest caught 1 unhandled error during the test run.\nError: boom\n ❯ src/a.ts:1:1\n' +
+      'ERROR: Coverage for lines (50%) does not meet global threshold (80%)\n' +
+      ' Test Files  1 passed (1)\n      Tests  3 passed (3)\n';
+    const { verify } = await repoWith(vitestRunner, [], { answer: { out } });
+    const result = await verify();
+    expect(result.code).toBe(EXIT_OK);
+    expect(result.stdout.split('\n')[0]).toBe('verify: OK');
+  });
+});
+
+describe('an exit code of 0 beside failing tests, and the base commit', () => {
+  const [pytestRunner] = RUNNERS;
+  if (!pytestRunner) throw new Error('no pytest runner');
+
+  // The base's command hides the same failing tests behind an exit code of
+  // 0. Before ADR 0072 the base passed, so the head's failure was new and
+  // blocked. Reading the base as failing would make it pre-existing: a pass
+  // that is easier to get. The base is judged by its exit code, as before.
+  it('keeps a failure new when the base commit hid the same failing tests', async () => {
+    const answer = { ...pytestRunner.answer(['charges', 'refunds']), code: 1, baseCode: 0 };
+    const { verify } = await repoWith(pytestRunner, [], { answer, branch: true });
+    const result = await verify('--json');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const report = JSON.parse(result.stdout) as Report;
+    expect(report.result).toBe('failed');
+    expect(testStep(result.stdout)).toMatchObject({ status: 'failed', label: 'new' });
+  });
+
+  // `pytest -x` stops at its first failure, so its results may hide a later
+  // new one: they are never evidence for pre-existing (ADR 0039). That holds
+  // when the head's command also hides its exit code.
+  it('never takes a run that stops at its first failure as evidence, whatever it exits with', async () => {
+    const answer = { ...pytestRunner.answer(['charges']), code: 0, baseCode: 1 };
+    const { verify } = await repoWith(pytestRunner, [], {
+      answer,
+      branch: true,
+      command: 'pytest -x',
+    });
+    const result = await verify('--json');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    expect(testStep(result.stdout)).toMatchObject({ status: 'failed', exitCode: 0, label: 'new' });
+  });
+});
+
+describe('an exit code of 0 beside failing tests, and the kept step time', () => {
+  // A pass replaces the kept time of a step, also with a shorter one; a
+  // failure only ever raises it (ADR 0057). This step is a failure.
+  it('does not replace the time of the last pass with its own shorter one', async () => {
+    const [, vitestRunner] = RUNNERS;
+    if (!vitestRunner) throw new Error('no Vitest runner');
+    const slow = { ...vitestRunner.answer([]), delayMs: 1500 };
+    const { repo, verify, answer } = await repoWith(vitestRunner, [], { answer: slow });
+    expect((await verify()).code).toBe(EXIT_OK);
+    const kept = async (): Promise<number> => {
+      const file = JSON.parse(
+        await readFile(path.join(repo.root, '.firescale', 'step-times.json'), 'utf8'),
+      ) as { steps: { step: string; durationMs: number }[] };
+      return file.steps.find((one) => one.step === 'test')?.durationMs ?? 0;
+    };
+    expect(await kept()).toBeGreaterThanOrEqual(1500);
+
+    await answer(vitestRunner.answer(['charges']));
+    expect((await verify('--no-cache')).code).toBe(EXIT_VIOLATIONS);
+    expect(await kept()).toBeGreaterThanOrEqual(1500);
   });
 });
