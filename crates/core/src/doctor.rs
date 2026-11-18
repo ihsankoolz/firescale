@@ -112,6 +112,20 @@ pub trait Machine {
     fn env_set(&self, name: &str) -> bool;
     /// True when something listens on `host:port`.
     fn listening(&self, host: &str, port: u16) -> bool;
+    /// True when `program` is found as a step would start it from `dir`:
+    /// on the PATH, or, for a path, relative to `dir`. The step cache's
+    /// lookup (ADR 0085).
+    fn finds(&self, dir: &Path, program: &str) -> bool {
+        if crate::stepcache::locate(dir, program).is_some() {
+            return true;
+        }
+        // `cmd` also looks in the step's folder first, unless this variable
+        // is set (verify passes the environment on as it is).
+        cfg!(windows)
+            && !program.contains(['/', '\\'])
+            && std::env::var_os("NoDefaultCurrentDirectoryInExePath").is_none()
+            && crate::stepcache::locate(dir, &format!(".\\{program}")).is_some()
+    }
 }
 
 /// The real machine.
@@ -471,6 +485,11 @@ struct Doctor<'a> {
     machine: &'a dyn Machine,
     settings: DoctorSettings,
     findings: Vec<Finding>,
+    /// The plan of a full `fscale verify`, when it could be built.
+    plan: Option<&'a crate::verify::VerifyPlan>,
+    /// The programs a planned step runs, by folder and lowercase name
+    /// without extension: doctor's own tool list leaves them to the plan.
+    planned: BTreeSet<(String, String)>,
 }
 
 impl Doctor<'_> {
@@ -874,6 +893,143 @@ impl Doctor<'_> {
         }
     }
 
+    /// The program of each planned step, looked up as the step would start
+    /// it. A tool doctor's own list knows, named by its bare name, is asked
+    /// its version as that list asks it; a program named by its path, or
+    /// unknown, is never run (ADR 0085).
+    fn planned_programs(&mut self) {
+        let Some(plan) = self.plan else {
+            return;
+        };
+        // Folder, program, the steps that run it. The command itself is
+        // never shown: it may hold a password (review of ADR 0085).
+        let mut programs: Vec<(String, String, Vec<String>)> = Vec::new();
+        let units = std::iter::once((".".to_owned(), &plan.steps))
+            .chain(plan.projects.iter().map(|p| (p.root.clone(), &p.steps)));
+        for (folder, steps) in units {
+            for (step, planned) in steps {
+                let crate::verify::Planned::Command(command) = planned else {
+                    continue;
+                };
+                let Some(program) = crate::stepcache::program_of(command) else {
+                    continue;
+                };
+                if not_judged(&program) {
+                    continue;
+                }
+                match programs
+                    .iter_mut()
+                    .find(|(f, p, _)| *f == folder && *p == program)
+                {
+                    Some((_, _, names)) => names.push(step.clone()),
+                    None => programs.push((folder.clone(), program, vec![step.clone()])),
+                }
+            }
+        }
+        for (folder, program, steps) in programs {
+            let stem = crate::stepcache::file_stem(&program);
+            // A path is the repo's own file, or one outside the PATH: it
+            // never stands for the tool of the list that has its name, and
+            // is never run (review of ADR 0085).
+            let path = program.contains(['/', '\\']);
+            if !path {
+                self.planned.insert((folder.clone(), stem.clone()));
+            }
+            let dir = dir_of(self.root, &folder);
+            let tool = if path {
+                None
+            } else {
+                self.tool_named(&folder, &stem)
+            };
+            let runs = steps_phrase(&steps);
+            let subject = subject_in(&folder, &program);
+            if !self.machine.finds(&dir, &program) {
+                let place = if path {
+                    "was not found"
+                } else {
+                    "is not on the PATH"
+                };
+                let fix = tool.as_ref().map_or_else(
+                    || {
+                        format!(
+                            "install {program}, or change the {} command under `verify` in the firescale config",
+                            step_or_steps(&steps)
+                        )
+                    },
+                    |tool| tool.install.to_owned(),
+                );
+                self.add(
+                    "tools",
+                    Some(&folder),
+                    subject,
+                    Status::Problem,
+                    format!("{program} {place}, and {runs} it."),
+                    Some(fix),
+                );
+                continue;
+            }
+            let Some(tool) = tool else {
+                self.add(
+                    "tools",
+                    Some(&folder),
+                    subject,
+                    Status::Ok,
+                    format!(
+                        "{program} {} ({})",
+                        if path { "was found" } else { "is on the PATH" },
+                        steps_owner(&steps)
+                    ),
+                    None,
+                );
+                continue;
+            };
+            // MSVC's `cl` takes no `--version`, as in the tool list.
+            let args: &[&str] = if stem == "cl" { &[] } else { tool.version_args };
+            match self.machine.run(&dir, &program, args) {
+                Some(out) => {
+                    let version = out.lines().find_map(find_version).unwrap_or_default();
+                    let shown = if version.is_empty() {
+                        format!("{program} is installed")
+                    } else {
+                        format!("{program} {version}")
+                    };
+                    self.add(
+                        "tools",
+                        Some(&folder),
+                        subject,
+                        Status::Ok,
+                        format!("{shown} ({})", steps_owner(&steps)),
+                        None,
+                    );
+                }
+                None => self.add(
+                    "tools",
+                    Some(&folder),
+                    subject,
+                    Status::Problem,
+                    format!(
+                        "{program} was found but `{program} {}` failed, and {runs} it.",
+                        args.join(" ")
+                    ),
+                    Some(tool.install.to_owned()),
+                ),
+            }
+        }
+    }
+
+    /// The tool of doctor's own list for the project in `folder` that has
+    /// `stem` among its programs.
+    fn tool_named(&self, folder: &str, stem: &str) -> Option<crate::ecosystems::Tool> {
+        let found = crate::ecosystems::Folder::read(self.root, folder);
+        self.facts
+            .projects
+            .iter()
+            .filter(|p| p.root == folder)
+            .filter_map(|p| crate::ecosystems::ecosystem(&p.kind))
+            .flat_map(|eco| (eco.doctor)(&found))
+            .find(|tool| tool.programs.contains(&stem))
+    }
+
     /// The programs each marker-file ecosystem needs (ADR 0051): a JDK,
     /// Maven or Gradle, Swift, Xcode, CMake and a compiler, Meson, the .NET
     /// SDK, Dart or Flutter, make. One line per program, and per project
@@ -894,6 +1050,13 @@ impl Doctor<'_> {
             let dir = dir_of(self.root, &folder);
             let found = crate::ecosystems::Folder::read(self.root, &folder);
             for tool in (eco.doctor)(&found) {
+                // A step of the plan runs it: checked there, by the step.
+                if tool.programs.iter().any(|program| {
+                    self.planned
+                        .contains(&(folder.clone(), (*program).to_owned()))
+                }) {
+                    continue;
+                }
                 let name = tool.programs.join(" or ");
                 if !asked.insert(name.clone()) {
                     continue;
@@ -1834,6 +1997,57 @@ fn packages_installed(count: usize, source: &str) -> String {
     }
 }
 
+/// A first word that is not a program to look up: a builtin or keyword of
+/// `sh` or `cmd`, a variable set for the command, shell syntax, a quoted or
+/// `~` path the shell rewrites. Such a step is not judged (ADR 0085).
+fn not_judged(program: &str) -> bool {
+    const BUILTINS: &[&str] = &[
+        // sh
+        "cd", "echo", "exit", "export", "set", "unset", "true", "false", "test", "[", "[[", ":",
+        ".", "source", "exec", "eval", "if", "for", "while", "until", "case", "time", "command",
+        "builtin", "type", "ulimit", "umask", "trap", "read", "wait", "let", "local", "shift",
+        // cmd
+        "call", "start", "setlocal", "endlocal", "pushd", "popd", "rem", "ver", "title", "copy",
+        "del", "erase", "md", "mkdir", "rd", "rmdir", "move", "ren", "rename", "cls", "mklink",
+        "chdir", "goto", "path", "assoc", "dir", "vol", "verify", "pause", "prompt", "color",
+    ];
+    program.contains('=')
+        || program.starts_with(['$', '%', '(', '{', '!', '~', '\''])
+        || BUILTINS.contains(&program.to_ascii_lowercase().as_str())
+}
+
+/// `lint step's` or `lint and test steps'`.
+fn step_or_steps(steps: &[String]) -> String {
+    match steps {
+        [one] => format!("{one} step's"),
+        _ => format!("{} steps'", join_and(steps)),
+    }
+}
+
+/// `verify's lint step runs` or `verify's lint and test steps run`.
+fn steps_phrase(steps: &[String]) -> String {
+    match steps {
+        [one] => format!("verify's {one} step runs"),
+        _ => format!("verify's {} steps run", join_and(steps)),
+    }
+}
+
+/// `verify's lint step` or `verify's lint and test steps`.
+fn steps_owner(steps: &[String]) -> String {
+    match steps {
+        [one] => format!("verify's {one} step"),
+        _ => format!("verify's {} steps", join_and(steps)),
+    }
+}
+
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// `backend/api packages`, or `packages` for the root.
 fn subject_in(folder: &str, what: &str) -> String {
     if folder == "." {
@@ -1939,17 +2153,34 @@ pub fn run_doctor_with(
     machine: &dyn Machine,
     settings: DoctorSettings,
 ) -> DoctorReport {
+    run_doctor_with_plan(root, facts, machine, settings, None)
+}
+
+/// Runs every check, and checks the program of each step of `plan` (the
+/// plan of a full `fscale verify`) as the step would start it. Doctor's own
+/// tool list leaves a tool to the plan where a step runs it (ADR 0085).
+#[must_use]
+pub fn run_doctor_with_plan(
+    root: &Path,
+    facts: &RepoFacts,
+    machine: &dyn Machine,
+    settings: DoctorSettings,
+    plan: Option<&crate::verify::VerifyPlan>,
+) -> DoctorReport {
     let mut doctor = Doctor {
         root,
         facts,
         machine,
         settings,
         findings: Vec::new(),
+        plan,
+        planned: BTreeSet::new(),
     };
     doctor.node();
     doctor.package_managers();
     doctor.rust();
     doctor.go();
+    doctor.planned_programs();
     doctor.toolchains();
     doctor.python();
     doctor.node_dependencies();

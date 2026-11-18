@@ -601,7 +601,7 @@ fn files_digest(snapshot: &Snapshot, scope: &Scope, owned: &[String]) -> Result<
 }
 
 /// The first word of a command, without quotes.
-fn program_of(command: &str) -> Option<String> {
+pub(crate) fn program_of(command: &str) -> Option<String> {
     let command = command.trim_start();
     let word = if let Some(rest) = command.strip_prefix('"') {
         rest.split('"').next()?.to_owned()
@@ -615,7 +615,7 @@ fn file_name(program: &str) -> &str {
     program.rsplit(['/', '\\']).next().unwrap_or(program)
 }
 
-fn file_stem(program: &str) -> String {
+pub(crate) fn file_stem(program: &str) -> String {
     let name = file_name(program).to_ascii_lowercase();
     for suffix in [".exe", ".cmd", ".bat"] {
         if let Some(stem) = name.strip_suffix(suffix) {
@@ -693,7 +693,7 @@ fn probes(command: &str) -> Vec<(String, Vec<&'static str>)> {
 
 /// Finds `program` on the PATH (never in the current folder), or, for a
 /// path, relative to `dir`.
-fn locate(dir: &Path, program: &str) -> Option<PathBuf> {
+pub(crate) fn locate(dir: &Path, program: &str) -> Option<PathBuf> {
     if program.contains(['/', '\\']) {
         let path = if Path::new(program).is_absolute() {
             PathBuf::from(program)

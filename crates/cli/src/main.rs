@@ -22,7 +22,7 @@ use firescale_core::config::{
 use firescale_core::configkey;
 use firescale_core::diff::unified_diff;
 use firescale_core::doctor::{
-    add_checks, format_doctor_human, format_doctor_json, run_doctor_with, ThisMachine,
+    add_checks, format_doctor_human, format_doctor_json, run_doctor_with_plan, ThisMachine,
 };
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
@@ -966,7 +966,41 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }
     let facts = detect_facts(root)?;
     let settings = load_doctor_settings(root)?;
-    let mut report = run_doctor_with(root, &facts, &ThisMachine, settings);
+    // The plan a full verify would run, built as --dry-run builds it: each
+    // step's program is checked as the step would start it (ADR 0085).
+    let plan =
+        load_verify_config(root).map(|config| plan_verify(root, &facts, &config, false, None));
+    let mut report = run_doctor_with_plan(root, &facts, &ThisMachine, settings, plan.as_ref().ok());
+    // Without the plan nothing says which programs verify's steps need:
+    // say so, rather than check nothing in silence (review of ADR 0085).
+    if let Err(error) = &plan {
+        let ts = root.join(firescale_core::config::TS_CONFIG).exists();
+        let (detail, fix) = if ts {
+            (
+                "doctor does not run firescale.config.ts (it is code), so the verify plan is not known and the programs of verify's steps were not checked.".to_owned(),
+                "keep the config in firescale.config.json to have them checked".to_owned(),
+            )
+        } else {
+            (
+                format!(
+                    "the verify plan could not be built, so the programs of verify's steps were not checked: {}",
+                    error.message()
+                ),
+                "fix the firescale config, then run fscale doctor again; fscale verify --dry-run shows the plan".to_owned(),
+            )
+        };
+        add_checks(
+            &mut report,
+            vec![firescale_core::doctor::Finding {
+                section: "tools",
+                project: None,
+                subject: "verify plan".to_owned(),
+                status: firescale_core::doctor::Status::Warning,
+                detail,
+                fix: Some(fix),
+            }],
+        );
+    }
     add_checks(&mut report, hook_findings(root));
     add_checks(&mut report, hook_limit_findings(root));
     let text = if args.json {

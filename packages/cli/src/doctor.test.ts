@@ -1,6 +1,7 @@
 // `fscale doctor`: is this machine ready for the repo? (SPEC §17, ADR 0026)
 // The tools doctor asks for their versions are stand-ins on a PATH the test
 // controls, so the results are the same on every machine.
+import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
@@ -678,8 +679,9 @@ describe('doctor and a variable that is set nowhere', () => {
       'firescale.config.ts': "export default { doctor: { missingEnv: 'problem' } };\n",
     });
     const human = await runCli(['doctor'], root, env);
+    // The verify plan is not known either, and doctor says so (ADR 0085).
     expect(human.stdout).toBe(
-      `Environment variables\n  warning  ${LINE}  warning  firescale.config.ts: doctor does not run firescale.config.ts (it is code), so doctor.missingEnv in it is not read: a variable that is set nowhere is a warning.\n\ndoctor: OK with 2 warnings - read them above.\n`,
+      `Tools\n  warning  verify plan: doctor does not run firescale.config.ts (it is code), so the verify plan is not known and the programs of verify's steps were not checked.\n           next: keep the config in firescale.config.json to have them checked\n\nEnvironment variables\n  warning  ${LINE}  warning  firescale.config.ts: doctor does not run firescale.config.ts (it is code), so doctor.missingEnv in it is not read: a variable that is set nowhere is a warning.\n\ndoctor: OK with 3 warnings - read them above.\n`,
     );
     expect(human.code).toBe(EXIT_OK);
   });
@@ -713,5 +715,199 @@ describe('verify points at doctor', () => {
       },
     });
     expect((await runCli(['verify'], passing.root)).stdout).not.toContain('fscale doctor');
+  });
+});
+
+// Doctor builds the verify plan, as `verify --dry-run` does, and looks up
+// the program of each step on the PATH the way the step cache does. Its own
+// list of tools gives way where a step runs that tool (ADR 0085).
+describe('doctor follows the verify plan (ADR 0085)', () => {
+  async function toolsFor(root: string, tools: Record<string, string>) {
+    const dir = path.join(root, '..', `${path.basename(root)}-tools`);
+    await writeVersionTools(dir, tools);
+    return toolPath(dir);
+  }
+
+  /**
+   * The stand-ins, and of the system only `sh` (doctor asks versions
+   * through it) and `git`: a tool this machine has installed is not found.
+   * GitHub's Ubuntu runners have Maven in /usr/bin.
+   */
+  async function onlyToolsFor(root: string, tools: Record<string, string>) {
+    if (WINDOWS) return toolsFor(root, tools);
+    const dir = path.join(root, '..', `${path.basename(root)}-tools`);
+    await writeVersionTools(dir, tools);
+    const system = path.join(root, '..', `${path.basename(root)}-system`);
+    await mkdir(system, { recursive: true });
+    for (const program of ['sh', 'git']) {
+      const found = ['/usr/bin', '/bin']
+        .map((folder) => path.join(folder, program))
+        .find((file) => existsSync(file));
+      if (found) await symlink(found, path.join(system, program));
+    }
+    return { PATH: [dir, system].join(path.delimiter) };
+  }
+
+  it('finds a program a verify step runs that is not on the PATH, and names the step', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: 'zzlint --strict', test: 'zztest run' },
+        }),
+      },
+    });
+    const env = await toolsFor(repo.root, { zztest: 'zztest 1.0' });
+    const result = await runCli(['doctor', '--json'], repo.root, env);
+    const report = await validate(result.stdout);
+    expect(report.checks.filter((c) => c.section === 'tools')).toEqual([
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'zzlint',
+        status: 'problem',
+        detail: "zzlint is not on the PATH, and verify's lint step runs it.",
+        fix: "install zzlint, or change the lint step's command under `verify` in the firescale config",
+      },
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'zztest',
+        status: 'ok',
+        detail: "zztest is on the PATH (verify's test step)",
+      },
+    ]);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const human = await runCli(['doctor'], repo.root, env);
+    expect(human.stdout).toContain(
+      "PROBLEM  zzlint: zzlint is not on the PATH, and verify's lint step runs it.",
+    );
+  });
+
+  it('gives its own entry for a tool to the plan where a step runs it, and keeps the rest of its list', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'pom.xml':
+          '<project><modelVersion>4.0.0</modelVersion><groupId>a</groupId><artifactId>b</artifactId><version>1</version></project>',
+      },
+    });
+    const missing = await runCli(
+      ['doctor', '--json'],
+      repo.root,
+      await onlyToolsFor(repo.root, {}),
+    );
+    const checks = (await validate(missing.stdout)).checks;
+    expect(checks.filter((c) => c.subject === 'mvn')).toEqual([
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'mvn',
+        status: 'problem',
+        detail: "mvn is not on the PATH, and verify's test step runs it.",
+        fix: 'install Maven from https://maven.apache.org, or add the Maven wrapper (mvnw) to the project',
+      },
+    ]);
+    // The JDK is no step's program: doctor's own list still asks for it.
+    expect(checks.filter((c) => c.subject === 'java').map((c) => c.status)).toEqual(['problem']);
+
+    const present = await fixtures.create({ files: { 'pom.xml': '<project/>' } });
+    const env = await toolsFor(present.root, {
+      mvn: 'Apache Maven 3.9.6',
+      java: 'openjdk version "21.0.2"',
+    });
+    const ready = await validate((await runCli(['doctor', '--json'], present.root, env)).stdout);
+    expect(ready.checks.filter((c) => c.subject === 'mvn')).toEqual([
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'mvn',
+        status: 'ok',
+        detail: "mvn 3.9.6 (verify's test step)",
+      },
+    ]);
+  });
+
+  it('never prints the command of a step, which may hold a password', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: {
+            test: 'zzdb postgres://shop:Pw0rdInStep@localhost/orders',
+            lint: false,
+            typecheck: false,
+          },
+        }),
+      },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    expect(result.stdout).toContain('zzdb is not on the PATH');
+    expect(result.stdout).not.toContain('Pw0rdInStep');
+  });
+
+  it('never runs a program a step names by its path, and never takes a tool of its own list away for it', async () => {
+    const marker = 'ran.txt';
+    const files: Record<string, string> = {
+      Makefile: 'test:\n\techo ok\n',
+      'firescale.config.json': JSON.stringify({
+        verify: { test: 'tools/make test', lint: false, typecheck: false },
+      }),
+    };
+    if (WINDOWS) {
+      files['tools/make.cmd'] = `@echo off\r\necho ran > ${marker}\r\necho GNU Make 9.9\r\n`;
+    } else {
+      files['tools/make'] = `#!/bin/sh\necho ran > ${marker}\necho "GNU Make 9.9"\n`;
+    }
+    const repo = await fixtures.create({ files });
+    if (!WINDOWS) await chmod(path.join(repo.root, 'tools', 'make'), 0o755);
+    const result = await runCli(['doctor', '--json'], repo.root, await onlyToolsFor(repo.root, {}));
+    const report = await validate(result.stdout);
+    // The list still asks for make on the PATH, as on main.
+    expect(report.checks.filter((c) => c.subject === 'make').map((c) => c.status)).toEqual([
+      'problem',
+    ]);
+    expect(report.checks.find((c) => c.subject === 'tools/make')).toEqual({
+      section: 'tools',
+      project: '.',
+      subject: 'tools/make',
+      status: 'ok',
+      detail: "tools/make was found (verify's test step)",
+    });
+    expect(existsSync(path.join(repo.root, marker))).toBe(false);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+  });
+
+  it('does not judge a step that starts with a builtin of cmd or sh', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: 'copy a.txt b.txt', typecheck: 'md out', test: 'del b.txt' },
+        }),
+      },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    expect((await validate(result.stdout)).checks.filter((c) => c.section === 'tools')).toEqual([]);
+  });
+
+  it('says so when the verify plan cannot be built, instead of checking nothing', async () => {
+    const repo = await fixtures.create({
+      files: { 'firescale.config.json': JSON.stringify({ verify: { compile: 'zzc' } }) },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    const plan = (await validate(result.stdout)).checks.filter((c) => c.subject === 'verify plan');
+    expect(plan.map((c) => c.status)).toEqual(['warning']);
+    expect(plan[0]?.detail).toContain("the programs of verify's steps were not checked");
+  });
+
+  it('does not judge a step that starts with a shell builtin or sets a variable first', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: 'FOO=1 zzlint', test: 'cd sub && zztest', typecheck: false },
+        }),
+      },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    const report = await validate(result.stdout);
+    expect(report.checks.filter((c) => c.section === 'tools')).toEqual([]);
+    expect(result.code).toBe(EXIT_OK);
   });
 });
