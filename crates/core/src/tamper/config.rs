@@ -99,7 +99,7 @@ pub(crate) struct Detector {
 }
 
 /// Every detector.
-pub(crate) const DETECTORS: [Detector; 4] = [
+pub(crate) const DETECTORS: [Detector; 5] = [
     Detector {
         reads: super::ci::reads,
         measures: super::ci::measures,
@@ -115,6 +115,10 @@ pub(crate) const DETECTORS: [Detector; 4] = [
     Detector {
         reads: super::lintconfig::reads,
         measures: super::lintconfig::measures,
+    },
+    Detector {
+        reads: super::runner::reads,
+        measures: super::runner::measures,
     },
 ];
 

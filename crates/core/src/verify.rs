@@ -4984,7 +4984,9 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
             } else {
                 format!("{}:{}", finding.file, finding.line)
             };
-            let approval = if !finding.kind.needs_approval() {
+            let approval = if finding.kind.reports_only() {
+                " [report only: it never fails verify; a reviewer judges it]".to_owned()
+            } else if !finding.kind.needs_approval() {
                 String::new()
             } else {
                 match &tamper.approvals {

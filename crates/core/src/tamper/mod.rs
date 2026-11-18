@@ -49,6 +49,7 @@ mod policy;
 mod python;
 mod reach;
 mod recover;
+mod runner;
 mod rust;
 mod suppress;
 mod swift;
@@ -754,6 +755,9 @@ pub enum Kind {
     /// An assertion whose expected value changed and nothing else (M26):
     /// needs a person's approval.
     ExpectedChanged,
+    /// A test or lint script, or a `conftest.py`, made unable to fail
+    /// (ADR 0086): report only, never fails verify.
+    RunnerWeakened,
     /// A changed test file tree-sitter cannot read, on the base or now: its
     /// tests and assertions could not be compared.
     NotChecked,
@@ -765,6 +769,13 @@ impl Kind {
     #[must_use]
     pub fn needs_approval(self) -> bool {
         matches!(self, Self::SnapshotChanged | Self::ExpectedChanged)
+    }
+
+    /// A finding shown for a reviewer that never fails verify, even when
+    /// the guard is enforced (ADR 0086).
+    #[must_use]
+    pub fn reports_only(self) -> bool {
+        matches!(self, Self::RunnerWeakened)
     }
 
     #[must_use]
@@ -780,6 +791,7 @@ impl Kind {
             Self::RuleDisabled => "rule turned off",
             Self::SnapshotChanged => "snapshot changed",
             Self::ExpectedChanged => "expected value changed",
+            Self::RunnerWeakened => "runner weakened",
             Self::NotChecked => "not checked",
         }
     }
@@ -882,6 +894,9 @@ impl TamperReport {
     /// True when a finding counts against the change now.
     #[must_use]
     pub fn counts_against(&self, finding: &Finding) -> bool {
+        if finding.kind.reports_only() {
+            return false;
+        }
         if !finding.kind.needs_approval() {
             return true;
         }
@@ -2722,6 +2737,7 @@ mod tests {
             Kind::RuleDisabled,
             Kind::SnapshotChanged,
             Kind::ExpectedChanged,
+            Kind::RunnerWeakened,
             Kind::NotChecked,
         ];
         for kind in &all {
@@ -2736,6 +2752,7 @@ mod tests {
                 | Kind::RuleDisabled
                 | Kind::SnapshotChanged
                 | Kind::ExpectedChanged
+                | Kind::RunnerWeakened
                 | Kind::NotChecked => {}
             }
         }
