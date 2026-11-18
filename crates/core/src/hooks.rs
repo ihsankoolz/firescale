@@ -26,6 +26,9 @@ use crate::error::{Error, Result};
 pub const WAY_OUT: &str =
     "If you believe a test or check is wrong, do not edit it: say which and why, and stop.";
 
+/// How a block summary for a setup problem starts (ADR 0022).
+pub const SETUP_NOTE: &str = "SETUP NEEDED:";
+
 /// How many times in a row a session is sent back before it is allowed to stop.
 pub const DEFAULT_MAX_BLOCKS: u32 = 3;
 /// Overrides `DEFAULT_MAX_BLOCKS`.
@@ -1400,7 +1403,7 @@ pub fn block_summary(report: &crate::verify::VerifyReport) -> String {
         )
     };
     format!(
-        "SETUP NEEDED: {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}{also}\n\n{summary}",
+        "{SETUP_NOTE} {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}{also}\n\n{summary}",
         if setup.len() == 1 { "1 step" } else { "some steps" }
     )
 }
@@ -1423,8 +1426,16 @@ pub fn reply(agent: Agent, decision: &Decision, summary: &str, max_blocks: u32) 
             exit_code: 0,
         },
         Decision::Block { blocks } => {
+            // A setup problem is not a wrong test: its note says what to
+            // run, and no line before it may tell the agent to stop
+            // (review of ADR 0084).
+            let way_out = if summary.starts_with(SETUP_NOTE) {
+                String::new()
+            } else {
+                format!("\n{WAY_OUT}")
+            };
             let message = format!(
-                "fscale verify failed, so the work is not done yet (attempt {blocks} of {max_blocks}).\n{WAY_OUT}\n\n{summary}"
+                "fscale verify failed, so the work is not done yet (attempt {blocks} of {max_blocks}).{way_out}\n\n{summary}"
             );
             match agent {
                 Agent::Claude | Agent::Codex => {

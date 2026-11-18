@@ -28,6 +28,7 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **One line**, in the stop hook's block message (its second line, for Claude Code, Codex and Cursor) and in the AGENTS.md block (after "Never skip, delete or weaken ..."): `If you believe a test or check is wrong, do not edit it: say which and why, and stop.`
 - **`fscale sync` puts it into an existing repo's block**; until then `sync --check` exits 1 and `agent-ready/agents-md` reports the block out of sync. This repo's block has it.
 - **Failing tests first:** 2, seen failing on `main` in WSL (the message for each agent; sync restoring the line). Two snapshots gain the line on purpose.
+- **From the fresh review, fixed:** the line came before the `SETUP NEEDED:` note and could tell an agent to stop instead of running the setup command; it is now left out of a setup block. Also: a fast Rust test of its place, the agents-md skill's description, a wrong ADR cited. **Not done:** an agent that takes the way out is blocked again with the same message, up to three times; letting a stated stop through would make a stop easier to get, so it waits for your decision (ADR 0084, Later).
 - **Not built (Later in ADR 0084):** a `PreToolUse` guard on the files the guard depends on; recording whether agents take the way out.
 
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)

@@ -361,6 +361,19 @@ mod tests {
     }
 
     #[test]
+    fn the_block_gives_the_way_out_after_the_rule_on_tests() {
+        let block = agents_block(&RepoFacts::default(), "fscale");
+        assert!(
+            block.contains(&format!(
+                "- Never skip, delete or weaken a test, a lint rule or a check to make it pass.
+- {WAY_OUT}
+"
+            )),
+            "{block}"
+        );
+    }
+
+    #[test]
     fn a_broken_block_is_left_for_a_person() {
         assert!(matches!(
             find_block("<!-- BEGIN firescale -->\nno end\n"),
