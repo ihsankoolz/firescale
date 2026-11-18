@@ -37,19 +37,25 @@ From the artifacts of run 44128788594: `bench/tamper-history-0.5.2.json` (new; e
 
 **Not done in this run, in one place:**
 
-- Stage 1, doctor: a missing env variable as a warning. Not started.
-- Stage 2: the five bug fixes above.
-- Stage 4, the project-type table: not started.
-- Stage 5, version 0.5.3: not started; it waits for Stage 1.
+- Stage 1, doctor: done later the same day ([#74](https://github.com/ihsankoolz/firescale/pull/74), ADR 0068).
+- Stage 2: bugs 2, 3 and 5 were fixed later the same day (#77, #76, #75) and the repos were run again. **Bugs 1 and 4 are not fixed.**
+- Stage 4, the project-type table: step 1 only, open and not merged ([#80](https://github.com/ihsankoolz/firescale/pull/80), ADR 0069). The rest of part C is not started.
+- Stage 5, version 0.5.3: merged ([#79](https://github.com/ihsankoolz/firescale/pull/79)), green on Linux, macOS and Windows. No tag was pushed.
 - No scheduled check-in was kept: the session stayed in one turn, and no cloud session could be started to schedule one for.
 - No fresh review of the workflow pull requests (#70, #71) or of the two data-and-docs ones (#72 and this one), beyond the labeller and the README's fact-check.
 
-**Morning list for you:**
+**Morning list for you** (as the run ended on 2026-11-18):
 
-1. Connect GitHub to Claude (`/web-setup`), then give the same brief to a cloud session. HANDOFF.md "In progress" says where it stands.
-2. Decide what a guessed linter may do (above). It is the main thing the real repos showed.
-3. If you measured a real `--budget 10m` run on the course project, say so: the README does not claim "about 5 minutes" as a measured time.
-4. `C:Usersihsans-readme` on the laptop is this run's scratch worktree (with a `target` folder from one build). Remove it with `git worktree remove --force ../fs-readme` from your checkout when you like. Your own checkout was not touched.
+1. **Release 0.5.3 when you want it:** the version is on `main`; tag `v0.5.3` on the merged commit and push the tag (RELEASING.md, step 3). Read "Version 0.5.3, and what you should see change" below first: doctor's exit code changes for a missing env variable.
+2. **Read and decide on [#80](https://github.com/ihsankoolz/firescale/pull/80)**, the first step of the project-type table (ADR 0069). It is open, green on Linux and not merged.
+3. **Decide what a guessed linter may do** (real-repo bug 1): be a blocking step, report without blocking, or never keep the tests from running. It is wrong in 4 of 15 real repos and is the main thing they showed.
+4. **#74 to #77, #79 and #80 were written with no local build.** GitHub CI was their only build and test, and no tests-first commit was seen to fail on its own. At the next local build: run `pnpm build && pnpm fscale verify`, print the README's doctor block again (`node scripts/readme-output.mjs`; two labels and the last line were changed by hand), and pin the exit code in the three older doctor tests whose exit code now follows the printed `PROBLEM` lines.
+5. `doctor.missingEnv` cannot be set by a repo whose config is `firescale.config.ts` (ADR 0068, Consequences). Say if doctor should load that config through Node.
+6. If you measured a real `--budget 10m` run on the course project, say so: the README does not claim "about 5 minutes" as a measured time.
+7. `C:\Users\ihsan\fs-readme` on the laptop is this run's scratch worktree (with a `target` folder from one build). Remove it with `git worktree remove --force ../fs-readme` from your checkout when you like. Your own checkout and the course project were not touched.
+8. To run the next brief in the cloud, connect GitHub to Claude first (`/web-setup`). A cloud routine was refused twice on 2026-11-18 for that reason.
+
+**Not done, in one place:** real-repo bugs 1 and 4; all of part C of the audit but its first step; M36 to M39 (not to be started). No scheduled check-in was kept. Fresh reviews: every pull request from #74 on had one (a subagent reading the diff, or checking the claims against the run's files); #70 to #73 had none beyond the labeller and the README's fact-check. #78 was merged a few minutes before the Linux jobs of its last, docs-only push had finished; they passed, and so did the run on `main`.
 
 **Blocked: the run could not move to the cloud.** Your rule is "Run in the cloud. Never touch my laptop or the course project." The session that received the brief runs on the laptop. Two ways to the cloud were tried on 2026-11-18:
 
@@ -58,7 +64,7 @@ From the artifacts of run 44128788594: `bench/tamper-history-0.5.2.json` (new; e
 
 What was done instead, so that the night is not lost and the laptop is left alone as far as it can be:
 
-- Only work that runs on GitHub: workflows started with `gh`, files written in one scratch worktree (`C:Usersihsans-readme`), nothing in your own checkout and nothing of the course project. The README pull request had built fscale once in that worktree before the rule arrived; no build or test ran on the laptop after it.
+- Only work that runs on GitHub: workflows started with `gh`, files written in one scratch worktree (`C:\Users\ihsan\fs-readme`), nothing in your own checkout and nothing of the course project. The README pull request had built fscale once in that worktree before the rule arrived; no build or test ran on the laptop after it.
 - **So every stage that needs fscale built and tested locally is not done:** the doctor change (Stage 1, second half), bug fixes from the real repos (Stage 2), the project-type table (Stage 4) and the version (Stage 5, which waits for them). Each is listed under "Not done" where it belongs.
 
 **For you:** connect GitHub to Claude, then give the same brief to a cloud session; HANDOFF.md "In progress" says where it stands.
@@ -133,7 +139,7 @@ Limits: doctor only looks for the file; it does not compare it with `pubspec.loc
 
 ### Version 0.5.3, and what you should see change
 
-The version is set to 0.5.3 with `node scripts/bump-version.mjs 0.5.3`, and the three snapshots that hold the version follow it. **No tag was pushed**: the release is yours (RELEASING.md, step 3). The version pull request carries the label `release`, so macOS and Windows ran on it. That run is the first time the code of #74 to #77 was built or tested on macOS and Windows.
+The version is set to 0.5.3 with `node scripts/bump-version.mjs 0.5.3`, and the three snapshots that hold the version follow it. **No tag was pushed**: the release is yours (RELEASING.md, step 3). The version pull request carries the label `release`, so macOS and Windows ran on it and passed (macOS in 12 minutes, Windows in 28). That run is the first time the code of #74 to #77 was built or tested on macOS and Windows.
 
 Compared with 0.5.2. Nothing here was run on the course project or on any machine of yours; each line is from the tests and from the second real-repos run.
 

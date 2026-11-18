@@ -4,16 +4,16 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**The overnight run of 2026-11-18 is in progress** (DECISIONS.md, "0.5.3 — the overnight run of 2026-11-18"). Its stages, in order:
+**The 0.5.3 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.3 — the overnight run of 2026-11-18"; its "Morning list for you" says what waits for the owner). Its stages:
 
-**The run could not move to the cloud** (DECISIONS.md, "Blocked: the run could not move to the cloud"): GitHub is not connected to the owner's Claude account. From the laptop, only work that runs on GitHub was done. The stages that need a local build wait for a cloud session.
+**The run never reached the cloud** (DECISIONS.md, "Blocked: the run could not move to the cloud"): GitHub is not connected to the owner's Claude account. After the README, nothing was built or tested on the laptop: #74 to #80 were written there and built and tested by GitHub CI only.
 
 0. The tamper benchmark: done. [Run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594), before `v0.5.1`, after `v0.5.2`, 16 public repos passed; this repo's own job was taken out ([#70](https://github.com/ihsankoolz/firescale/pull/70)). Not started again; Stage 3 reads its artifacts (kept until 2026-12-01).
 1. The README: merged as [#69](https://github.com/ihsankoolz/firescale/pull/69). Doctor: merged as [#74](https://github.com/ihsankoolz/firescale/pull/74) (ADR 0068): a variable set nowhere is a warning; `doctor.missingEnv: "problem"` turns it back. The README's doctor block was changed by hand; print it again with `node scripts/readme-output.mjs` at the next local build.
 2. `real-repos.yml` ran twice on 15 public repos: `docs/reviews/real-repos-0.5.3.md`. Bugs 2, 3 and 5 are fixed ([#77](https://github.com/ihsankoolz/firescale/pull/77), [#76](https://github.com/ihsankoolz/firescale/pull/76), [#75](https://github.com/ihsankoolz/firescale/pull/75)); right in 9, wrong in 5, not judged in 1 (gson and timber keep their first verdict: their downloads failed in the second run). **Bugs 1 and 4 are not fixed**; bug 1 needs the owner's decision first (what a guessed linter may do). #74 to #77 were written with no local build: GitHub CI was their only build and test.
 3. The benchmark's labels and rates: done (`bench/tamper-history-0.5.2.json`, `bench/RESULTS.md`, the README's table). 0.5.1: 11.6% false; 0.5.2: 12.4%; AI labels.
-4. The project-type table (audit part C): not started.
-5. Version 0.5.3: not started; it waits for Stages 1 to 3.
+4. The project-type table (audit part C): step 1 only, **open and not merged**, [#80](https://github.com/ihsankoolz/firescale/pull/80) (ADR 0069, status proposed): each ecosystem lists the files it reads, and the cache inputs of three rules are built from that. It waits for the owner. The rest of part C is not started.
+5. Version 0.5.3: merged as [#79](https://github.com/ihsankoolz/firescale/pull/79), green on Linux, macOS and Windows. **No tag was pushed: the release is the owner's step** (RELEASING.md, step 3).
 
 Before this run: the 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the course project, `docs/reviews/cs464-0.5.1.md`) is merged. Each fix had a failing test first. Blocks per pull request are in DECISIONS.md "0.5.2":
 
@@ -27,7 +27,7 @@ Before this run: the 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the cou
 
 The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged and released. The 0.5.2 run ended with its version pull request. Do not start M36 or the project-type table without the owner's word.
 
-- **Version:** 0.5.2 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **0.5.2 is released**: the tag `v0.5.2` is on commit `c9d8ffc` and it is npm's latest (seen on 2026-11-18).
+- **Version:** 0.5.3 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **0.5.3 is not released**: there is no tag `v0.5.3`. 0.5.2 is npm's latest (the tag `v0.5.2` is on commit `c9d8ffc`; seen on 2026-11-18).
 - **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run; `fscale doctor` says PROBLEM for a `.env` that is a symbolic link when its variables are set nowhere else; `hooks install` no longer prints the note about the Cursor hook format.
 - **Verify's JSON is schema version 7** (`notRun`, `budgetMs`, the step status `over-budget`).
 - **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
