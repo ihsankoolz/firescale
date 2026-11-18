@@ -2681,6 +2681,58 @@ mod tests {
     }
 
     #[test]
+    fn a_glob_that_names_a_folder_counts_every_file_in_it() {
+        let fixture = Fixture::new(
+            &[("api/dist/a.js", "a\n"), ("api/dist/deep/b.js", "b\n")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let api = fixture.root().join("api");
+        let digest = |glob: &str| declared_files_digest(&api, glob).unwrap();
+        let nothing = digest("nowhere");
+        // `dist`, as a .gitignore would name the folder, is all of it.
+        let before = digest("dist");
+        assert_ne!(before, nothing);
+        assert_eq!(before, digest("dist/**"));
+        fixture.write("api/dist/deep/b.js", "b2\n").unwrap();
+        assert_ne!(digest("dist"), before);
+        // A folder a wildcard names, too.
+        let star = digest("dis*");
+        assert_ne!(star, nothing);
+        fixture.write("api/dist/deep/b.js", "b3\n").unwrap();
+        assert_ne!(digest("dis*"), star);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_on_the_way_to_named_files_counts_by_its_target_and_is_not_followed() {
+        let fixture = Fixture::new(
+            &[("api/src/a.js", "a\n"), ("outside/dist/a.js", "a\n")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let api = root.join("api");
+        std::os::unix::fs::symlink(root.join("outside"), api.join("out")).unwrap();
+        let digest = |glob: &str| declared_files_digest(&api, glob).unwrap();
+        let nothing = digest("nowhere/**");
+        // The link is in the digest, by where it points.
+        for glob in ["out/dist/**", "out/**", "out"] {
+            let before = digest(glob);
+            assert_ne!(before, nothing, "{glob}");
+            // What is behind it is not read.
+            fixture.write("outside/dist/a.js", "changed\n").unwrap();
+            assert_eq!(digest(glob), before, "{glob}");
+            fixture.write("outside/dist/a.js", "a\n").unwrap();
+        }
+        // Pointed elsewhere, the digest changes.
+        let before = digest("out/dist/**");
+        std::fs::remove_file(api.join("out")).unwrap();
+        std::os::unix::fs::symlink(root.join("api").join("src"), api.join("out")).unwrap();
+        assert_ne!(digest("out/dist/**"), before);
+    }
+
+    #[test]
     fn the_env_files_line_holds_a_hash_per_file_and_never_a_value() {
         let fixture = Fixture::new(
             &[

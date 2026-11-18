@@ -246,6 +246,32 @@ describe('the config reader and additive inputs', () => {
     );
   });
 
+  it('refuses inputs for a folder that verify runs no project in, where they would do nothing', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: { projects: { backend: { inputs: [{ env: 'API_URL' }] } } },
+        }),
+        'backend/api/pyproject.toml': '[project]\nname = "api"\n',
+        'backend/api/main.py': 'app = None\n',
+      },
+    });
+    for (const flags of [[], ['--dry-run']]) {
+      const result = await runCli(['verify', ...flags], repo.root, {});
+      expect(result.code, flags.join(' ')).not.toBe(EXIT_OK);
+      expect(result.stderr, flags.join(' ')).toContain(
+        'verify.projects["backend"] names inputs, but verify runs no project in that folder, so they would be part of no key.',
+      );
+    }
+  });
+
+  it('names inputs among the keys of a project step', async () => {
+    expect(await refused({ web: { test: { cmd: 'x' } } })).toContain(
+      'unknown key "cmd" in verify.projects["web"].test. Allowed keys: command, timeout, inputs.',
+    );
+  });
+
   it('refuses inputs outside verify.projects, where no project is named', async () => {
     const repo = await fixtures.create({
       files: {
