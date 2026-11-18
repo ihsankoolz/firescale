@@ -105,16 +105,17 @@ describe('additive inputs of a project', () => {
   });
 
   it("keys only the step that names the input when it is the step's own", async () => {
+    // The auth service has a lint step (ruff) and a test step (pytest).
     const { verify } = await courseProject({
-      [AUDIT]: { test: { inputs: [{ env: 'AUDIT_SEED' }] } },
+      'backend/auth_service': { test: { inputs: [{ env: 'AUTH_SEED' }] } },
     });
-    const first = await verify({ AUDIT_SEED: '1' });
-    const audit = (calls: string[]) => calls.filter((call) => call.endsWith(' in audit_service'));
-    expect(audit(first.calls).length).toBeGreaterThan(1);
-    const second = await verify({ AUDIT_SEED: '2' });
-    expect(second.projects).toEqual(['audit_service']);
-    expect(audit(second.calls)).toHaveLength(1);
-    expect(audit(second.calls)[0]).toContain('pytest');
+    const auth = (calls: string[]) => calls.filter((call) => call.endsWith(' in auth_service'));
+    const first = await verify({ AUTH_SEED: '1' });
+    expect(auth(first.calls).length).toBeGreaterThan(1);
+    const second = await verify({ AUTH_SEED: '2' });
+    expect(second.projects).toEqual(['auth_service']);
+    expect(auth(second.calls)).toHaveLength(1);
+    expect(auth(second.calls)[0]).toContain('pytest');
   });
 
   it('runs a project again when its inputs are added to the config, and only that project', async () => {

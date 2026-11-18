@@ -988,6 +988,139 @@ fn env_files_line(root: &Path, folder: Option<&str>) -> Result<String, String> {
     Ok(line)
 }
 
+/// More files than this under one `ignored` glob, and the step is not
+/// cached: its key would cost more to make than the cache saves.
+const MAX_DECLARED_FILES: usize = 5_000;
+
+/// More folder entries than this looked at for one `ignored` glob, and the
+/// step is not cached.
+const MAX_DECLARED_ENTRIES: usize = 50_000;
+
+/// The files under `base` that `glob` names, as one digest: each file's
+/// path from `base` and the hash of its bytes, also for a file git ignores
+/// (ADR 0076). A link counts by where it points and is not followed. `.git`
+/// is never entered.
+///
+/// # Errors
+///
+/// Why the step is not cached: too many files, or one that cannot be read.
+fn declared_files_digest(base: &Path, glob: &str) -> Result<String, String> {
+    let matcher = globset::GlobBuilder::new(glob)
+        .literal_separator(true)
+        .build()
+        .map_err(|error| format!("its input \"{glob}\" is not a valid glob ({error})"))?
+        .compile_matcher();
+    // The walk starts at the folder the glob's plain first parts name.
+    let plain: Vec<&str> = glob
+        .split('/')
+        .take_while(|part| !part.contains(['*', '?', '[', '{']))
+        .collect();
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut seen = 0usize;
+    let mut queue: Vec<String> = vec![plain.join("/")];
+    while let Some(rel) = queue.pop() {
+        let path = rel
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .fold(base.to_path_buf(), |path, part| path.join(part));
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        seen += 1;
+        if seen > MAX_DECLARED_ENTRIES {
+            return Err(format!(
+                "its input \"{glob}\" is in a folder with more than {MAX_DECLARED_ENTRIES} files and folders"
+            ));
+        }
+        if meta.is_dir() {
+            let entries = fs::read_dir(&path).map_err(|error| {
+                format!("its input \"{glob}\": {rel} could not be listed ({error})")
+            })?;
+            for entry in entries.filter_map(std::result::Result::ok) {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == ".git" {
+                    continue;
+                }
+                queue.push(if rel.is_empty() {
+                    name
+                } else {
+                    format!("{rel}/{name}")
+                });
+            }
+            continue;
+        }
+        if rel.is_empty() || !matcher.is_match(&rel) {
+            continue;
+        }
+        let state = if meta.file_type().is_symlink() {
+            let target = fs::read_link(&path).map_err(|error| {
+                format!("its input \"{glob}\": {rel} could not be read ({error})")
+            })?;
+            format!("link\0{}", target.to_string_lossy().replace('\\', "/"))
+        } else if meta.is_file() {
+            let bytes = fs::read(&path).map_err(|error| {
+                format!("its input \"{glob}\": {rel} could not be read ({error})")
+            })?;
+            blake3::hash(&bytes).to_hex().to_string()
+        } else {
+            continue;
+        };
+        found.push((rel, state));
+        if found.len() > MAX_DECLARED_FILES {
+            return Err(format!(
+                "its input \"{glob}\" names more than {MAX_DECLARED_FILES} files"
+            ));
+        }
+    }
+    found.sort();
+    let mut hasher = blake3::Hasher::new();
+    for (rel, state) in &found {
+        hasher.update(format!("{rel}\0{state}\n").as_bytes());
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// The inputs the config names for a step, as one line of its key per
+/// input (ADR 0076): the glob with the digest of the files it names, the
+/// variable's name with the hash of its value or `unset`. Empty when none
+/// is named. No value and no content is in it.
+///
+/// # Errors
+///
+/// Why the step is not cached.
+fn declared_inputs_line(
+    root: &Path,
+    folder: Option<&str>,
+    inputs: &[crate::verify::DeclaredInput],
+    read: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Result<String, String> {
+    let base = folder
+        .filter(|folder| *folder != ".")
+        .into_iter()
+        .flat_map(|folder| folder.split('/'))
+        .fold(root.to_path_buf(), |path, part| path.join(part));
+    let mut line = String::new();
+    for input in inputs {
+        match input {
+            crate::verify::DeclaredInput::Ignored(glob) => {
+                let digest = declared_files_digest(&base, glob)?;
+                line.push_str(&format!("ignored\0{glob}\0{digest}\n"));
+            }
+            crate::verify::DeclaredInput::Env(name) => {
+                let value = read(name).map_or_else(
+                    || "unset".to_owned(),
+                    |value| {
+                        let text = value.to_string_lossy();
+                        format!("set\0{}", blake3::hash(text.as_bytes()).to_hex())
+                    },
+                );
+                line.push_str(&format!("env\0{name}\0{value}\n"));
+            }
+        }
+    }
+    Ok(line)
+}
+
 /// True for a command whose result depends on git history, not only on the
 /// files: `nx affected`, `turbo run --affected`.
 fn uses_history(command: &str) -> bool {
@@ -1536,6 +1669,8 @@ pub struct StepCache<'a> {
     salt: Option<String>,
     base_tree: std::sync::Mutex<Option<(String, BaseTree)>>,
     log: std::sync::Mutex<Vec<String>>,
+    /// The inputs the config names per project (ADR 0076).
+    declared: BTreeMap<String, crate::verify::ProjectInputs>,
 }
 
 /// A step's key, and the digest of its files when it was made.
@@ -1545,6 +1680,9 @@ pub struct CacheKey {
     files: String,
     /// The unit's env files when the key was made ([`env_files_line`]).
     env_files: String,
+    /// The inputs the config names for the step, when the key was made
+    /// ([`declared_inputs_line`]).
+    declared: String,
 }
 
 /// How a step's run uses the cache.
@@ -1594,6 +1732,7 @@ impl<'a> StepCache<'a> {
             salt: None,
             base_tree: std::sync::Mutex::new(None),
             log: std::sync::Mutex::new(Vec::new()),
+            declared: BTreeMap::new(),
         }
     }
 
@@ -1609,6 +1748,24 @@ impl<'a> StepCache<'a> {
         self.salt = salt;
         self.shared = shared;
         self
+    }
+
+    /// Adds the inputs the config names per project
+    /// (`verify.projects.<folder>.inputs`, ADR 0076) to the keys of that
+    /// project's steps. They can only add to a key.
+    #[must_use]
+    pub fn with_inputs(mut self, inputs: BTreeMap<String, crate::verify::ProjectInputs>) -> Self {
+        self.declared = inputs;
+        self
+    }
+
+    /// The line of a step's key for the inputs the config names for it.
+    fn declared_line(&self, folder: Option<&str>, step: &str) -> Result<String, String> {
+        let inputs = crate::verify::inputs_of(&self.declared, folder, step);
+        if inputs.is_empty() {
+            return Ok(String::new());
+        }
+        declared_inputs_line(&self.root, folder, &inputs, &|name| std::env::var_os(name))
     }
 
     /// Says what the difference between the base commit's config and the
@@ -1717,11 +1874,22 @@ impl<'a> StepCache<'a> {
         let key = blake3::hash(format!("{key}\0env-files\0{env_files}").as_bytes())
             .to_hex()
             .to_string();
+        // What the config names for this step, when it names anything: a
+        // key with no named input is made as before (ADR 0076).
+        let declared = self.declared_line(folder, step)?;
+        let key = if declared.is_empty() {
+            key
+        } else {
+            blake3::hash(format!("{key}\0declared-inputs\0{declared}").as_bytes())
+                .to_hex()
+                .to_string()
+        };
         let key = self.salted(key);
         Ok(CacheKey {
             key,
             files,
             env_files,
+            declared,
         })
     }
 
@@ -1868,8 +2036,12 @@ impl<'a> StepCache<'a> {
         );
         let now = self.fresh();
         let env_files = env_files_line(&self.root, folder);
+        let declared = self.declared_line(folder, &entry.step);
         match self.digests.digest(&now, &scope) {
-            Ok(after) if after == key.files && env_files.as_ref() == Ok(&key.env_files) => {}
+            Ok(after)
+                if after == key.files
+                    && env_files.as_ref() == Ok(&key.env_files)
+                    && declared.as_ref() == Ok(&key.declared) => {}
             _ => {
                 let why = "files it depends on changed while verify ran".to_owned();
                 self.note(format!("cache: not stored {place}: {why}"));
@@ -2442,6 +2614,70 @@ mod tests {
         assert_eq!(write(&"n".repeat(401), "0123456789abcdef"), none);
         assert_eq!(write("files in api", "not a digest"), none);
         assert_eq!(write("", "0123456789abcdef"), none);
+    }
+
+    #[test]
+    fn the_line_of_named_inputs_holds_digests_and_changes_with_what_it_names() {
+        use crate::verify::DeclaredInput;
+        let fixture = Fixture::new(
+            &[
+                ("api/dist/a.js", "a\n"),
+                ("api/dist/deep/b.js", "b\n"),
+                ("api/src/main.py", "x = 1\n"),
+                ("api/.git/config", "not entered\n"),
+                ("web/dist/a.js", "other project\n"),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let inputs = [
+            DeclaredInput::Env("API_TOKEN".to_owned()),
+            DeclaredInput::Ignored("dist/**".to_owned()),
+        ];
+        let line = |token: Option<&str>| {
+            let token = token.map(std::ffi::OsString::from);
+            declared_inputs_line(root, Some("api"), &inputs, &|name| {
+                (name == "API_TOKEN").then(|| token.clone()).flatten()
+            })
+            .unwrap()
+        };
+        let first = line(Some("never-shown"));
+        assert!(first.starts_with("env\0API_TOKEN\0set\0"), "{first:?}");
+        assert!(first.contains("\nignored\0dist/**\0"), "{first:?}");
+        assert!(!first.contains("never-shown") && !first.contains("a.js"));
+        assert_eq!(first, line(Some("never-shown")));
+        // The value, set to nothing, and not set, are three lines.
+        assert_ne!(first, line(Some("other")));
+        assert_ne!(line(Some("")), line(None));
+        assert!(line(None).starts_with("env\0API_TOKEN\0unset\n"));
+        // A named file changes, appears and goes.
+        fixture.write("api/dist/deep/b.js", "b2\n").unwrap();
+        let changed = line(Some("never-shown"));
+        assert_ne!(changed, first);
+        fixture.write("api/dist/c.js", "c\n").unwrap();
+        let more = line(Some("never-shown"));
+        assert_ne!(more, changed);
+        std::fs::remove_file(root.join("api").join("dist").join("c.js")).unwrap();
+        assert_eq!(line(Some("never-shown")), changed);
+        // A file the glob does not name, and another project's, change nothing.
+        fixture.write("api/src/main.py", "x = 2\n").unwrap();
+        fixture.write("web/dist/a.js", "changed\n").unwrap();
+        assert_eq!(line(Some("never-shown")), changed);
+        // `*` stays in one folder; a plain path names one file; nothing is fine.
+        let digest = |glob: &str| declared_files_digest(&root.join("api"), glob).unwrap();
+        assert_ne!(digest("dist/*"), digest("dist/**"));
+        assert_ne!(digest("dist/a.js"), digest("dist/nothing.js"));
+        assert_eq!(digest("nowhere/**"), digest("dist/nothing.js"));
+        // The whole folder, without `.git`.
+        let all = digest("**");
+        fixture.write("api/.git/config", "changed\n").unwrap();
+        assert_eq!(digest("**"), all);
+        // No inputs: no line, so the key is made as before.
+        assert_eq!(
+            declared_inputs_line(root, Some("api"), &[], &|_| None).unwrap(),
+            ""
+        );
     }
 
     #[test]

@@ -14,7 +14,10 @@ use crate::error::{Error, Result};
 use crate::model::{RuleMeta, Status};
 use crate::node::NodeHost;
 use crate::rule::{BuiltinPack, BuiltinRule, Options};
-use crate::verify::{Limit, ProjectOverride, ProjectTimeouts, StepOverride, VerifyConfig};
+use crate::verify::{
+    DeclaredInput, Limit, ProjectInputs, ProjectOverride, ProjectTimeouts, StepOverride,
+    VerifyConfig,
+};
 
 pub const TS_CONFIG: &str = "firescale.config.ts";
 pub const JSON_CONFIG: &str = "firescale.config.json";
@@ -414,14 +417,84 @@ fn parse_limit(name: &str, key: &str, value: &Value) -> Result<Limit> {
     Ok(Limit::After(std::time::Duration::from_secs(seconds)))
 }
 
+/// What every error about `inputs` ends with: there is no way to remove an
+/// input, and the reader says so (ADR 0076).
+const INPUTS_ONLY_ADD: &str = "Inputs can only add to what a step's key holds: each entry is { \"ignored\": \"<glob>\" } or { \"env\": \"NAME\" }.";
+
+/// Reads an `inputs` list: `{ "ignored": "<glob>" }` and `{ "env": "NAME" }`
+/// entries (ADR 0076). Anything else is an error, so that no entry can be
+/// read as taking an input away.
+fn parse_inputs(name: &str, key: &str, value: &Value) -> Result<Vec<DeclaredInput>> {
+    let Value::Array(entries) = value else {
+        return Err(Error::user(format!(
+            "{name}: {key} must be a list, for example [{{ \"ignored\": \"dist/**\" }}, {{ \"env\": \"API_URL\" }}]. {INPUTS_ONLY_ADD}"
+        )));
+    };
+    let mut inputs = Vec::new();
+    for entry in entries {
+        let one = match entry {
+            Value::Object(fields) if fields.len() == 1 => fields.iter().next(),
+            _ => None,
+        };
+        let input = match one {
+            Some((kind, Value::String(glob))) if kind == "ignored" => {
+                let inside = !glob.is_empty()
+                    && !glob.starts_with('/')
+                    && !glob.starts_with('!')
+                    && !glob.contains('\\')
+                    && !glob.contains(':')
+                    && glob
+                        .split('/')
+                        .all(|part| !part.is_empty() && part != "." && part != "..");
+                if !inside {
+                    return Err(Error::user(format!(
+                        "{name}: {key} holds the glob \"{glob}\", which must name files inside the project's folder: relative to it, written with forward slashes, with no \"..\" and no \"!\" in front, for example \"dist/**\". {INPUTS_ONLY_ADD}"
+                    )));
+                }
+                if let Some(why) = crate::agentrun::glob_error(glob) {
+                    return Err(Error::user(format!(
+                        "{name}: {key} holds \"{glob}\", which is not a valid glob ({why}). {INPUTS_ONLY_ADD}"
+                    )));
+                }
+                DeclaredInput::Ignored(glob.clone())
+            }
+            Some((kind, Value::String(variable))) if kind == "env" => {
+                let mut chars = variable.chars();
+                let named = chars
+                    .next()
+                    .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+                if !named {
+                    return Err(Error::user(format!(
+                        "{name}: {key} holds the variable name \"{variable}\", which must be letters, digits and \"_\", not starting with a digit, for example \"API_URL\". {INPUTS_ONLY_ADD}"
+                    )));
+                }
+                DeclaredInput::Env(variable.clone())
+            }
+            _ => {
+                return Err(Error::user(format!(
+                    "{name}: {key} holds {entry}, which is not an input. {INPUTS_ONLY_ADD}"
+                )));
+            }
+        };
+        inputs.push(input);
+    }
+    Ok(inputs)
+}
+
+/// What one step setting holds.
+#[derive(Default)]
+struct StepSetting {
+    command: Option<StepOverride>,
+    limit: Option<Limit>,
+    /// `inputs`, which only a project's step may have (ADR 0076).
+    inputs: Option<Vec<DeclaredInput>>,
+}
+
 /// Reads one step setting: a command, `false` for "do not run this step",
-/// or an object with a `command` and a `timeout`.
-fn parse_step(
-    name: &str,
-    key: &str,
-    step: &str,
-    value: &Value,
-) -> Result<(Option<StepOverride>, Option<Limit>)> {
+/// or an object with a `command`, a `timeout` and, under `verify.projects`,
+/// `inputs`.
+fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepSetting> {
     if !crate::verify::STEPS.contains(&step) {
         return Err(Error::user(format!(
             "{name}: unknown verify step \"{step}\". Allowed steps: lint, typecheck, test."
@@ -433,13 +506,18 @@ fn parse_step(
         ))
     };
     match value {
-        Value::String(command) if !command.trim().is_empty() => {
-            Ok((Some(StepOverride::Command(command.clone())), None))
-        }
-        Value::Bool(false) => Ok((Some(StepOverride::Skip), None)),
+        Value::String(command) if !command.trim().is_empty() => Ok(StepSetting {
+            command: Some(StepOverride::Command(command.clone())),
+            ..StepSetting::default()
+        }),
+        Value::Bool(false) => Ok(StepSetting {
+            command: Some(StepOverride::Skip),
+            ..StepSetting::default()
+        }),
         Value::Object(fields) if !fields.is_empty() => {
             let mut command = None;
             let mut limit = None;
+            let mut inputs = None;
             for (field, value) in fields {
                 match field.as_str() {
                     "command" => match value {
@@ -455,6 +533,9 @@ fn parse_step(
                     "timeout" => {
                         limit = Some(parse_limit(name, &format!("{key}.{step}.timeout"), value)?);
                     }
+                    "inputs" => {
+                        inputs = Some(parse_inputs(name, &format!("{key}.{step}.inputs"), value)?);
+                    }
                     other => {
                         return Err(Error::user(format!(
                             "{name}: unknown key \"{other}\" in {key}.{step}. Allowed keys: command, timeout."
@@ -462,7 +543,11 @@ fn parse_step(
                     }
                 }
             }
-            Ok((command, limit))
+            Ok(StepSetting {
+                command,
+                limit,
+                inputs,
+            })
         }
         _ => Err(bad()),
     }
@@ -575,6 +660,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                         )));
                     }
                     let mut timeouts = ProjectTimeouts::default();
+                    let mut inputs = ProjectInputs::default();
                     let parsed = match setting {
                         Value::Bool(false) => ProjectOverride::Off,
                         Value::Object(steps) => {
@@ -586,12 +672,22 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                                         Some(parse_limit(name, &format!("{key}.timeout"), value)?);
                                     continue;
                                 }
-                                let (command, limit) = parse_step(name, &key, step, value)?;
-                                if let Some(command) = command {
+                                if step == "inputs" {
+                                    inputs.all =
+                                        parse_inputs(name, &format!("{key}.inputs"), value)?;
+                                    continue;
+                                }
+                                let setting = parse_step(name, &key, step, value)?;
+                                if let Some(command) = setting.command {
                                     map.insert(step.clone(), command);
                                 }
-                                if let Some(limit) = limit {
+                                if let Some(limit) = setting.limit {
                                     timeouts.steps.insert(step.clone(), limit);
+                                }
+                                if let Some(named) =
+                                    setting.inputs.filter(|named| !named.is_empty())
+                                {
+                                    inputs.steps.insert(step.clone(), named);
                                 }
                             }
                             ProjectOverride::Steps(map)
@@ -610,14 +706,22 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     if timeouts != ProjectTimeouts::default() {
                         verify.project_timeouts.insert(clean.to_owned(), timeouts);
                     }
+                    if inputs != ProjectInputs::default() {
+                        verify.project_inputs.insert(clean.to_owned(), inputs);
+                    }
                 }
             }
             step if crate::verify::STEPS.contains(&step) => {
-                let (command, limit) = parse_step(name, "verify", step, value)?;
-                if let Some(command) = command {
+                let setting = parse_step(name, "verify", step, value)?;
+                if setting.inputs.is_some() {
+                    return Err(Error::user(format!(
+                        "{name}: verify.{step}.inputs is not a setting: inputs are set per project, under verify.projects.<folder>.inputs or verify.projects.<folder>.{step}.inputs."
+                    )));
+                }
+                if let Some(command) = setting.command {
                     verify.steps.insert(step.to_owned(), command);
                 }
-                if let Some(limit) = limit {
+                if let Some(limit) = setting.limit {
                     verify.step_timeouts.insert(step.to_owned(), limit);
                 }
             }

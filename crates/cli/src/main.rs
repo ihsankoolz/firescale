@@ -1423,7 +1423,8 @@ fn verify_report(
             read_env: &read_env,
         },
     )
-    .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
+    .with_ci(ci.as_ref().map(CiRun::key_salt), shared)
+    .with_inputs(verify_config.project_inputs.clone());
     // What the config's difference from the base commit's reaches, so that
     // a step it does not reach can count as the same on the base (ADR 0058).
     // Not for a `firescale.config.ts`: it is a file of every key, and its
