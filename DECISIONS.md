@@ -92,6 +92,15 @@ Build idea 2, first step only.
 - **The fresh review** found nothing that removes or weakens an input. It found inputs that did nothing without saying so; fixed test first: a glob that names a folder now names its files, a link on the way is not walked through, and inputs for a folder that is no project are an error. Logged, not fixed: a kept base result is not keyed on the named inputs (ADR 0076, "Not done").
 - **One full local run had a test file fail with no failing test in it** (10 skipped instead of 4); the same tests passed when run again (60 files, 1469 passed). I did not find which file. Linux CI is the gate.
 
+**Pull request 6: affected covers the key, as a property test (ADR 0077)**
+
+Build idea 11, the test only.
+
+- **The test:** `crates/core/src/affected_covers_key.rs`. Four fixture repos, 60 seeds each, one to three random changes per seed. Every unit whose key differs after the change must be in the affected set. 763 keys compared, about 7 seconds.
+- **It found three cases.** One fixed by widening: the repo root's own steps now run when a project below the root changed (their key holds every file of the repo). Nothing changes in a repo with no project at the root, such as the course project.
+- **Two wait for you** (ADR 0077, "Needs your decision"), each pinned by a test: a document that belongs to no project is in every key and affects nothing (ADR 0034 against ADR 0043); with a project at the root, a file in no project below it affects the root project only, and is in the keys of the projects below. Widening the second made two existing tests fail, so I took it back and left those tests alone.
+- **Failing test first:** three of three fixtures failed in WSL before any change.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

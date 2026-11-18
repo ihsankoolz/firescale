@@ -69,6 +69,10 @@ struct State {
     affected: BTreeMap<Unit, bool>,
     /// The changed files that affected counts as inert (ADR 0034).
     inert: Vec<String>,
+    /// The folders of the projects below the repo root.
+    below: Vec<String>,
+    /// True when the repo root is a project itself.
+    root_project: bool,
 }
 
 fn state(root: &Path, changed: &BTreeSet<String>) -> State {
@@ -135,6 +139,13 @@ fn state(root: &Path, changed: &BTreeSet<String>) -> State {
         keys,
         affected,
         inert: set.inert_files,
+        below: facts
+            .projects
+            .iter()
+            .filter(|project| project.root != ".")
+            .map(|project| project.root.clone())
+            .collect(),
+        root_project: facts.projects.iter().any(|project| project.root == "."),
     }
 }
 
@@ -357,12 +368,16 @@ const CASES: u64 = 60;
 
 /// What the cases of one fixture gave.
 struct Outcome {
-    /// Every case that breaks the property, as text.
+    /// Every case that breaks the property and is in neither known gap.
     broken: Vec<String>,
-    /// The cases that break it only where a changed file is one that
-    /// affected counts as inert (ADR 0034): the known gap, see
-    /// [`a_document_below_the_root_is_in_the_keys_and_affects_nothing`].
+    /// Known gap 1 (ADR 0077): a changed file is one that affected counts
+    /// as inert (a document, a picture, `docs/`; ADR 0034), and a key
+    /// holds it.
     inert: Vec<String>,
+    /// Known gap 2 (ADR 0077): the repo root is a project, and a changed
+    /// file is in no project below it. Affected gives the file to the root
+    /// project; the key of every project below holds it too.
+    root_files: Vec<String>,
     /// How many keys were compared.
     compared: usize,
 }
@@ -376,6 +391,7 @@ fn outcome(name: &str, files: &[(String, String)]) -> Outcome {
     let mut outcome = Outcome {
         broken: Vec::new(),
         inert: Vec::new(),
+        root_files: Vec::new(),
         compared: 0,
     };
     for seed in 0..CASES {
@@ -385,6 +401,12 @@ fn outcome(name: &str, files: &[(String, String)]) -> Outcome {
         let mut random = Random::new(seed);
         let touched = change(root, &mut random);
         let after = state(root, &touched);
+        let outside_every_project = touched.iter().any(|file| {
+            !after.below.iter().any(|folder| {
+                file.strip_prefix(folder.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
+        });
         for (unit, key) in &after.keys {
             // A unit with no key is never served from the cache, so
             // nothing is compared for it.
@@ -398,10 +420,12 @@ fn outcome(name: &str, files: &[(String, String)]) -> Outcome {
                     after.affected.get(unit),
                     after.inert
                 );
-                if after.inert.is_empty() {
-                    outcome.broken.push(case);
-                } else {
+                if !after.inert.is_empty() {
                     outcome.inert.push(case);
+                } else if after.root_project && unit.0.is_some() && outside_every_project {
+                    outcome.root_files.push(case);
+                } else {
+                    outcome.broken.push(case);
                 }
             }
         }
@@ -409,10 +433,18 @@ fn outcome(name: &str, files: &[(String, String)]) -> Outcome {
     outcome
 }
 
-/// The property for one fixture: no case breaks it, apart from the known
-/// gap, and enough keys were compared for that to mean something.
+/// The property for one fixture: no case breaks it, apart from the two
+/// known gaps, and enough keys were compared for that to mean something.
 fn holds(name: &str, files: &[(String, String)], at_least: usize) {
     let outcome = outcome(name, files);
+    // Shown with `--nocapture`: the numbers ADR 0077 quotes.
+    println!(
+        "{name}: {} keys compared, {} in known gap 1 (inert files), {} in known gap 2 (the root project's files), {} broken",
+        outcome.compared,
+        outcome.inert.len(),
+        outcome.root_files.len(),
+        outcome.broken.len()
+    );
     assert!(outcome.broken.is_empty(), "{}", outcome.broken.join("\n"));
     assert!(
         outcome.compared > at_least,
@@ -439,6 +471,95 @@ fn every_unit_whose_key_differs_is_affected_in_projects_below_a_plain_root() {
 #[test]
 fn every_unit_whose_key_differs_is_affected_below_a_root_project() {
     holds("rooted repo", &rooted_files(), 60);
+}
+
+/// Known gap 1, pinned so that it is seen (ADR 0077, "Needs your
+/// decision"): a document below the repo root is in the key of every
+/// project (a test may read it by its path, ADR 0043), and affected counts
+/// it as inert (ADR 0034). `verify --affected` then runs nothing, and a
+/// plain `fscale verify` runs every project again. When this test fails,
+/// the gap was closed: take the case out of [`Outcome::inert`] too.
+#[test]
+fn known_gap_a_document_below_the_root_is_in_the_keys_and_affects_nothing() {
+    let files = split_files();
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    for file in ["docs/design.md", "fixtures/words.txt"] {
+        let fixture = Fixture::new(&borrowed, Track::NoGit).unwrap();
+        let root = fixture.root();
+        let before = state(root, &BTreeSet::new());
+        fixture.write(file, "changed\n").unwrap();
+        let after = state(root, &BTreeSet::from([file.to_owned()]));
+        assert_eq!(after.inert, [file], "{file}");
+        assert_eq!(after.keys.len(), 3, "{file}: {:?}", after.keys.keys());
+        for (unit, key) in &after.keys {
+            assert_ne!(Some(key), before.keys.get(unit), "{file}: {unit:?}");
+            assert_eq!(after.affected.get(unit), Some(&false), "{file}: {unit:?}");
+        }
+    }
+    // The generator meets the gap in every fixture that has such a file.
+    assert!(!outcome("split repo", &files).inert.is_empty());
+}
+
+/// Known gap 2, pinned so that it is seen (ADR 0077, "Needs your
+/// decision"): where the repo root is a project, a file in no project
+/// below it is the root project's for affected, and is in the key of every
+/// project below as well. When this test fails, the gap was closed: take
+/// the case out of [`Outcome::root_files`] too.
+#[test]
+fn known_gap_a_file_of_the_root_project_is_in_the_keys_of_the_projects_below() {
+    let files = rooted_files();
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    let fixture = Fixture::new(&borrowed, Track::NoGit).unwrap();
+    let root = fixture.root();
+    let before = state(root, &BTreeSet::new());
+    fixture
+        .write("src/index.ts", "export const site = 2;\n")
+        .unwrap();
+    let after = state(root, &BTreeSet::from(["src/index.ts".to_owned()]));
+    let unit = |folder: &str, kind: &str| (Some(folder.to_owned()), Some(kind.to_owned()));
+    // The root's own steps run, and their key differs.
+    assert_eq!(after.affected.get(&(None, None)), Some(&true));
+    for below in [unit("backend", "python"), unit("tools/cli", "rust")] {
+        assert_ne!(after.keys.get(&below), before.keys.get(&below), "{below:?}");
+        assert_eq!(after.affected.get(&below), Some(&false), "{below:?}");
+    }
+    assert!(!outcome("rooted repo", &files).root_files.is_empty());
+}
+
+/// The fix this test led to (ADR 0077): the repo root's own steps run when
+/// a project below the root changed, since their key holds every file of
+/// the repo. Seen failing first: `Some(false)`.
+#[test]
+fn the_roots_own_steps_run_when_a_project_below_the_root_changed() {
+    let files = rooted_files();
+    let borrowed: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(path, text)| (path.as_str(), text.as_str()))
+        .collect();
+    for file in ["backend/main.py", "tools/cli/src/main.rs"] {
+        let fixture = Fixture::new(&borrowed, Track::NoGit).unwrap();
+        let root = fixture.root();
+        let before = state(root, &BTreeSet::new());
+        fixture.write(file, "changed\n").unwrap();
+        let after = state(root, &BTreeSet::from([file.to_owned()]));
+        let root_unit = (None, None);
+        assert_ne!(after.keys.get(&root_unit), before.keys.get(&root_unit));
+        assert_eq!(after.affected.get(&root_unit), Some(&true), "{file}");
+    }
+    // Nothing changed: nothing runs.
+    let fixture = Fixture::new(&borrowed, Track::NoGit).unwrap();
+    let idle = state(fixture.root(), &BTreeSet::new());
+    assert!(
+        idle.affected.values().all(|runs| !runs),
+        "{:?}",
+        idle.affected
+    );
 }
 
 /// The generator gives the same changes for the same seed, and different

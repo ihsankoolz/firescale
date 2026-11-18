@@ -485,6 +485,19 @@ pub fn limit_to_affected(
                 true,
                 "the repo root's commands are not tied to one project, so they run whenever anything changed".to_owned(),
             )
+        } else if anything
+            && plan
+                .projects
+                .iter()
+                .any(|project| affected_project(affected, project))
+        {
+            // The key of the repo root's steps holds every file of the
+            // repo, also those of a project below that runs its own steps
+            // (ADR 0077).
+            (
+                true,
+                "the repo root's commands run from the repo root and can read every file below it, and a project below it changed".to_owned(),
+            )
         } else if anything && covered.is_empty() {
             (
                 true,
@@ -794,6 +807,15 @@ pub fn check_project_inputs(config: &VerifyConfig, plan: &VerifyPlan) -> Result<
         }
     }
     Ok(())
+}
+
+/// True when a change reaches the planned project.
+fn affected_project(affected: &Affected, project: &ProjectPlan) -> bool {
+    affected.everything.is_some()
+        || project
+            .kind
+            .as_ref()
+            .is_some_and(|kind| affected.reason(&project_id(kind, &project.root)).is_some())
 }
 
 /// Chooses a command for each step.
