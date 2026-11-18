@@ -1961,7 +1961,7 @@ fn check_hook_starts(root: &Path, files: &[&str], allowed: &[&str], out: &mut St
     all_start
 }
 
-/// `fscale doctor`'s check of Claude Code's stop hook limit (ADR 0082): a
+/// `fscale doctor`'s check of Claude Code's stop hook limit (ADR 0083): a
 /// warning when the kept times of the steps the hook would run add up to
 /// more than its `timeout`, or Claude Code's default when it sets none.
 fn hook_limit_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
@@ -2056,7 +2056,7 @@ fn hook_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
 }
 
 /// The time limit `hooks install` writes on Claude Code's stop hook, and
-/// why (ADR 0082).
+/// why (ADR 0083).
 struct HookLimit {
     seconds: u64,
     /// Why this limit: the end of the line that says it.
@@ -2213,7 +2213,7 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             // The check starts only a command fscale writes: this one, or
             // the repo's default (review of ADR 0064).
             let allowed = [bin, writes.as_str()];
-            // Claude Code's entry gets a time limit (ADR 0082).
+            // Claude Code's entry gets a time limit (ADR 0083).
             let limit = hook_limit(root, args, &agents)?;
             let mut out = String::new();
             let mut notes = Vec::new();

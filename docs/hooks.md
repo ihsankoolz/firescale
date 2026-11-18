@@ -20,7 +20,7 @@ Installing never rewrites a file that has something in it. The hook goes in as n
 
 ## `--timeout`: how long Claude Code lets the hook run
 
-Claude Code ends a command hook that runs past its `timeout`, in seconds, and its default for a command hook is 600 (code.claude.com, hooks reference, read on 2026-11-18). An agent whose stop hook is ended stops without verify having finished. So `hooks install` writes an explicit `timeout` on the Claude Code entry (ADR 0082):
+Claude Code ends a command hook that runs past its `timeout`, in seconds, and its default for a command hook is 600 (code.claude.com, hooks reference, read on 2026-11-18). An agent whose stop hook is ended stops without verify having finished. So `hooks install` writes an explicit `timeout` on the Claude Code entry (ADR 0083):
 
 - with `--timeout <time>` (`30m`, `1h 30m`, or a number of seconds), that;
 - otherwise from the kept step times in `.firescale/step-times.json`: twice the sum of the kept times of every step a full `fscale verify` plans (a new failure is run again, and a step whose pass is not cached runs in full), plus `verify.baseBudget` (5 minutes by default) for the base run, rounded up to whole minutes, and never less than 600;

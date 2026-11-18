@@ -656,7 +656,7 @@ describe('the command the hook starts (ADR 0064)', () => {
       repo.root,
       await onlyStandIns(dir),
     );
-    // The hook was there: only its time limit is added (ADR 0082), and its
+    // The hook was there: only its time limit is added (ADR 0083), and its
     // command is kept.
     expect(result.stdout).toContain('timeout added     .claude/settings.json');
     expect(await read(repo.root, HOOK_FILES.claude)).toContain(
@@ -1312,7 +1312,7 @@ describe('a hook file a project reads, and what is outside the hook entries (ADR
   }, 300_000);
 });
 
-describe("the stop hook's time limit (ADR 0082)", () => {
+describe("the stop hook's time limit (ADR 0083)", () => {
   /** A repo whose only planned step is `node test.js`, and its kept time. */
   async function timedRepo(minutes: number | null, files: Record<string, string> = {}) {
     const keptTimes =

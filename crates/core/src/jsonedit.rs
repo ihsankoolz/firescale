@@ -170,7 +170,7 @@ fn additions(
             if have.len() == wanted.len() && have != wanted =>
         {
             // The same items, some with something added inside: the
-            // additions go into each item where it is (ADR 0082: a key
+            // additions go into each item where it is (ADR 0083: a key
             // added to the stop hook's entry).
             for (index, (have, wanted)) in have.iter().zip(wanted).enumerate() {
                 path.push(Step::Index(index));

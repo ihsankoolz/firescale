@@ -3826,7 +3826,7 @@ pub fn format_budget_plan(plan: &VerifyPlan, times: &StepTimes, budget: Duration
     )
 }
 
-/// The kept times of the steps a plan would run, added up (ADR 0082).
+/// The kept times of the steps a plan would run, added up (ADR 0083).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PlannedTimes {
     /// The sum of every kept time, finished or not.

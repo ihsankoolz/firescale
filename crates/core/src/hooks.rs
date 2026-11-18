@@ -907,11 +907,11 @@ fn child<'a>(map: &'a mut Map<String, Value>, key: &str, empty: Value) -> &'a mu
 
 /// Claude Code's time limit for a command hook whose entry sets no
 /// `timeout`, in seconds ("Defaults: 600 for `command`", code.claude.com,
-/// hooks reference, read on 2026-11-18; ADR 0082).
+/// hooks reference, read on 2026-11-18; ADR 0083).
 pub const CLAUDE_DEFAULT_TIMEOUT: u64 = 600;
 
 /// The `timeout` to write on Claude Code's stop hook when the planned
-/// steps took `steps` in all when they last ran (ADR 0082): twice that, for
+/// steps took `steps` in all when they last ran (ADR 0083): twice that, for
 /// the rerun of a new failure and a step whose pass is not cached, plus
 /// `base` for the base run of blame-aware verify, rounded up to whole
 /// minutes, and never under Claude Code's own default.
@@ -1009,7 +1009,7 @@ pub fn merge_hook(existing: Option<&str>, agent: Agent, bin: &str) -> Result<Opt
 }
 
 /// [`merge_hook`], and for Claude Code a `timeout` of `timeout` seconds on
-/// the entry (ADR 0082): on a new entry, and as a new line on an entry
+/// the entry (ADR 0083): on a new entry, and as a new line on an entry
 /// firescale's hook already has without one. A `timeout` in the file is
 /// never changed. Other agents take no `timeout`.
 pub fn merge_hook_with(
