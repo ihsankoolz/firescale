@@ -397,6 +397,9 @@ pub struct AffectedPlan {
     pub notes: Vec<String>,
     /// What the graph cannot see, such as dynamic imports.
     pub warnings: Vec<String>,
+    /// The units that hold a changed file, as folder and kind (the repo
+    /// root's own steps: `None`). Their steps start first (ADR 0078).
+    pub changed_first: Vec<(Option<String>, Option<String>)>,
 }
 
 /// One unit of an affected run.
@@ -554,6 +557,7 @@ pub fn limit_to_affected(
         units,
         notes: Vec::new(),
         warnings: graph.warnings.clone(),
+        changed_first: Vec::new(),
     });
 }
 
@@ -7381,6 +7385,96 @@ mod tests {
         );
     }
 
+    // ------------------------------- changed projects start first (ADR 0078)
+
+    /// A plan of the projects `a`, `b`, `c` and `d`, of which an affected
+    /// run runs all, and `changed` hold a changed file.
+    fn four_projects(changed: &[&str]) -> VerifyPlan {
+        let unit = |root: &str| AffectedUnit {
+            project: Some(root.to_owned()),
+            kind: None,
+            affected: true,
+            reason: "changed".to_owned(),
+        };
+        VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: ["a", "b", "c", "d"]
+                .iter()
+                .map(|root| one_step(root, &format!("echo {root}")))
+                .collect(),
+            affected: Some(AffectedPlan {
+                changed_files: changed.len(),
+                units: ["a", "b", "c", "d"].iter().map(|root| unit(root)).collect(),
+                changed_first: changed
+                    .iter()
+                    .map(|root| (Some((*root).to_owned()), None))
+                    .collect(),
+                ..AffectedPlan::default()
+            }),
+            ..VerifyPlan::default()
+        }
+    }
+
+    /// The folders in the order their steps started, and in the order the
+    /// report lists them.
+    fn started_and_listed(plan: &VerifyPlan, jobs: usize) -> (Vec<String>, Vec<String>) {
+        let fixture = Fixture::new(
+            &[("a/x", ""), ("b/x", ""), ("c/x", ""), ("d/x", "")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let config = VerifyConfig::default();
+        let shared = crate::progress::Shared::default();
+        let progress = Progress::new(Box::new(shared.clone()));
+        let options = RunOptions {
+            jobs,
+            progress: Some(&progress),
+            ..RunOptions::quiet(&config)
+        };
+        let report =
+            run_verify_with(fixture.root(), "0.0.0", passing_check(), plan, &options).unwrap();
+        assert_eq!(report.result, VerifyResult::Ok, "{report:?}");
+        let started = shared
+            .text()
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("[verify] test in ")?;
+                let (folder, rest) = rest.split_once(':')?;
+                rest.starts_with(" started").then(|| folder.to_owned())
+            })
+            .collect();
+        let listed = report
+            .steps
+            .iter()
+            .filter_map(|step| step.project.clone())
+            .collect();
+        (started, listed)
+    }
+
+    #[test]
+    fn units_that_hold_a_changed_file_start_first_and_the_report_keeps_its_order() {
+        let (started, listed) = started_and_listed(&four_projects(&["c"]), 1);
+        assert_eq!(started, ["c", "a", "b", "d"]);
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+        // Two changed units keep the plan's order among themselves.
+        let (started, listed) = started_and_listed(&four_projects(&["d", "b"]), 1);
+        assert_eq!(started, ["b", "d", "a", "c"]);
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+        // No unit known to hold a changed file: the plan's order.
+        let (started, listed) = started_and_listed(&four_projects(&[]), 1);
+        assert_eq!(started, ["a", "b", "c", "d"]);
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn with_jobs_the_changed_unit_is_among_the_first_started_and_the_report_keeps_its_order() {
+        let (started, listed) = started_and_listed(&four_projects(&["d"]), 2);
+        assert_eq!(started.len(), 4, "{started:?}");
+        let place = started.iter().position(|folder| folder == "d").unwrap();
+        assert!(place < 2, "{started:?}");
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+    }
+
     // ------------------------------------------------- --affected (M17)
 
     mod affected_runs {
@@ -7410,6 +7504,41 @@ mod tests {
 
         fn services(names: &[&str]) -> Vec<String> {
             names.iter().map(|name| format!("backend/{name}")).collect()
+        }
+
+        /// The units of the course project's plan that hold a changed file.
+        fn changed_first(files: &[&str]) -> Vec<String> {
+            let fixture = course_project().unwrap();
+            let facts = detect_facts_with(fixture.root(), None).unwrap();
+            let graph = build_graph(fixture.root(), &facts);
+            let mut plan =
+                plan_verify(fixture.root(), &facts, &VerifyConfig::default(), true, None);
+            let changed = Changed::Files(files.iter().map(|file| (*file).to_owned()).collect());
+            limit_to_affected(&mut plan, &facts, &graph, &affected(&graph, &changed), None);
+            plan.affected
+                .unwrap()
+                .changed_first
+                .into_iter()
+                .map(|(project, _)| project.unwrap_or_default())
+                .collect()
+        }
+
+        #[test]
+        fn the_units_that_hold_a_changed_file_are_known_to_the_plan() {
+            assert_eq!(changed_first(&["frontend/src/main.ts"]), ["frontend"]);
+            assert_eq!(
+                changed_first(&[
+                    "backend/market_service/unit_test/conftest.py",
+                    "backend/audit_service/unit_test/conftest.py",
+                ]),
+                services(&["audit_service", "market_service"])
+            );
+            // The shared folder is no unit: the services that import it run,
+            // and none of them holds the changed file.
+            assert_eq!(running(&["backend/shared/db.py"]).len(), 3);
+            assert!(changed_first(&["backend/shared/db.py"]).is_empty());
+            // Everything runs and no file is tied to a unit: the plan's order.
+            assert!(changed_first(&["docker-compose.yml"]).is_empty());
         }
 
         #[test]
