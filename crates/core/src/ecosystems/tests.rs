@@ -101,6 +101,57 @@ fn go_is_unchanged_by_the_move() {
     assert_eq!(project.commands.lint.as_deref(), Some("go vet ./..."));
 }
 
+// google/gson (docs/reviews/real-repos-0.5.3.md, bug 4): a module that tests
+// the packaged jar of another module cannot compile under `mvn test`, which
+// stops before `package`. The repo's own command is `mvn verify`.
+#[test]
+fn a_maven_build_with_modules_tests_with_verify() {
+    let project = only_project(&[
+        (
+            "pom.xml",
+            "<project>
+  <artifactId>gson-parent</artifactId>
+  <modules>
+    <module>gson</module>
+    <module>test-jpms</module>
+  </modules>
+</project>
+",
+        ),
+        ("gson/pom.xml", "<project><artifactId>gson</artifactId></project>
+"),
+        ("test-jpms/pom.xml", "<project><artifactId>test-jpms</artifactId></project>
+"),
+    ]);
+    assert_eq!(project.commands.test.as_deref(), Some("mvn -B verify"));
+    assert_eq!(
+        project.commands.build.as_deref(),
+        Some("mvn -B package -DskipTests")
+    );
+
+    // A build with no modules keeps `mvn test` (apache/commons-cli), also
+    // when the word is only in a comment.
+    for pom in [
+        "<project><artifactId>commons-cli</artifactId></project>
+",
+        "<project><artifactId>commons-cli</artifactId>
+<!-- <modules><module>old</module></modules> -->
+</project>
+",
+        "<project><artifactId>commons-cli</artifactId>
+<!--
+  <modules>
+    <module>old</module>
+  </modules>
+-->
+</project>
+",
+    ] {
+        let project = only_project(&[("pom.xml", pom)]);
+        assert_eq!(project.commands.test.as_deref(), Some("mvn -B test"), "{pom}");
+    }
+}
+
 #[test]
 fn maven_with_its_wrapper_a_linter_and_kotlin() {
     let project = only_project(&[
