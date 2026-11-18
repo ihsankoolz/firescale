@@ -905,23 +905,39 @@ impl<'a> Builder<'a> {
     ) {
         let dir = parent(file).to_owned();
         for import in &imports.imports {
-            for target in python_targets(
+            let found = python_targets(
                 self.root,
                 &dir,
                 importer,
                 &import.module,
                 &import.names,
                 &self.projects,
-            ) {
-                let detail = import.text.clone();
-                self.link(
-                    importer,
-                    &target,
-                    Source::PythonImport,
-                    file,
-                    Some(import.line),
-                    &detail,
-                );
+            );
+            // The nodes the places lead to, with the first place that leads
+            // to each: two places in one project are one place.
+            let mut places: BTreeMap<String, String> = BTreeMap::new();
+            for target in &found.paths {
+                for to in self.targets(importer, target, Source::PythonImport) {
+                    self.add(
+                        &importer.id,
+                        &to,
+                        Source::PythonImport,
+                        file,
+                        Some(import.line),
+                        import.text.clone(),
+                    );
+                    places.entry(to).or_insert_with(|| target.clone());
+                }
+            }
+            if found.any_of && places.len() > 1 {
+                let named: BTreeSet<&str> = places.values().map(String::as_str).collect();
+                self.warnings.insert(format!(
+                    "{file}:{}: `{}` could come from {} places in the repo ({}), and firescale cannot tell which one Python picks. It counts as depending on each.",
+                    import.line,
+                    import.text,
+                    named.len(),
+                    named.into_iter().collect::<Vec<_>>().join(", ")
+                ));
             }
         }
         for call in &imports.dynamic {
@@ -1253,10 +1269,30 @@ fn deepest(root: &Path, start: String, names: &[&str]) -> String {
     path
 }
 
+/// Where a Python import leads.
+struct PythonTargets {
+    /// Repo-relative paths outside the importer's own code.
+    paths: Vec<String>,
+    /// True when the paths are the places one module could come from, of
+    /// which Python picks one by an import path the repo does not state
+    /// (ADR 0077). False when each path is imported.
+    any_of: bool,
+}
+
+impl PythonTargets {
+    fn each(paths: Vec<String>) -> Self {
+        Self {
+            paths,
+            any_of: false,
+        }
+    }
+}
+
 /// Where a Python import leads, as repo-relative paths outside the importer's
 /// own code. An import the importer resolves itself, or that resolves to
 /// nothing in the repo (the standard library, an installed package), gives
-/// nothing.
+/// nothing. A module that more than one place could hold gives every place
+/// (ADR 0077).
 fn python_targets(
     root: &Path,
     dir: &str,
@@ -1264,7 +1300,7 @@ fn python_targets(
     module: &str,
     names: &[String],
     projects: &[ProjectNode],
-) -> Vec<String> {
+) -> PythonTargets {
     let dots = module.chars().take_while(|c| *c == '.').count();
     let rest: Vec<&str> = module[dots..]
         .split('.')
@@ -1275,23 +1311,25 @@ fn python_targets(
         let mut base = dir.to_owned();
         for _ in 1..dots {
             if base == "." {
-                return Vec::new();
+                return PythonTargets::each(Vec::new());
             }
             base = parent(&base).to_owned();
         }
         if rest.is_empty() {
-            return names
-                .iter()
-                .filter(|name| name.as_str() != "*")
-                .map(|name| python_module_at(root, &base, name).unwrap_or_else(|| base.clone()))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
+            return PythonTargets::each(
+                names
+                    .iter()
+                    .filter(|name| name.as_str() != "*")
+                    .map(|name| python_module_at(root, &base, name).unwrap_or_else(|| base.clone()))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+            );
         }
-        return vec![deepest(root, base, &rest)];
+        return PythonTargets::each(vec![deepest(root, base, &rest)]);
     }
     let Some(first) = rest.first() else {
-        return Vec::new();
+        return PythonTargets::each(Vec::new());
     };
     // The importer's own code: the file's folder and the folders above it up
     // to the importer's folder, and its `src/`.
@@ -1312,10 +1350,13 @@ fn python_targets(
         // Found from the importer's own folders: its own code, unless the
         // path leads into another project (the repo root's project importing
         // `services.auth.client`). The caller tells the two apart.
-        return vec![deepest(root, start, &rest[1..])];
+        return PythonTargets::each(vec![deepest(root, start, &rest[1..])]);
     }
     // A folder above the importer's own: `backend/` holding `shared/` for
     // services that run with `backend/` on the import path.
+    // Every folder above that has the module, not only the first: which one
+    // Python picks depends on an import path the repo does not state.
+    let mut places: Vec<String> = Vec::new();
     let mut above = importer.root.clone();
     while above != "." {
         above = parent(&above).to_owned();
@@ -1327,18 +1368,26 @@ fn python_targets(
             }
             if inside(&found, &importer.root) {
                 // The importer's own package, reached from a folder above it.
-                return Vec::new();
+                if places.is_empty() {
+                    return PythonTargets::each(Vec::new());
+                }
+                continue;
             }
-            return vec![found];
+            places.push(found);
         }
     }
     // Another Python project's top-level package.
-    projects
-        .iter()
-        .filter(|project| project.kind == "python" && project.id != importer.id)
-        .filter(|project| python_packages(root, &project.root).contains(*first))
-        .map(|project| project.root.clone())
-        .collect()
+    places.extend(
+        projects
+            .iter()
+            .filter(|project| project.kind == "python" && project.id != importer.id)
+            .filter(|project| python_packages(root, &project.root).contains(*first))
+            .map(|project| project.root.clone()),
+    );
+    PythonTargets {
+        paths: places,
+        any_of: true,
+    }
 }
 
 /// True when a folder has a `.py` file in it or in a subfolder, three levels
@@ -2670,7 +2719,7 @@ mod tests {
         );
         assert_eq!(
             graph.warnings,
-            ["backend/svc/main.py:2: `from shared.db import URL` could come from 2 places in the repo (backend/shared, shared), and firescale cannot tell which one Python picks. It counts as depending on each."]
+            ["backend/svc/main.py:2: `from shared.db import URL` could come from 2 places in the repo (backend/shared/db.py, shared/db.py), and firescale cannot tell which one Python picks. It counts as depending on each."]
         );
         // A change in either place reaches the importer.
         for file in ["backend/shared/db.py", "shared/db.py"] {

@@ -33,9 +33,11 @@ Each edge lists every piece of evidence for it, most trusted first, with its fil
 Python finds modules on its import path, which the repo's files do not fully state. The graph follows what the layout says:
 
 1. **The importer's own code**: the file's folder and the folders above it up to the project's folder, and its `src/`. A module found there is the project's own; no edge.
-2. **A folder above the project**: `backend/` holding `shared/` for services that run with `backend/` on the import path. The first folder above the project that has the module (a `.py` file, or a folder with Python in it) wins.
+2. **A folder above the project**: `backend/` holding `shared/` for services that run with `backend/` on the import path. Every folder above the project that has the module (a `.py` file, or a folder with Python in it) is a place it could come from.
 3. **Another Python project's package**: a folder with an `__init__.py` in another project's folder or its `src/`.
 4. Anything else is the standard library or an installed package: no edge.
+
+**When more than one place could hold the module** (two folders above, or a folder above and another project's package), the importer gets an edge to each, and `fscale graph` prints a warning that names the import and the places: which one Python picks depends on an import path the repo does not state (ADR 0077). Before, the first folder above won and the others got no edge. The importer's own code still comes first and gives no edge.
 
 Relative imports (`from ..common import x`) resolve from the file's folder. An imported file stands for the package it is part of: `backend/shared/db.py` gives the node `backend/shared`.
 
