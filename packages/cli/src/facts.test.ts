@@ -189,6 +189,19 @@ describe('fscale facts and a CMake build folder', () => {
     }
   });
 
+  // An in-source build (cmake . inside the project) leaves the cache beside
+  // the project's own CMakeLists.txt: the folder is still a project.
+  it('still reads a project that was built in its own folder', async () => {
+    expect(
+      await projects({
+        'native/CMakeLists.txt': SOURCES['CMakeLists.txt'],
+        'native/main.cpp': SOURCES['main.cpp'],
+        'native/CMakeCache.txt': '# This is the CMakeCache file.
+',
+      }),
+    ).toEqual(['cmake native']);
+  });
+
   it('still reads a folder with a Makefile and no CMakeCache.txt as a project', async () => {
     expect(await projects({ ...SOURCES, 'tools/Makefile': 'test:\n\ttrue\n' })).toEqual([
       'cmake .',
