@@ -131,6 +131,19 @@ Limits: doctor only looks for the file; it does not compare it with `pubspec.loc
 
 **Not done in Stage 2:** bug 1 (a guessed linter that fails keeps the tests from running; 4 repos; needs the owner's decision) and bug 4 (`mvn -B test` on a build that needs `verify`; it needs a rule for when, and `verify.test` is the way out today).
 
+### Version 0.5.3, and what you should see change
+
+The version is set to 0.5.3 with `node scripts/bump-version.mjs 0.5.3`, and the three snapshots that hold the version follow it. **No tag was pushed**: the release is yours (RELEASING.md, step 3). The version pull request carries the label `release`, so macOS and Windows ran on it. That run is the first time the code of #74 to #77 was built or tested on macOS and Windows.
+
+Compared with 0.5.2. Nothing here was run on the course project or on any machine of yours; each line is from the tests and from the second real-repos run.
+
+1. **`fscale doctor` no longer exits 1 for a variable that a `.env.example` names and that is set nowhere.** The line is a `warning`, and the last line is `doctor: OK with N warnings - read them above.` when nothing else is wrong. On the course project the env lines of 0.5.2 should all read `warning`. To get the old behaviour, add `"doctor": { "missingEnv": "problem" }` to `firescale.config.json` (ADR 0068). **A script that relied on doctor's exit code for missing variables must set it.**
+2. **Doctor has a line for Dart and Flutter packages** (`pub get` not run is a problem) **and for SwiftLint** where a `.swiftlint.yml` makes verify run it.
+3. **Verify says `SETUP NEEDED`, not `FAILED`,** when `dart analyze` or `flutter analyze` fails on a project whose packages were never fetched.
+4. **A CMake build folder is not a project**, whatever its name, when it holds a `CMakeCache.txt` and no `CMakeLists.txt`.
+
+Known and not changed in 0.5.3: a guessed linter that fails still keeps the tests from running (real-repo bug 1, your decision), and `mvn -B test` is still the Maven test command (bug 4).
+
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
 **Pull request 7: `*.log` in core/gitignore-basics**
