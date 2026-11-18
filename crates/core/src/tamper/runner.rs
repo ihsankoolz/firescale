@@ -50,7 +50,9 @@ pub(crate) fn measures(path: &str, text: &str) -> Result<Vec<Measure>, usize> {
             }
             measures.push(Measure::count(
                 Kind::RunnerWeakened,
-                format!("runner script {name}: {check}"),
+                // Not the script's name: a script renamed with what it
+                // swallowed is the same place (found in review).
+                format!("runner script: {check}"),
                 -1,
                 entry.line,
                 format!("{name}: {script}"),
@@ -70,20 +72,33 @@ fn exits_zero(rest: &str) -> bool {
 /// The places in a `conftest.py` that end or rewrite the run.
 fn conftest(text: &str) -> Vec<Measure> {
     let mut measures = Vec::new();
+    // The indent of the `def pytest_sessionfinish(` whose body this is, at
+    // the top level or in a plugin class.
     let mut hook: Option<usize> = None;
     let mut hook_counted = false;
     for (index, line) in text.lines().enumerate() {
         let number = index + 1;
-        let top = !line.starts_with([' ', '\t']);
+        let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let top = indent == 0;
         let code = line.split('#').next().unwrap_or("").trim_end();
-        if top && !code.is_empty() {
+        let statement = code.trim_start();
+        if statement.starts_with("def pytest_sessionfinish(") {
+            hook = Some(indent);
+            hook_counted = false;
+            continue;
+        }
+        // A line at the hook's indent or less ends its body, unless it
+        // closes the signature (`) -> None:`, as Black writes it).
+        if hook
+            .is_some_and(|at| !statement.is_empty() && indent <= at && !statement.starts_with(')'))
+        {
             hook = None;
-            if code.starts_with("def pytest_sessionfinish(") {
-                hook = Some(number);
-                hook_counted = false;
+        }
+        if top && !code.is_empty() {
+            let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+            if hook.is_some() {
                 continue;
             }
-            let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
             if compact.starts_with("sys.exit(")
                 || compact.starts_with("os._exit(")
                 || compact == "raiseSystemExit"
@@ -113,21 +128,28 @@ fn conftest(text: &str) -> Vec<Measure> {
     measures
 }
 
-/// `session.exitstatus = 0`, `exitstatus = …`, `setattr(session, "exitstatus", …)`:
-/// an assignment, not a comparison.
+/// `session.exitstatus = 0`, `exitstatus = …`, `x.exitstatus |= …`,
+/// `setattr(session, "exitstatus", …)`: a statement that assigns it, not a
+/// comparison, a keyword argument or text (found in review).
 fn sets_exitstatus(code: &str) -> bool {
-    if code.contains("setattr(") && code.contains("exitstatus") {
+    let statement = code.trim();
+    if statement.starts_with("setattr(") && statement.contains("exitstatus") {
         return true;
     }
-    let mut rest = code;
-    while let Some(at) = rest.find("exitstatus") {
-        let after = rest[at + "exitstatus".len()..].trim_start();
-        if after.starts_with('=') && !after.starts_with("==") {
-            return true;
-        }
-        rest = &rest[at + "exitstatus".len()..];
+    // The target before the operator: names and dots only.
+    let target_end = statement
+        .find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+        .unwrap_or(statement.len());
+    let (target, rest) = statement.split_at(target_end);
+    if !(target == "exitstatus" || target.ends_with(".exitstatus")) {
+        return false;
     }
-    false
+    let operator = rest.trim_start();
+    let assigns = operator.starts_with('=') && !operator.starts_with("==");
+    let augmented = ["+=", "-=", "|=", "&=", "*="]
+        .iter()
+        .any(|op| operator.starts_with(op));
+    assigns || augmented
 }
 
 #[cfg(test)]
@@ -156,8 +178,8 @@ mod tests {
         assert_eq!(
             whats("packages/a/package.json", package),
             [
-                "runner script test: vitest @4: test: vitest run || true",
-                "runner script lint: eslint @5: lint: eslint . ; exit 0",
+                "runner script: vitest @4: test: vitest run || true",
+                "runner script: eslint @5: lint: eslint . ; exit 0",
             ]
         );
     }
