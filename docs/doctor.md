@@ -50,14 +50,14 @@ Doctor changes nothing and downloads nothing. The only programs it runs are vers
 
 A tool that is missing is a problem with the page or command that installs it.
 
-**The programs verify will run** (ADR 0085). Doctor builds the plan of a full `fscale verify`, as `fscale verify --dry-run` shows it, and looks up the first word of each step's command as the step would start it: on the PATH (on Windows with the `PATHEXT` extensions, as `cmd` does), or, for a path such as `./gradlew`, in the step's folder. This is the step cache's lookup. A program that is not found is a **problem** that names the step and its command:
+**The programs verify will run** (ADR 0085). Doctor builds the plan of a full `fscale verify`, as `fscale verify --dry-run` shows it, and looks up the first word of each step's command as the step would start it: on the PATH (on Windows with the `PATHEXT` extensions, and in the step's folder first, as `cmd` does), or, for a path such as `./gradlew`, in the step's folder. This is the step cache's lookup. A program that is not found is a **problem** that names the step (not its command, which may hold a password):
 
 ```
-  PROBLEM  zzlint: zzlint is not on the PATH, and verify's lint step runs `zzlint --strict`.
+  PROBLEM  zzlint: zzlint is not on the PATH, and verify's lint step runs it.
            next: install zzlint, or change the lint step's command under `verify` in the firescale config
 ```
 
-A program doctor's own list knows (Maven, Gradle, .NET, CMake and the others of each ecosystem) is also asked its version, as that list asks it, and that list then leaves the tool to the step: one line, naming the step, not two. Any other program is only looked up, never run. A step whose command starts with a shell builtin (`cd`, `set`, `call`, ...), a variable (`FOO=1 cmd`) or shell syntax is not judged. Only the first program of a command is looked up: in `npm run lint && cargo test`, `cargo` is not.
+A program doctor's own list knows (Maven, Gradle, .NET, CMake and the others of each ecosystem), named by its bare name, is also asked its version, as that list asks it, and that list then leaves the tool to the step: one line, naming the step, not two. Any other program, and any program named by a path (`./gradlew`, `tools/make`), is only looked up, never run, and a path never takes a tool off the list. A step whose command starts with a builtin of `sh` or `cmd` (`cd`, `set`, `call`, `copy`, `del`, `md`, ...), a variable (`FOO=1 cmd`), shell syntax, or a quoted or `~` path is not judged. When the plan cannot be built (a config verify refuses, or a `firescale.config.ts`, which doctor never runs), a warning, `verify plan`, says the programs were not checked. Only the first program of a command is looked up: in `npm run lint && cargo test`, `cargo` is not.
 
 ### Environment variables
 

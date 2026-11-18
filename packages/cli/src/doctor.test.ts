@@ -679,8 +679,9 @@ describe('doctor and a variable that is set nowhere', () => {
       'firescale.config.ts': "export default { doctor: { missingEnv: 'problem' } };\n",
     });
     const human = await runCli(['doctor'], root, env);
+    // The verify plan is not known either, and doctor says so (ADR 0085).
     expect(human.stdout).toBe(
-      `Environment variables\n  warning  ${LINE}  warning  firescale.config.ts: doctor does not run firescale.config.ts (it is code), so doctor.missingEnv in it is not read: a variable that is set nowhere is a warning.\n\ndoctor: OK with 2 warnings - read them above.\n`,
+      `Tools\n  warning  verify plan: doctor does not run firescale.config.ts (it is code), so the verify plan is not known and the programs of verify's steps were not checked.\n           next: keep the config in firescale.config.json to have them checked\n\nEnvironment variables\n  warning  ${LINE}  warning  firescale.config.ts: doctor does not run firescale.config.ts (it is code), so doctor.missingEnv in it is not read: a variable that is set nowhere is a warning.\n\ndoctor: OK with 3 warnings - read them above.\n`,
     );
     expect(human.code).toBe(EXIT_OK);
   });

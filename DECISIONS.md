@@ -37,6 +37,7 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **A tool doctor's own list knows is asked its version as before**, and that list gives the tool to the step where a step runs it: one line, not two. Programs it does not know are looked up, never run.
 - **Not judged:** a step that starts with a shell builtin, a variable or shell syntax; only the first program of a command is looked up.
 - **Failing tests first:** 3 in `doctor.test.ts`, 2 seen failing on `main` in WSL; the third guards the not-judged case.
+- **From the fresh review, fixed:** a step naming a path (`tools/make`) took that tool off doctor's own list and doctor ran the file, so a doctor pass could be easier to get than before; it no longer does either. Also: the step's command (which may hold a password) is no longer printed; more `cmd` and `sh` builtins are not judged; on Windows the step's folder is searched as `cmd` does; a config that cannot give a plan, or a `firescale.config.ts`, gives a warning instead of nothing. 4 tests from the review, seen failing first. **Not done:** no test of the Windows folder lookup (CI is Linux only).
 
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
