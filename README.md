@@ -23,7 +23,7 @@ Write `npx firescale`, not `npx fscale`: `fscale` on npm is another package. Aft
 
 ## Usage: the five ideas
 
-Each block below is what `fscale` printed on a test fixture of this repo. `node scripts/readme-output.mjs` prints them all again (build first). They were made on Windows 11 with a debug build of 0.5.2. Commit ids change from run to run. The tool versions and Windows paths in the doctor block are that machine's. In the doctor block, the two `warning` labels and the last line were changed by hand for 0.5.3 to what its tests expect; that block was not printed again.
+Each block below is what `fscale` printed on a test fixture of this repo. `node scripts/readme-output.mjs` prints them all again (build first). They were made on Windows 11 with a debug build of 0.5.3, on 2026-11-18. Commit ids change from run to run. The tool versions and Windows paths in the doctor block are that machine's.
 
 ### 1. A rule is a check, a fix and a page that explains it
 
@@ -85,19 +85,19 @@ When a step fails, verify finds out whether it fails on the base commit too. It 
 
 ```
 $ fscale verify
-verify: FAILED at lint (new); pre-existing (fails on the base commit 3b00a4e too, does not block): test
+verify: FAILED at lint (new); pre-existing (fails on the base commit 767f501 too, does not block): test
   check      passed   8 rules, no enforced violations
   lint       FAILED   [new] node lint.js (exit 1)
   typecheck  off      turned off in your firescale config
   test       FAILED   [pre-existing] node test.js (exit 1)
 
-New: lint passes on the base commit 3b00a4e, so this change broke it.
+New: lint passes on the base commit 767f501, so this change broke it.
 
 Fix the failure, then run again: node lint.js
 
-Pre-existing: test fails on the base commit 3b00a4e too, with the same output, so it does not block this change.
+Pre-existing: test fails on the base commit 767f501 too, with the same output, so it does not block this change.
 
-Compared with the base commit 3b00a4e (main): 1 step from an earlier base run, 1 step run in a worktree of it.
+Compared with the base commit 767f501 (main): 1 step from an earlier base run, 1 step run in a worktree of it.
 
 note: test: its runner gives no per-test results, so it is compared as a whole step
 ```
@@ -110,7 +110,7 @@ A change can pass by weakening the tests. The guard compares the change with the
 $ fscale tamper
 tamper: 1 report-only finding
 
-Tamper guard (report only; verify.tamper on the base commit decides, and "enforced" makes this fail): compared with the base commit 9be1437, this change takes away tests or assertions, adds lint suppressions, lowers coverage thresholds, weakens CI, skips git hooks, turns rules off, or changes files it cannot read.
+Tamper guard (report only; verify.tamper on the base commit decides, and "enforced" makes this fail): compared with the base commit 9229bc0, this change takes away tests or assertions, adds lint suppressions, lowers coverage thresholds, weakens CI, skips git hooks, turns rules off, or changes files it cannot read.
   test skipped: src/math.test.ts:9: math > subtracts
   In the changed test files: 2 tests on the base, 2 now; 0 skipped on the base, 1 now; 3 assertions on the base, 3 now.
 ```

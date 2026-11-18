@@ -502,9 +502,11 @@ describe('doctor and env files in the folders above a project', () => {
     expect(result.stdout).toContain(
       '  warning  lonely/.env.example: 1 of 1 variables are not set in the environment, and there is no lonely/.env, nor a .env in a folder above it: LONELY.\n           next: copy lonely/.env.example to lonely/.env and fill in the values (or set the variables in your shell)\n',
     );
-    // The exit code follows the problems, and a variable set nowhere is no
-    // longer one (ADR 0068).
-    expect(result.code).toBe(result.stdout.includes('  PROBLEM  ') ? EXIT_VIOLATIONS : EXIT_OK);
+    // The variable set nowhere is a warning and counts as one (ADR 0068).
+    // The exit code is 1 for the one problem beside it: the project has no
+    // virtual environment.
+    expect(result.stdout).toContain('\ndoctor: 1 problem, 1 warning - ');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
   });
 
   // Making a symlink to a file needs a privilege on Windows.
@@ -535,9 +537,11 @@ describe('doctor and env files in the folders above a project', () => {
       expect(human.stdout).toContain(
         '  warning  svc/.env.example: 1 of 1 variables are not set in the environment: LINKED_KEY. svc/.env is a symbolic link, so it was not read.\n           next: replace svc/.env with a real file that sets LINKED_KEY, or set the variables in your shell (see svc/.env.example for what each one is)\n',
       );
-      // The exit code follows the problems, and a variable set nowhere is no
-      // longer one (ADR 0068).
-      expect(human.code).toBe(human.stdout.includes('  PROBLEM  ') ? EXIT_VIOLATIONS : EXIT_OK);
+      // The variable set nowhere is a warning and counts as one (ADR 0068).
+      // The exit code is 1 for the one problem beside it: the project has no
+      // virtual environment.
+      expect(human.stdout).toContain('\ndoctor: 1 problem, 1 warning - ');
+      expect(human.code).toBe(EXIT_VIOLATIONS);
       // The database it names is not checked either.
       const report = await validate(json.stdout);
       expect(report.checks.filter((check) => check.section === 'services')).toEqual([]);
@@ -569,9 +573,11 @@ describe('doctor and env files in the folders above a project', () => {
       '  warning  svc/.env.example: 1 of 1 variables are not set in the environment, and there is no svc/.env, nor a .env in a folder above it: ABOVE_ROOT_KEY.\n',
     );
     expect(result.stdout + result.stderr).not.toContain('above-root-secret-987');
-    // The exit code follows the problems, and a variable set nowhere is no
-    // longer one (ADR 0068).
-    expect(result.code).toBe(result.stdout.includes('  PROBLEM  ') ? EXIT_VIOLATIONS : EXIT_OK);
+    // The variable set nowhere is a warning and counts as one (ADR 0068).
+    // The exit code is 1 for the one problem beside it: the project has no
+    // virtual environment.
+    expect(result.stdout).toContain('\ndoctor: 1 problem, 1 warning - ');
+    expect(result.code).toBe(EXIT_VIOLATIONS);
   });
 });
 
