@@ -116,6 +116,15 @@ Test first (`a_swift_package_with_a_swiftlint_config_needs_swiftlint`, doctor.rs
 
 Not done: only SwiftLint. Doctor still does not look for the other programs a guessed lint step runs (`clang-format`, `golangci-lint`, `ktlint` and others), and a lint command set in `verify.lint` is not looked at. Written without a local build; CI is the only run.
 
+### Real-repo bug 2, fixed: Dart packages that are not fetched
+
+Tests first: `dart_packages_that_are_not_fetched_are_a_setup_problem` (setup.rs) and `a_dart_project_whose_packages_are_not_fetched_is_a_problem` (doctor.rs). Fix, in two places:
+
+- **verify:** a failed step in a folder with a `pubspec.yaml` and no `.dart_tool/package_config.json` (in it or above it, up to the root) whose output has an analyzer line ending in `uri_does_not_exist` or `undefined_...` is `SETUP NEEDED`, with the project's install command (`dart pub get` or `flutter pub get`) as the next step.
+- **doctor:** a new line under Dependencies for each Dart or Flutter project: a problem with `dart pub get` when the file is missing, `ok` when it is there.
+
+Limits: doctor only looks for the file; it does not compare it with `pubspec.lock`, so packages that are out of date still read as fetched. The analyzer lines are matched as the real-repos run printed them (Dart 3); no test runs a real `dart`. Written without a local build; CI is the only run.
+
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
 **Pull request 7: `*.log` in core/gitignore-basics**

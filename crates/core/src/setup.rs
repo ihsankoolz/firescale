@@ -1338,6 +1338,31 @@ fn mypy_missing(line: &str) -> Option<&str> {
     name_after(line, at + STUB.len())
 }
 
+/// True when `dir` is a Dart or Flutter project (it has a `pubspec.yaml`)
+/// and `pub get` has not run for it: no `.dart_tool/package_config.json`
+/// in it, nor in a folder above it up to `root` (a pub workspace keeps one
+/// at its root).
+pub(crate) fn dart_packages_not_fetched(root: &Path, dir: &Path) -> bool {
+    if !dir.join("pubspec.yaml").is_file() {
+        return false;
+    }
+    let mut at = Some(dir);
+    while let Some(folder) = at {
+        if folder
+            .join(".dart_tool")
+            .join("package_config.json")
+            .is_file()
+        {
+            return false;
+        }
+        if folder == root {
+            break;
+        }
+        at = folder.parent();
+    }
+    true
+}
+
 /// Looks at the output of a failed step for a sign that the environment is
 /// not set up. `dir` is the folder the step ran in, `root` the repo root.
 /// Returns `None` when unsure: then the step is a normal failure.
@@ -1371,6 +1396,21 @@ pub fn setup_problem(
     }
     if reports_failed_tests(output) {
         return None;
+    }
+    // Dart and Flutter: before `pub get` the analyzer cannot follow a
+    // `package:` import, and every name that comes from one is undefined.
+    if (output.contains(" - uri_does_not_exist") || output.contains(" - undefined_"))
+        && dart_packages_not_fetched(root, dir)
+    {
+        return Some(SetupProblem {
+            reason:
+                "the Dart packages are not fetched (there is no .dart_tool/package_config.json)"
+                    .to_owned(),
+            missing_program: None,
+            missing_service: None,
+            start_services: None,
+            missing_package: None,
+        });
     }
     let lines: Vec<&str> = output.lines().collect();
     let has_stack = output.contains("Require stack:") || output.contains("MODULE_NOT_FOUND");

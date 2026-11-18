@@ -1345,6 +1345,54 @@ impl Doctor<'_> {
         );
     }
 
+    // --- Dart and Flutter packages
+
+    /// `pub get` has run for each Dart or Flutter project: without it the
+    /// analyzer and the tests cannot follow a `package:` import.
+    fn dart_dependencies(&mut self) {
+        let projects: Vec<_> = self
+            .facts
+            .projects
+            .iter()
+            .filter(|p| p.kind == "dart")
+            .cloned()
+            .collect();
+        for project in projects {
+            let folder = project.root.clone();
+            let dir = dir_of(self.root, &folder);
+            let subject = subject_in(&folder, "packages");
+            let manifest = shown(&folder, "pubspec.yaml");
+            if crate::setup::dart_packages_not_fetched(self.root, &dir) {
+                let install = project
+                    .commands
+                    .install
+                    .clone()
+                    .unwrap_or_else(|| "dart pub get".to_owned());
+                self.add(
+                    "dependencies",
+                    Some(&folder),
+                    subject,
+                    Status::Problem,
+                    format!("the packages of {manifest} are not fetched: there is no .dart_tool/package_config.json."),
+                    Some(if folder == "." {
+                        install
+                    } else {
+                        format!("in {folder}: {install}")
+                    }),
+                );
+            } else {
+                self.add(
+                    "dependencies",
+                    Some(&folder),
+                    subject,
+                    Status::Ok,
+                    format!("the packages of {manifest} are fetched (.dart_tool/package_config.json is there)"),
+                    None,
+                );
+            }
+        }
+    }
+
     // --- Node dependencies
 
     fn node_dependencies(&mut self) {
@@ -1905,6 +1953,7 @@ pub fn run_doctor_with(
     doctor.toolchains();
     doctor.python();
     doctor.node_dependencies();
+    doctor.dart_dependencies();
     doctor.env();
     doctor.services();
     report_of(doctor.findings)

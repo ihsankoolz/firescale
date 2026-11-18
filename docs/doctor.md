@@ -88,6 +88,8 @@ When every name is set in the environment or in a real env file, the link is not
 
 ### Dependencies
 
+For a Dart or Flutter project, doctor looks for `.dart_tool/package_config.json` in the project or in a folder above it (a pub workspace keeps one at its root). Without it, `pub get` has not run: a problem, with `dart pub get` or `flutter pub get` as the next step. Doctor does not compare the file with `pubspec.lock`.
+
 - **Node projects:** every package in `dependencies` and `devDependencies` (except `workspace:`, `file:` and `link:` ones) has a folder in `node_modules`, here or in a folder above, as Node itself looks them up. When all are there, the lockfile must not be newer than the file the package manager writes on each install (`node_modules/.package-lock.json` for npm, `.modules.yaml` for pnpm, `.yarn-integrity` or `.yarn-state.yml` for Yarn, `.bun-tag` for Bun); if it is, the lockfile changed since the last install. The fix is the project's install command from `fscale facts`, in the form that installs what the lockfile says and never rewrites it when the project has one (see [Install commands that keep the lockfile](#install-commands-that-keep-the-lockfile)).
 - **Python projects:**
   - A virtual environment, `.venv` or `venv`, in the project's folder (for a uv workspace member, at the workspace root). With none there, an active `VIRTUAL_ENV` is checked instead, as verify uses it. No environment is a problem, with the commands that make one and install into it. An environment whose interpreter does not run (made on another machine, or with a Python that is gone) is a problem too. For Poetry and Pipenv, which may keep it elsewhere, a missing one is a warning.
