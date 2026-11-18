@@ -135,9 +135,41 @@ fn a_maven_build_with_modules_tests_with_verify() {
         Some("mvn -B package -DskipTests")
     );
 
+    // With the wrapper, and with the modules in a profile.
+    let project = only_project(&[
+        (
+            "pom.xml",
+            "<project><artifactId>parent</artifactId><profiles><profile><modules>
+<module>api</module></modules></profile></profiles></project>
+",
+        ),
+        (
+            "mvnw",
+            "#!/bin/sh
+",
+        ),
+        (
+            "api/pom.xml",
+            "<project><artifactId>api</artifactId></project>
+",
+        ),
+    ]);
+    assert_eq!(
+        project.commands.test,
+        Some(format!("{} -B verify", wrapper("mvnw")))
+    );
+
     // A build with no modules keeps `mvn test` (apache/commons-cli), also
-    // when the word is only in a comment.
+    // when the word is only in a comment, or is a plugin's own setting
+    // (the EAR plugin lists what it packs under `<modules>`).
     for pom in [
+        "<project><artifactId>app-ear</artifactId><build><plugins><plugin><artifactId>maven-ear-plugin</artifactId><configuration><modules>
+<webModule><artifactId>web</artifactId></webModule></modules></configuration></plugin></plugins></build></project>
+",
+        "<project><artifactId>commons-cli</artifactId>
+<!--> <modules><module>old</module></modules> -->
+</project>
+",
         "<project><artifactId>commons-cli</artifactId></project>
 ",
         "<project><artifactId>commons-cli</artifactId>

@@ -367,13 +367,24 @@ fn without_xml_comments(text: &str) -> String {
     let mut rest = text;
     while let Some(start) = rest.find("<!--") {
         out.push_str(&rest[..start]);
-        match rest[start..].find("-->") {
-            Some(end) => rest = &rest[start + end + "-->".len()..],
+        let body = &rest[start + "<!--".len()..];
+        match body.find("-->") {
+            Some(end) => rest = &body[end + "-->".len()..],
             None => return out,
         }
     }
     out.push_str(rest);
     out
+}
+
+/// True when a `pom.xml` lists modules of the build: a `<modules>` element
+/// whose first child is a `<module>`, outside comments. A plugin's own
+/// `<modules>` (the EAR plugin's holds `<ejbModule>`, `<webModule>`) is not
+/// one.
+fn has_maven_modules(pom: &str) -> bool {
+    let text = without_xml_comments(pom);
+    text.match_indices("<modules>")
+        .any(|(at, tag)| text[at + tag.len()..].trim_start().starts_with("<module>"))
 }
 
 const MAVEN: Ecosystem = Ecosystem {
@@ -417,11 +428,13 @@ const MAVEN: Ecosystem = Ecosystem {
                 // A build with modules is tested with `verify`: a module can
                 // test the packaged jar of another, and `test` stops before
                 // `package` (ADR 0071).
-                test: Some(if without_xml_comments(&pom).contains("<modules>") {
-                    format!("{mvn} -B verify")
-                } else {
-                    format!("{mvn} -B test")
-                }),
+                test: Some(
+                    if has_maven_modules(&f.text("pom.xml").unwrap_or_default()) {
+                        format!("{mvn} -B verify")
+                    } else {
+                        format!("{mvn} -B test")
+                    },
+                ),
                 lint,
                 ..Commands::default()
             },
