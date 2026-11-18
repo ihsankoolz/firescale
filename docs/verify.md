@@ -24,7 +24,7 @@ verify: FAILED at test
   test       FAILED   vitest run (exit 0): the command reported success but 2 tests failed
 ```
 
-That is what a test script ending in `|| exit 0` or `|| true` does, and a pytest hook that sets the session's exit status to 0. The failing tests are listed as for any failure, and get their labels when there is a base commit. In `--json` the step has the status `failed` and `exitCode: 0`. Such a step is never cached. A coverage threshold or Vitest's unhandled errors beside an exit code of 0 do not count: only a test does. A runner with no per-test results is judged by its exit code alone, as before.
+That is what a test script ending in `|| exit 0` or `|| true` does, and a pytest hook that sets the session's exit status to 0. The failing tests are listed as for any failure, and get their labels when there is a base commit. In `--json` the step has the status `failed` and `exitCode: 0`. Such a step is never cached. The base commit's steps are judged by their exit code alone, so a base that hides its failures never makes the head's failure `pre-existing`. A coverage threshold or Vitest's unhandled errors beside an exit code of 0 do not count: only a test does. A runner with no per-test results is judged by its exit code alone, as before.
 
 ## Setup needed is not a failure in the code
 

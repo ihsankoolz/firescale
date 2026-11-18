@@ -2243,22 +2243,6 @@ fn run_step(
     }
     let duration_ms = u64::try_from(finished.duration.as_millis()).unwrap_or(u64::MAX);
     let took = format_duration(finished.duration);
-    // How long it took is kept for the next run (ADR 0057).
-    if let Some(times) = options.times {
-        // A step that was stopped (Ctrl+C, a time limit, or early for a
-        // service that is down) ran at least this long.
-        let outcome = match finished.ending {
-            Ending::Exited(Some(0)) => Outcome::Passed,
-            Ending::Exited(_) => Outcome::Failed,
-            Ending::TimedOut | Ending::Stopped | Ending::GaveUp => Outcome::Unfinished,
-        };
-        if finished.ending == Ending::Stopped {
-            // The person wants verify gone: no long wait for the file.
-            times.record(project, name, command, finished.duration, outcome);
-        } else {
-            times.record_ended(project, name, command, finished.duration, outcome);
-        }
-    }
     let mut report = StepReport {
         name: name.to_owned(),
         project: project.map(str::to_owned),
@@ -2297,6 +2281,12 @@ fn run_step(
     if !matches!(finished.ending, Ending::Exited(Some(0))) {
         report.signature = failure_signature(&text(), unit.root);
     }
+    // The tests the runner's own results name as failed or errored beside an
+    // exit code of 0, which is then not a pass (ADR 0072): a script ending in
+    // `|| exit 0`, or a hook that sets the exit status, would hide them. The
+    // base commit's steps are judged by their exit code alone, as before: a
+    // base read as failing could make a failure of the head pre-existing.
+    let mut hidden = 0;
     if let Some(runner) = runner {
         let xml = junit
             .as_ref()
@@ -2322,9 +2312,18 @@ fn run_step(
             }
             results.hash_reasons(&roots);
         }
+        if finished.ending == Ending::Exited(Some(0)) && !options.base_run {
+            hidden = report.test_results.as_ref().map_or(0, |results| {
+                results
+                    .failed
+                    .iter()
+                    .filter(|id| crate::pertest::is_test(id))
+                    .count()
+            });
+        }
         // A run that stopped at its first failure may hide a later new one:
         // never evidence for pre-existing (ADR 0039).
-        if !matches!(finished.ending, Ending::Exited(Some(0)))
+        if (!matches!(finished.ending, Ending::Exited(Some(0))) || hidden > 0)
             && crate::pertest::stopped_at_first_failure(
                 runner,
                 command,
@@ -2351,6 +2350,23 @@ fn run_step(
     }
     if let Some(junit) = &junit {
         let _ = std::fs::remove_file(junit);
+    }
+    // How long it took is kept for the next run (ADR 0057).
+    if let Some(times) = options.times {
+        // A step that was stopped (Ctrl+C, a time limit, or early for a
+        // service that is down) ran at least this long.
+        let outcome = match finished.ending {
+            // An exit code of 0 beside failing tests is not a pass (ADR 0072).
+            Ending::Exited(Some(0)) if hidden == 0 => Outcome::Passed,
+            Ending::Exited(_) => Outcome::Failed,
+            Ending::TimedOut | Ending::Stopped | Ending::GaveUp => Outcome::Unfinished,
+        };
+        if finished.ending == Ending::Stopped {
+            // The person wants verify gone: no long wait for the file.
+            times.record(project, name, command, finished.duration, outcome);
+        } else {
+            times.record_ended(project, name, command, finished.duration, outcome);
+        }
     }
     let early_seen = early
         .into_inner()
@@ -2559,18 +2575,11 @@ fn run_step(
         }
     };
     report.exit_code = code;
-    // The tests the runner's own results name as failed or errored. An exit
-    // code of 0 beside them is not a pass (ADR 0072): a script ending in
-    // `|| exit 0`, or a hook that sets the exit status, would hide them.
-    let hidden = report.test_results.as_ref().map_or(0, |results| {
-        results
-            .failed
-            .iter()
-            .filter(|id| crate::pertest::is_test(id))
-            .count()
-    });
     if code == Some(0) && hidden > 0 {
-        report.signature = failure_signature(&text(), unit.root);
+        // Before what is there already: the mark of a run that stopped at
+        // its first failure.
+        let marks = std::mem::replace(&mut report.signature, failure_signature(&text(), unit.root));
+        report.signature.extend(marks);
         report.output_tail = tail(&finished.stdout, &finished.stderr);
         report.status = StepStatus::Failed;
         let tests = if hidden == 1 { "test" } else { "tests" };

@@ -218,8 +218,7 @@ async function repoWith(
     FSCALE_LOG: 'cache',
   };
   const verify = (...flags: string[]) => runCli(['verify', ...flags], repo.root, env);
-  const answer = (next: Answer) =>
-    writeFile(path.join(tools, 'answer.json'), JSON.stringify(next));
+  const answer = (next: Answer) => writeFile(path.join(tools, 'answer.json'), JSON.stringify(next));
   return { repo, tools, verify, answer };
 }
 
@@ -334,7 +333,12 @@ describe('an exit code of 0 beside failing tests, and the base commit', () => {
     });
     const result = await verify('--json');
     expect(result.code).toBe(EXIT_VIOLATIONS);
-    expect(testStep(result.stdout)).toMatchObject({ status: 'failed', exitCode: 0, label: 'new' });
+    const step = testStep(result.stdout);
+    expect(step).toMatchObject({ status: 'failed', exitCode: 0 });
+    // It blocks: the base cannot judge it, so it has no label, or it is new.
+    expect(step.label).not.toBe('pre-existing');
+    expect(step.label).not.toBe('flaky');
+    expect((JSON.parse(result.stdout) as Report).result).toBe('failed');
   });
 });
 

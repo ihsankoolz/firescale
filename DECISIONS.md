@@ -27,6 +27,9 @@ Verification idea 2, step one.
 - **The failing test first:** `packages/cli/src/exit-zero.test.ts`. On `main`, in WSL: 5 of 9 failed with `expected +0 to be 1` (verify exited 0), one per runner and one for the wording. The other 4 are guards and passed: the same stand-ins with no failing test pass and are cached.
 - **Decided on your behalf:** only tests count. A coverage threshold or Vitest's unhandled errors printed beside an exit code of 0 do not fail the step. Say if they should.
 - **What it can cost:** a script that retries its tests by hand (`cargo test || cargo test`) is `FAILED` when the first try's failures are in the output.
+- **The fresh review found three things the first fix broke; each is fixed, with a test seen failing first.** A base commit that hid the same failing tests was read as failing, which made the head's failure `pre-existing` (a pass easier to get): the base is now judged by its exit code alone, as before. A run that stops at its first failure lost its mark. The step's short time replaced the kept time of the last pass.
+- **Needs your decision:** a repo whose base already hides failing tests behind exit 0 gets `new` for them on every change. Reading the base by its results would label them `pre-existing`, and would let through a failure that blocked before. ADR 0072 has it.
+- **Not done** (ADR 0072): setup detection for such a step; commands that keep their results from verify (`pytest --junitxml=x || true`, `cargo test -q || true`, `--reporter=dot`).
 
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
