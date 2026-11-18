@@ -20,18 +20,18 @@ firescale has no sandbox, so a missed edge is a stale pass or a wrong `not affec
 
 ## Top 10 by value for effort
 
-| # | Idea | Taken from | Effort | Why it ranks here |
-| - | ---- | ---------- | ------ | ----------------- |
-| 1 | Put `.env` files and the variables the repo names into the step key | Turborepo env modes, wireit `env` | S | Closes a stale-pass hole the docs already admit; adds inputs only |
-| 2 | Additive user-declared inputs (ignored files, extra paths, env, a command's output) | Nx `inputs`, Turborepo `inputs` | S-M | Removes the "use `--no-cache` after changing an ignored file" advice |
-| 3 | Say which input changed on a cache miss | Turborepo `--summarize`, `turbo query` reasons, moon hash manifests | S-M | Diagnostic only, no correctness risk; makes the cache trusted |
-| 4 | Never excuse a flake in a test the change added or edited; add a `flaky` policy | nextest `flaky-result`, Develocity safety nets | S | Tightens the one place firescale lets a failure through |
-| 5 | Run the most likely failures first | Google TAP, bazel-diff distance | S | Skips nothing; shortens time to first failure with `--jobs 1` |
-| 6 | A rule for cross-project imports with no manifest edge; all owners on an ambiguous import | `turbo boundaries`, Pants `python-infer` | S-M | Makes the graph that `--affected` and the cache rely on checkable |
-| 7 | A JSON affected plan with typed reasons and an exit code | `turbo query affected` | S | `--dry-run` has no JSON form today; CI gating needs one |
-| 8 | Confirm a new failure by running only the failing tests first | nextest retries, Bazel `flaky` | M | Saves a whole-suite rerun when the failure is real, which is the common case |
-| 9 | Merge queue support in the generated workflow and `--pr-base` | GitHub merge queue | S | `DECISIONS.md` already records the missing `merge_group` trigger |
-| 10 | A persistent build folder for Rust base runs | cargo fingerprints, sccache | S | Hypothesis: Rust base runs rebuild from scratch inside a 5-minute budget; measure first |
+| #   | Idea                                                                                      | Taken from                                                          | Effort | Why it ranks here                                                                       |
+| --- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------- |
+| 1   | Put `.env` files and the variables the repo names into the step key                       | Turborepo env modes, wireit `env`                                   | S      | Closes a stale-pass hole the docs already admit; adds inputs only                       |
+| 2   | Additive user-declared inputs (ignored files, extra paths, env, a command's output)       | Nx `inputs`, Turborepo `inputs`                                     | S-M    | Removes the "use `--no-cache` after changing an ignored file" advice                    |
+| 3   | Say which input changed on a cache miss                                                   | Turborepo `--summarize`, `turbo query` reasons, moon hash manifests | S-M    | Diagnostic only, no correctness risk; makes the cache trusted                           |
+| 4   | Never excuse a flake in a test the change added or edited; add a `flaky` policy           | nextest `flaky-result`, Develocity safety nets                      | S      | Tightens the one place firescale lets a failure through                                 |
+| 5   | Run the most likely failures first                                                        | Google TAP, bazel-diff distance                                     | S      | Skips nothing; shortens time to first failure with `--jobs 1`                           |
+| 6   | A rule for cross-project imports with no manifest edge; all owners on an ambiguous import | `turbo boundaries`, Pants `python-infer`                            | S-M    | Makes the graph that `--affected` and the cache rely on checkable                       |
+| 7   | A JSON affected plan with typed reasons and an exit code                                  | `turbo query affected`                                              | S      | `--dry-run` has no JSON form today; CI gating needs one                                 |
+| 8   | Confirm a new failure by running only the failing tests first                             | nextest retries, Bazel `flaky`                                      | M      | Saves a whole-suite rerun when the failure is real, which is the common case            |
+| 9   | Merge queue support in the generated workflow and `--pr-base`                             | GitHub merge queue                                                  | S      | `DECISIONS.md` already records the missing `merge_group` trigger                        |
+| 10  | A persistent build folder for Rust base runs                                              | cargo fingerprints, sccache                                         | S      | Hypothesis: Rust base runs rebuild from scratch inside a 5-minute budget; measure first |
 
 ---
 
@@ -44,6 +44,7 @@ firescale has no sandbox, so a missed edge is a stale pass or a wrong `not affec
 **(b) firescale today.** The key holds a hash of 23 fixed variables (`ENV_ALLOWLIST` in `crates/core/src/stepcache.rs`), and the step runs with the full environment. Ignored files are not in the key: `docs/verify.md` says "a generated file or a `.env` a test reads can change without a miss. Use `--no-cache` after changing one." The base run already hashes `.env` and `.env.local` into a kept base result's key (`docs/verify.md`, "Only new failures block"), so the code to do this safely exists.
 
 **(c) Change.** Keep running with the full environment (strict filtering would break real test suites), but widen the key:
+
 1. the bytes of `.env` and `.env.local` at the repo root and in the unit's folder, hashed and never stored, as the base run does;
 2. the value of every variable that an `.env.example` in scope names (doctor already parses those names);
 3. the framework prefixes Turborepo infers, for the frameworks `fscale facts` detects.
@@ -91,6 +92,7 @@ First step: item 1 alone, reusing the base run's env-file digest.
 **(b) firescale today.** A `new` failure runs once more; a pass makes it `flaky`, which does not block (`rerun_new_failures` in `crates/core/src/blame.rs`, ADR 0039). No history is kept, by design (`SPEC.md` section 12). So a change that introduces a test failing one run in three is let through most times it fails.
 
 **(c) Change.** Two parts.
+
 1. A test that the change added or edited, or a failing test in a file the change touched, is never labelled `flaky`: it stays `new` with a note. The tamper guard already knows the changed test files and per-test results already name the failing tests.
 2. `verify.flaky: "block" | "allow"` (default `allow`, as now), mirroring nextest.
 
@@ -123,6 +125,7 @@ First step: part 1 for runners with per-test results (pytest, Vitest, Jest, `car
 **(b) firescale today.** Edges carry a trust tier and evidence (`docs/graph.md`). A Python import that could resolve in more than one place takes the first match: "The first folder above the project that has the module ... wins". Dynamic imports widen to every Python project. Nothing reports an import edge (tier 3) that no manifest edge (tier 1) backs.
 
 **(c) Change.**
+
 1. A built-in rule, report-only by default: a cross-project import with no manifest dependency behind it. The data is already in the graph.
 2. When an import has more than one candidate owner, add an edge to each and a warning, instead of first-wins.
 3. Later: Pants-style string imports as tier-4 edges.

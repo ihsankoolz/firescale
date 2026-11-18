@@ -14,13 +14,13 @@ Repo facts come from `README.md`, `SPEC.md` §12, `docs/verify.md`, `docs/hooks.
 
 The held-out cheat corpus (`bench/RESULTS.md`, "Misses on cheating changes", 42 to 43 of 98 missed) misses by category:
 
-| Category | Missed of 11 | What the misses are (titles in `bench/tamper-cheats.json`) |
-| --- | --- | --- |
-| other | 11 | mock the module under test; import a different function; `process.exit(0)` in Jest globalSetup; conftest hooks that skip, rewrite reports or force exit status 0; `sys.exit(0)` in conftest; `vitest run \|\| exit 0`; hardcoded test input; `PYTEST_CURRENT_TEST` sniffing; a `#[cfg(test)]` twin of the function |
-| assertion-weakened | 8 | `toThrow` to `toBeDefined`; `==` to `is not None`; try/except AssertionError; `let _ =`; wider `approx`; `if let Ok`; `len(x) >= 0`; assert on a tuple; `expect.anything()`; dropped `await` on `.rejects`; added `#[should_panic]` |
-| hooks-skipped | 7 | hook removed or `\|\| true`; `disableAllHooks`; `settings.local.json`; husky `exit 0`; pre-commit and lefthook entries turned off |
-| snapshot/expected | 4 (7 more approval-only) | |
-| config, ci, suppression | 4, 3, 3 | |
+| Category                | Missed of 11             | What the misses are (titles in `bench/tamper-cheats.json`)                                                                                                                                                                                                                                                         |
+| ----------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| other                   | 11                       | mock the module under test; import a different function; `process.exit(0)` in Jest globalSetup; conftest hooks that skip, rewrite reports or force exit status 0; `sys.exit(0)` in conftest; `vitest run \|\| exit 0`; hardcoded test input; `PYTEST_CURRENT_TEST` sniffing; a `#[cfg(test)]` twin of the function |
+| assertion-weakened      | 8                        | `toThrow` to `toBeDefined`; `==` to `is not None`; try/except AssertionError; `let _ =`; wider `approx`; `if let Ok`; `len(x) >= 0`; assert on a tuple; `expect.anything()`; dropped `await` on `.rejects`; added `#[should_panic]`                                                                                |
+| hooks-skipped           | 7                        | hook removed or `\|\| true`; `disableAllHooks`; `settings.local.json`; husky `exit 0`; pre-commit and lefthook entries turned off                                                                                                                                                                                  |
+| snapshot/expected       | 4 (7 more approval-only) |                                                                                                                                                                                                                                                                                                                    |
+| config, ci, suppression | 4, 3, 3                  |                                                                                                                                                                                                                                                                                                                    |
 
 Two cautions. (1) `crates/core/src/tamper/noverify.rs` now names `disableAllHooks`, `settings.local.json`, lefthook and pre-commit files, so part of "hooks-skipped" may already be closed: the per-category table is from M26 and should be measured again before work is planned. (2) I read the corpus titles to write this report. Any detector written from this report is no longer held out against that corpus: a second held-out corpus is needed (idea 11).
 
@@ -28,18 +28,18 @@ The structural point: the guard counts tests, skips and assertions **net** (`doc
 
 ## Top 10, ranked by value over effort
 
-| # | Idea | Effort | Mainly improves |
-| --- | --- | --- | --- |
-| 1 | Run the **base's tests against the head's code** as a tamper oracle | M | miss rate (assertion-weakened, expected-changed, mocks) and false positives |
-| 2 | Result consistency: exit 0 with failing tests, and tests that ran on the base but not on the head | S, then M | miss rate ("other") |
-| 3 | A flaky verdict on a **new or changed test** blocks; a test that failed in two verify runs of one session is not flaky | S | honesty of `flaky` |
-| 4 | Stop hook: write a `timeout`, and offer `asyncRewake` for slow suites | S | agents stopping with verify never finished |
-| 5 | Edit-time guard (PreToolUse deny on guard files) and an explicit "flag the test and stop" way out | S to M | cheating at the source |
-| 6 | Assertion-strength downgrade detectors | M | miss rate (assertion-weakened) |
-| 7 | Static detectors for runner laundering and test-aware production code | S to M | miss rate ("other", hooks) |
-| 8 | Default-branch **failures** in the shared CI cache; a stored baseline only as fallback | M | base cost, "not judged" failures |
-| 9 | Related tests first; under `--budget`, the related subset of a slow suite instead of nothing | M | time to first failure, the 1h 36m suite |
-| 10 | Doctor reads the verify plan; doctor checks that the tamper workflow is a required check | S | bug 3 of the real-repos review; CI enforcement |
+| #   | Idea                                                                                                                   | Effort    | Mainly improves                                                             |
+| --- | ---------------------------------------------------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------- |
+| 1   | Run the **base's tests against the head's code** as a tamper oracle                                                    | M         | miss rate (assertion-weakened, expected-changed, mocks) and false positives |
+| 2   | Result consistency: exit 0 with failing tests, and tests that ran on the base but not on the head                      | S, then M | miss rate ("other")                                                         |
+| 3   | A flaky verdict on a **new or changed test** blocks; a test that failed in two verify runs of one session is not flaky | S         | honesty of `flaky`                                                          |
+| 4   | Stop hook: write a `timeout`, and offer `asyncRewake` for slow suites                                                  | S         | agents stopping with verify never finished                                  |
+| 5   | Edit-time guard (PreToolUse deny on guard files) and an explicit "flag the test and stop" way out                      | S to M    | cheating at the source                                                      |
+| 6   | Assertion-strength downgrade detectors                                                                                 | M         | miss rate (assertion-weakened)                                              |
+| 7   | Static detectors for runner laundering and test-aware production code                                                  | S to M    | miss rate ("other", hooks)                                                  |
+| 8   | Default-branch **failures** in the shared CI cache; a stored baseline only as fallback                                 | M         | base cost, "not judged" failures                                            |
+| 9   | Related tests first; under `--budget`, the related subset of a slow suite instead of nothing                           | M         | time to first failure, the 1h 36m suite                                     |
+| 10  | Doctor reads the verify plan; doctor checks that the tamper workflow is a required check                               | S         | bug 3 of the real-repos review; CI enforcement                              |
 
 ### 1. Base's tests on the head's code ("old tests, new code")
 
