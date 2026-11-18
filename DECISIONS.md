@@ -31,6 +31,16 @@ Verification idea 2, step one.
 - **Needs your decision:** a repo whose base already hides failing tests behind exit 0 gets `new` for them on every change. Reading the base by its results would label them `pre-existing`, and would let through a failure that blocked before. ADR 0072 has it.
 - **Not done** (ADR 0072): setup detection for such a step; commands that keep their results from verify (`pytest --junitxml=x || true`, `cargo test -q || true`, `--reporter=dot`).
 
+**Pull request 2: a flaky pass never excuses the change's own tests (ADR 0073)**
+
+Build idea 4, part 1, and verification idea 3, part (i).
+
+- **A new failing test in a file the change added or edited is never labelled `flaky`.** Its step stays `new` and is not run again, and a note names the test and the file. Pytest, Vitest, Jest and `cargo test`; a step with no per-test results is run again as before.
+- For `cargo test`, which names no file, the change's Rust files are read for a test of the failing test's name.
+- **The failing test first:** `packages/cli/src/flaky-own-tests.test.ts`. In WSL, before the change: 5 of 9 failed with `expected +0 to be 1` (the step was `flaky`). The other 4 are guards: with another file edited, the failure is still `flaky`.
+- **Decided on your behalf:** the step is not run again at all, since the second run could no longer change the label. Say if you want the rerun kept for what it shows.
+- **What it can cost:** an honest edit to a file that holds an already flaky test blocks when that test fails. Running verify again is the way out.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

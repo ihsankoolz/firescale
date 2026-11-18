@@ -2148,6 +2148,30 @@ fn rerun_new_failures(
             report.notes.push(note);
             continue;
         }
+        // A failing test of the change itself is never excused as flaky
+        // (ADR 0073): it stays new, and a second run would change nothing.
+        let own = own_tests(
+            run.root,
+            run.changed,
+            step.command.as_deref(),
+            step.project.as_deref(),
+            &step.failed_tests,
+            &dir,
+        );
+        if let Some((file, id)) = own.first() {
+            let count = own.len();
+            let (tests, are) = if count == 1 {
+                ("test is", String::new())
+            } else {
+                ("tests are", format!(", and {} more", count - 1))
+            };
+            let note = format!(
+                "{}: not run again, and it stays new: {count} failing {tests} in a file this change added or edited ({file}: {id}{are}). A failing test of the change itself is never labelled flaky (ADR 0073).",
+                place(step)
+            );
+            report.notes.push(note);
+            continue;
+        }
         say(&format!(
             "{}: a new failure; running it once more before it blocks",
             place(step)
@@ -2223,6 +2247,92 @@ fn rerun_new_failures(
     }
 }
 
+/// The new failing tests of a step (`failed`) that sit in a file the change added or
+/// edited, each with that file (ADR 0073). Empty for a step whose runner
+/// gives no per-test results, and when git could not list the change.
+fn own_tests(
+    root: &Path,
+    changed: Option<&BTreeSet<String>>,
+    command: Option<&str>,
+    folder: Option<&str>,
+    failed: &[crate::verify::FailedTest],
+    dir: &Path,
+) -> Vec<(String, String)> {
+    let (Some(changed), Some(command)) = (changed, command) else {
+        return Vec::new();
+    };
+    let script = crate::pertest::script_text(dir, command);
+    let Some(runner) = crate::pertest::TestRunner::of(command, script.as_deref()) else {
+        return Vec::new();
+    };
+    // `cargo test` names a test by its modules, not by its file: the Rust
+    // files of the change are read for the tests they hold.
+    let rust_tests: Vec<(&String, BTreeSet<String>)> = if runner
+        == crate::pertest::TestRunner::Cargo
+    {
+        changed
+            .iter()
+            .filter(|path| path.ends_with(".rs"))
+            .filter_map(|path| {
+                let source = fs::read_to_string(folder_of(root, Some(path))).ok()?;
+                let file = crate::tamper::read_test_file(&source, crate::tamper::Language::Rust);
+                let names = file
+                    .tests
+                    .iter()
+                    .map(|test| last_segment(&test.id).to_owned())
+                    .collect();
+                Some((path, names))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    failed
+        .iter()
+        .filter(|test| test.label == Some(Label::New) && crate::pertest::is_test(&test.id))
+        .filter_map(|test| {
+            let file = match crate::pertest::file_of(runner, &test.id) {
+                Some(file) => touched(file, folder, changed)?,
+                None => rust_tests
+                    .iter()
+                    .find(|(_, names)| names.contains(last_segment(&test.id)))
+                    .map(|(path, _)| (*path).clone())?,
+            };
+            Some((file, test.id.clone()))
+        })
+        .collect()
+}
+
+/// The last part of a Rust test's name: `charges` of `pay::tests::charges`.
+fn last_segment(id: &str) -> &str {
+    id.rsplit("::").next().unwrap_or(id)
+}
+
+/// The changed file that is the test file `file` of a step in `folder`. A
+/// runner writes a test's file from its own root folder, which is the
+/// step's folder, the repo's, or one between: so a changed path counts when
+/// it is `file`, or ends with `/file`.
+fn touched(file: &str, folder: Option<&str>, changed: &BTreeSet<String>) -> Option<String> {
+    let file = file.trim_start_matches("./");
+    if file.is_empty() {
+        return None;
+    }
+    let in_folder = match folder {
+        None | Some(".") => file.to_owned(),
+        Some(folder) => format!("{folder}/{file}"),
+    };
+    let suffix = format!("/{file}");
+    changed
+        .iter()
+        .find(|path| **path == in_folder)
+        .or_else(|| {
+            changed
+                .iter()
+                .find(|path| path.as_str() == file || path.ends_with(&suffix))
+        })
+        .cloned()
+}
+
 fn past(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
@@ -2294,6 +2404,87 @@ pub fn violation_id(rule: &str, file: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_file_is_a_tests_file_from_the_steps_folder_or_any_folder_above_it() {
+        let changed: BTreeSet<String> = [
+            "web/src/pay.test.ts",
+            "tests/test_auth.py",
+            "docs/src/pay.test.ts.md",
+            "other-src/pay.test.ts",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let found = |file: &str, folder: Option<&str>| touched(file, folder, &changed);
+        // Relative to the step's folder, to the repo, or to a folder between.
+        assert_eq!(
+            found("src/pay.test.ts", Some("web")).as_deref(),
+            Some("web/src/pay.test.ts")
+        );
+        assert_eq!(
+            found("web/src/pay.test.ts", Some("web")).as_deref(),
+            Some("web/src/pay.test.ts")
+        );
+        assert_eq!(
+            found("./tests/test_auth.py", None).as_deref(),
+            Some("tests/test_auth.py")
+        );
+        assert_eq!(
+            found("test_auth.py", Some(".")).as_deref(),
+            Some("tests/test_auth.py")
+        );
+        // A whole path part must match: not `other-src/pay.test.ts`.
+        assert_eq!(
+            found("src/pay.test.ts", Some("api")).as_deref(),
+            Some("web/src/pay.test.ts")
+        );
+        assert_eq!(found("rc/pay.test.ts", None), None);
+        assert_eq!(found("src/refund.test.ts", Some("web")), None);
+        assert_eq!(found("", None), None);
+    }
+
+    #[test]
+    fn only_new_failing_tests_in_files_of_the_change_are_its_own() {
+        let dir = std::env::temp_dir();
+        let changed: BTreeSet<String> = ["src/pay.test.ts".to_owned()].into_iter().collect();
+        let test = |id: &str, label: Label| crate::verify::FailedTest {
+            id: id.to_owned(),
+            label: Some(label),
+        };
+        let failed = vec![
+            test("src/pay.test.ts > pay > charges", Label::New),
+            test("src/pay.test.ts > pay > refunds", Label::PreExisting),
+            test("src/cart.test.ts > cart > adds", Label::New),
+            test(crate::pertest::UNHANDLED_ERRORS, Label::New),
+        ];
+        assert_eq!(
+            own_tests(
+                &dir,
+                Some(&changed),
+                Some("vitest run"),
+                None,
+                &failed,
+                &dir
+            ),
+            vec![(
+                "src/pay.test.ts".to_owned(),
+                "src/pay.test.ts > pay > charges".to_owned()
+            )]
+        );
+        // Git could not list the change, or the runner gives no results.
+        assert!(own_tests(&dir, None, Some("vitest run"), None, &failed, &dir).is_empty());
+        assert!(own_tests(
+            &dir,
+            Some(&changed),
+            Some("node test.js"),
+            None,
+            &failed,
+            &dir
+        )
+        .is_empty());
+        assert!(own_tests(&dir, Some(&changed), None, None, &failed, &dir).is_empty());
+    }
     use crate::testing::{Fixture, Track};
 
     #[cfg(unix)]

@@ -159,6 +159,20 @@ pub fn is_test(id: &str) -> bool {
     id != UNHANDLED_ERRORS && id != COVERAGE_THRESHOLD
 }
 
+/// The file a test's identity names, as the runner writes it: the part
+/// before `::` (pytest), ` > ` (Vitest) or ` › ` (Jest). `cargo test` names
+/// no file.
+#[must_use]
+pub fn file_of(runner: TestRunner, id: &str) -> Option<&str> {
+    let separator = match runner {
+        TestRunner::Pytest => "::",
+        TestRunner::Vitest => " > ",
+        TestRunner::Jest => " \u{203a} ",
+        TestRunner::Cargo => return None,
+    };
+    Some(id.split(separator).next().unwrap_or(id))
+}
+
 /// The roots of a run as they can appear in its output: as given, with
 /// forward slashes, and resolved, longest first.
 #[must_use]
