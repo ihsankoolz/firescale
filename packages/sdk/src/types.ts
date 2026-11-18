@@ -322,7 +322,7 @@ export interface AffectedReason {
   sources?: string[];
   /** The file that makes everything run. */
   file?: string;
-  /** `config-setting`: the steps the changed setting reaches. */
+  /** `config-setting`: the steps the changed setting reaches. Empty for a setting every step shares, and when the base's config could not be read. */
   steps?: string[];
 }
 

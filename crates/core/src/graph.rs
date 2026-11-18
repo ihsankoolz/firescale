@@ -1837,7 +1837,8 @@ pub enum Why {
     /// everything runs.
     AgentHookFile { file: String },
     /// A setting of the firescale config changed what these steps run. No
-    /// steps named: a setting every step shares.
+    /// steps named: a setting every step shares, or the base's config
+    /// could not be read, so every setting counts as changed.
     ConfigSetting { steps: Vec<String> },
     /// Its steps can read every file of the repo, and a file only such a
     /// step can read changed (the config, an agent hook file).

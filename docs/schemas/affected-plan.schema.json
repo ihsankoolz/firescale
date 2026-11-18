@@ -103,7 +103,7 @@
           "type": "string"
         },
         "steps": {
-          "description": "config-setting: the steps the changed setting reaches. Empty for a setting every step shares.",
+          "description": "config-setting: the steps the changed setting reaches. Empty for a setting every step shares, and when the base's config could not be read.",
           "type": "array",
           "items": { "type": "string" }
         }
