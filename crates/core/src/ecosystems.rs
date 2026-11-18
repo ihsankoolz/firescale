@@ -577,6 +577,16 @@ const SWIFT_TOOL: Tool = Tool {
     install: "install Swift from https://www.swift.org/install (on macOS, with Xcode)",
 };
 
+/// SwiftLint, where the folder has its config: verify's lint step runs it
+/// (`swift_lint`), so doctor looks for it.
+fn swiftlint_tool(f: &Folder) -> Option<Tool> {
+    (f.has(".swiftlint.yml") || f.has(".swiftlint.yaml")).then_some(Tool {
+        programs: &["swiftlint"],
+        version_args: &["version"],
+        install: "install SwiftLint (https://github.com/realm/SwiftLint; on macOS: brew install swiftlint)",
+    })
+}
+
 /// True when a CMake or Meson build in the folder builds a native extension
 /// of another ecosystem's package, and that package's own tool drives it:
 /// scikit-build-core, meson-python, py-build-cmake or a `setup.py` using
@@ -649,7 +659,11 @@ const SWIFT: Ecosystem = Ecosystem {
     lint: Missing::Skipped("no linter was found (looked for .swiftlint.yml and .swift-format)"),
     test: Missing::Skipped("no test command was found"),
     programs: &["swift", "swiftlint"],
-    doctor: |_| vec![SWIFT_TOOL],
+    doctor: |f| {
+        let mut tools = vec![SWIFT_TOOL];
+        tools.extend(swiftlint_tool(f));
+        tools
+    },
     ignored: &[".build"],
 };
 
@@ -804,6 +818,7 @@ const XCODE: Ecosystem = Ecosystem {
                 install: "install CocoaPods (https://cocoapods.org), then run `pod install`",
             });
         }
+        tools.extend(swiftlint_tool(f));
         tools
     },
     ignored: &["xcuserdata"],
