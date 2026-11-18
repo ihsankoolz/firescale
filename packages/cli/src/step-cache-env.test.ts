@@ -158,20 +158,69 @@ describe('the step cache and env files', () => {
     expect(await readFile(path.join(repo.root, '.env'), 'utf8')).toBe(`API_KEY=${secret}\n`);
   });
 
-  // Making a symlink needs a privilege on Windows.
+  // Making a symlink to a file needs a privilege on Windows.
   it.skipIf(process.platform === 'win32')(
-    'never caches a step while an env file is a link, which is not followed, and says why',
+    'keys an env file that is a link on where it points and on the bytes there, and still caches',
     async () => {
       const { repo, ran, verify } = await loggingRepo();
       const outside = await fixtures.create({ files: { 'real.env': 'A=1\n' }, track: 'no-git' });
       await symlink(path.join(outside.root, 'real.env'), path.join(repo.root, '.env'));
       const first = await verify();
       expect(first.code).toBe(EXIT_OK);
-      expect(first.stdout).toContain(
-        'Not cached: lint passed, but the next run cannot reuse it: .env is a link, which is not followed, so what it holds is not in the key.',
-      );
+      expect(first.stdout).not.toContain('Not cached');
+      expect(await ran()).toBe(3);
+      expect((await verify()).code).toBe(EXIT_OK);
+      expect(await ran()).toBe(3);
+      // The bytes it points to change.
+      await writeFile(path.join(outside.root, 'real.env'), 'A=2\n');
       expect((await verify()).code).toBe(EXIT_OK);
       expect(await ran()).toBe(6);
+      // It points somewhere else, at the same bytes.
+      await writeFile(path.join(outside.root, 'other.env'), 'A=2\n');
+      await rm(path.join(repo.root, '.env'));
+      await symlink(path.join(outside.root, 'other.env'), path.join(repo.root, '.env'));
+      expect((await verify()).code).toBe(EXIT_OK);
+      expect(await ran()).toBe(9);
+      expect((await verify()).code).toBe(EXIT_OK);
+      expect(await ran()).toBe(9);
     },
   );
+
+  // A junction on Windows, which needs no privilege; a symbolic link elsewhere.
+  it('still caches when .env is a link to a folder, a virtual environment of that name', async () => {
+    const { repo, ran, verify } = await loggingRepo();
+    const outside = await fixtures.create({
+      files: { 'pyvenv.cfg': 'home = x\n' },
+      track: 'no-git',
+    });
+    await symlink(outside.root, path.join(repo.root, '.env'), 'junction');
+    const first = await verify();
+    expect(first.code).toBe(EXIT_OK);
+    expect(first.stdout).not.toContain('Not cached');
+    expect((await verify()).code).toBe(EXIT_OK);
+    expect(await ran()).toBe(3);
+  });
+
+  it('does not keep the pass of a step that wrote an env file while it ran', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          packs: ['core'],
+          verify: {
+            test: `node -e "require('fs').appendFileSync('.env', 'RUN=1\\n'); require('fs').appendFileSync('steps.log', 'test\\n')"`,
+          },
+        }),
+        'src/a.js': 'export const a = 1;\n',
+        '.gitignore': 'steps.log\n.env\n.env.local\n.firescale/\n',
+      },
+    });
+    for (const run of [1, 2]) {
+      const result = await runCli(['verify'], repo.root, {});
+      expect(result.code, `run ${run}`).toBe(EXIT_OK);
+      expect(result.stdout).toContain(
+        'Not cached: test passed, but the next run cannot reuse it: files it depends on changed while verify ran.',
+      );
+    }
+    expect(await readFile(path.join(repo.root, 'steps.log'), 'utf8')).toBe('test\ntest\n');
+  });
 });

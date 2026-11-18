@@ -904,23 +904,45 @@ fn environment_digest(read: &dyn Fn(&str) -> Option<String>) -> String {
 /// What is at the path of an env file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EnvFile {
-    /// Nothing, or a folder (a virtual environment named `.env`).
+    /// Nothing, or something that is not a file: a folder (a virtual
+    /// environment named `.env`), a pipe.
     Missing,
     /// A plain file, with the hash of its bytes. The bytes themselves are
     /// never kept, logged or shown.
     Plain(String),
-    /// A link, which is not followed.
-    Link,
+    /// A link, with a hash of where it points and of the bytes there, as
+    /// the snapshot of the tree counts a link ([`read_state`]).
+    Link(String),
+    /// It is there and could not be read.
     Unreadable,
 }
 
 /// Reads the env file at `path` for its hash alone.
 pub(crate) fn env_file(path: &Path) -> EnvFile {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return EnvFile::Missing;
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return EnvFile::Missing,
+        Err(_) => return EnvFile::Unreadable,
     };
     if meta.file_type().is_symlink() {
-        return EnvFile::Link;
+        let Ok(target) = fs::read_link(path) else {
+            return EnvFile::Unreadable;
+        };
+        let target = target.to_string_lossy().replace('\\', "/");
+        let pointed = match fs::metadata(path) {
+            // A linked folder is a virtual environment, not an env file:
+            // only where the link points is counted.
+            Ok(pointed) if pointed.is_dir() => "folder".to_owned(),
+            Ok(pointed) if pointed.is_file() => match fs::read(path) {
+                Ok(bytes) => blake3::hash(&bytes).to_hex().to_string(),
+                Err(_) => return EnvFile::Unreadable,
+            },
+            Ok(_) => "other".to_owned(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "dangling".to_owned(),
+            Err(_) => return EnvFile::Unreadable,
+        };
+        let both = format!("{target}\0{pointed}");
+        return EnvFile::Link(blake3::hash(both.as_bytes()).to_hex().to_string());
     }
     if !meta.is_file() {
         return EnvFile::Missing;
@@ -938,7 +960,7 @@ pub(crate) fn env_file(path: &Path) -> EnvFile {
 ///
 /// # Errors
 ///
-/// Why the step is not cached: an env file is a link, or cannot be read.
+/// Why the step is not cached: an env file cannot be read.
 fn env_files_line(root: &Path, folder: Option<&str>) -> Result<String, String> {
     let mut folders = vec!["."];
     if let Some(folder) = folder.filter(|folder| *folder != ".") {
@@ -958,11 +980,7 @@ fn env_files_line(root: &Path, folder: Option<&str>) -> Result<String, String> {
             match env_file(&path) {
                 EnvFile::Missing => {}
                 EnvFile::Plain(hash) => line.push_str(&format!("{rel}\0{hash}\n")),
-                EnvFile::Link => {
-                    return Err(format!(
-                        "{rel} is a link, which is not followed, so what it holds is not in the key"
-                    ));
-                }
+                EnvFile::Link(hash) => line.push_str(&format!("link\0{rel}\0{hash}\n")),
                 EnvFile::Unreadable => return Err(format!("{rel} could not be read")),
             }
         }
@@ -2093,6 +2111,53 @@ mod tests {
         assert_eq!(env_files_line(root, Some("lib")).unwrap(), root_only);
         assert_eq!(env_file(&root.join("lib").join(".env")), EnvFile::Missing);
         assert_eq!(env_file(&root.join("nowhere")), EnvFile::Missing);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_env_file_that_is_a_link_counts_by_its_target_and_the_bytes_there() {
+        let fixture = Fixture::new(
+            &[
+                ("real.env", "A=1\n"),
+                ("same.env", "A=1\n"),
+                ("venv/pyvenv.cfg", ""),
+            ],
+            Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let link = root.join(".env");
+        let at = |target: &str| {
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(root.join(target), &link).unwrap();
+            env_file(&link)
+        };
+        let first = at("real.env");
+        assert!(matches!(first, EnvFile::Link(_)));
+        assert_eq!(at("real.env"), first);
+        // The same bytes somewhere else, and other bytes at the same place.
+        assert_ne!(at("same.env"), first);
+        fixture.write("real.env", "A=2\n").unwrap();
+        assert_ne!(at("real.env"), first);
+        // A linked folder and a link to nothing are keyed, not refused.
+        assert!(matches!(at("venv"), EnvFile::Link(_)));
+        assert!(matches!(at("nowhere"), EnvFile::Link(_)));
+        assert!(env_files_line(root, None)
+            .unwrap()
+            .starts_with("link\0.env\0"));
+        // A file that is there and cannot be read is never keyed as absent.
+        let _ = std::fs::remove_file(&link);
+        fixture.write(".env", "A=3\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&link, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&link).is_err() {
+            assert_eq!(env_file(&link), EnvFile::Unreadable);
+            assert_eq!(
+                env_files_line(root, None),
+                Err(".env could not be read".to_owned())
+            );
+        }
+        std::fs::set_permissions(&link, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 
     struct NoTools;

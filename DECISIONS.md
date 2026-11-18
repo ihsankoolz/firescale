@@ -48,7 +48,8 @@ Build idea 1, first step only.
 
 - **What changed:** the bytes of `.env` and `.env.local`, at the repo root and in the step's project folder, are part of the step's key, as a hash. Edit one and the steps that can read it run again; put the old bytes back and the old pass is found.
 - **No value appears anywhere:** not in output, the cache log, `.firescale/` or the temp folder. A test greps all of them for a planted value. One function reads the files, for the step key and for the base run's key.
-- **Decided on your behalf:** a step is not cached while one of those four paths is a link or cannot be read, and the summary says why. Links are not followed, so what the tests read through one cannot be in the key. Before, such a step was cached.
+- **Decided on your behalf:** an env file that is a link counts by where it points and by the bytes there, as a tracked link already did. A step is not cached while one of the four paths is there and cannot be read.
+- **The fresh review** found no stale pass and no leak. It found that my first version, which refused to cache any unit with a linked `.env`, made repos uncacheable that were cached before (a committed `.env` link, a virtual environment linked in as `.env`). Fixed, with two tests seen failing first.
 - **What it costs:** every kept pass misses once after the upgrade. A repo whose `.env` is rewritten on every run never hits.
 - **Failing test first:** `packages/cli/src/step-cache-env.test.ts`, 4 of 5 failed in WSL before the change (`expected 3 to be 6`). The fifth is the guard that no value is kept.
 - **Later (ADR 0074):** the variables an `.env.example` names, and the framework prefixes. **Not done:** other ignored files (`.env.test`), an env file in a folder between the root and the unit.
