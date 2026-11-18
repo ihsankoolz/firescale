@@ -1634,7 +1634,6 @@ mod tests {
         );
     }
 
-    // ADR 0055: the cmake starter's lint target without clang-format.
     // Found on real repos (docs/reviews/real-repos-0.5.3.md, bug 2): the
     // analyzer before `pub get` read as a failed lint.
     #[test]
@@ -1656,6 +1655,14 @@ mod tests {
         );
         assert_eq!(p.missing_program, None);
         assert_eq!(p.missing_service, None);
+        // `flutter analyze` separates the fields with a bullet on Linux and
+        // macOS, as the real-repos run printed them.
+        const FLUTTER: &str = "Analyzing app...\n\n  error • Target of URI doesn't exist: 'package:flutter/material.dart'. Try creating the file referenced by the URI, or try using a URI for a file that does exist • lib/main.dart:1:8 • uri_does_not_exist\n  error • Undefined class 'Widget'. Try changing the name to the name of an existing class, or creating a class with the name 'Widget' • lib/main.dart:5:3 • undefined_class\n\n2 issues found. (ran in 1.2s)\n";
+        let p = setup_problem(FLUTTER, Some(1), root, &app).unwrap();
+        assert_eq!(
+            p.reason,
+            "the Dart packages are not fetched (there is no .dart_tool/package_config.json)"
+        );
         // An error that fetching would not fix is a failure.
         assert!(setup_problem(OTHER, Some(3), root, &app).is_none());
 
@@ -1672,6 +1679,7 @@ mod tests {
         assert!(setup_problem(UNDEFINED, Some(3), root, &app).is_none());
     }
 
+    // ADR 0055: the cmake starter's lint target without clang-format.
     #[test]
     fn the_cmake_starter_without_clang_format_is_a_setup_problem() {
         let output = "clang-format was not found on the PATH; install it to run the lint target\ngmake[3]: *** [CMakeFiles/lint.dir/build.make:71: CMakeFiles/lint] Error 1\ngmake: *** [Makefile:174: lint] Error 2\n";
