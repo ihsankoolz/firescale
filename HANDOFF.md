@@ -19,6 +19,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 5. `verify.projects.<folder>.inputs` and `verify.projects.<folder>.<step>.inputs`: `{ "ignored": "<glob>" }` and `{ "env": "NAME" }`, which only add to a key (ADR 0076; `parse_inputs` in `crates/core/src/config.rs`, `DeclaredInput`, `ProjectInputs` and `inputs_of` in `verify.rs`, `declared_inputs_line` and `StepCache::with_inputs` in `stepcache.rs`, two rows in `configkey.rs`).
 6. A property test that every unit whose key differs after a random change is in the affected set (ADR 0077; `crates/core/src/affected_covers_key.rs`). The repo root's own steps now run when a project below the root changed (`limit_to_affected` in `verify.rs`). Two gaps are pinned by `known_gap_` tests and wait for the owner.
 7. A Python import that more than one place could hold is an edge to each, with a warning in `fscale graph` (ADR 0077; `python_targets` and `python_file` in `crates/core/src/graph.rs`).
+8. With `--affected`, units that hold a changed file start first; print order stays (ADR 0078; `Affected.direct` in `graph.rs`, `AffectedPlan.changed_first` and the start order in `run_verify_with` in `verify.rs`).
 
 **The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
 

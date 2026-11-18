@@ -453,6 +453,8 @@ pub fn limit_to_affected(
 ) {
     let anything = !affected.is_empty();
     let mut units = Vec::new();
+    // The units that hold a changed file: their steps start first.
+    let mut changed_first: Vec<(Option<String>, Option<String>)> = Vec::new();
     if plan
         .steps
         .iter()
@@ -513,6 +515,15 @@ pub fn limit_to_affected(
                 "no change reaches the projects the repo root's commands run".to_owned(),
             )
         };
+        if runs
+            && covered.iter().any(|project| {
+                affected
+                    .direct
+                    .contains(&project_id(&project.kind, &project.root))
+            })
+        {
+            changed_first.push((None, None));
+        }
         units.push(AffectedUnit {
             project: None,
             kind: None,
@@ -543,6 +554,14 @@ pub fn limit_to_affected(
             ),
             None => (false, "nothing changed".to_owned()),
         };
+        if runs
+            && project
+                .kind
+                .as_ref()
+                .is_some_and(|kind| affected.direct.contains(&project_id(kind, &project.root)))
+        {
+            changed_first.push((Some(project.root.clone()), project.kind.clone()));
+        }
         units.push(AffectedUnit {
             project: Some(project.root.clone()),
             kind: project.kind.clone(),
@@ -557,7 +576,7 @@ pub fn limit_to_affected(
         units,
         notes: Vec::new(),
         warnings: graph.warnings.clone(),
-        changed_first: Vec::new(),
+        changed_first,
     });
 }
 
@@ -3274,41 +3293,60 @@ pub fn run_verify_with(
         )
     }))
     .collect();
+    // The order the units start in: those that hold a changed file first,
+    // then the rest, each group in the plan's order (ADR 0078). Every unit
+    // still runs, and the report lists them in the plan's order.
+    let first = |unit: &Unit<'_>| {
+        plan.affected.as_ref().is_some_and(|affected| {
+            affected
+                .changed_first
+                .iter()
+                .any(|(folder, kind)| match unit.project {
+                    None => folder.is_none(),
+                    Some(project) => {
+                        folder.as_deref() == Some(project.root.as_str()) && *kind == project.kind
+                    }
+                })
+        })
+    };
+    let mut order: Vec<usize> = (0..units.len()).collect();
+    order.sort_by_key(|index| !first(&units[*index].1));
     let jobs = options.jobs.clamp(1, units.len().max(1));
-    let results: Vec<Result<Vec<StepReport>>> = if jobs == 1 {
-        units
-            .iter()
-            .map(|(unit_steps, unit)| run_unit(unit, unit_steps, check_failed, options))
-            .collect()
+    let slots: Vec<Mutex<Option<Result<Vec<StepReport>>>>> =
+        units.iter().map(|_| Mutex::new(None)).collect();
+    let run_at = |place: usize| -> bool {
+        let Some(index) = order.get(place).copied() else {
+            return false;
+        };
+        let (unit_steps, unit) = &units[index];
+        let result = run_unit(unit, unit_steps, check_failed, options);
+        *slots[index].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+        true
+    };
+    if jobs == 1 {
+        for place in 0..order.len() {
+            run_at(place);
+        }
     } else {
         let next = AtomicUsize::new(0);
-        let slots: Vec<Mutex<Option<Result<Vec<StepReport>>>>> =
-            units.iter().map(|_| Mutex::new(None)).collect();
         std::thread::scope(|scope| {
             for _ in 0..jobs {
-                scope.spawn(|| loop {
-                    let index = next.fetch_add(1, Ordering::SeqCst);
-                    let Some((unit_steps, unit)) = units.get(index) else {
-                        break;
-                    };
-                    let result = run_unit(unit, unit_steps, check_failed, options);
-                    *slots[index].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
-                });
+                scope.spawn(|| while run_at(next.fetch_add(1, Ordering::SeqCst)) {});
             }
         });
-        slots
-            .into_iter()
-            .map(|slot| {
-                slot.into_inner()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .unwrap_or_else(|| {
-                        Err(Error::internal(
-                            "A verify unit did not finish. Please report this.",
-                        ))
-                    })
-            })
-            .collect()
-    };
+    }
+    let results: Vec<Result<Vec<StepReport>>> = slots
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .unwrap_or_else(|| {
+                    Err(Error::internal(
+                        "A verify unit did not finish. Please report this.",
+                    ))
+                })
+        })
+        .collect();
     for result in results {
         steps.extend(result?);
     }
