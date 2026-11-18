@@ -124,6 +124,8 @@ Doctor runs no script of the repo and downloads nothing here either:
 
 The check runs on whichever machine runs doctor, so a teammate whose machine cannot start the hook finds out, not only the person who installed it (ADR 0064).
 
+**The stop hook's time limit** (ADR 0083). For Claude Code's file, doctor adds up the kept times (`.firescale/step-times.json`) of every step a full `fscale verify` plans. When that is more than the hook's limit, its `timeout` (seconds; a point is allowed) or Claude Code's default of 10 minutes when it has none or its value is not a number of seconds, it is a **warning**: Claude Code ends a stop hook that runs past its limit, and the agent stops without verify having finished. The warning says to work on a branch (the hook then runs only the projects a change reaches, as `fscale verify --affected` does), to give the hook a smaller scope (a faster command for the slow steps under `verify` in the config), or to raise the limit. Steps with no kept time count as nothing, so a repo where verify never ran gets no warning. Codex and Cursor are not checked: firescale knows no time limit field for them.
+
 ## JSON
 
 `fscale doctor --json` prints the same checks. The schema is [`packages/cli/schemas/doctor-output.schema.json`](../packages/cli/schemas/doctor-output.schema.json).
