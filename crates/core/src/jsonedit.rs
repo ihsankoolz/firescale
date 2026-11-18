@@ -166,6 +166,19 @@ fn additions(
             }
             Some(())
         }
+        (Value::Array(have), Value::Array(wanted))
+            if have.len() == wanted.len() && have != wanted =>
+        {
+            // The same items, some with something added inside: the
+            // additions go into each item where it is (ADR 0082: a key
+            // added to the stop hook's entry).
+            for (index, (have, wanted)) in have.iter().zip(wanted).enumerate() {
+                path.push(Step::Index(index));
+                additions(have, wanted, path, out)?;
+                path.pop();
+            }
+            Some(())
+        }
         (Value::Array(have), Value::Array(wanted)) => {
             // `wanted` is `have` plus new items.
             if !have.iter().all(|item| wanted.contains(item)) {
@@ -412,5 +425,27 @@ mod tests {
     fn a_change_to_an_existing_value_is_not_an_insertion() {
         let text = "{\n  \"a\": 1\n}\n";
         assert_eq!(insert_merge(text, &json!({"a": 2})), None);
+    }
+
+    #[test]
+    fn a_key_goes_into_an_item_of_a_list_where_it_is() {
+        let text = "{\n  \"list\": [\n    {\n      \"a\": 1\n    },\n    {\n      \"b\": 2\n    }\n  ]\n}\n";
+        let wanted = json!({"list": [{"a": 1}, {"b": 2, "c": 3}]});
+        let merged = insert_merge(text, &wanted).unwrap();
+        assert!(every_line_kept(text, &merged));
+        assert_eq!(serde_json::from_str::<Value>(&merged).unwrap(), wanted);
+        assert!(merged.contains("\n      \"c\": 3,\n      \"b\": 2\n"));
+        // An item changed or taken away is still not an insertion.
+        assert_eq!(
+            insert_merge(text, &json!({"list": [{"a": 1}, {"b": 3}]})),
+            None
+        );
+        assert_eq!(insert_merge(text, &json!({"list": [{"a": 1}, 7]})), None);
+        // An item on one line cannot take a new line.
+        let one_line = "{\n  \"list\": [\n    { \"a\": 1 }\n  ]\n}\n";
+        assert_eq!(
+            insert_merge(one_line, &json!({"list": [{"a": 1, "c": 3}]})),
+            None
+        );
     }
 }

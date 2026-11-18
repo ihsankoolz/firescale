@@ -905,13 +905,153 @@ fn child<'a>(map: &'a mut Map<String, Value>, key: &str, empty: Value) -> &'a mu
     slot
 }
 
+/// Claude Code's time limit for a command hook whose entry sets no
+/// `timeout`, in seconds ("Defaults: 600 for `command`", code.claude.com,
+/// hooks reference, read on 2026-11-18; ADR 0082).
+pub const CLAUDE_DEFAULT_TIMEOUT: u64 = 600;
+
+/// The `timeout` to write on Claude Code's stop hook when the planned
+/// steps took `steps` in all when they last ran (ADR 0082): twice that, for
+/// the rerun of a new failure and a step whose pass is not cached, plus
+/// `base` for the base run of blame-aware verify, rounded up to whole
+/// minutes, and never under Claude Code's own default.
+#[must_use]
+pub fn hook_timeout_for(steps: Duration, base: Duration) -> u64 {
+    let steps = u64::try_from(steps.as_millis().div_ceil(1000)).unwrap_or(u64::MAX);
+    let wanted = steps.saturating_mul(2).saturating_add(base.as_secs());
+    wanted
+        .div_ceil(60)
+        .saturating_mul(60)
+        .max(CLAUDE_DEFAULT_TIMEOUT)
+}
+
+/// What installing a hook did to its file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Installed {
+    /// The stop hook was added.
+    Added,
+    /// The stop hook was there; its `timeout` was added as a new line.
+    TimeoutAdded,
+    /// The stop hook was there, and the file is as it was.
+    AlreadyThere,
+}
+
+/// What [`merge_hook_with`] found about the Claude Code entry's `timeout`
+/// when it left the entry as it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeptTimeout {
+    /// Nothing to say: no limit was asked for, or it was written.
+    #[default]
+    None,
+    /// The entry has a `timeout` of its own (seconds), which is kept: no
+    /// value in the file is ever changed.
+    Kept(u64),
+    /// The entry has none, and it cannot go in as a new line (the entry is
+    /// written on one line).
+    CannotAdd,
+}
+
+/// Claude Code's stop hook entry that runs firescale's hook command, if
+/// the parsed file has one: the first of them.
+fn claude_entry(value: &Value) -> Option<&Value> {
+    let needle = format!("hooks run --agent {}", Agent::Claude.name());
+    value
+        .get("hooks")?
+        .get("Stop")?
+        .as_array()?
+        .iter()
+        .filter_map(|group| group.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .find(|entry| {
+            entry
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains(&needle))
+        })
+}
+
+fn claude_entry_mut(value: &mut Value) -> Option<&mut Map<String, Value>> {
+    let needle = format!("hooks run --agent {}", Agent::Claude.name());
+    value
+        .get_mut("hooks")?
+        .get_mut("Stop")?
+        .as_array_mut()?
+        .iter_mut()
+        .filter_map(|group| group.get_mut("hooks").and_then(Value::as_array_mut))
+        .flatten()
+        .find(|entry| {
+            entry
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains(&needle))
+        })?
+        .as_object_mut()
+}
+
+/// The time limit of the repo's Claude Code stop hook that runs firescale:
+/// `None` when there is no such hook, `Some(None)` when its entry sets no
+/// `timeout` (Claude Code's default applies), else the seconds it sets.
+#[must_use]
+pub fn claude_hook_timeout(root: &Path) -> Option<Option<u64>> {
+    let text = fs::read_to_string(resolve(root, Agent::Claude.config_file())).ok()?;
+    let value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    let entry = claude_entry(&value)?;
+    Some(entry.get("timeout").and_then(Value::as_u64))
+}
+
 /// Adds the stop hook to an agent's config. A file that has something in it
 /// is never re-serialised: the hook goes in as new lines and every line a
 /// person wrote stays as it was (ADR 0027). When that cannot be done the
 /// file is refused, with an error that says what to add by hand.
 /// Returns the new file content, or `None` when the hook is already there.
 pub fn merge_hook(existing: Option<&str>, agent: Agent, bin: &str) -> Result<Option<String>> {
+    merge_hook_with(existing, agent, bin, None).map(|(text, _, _)| text)
+}
+
+/// [`merge_hook`], and for Claude Code a `timeout` of `timeout` seconds on
+/// the entry (ADR 0082): on a new entry, and as a new line on an entry
+/// firescale's hook already has without one. A `timeout` in the file is
+/// never changed. Other agents take no `timeout`.
+pub fn merge_hook_with(
+    existing: Option<&str>,
+    agent: Agent,
+    bin: &str,
+    timeout: Option<u64>,
+) -> Result<(Option<String>, Installed, KeptTimeout)> {
+    let timeout = timeout.filter(|_| agent == Agent::Claude);
     let file = agent.config_file();
+    let parsed = existing
+        .filter(|text| !text.trim_start_matches('\u{feff}').trim().is_empty())
+        .and_then(|text| serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok());
+    if let (Some(text), Some(mut root), Some(seconds)) = (existing, parsed, timeout) {
+        if mentions_hook(&root, agent) {
+            let Some(entry) = claude_entry_mut(&mut root) else {
+                return Ok((None, Installed::AlreadyThere, KeptTimeout::None));
+            };
+            if let Some(have) = entry.get("timeout") {
+                let kept = have.as_u64().map_or(KeptTimeout::None, KeptTimeout::Kept);
+                return Ok((None, Installed::AlreadyThere, kept));
+            }
+            entry.insert("timeout".to_owned(), json!(seconds));
+            return Ok(match crate::jsonedit::insert_merge(text, &root) {
+                Some(merged) => (Some(merged), Installed::TimeoutAdded, KeptTimeout::None),
+                None => (None, Installed::AlreadyThere, KeptTimeout::CannotAdd),
+            });
+        }
+    }
+    Ok(match merge_new(existing, agent, bin, timeout, file)? {
+        Some(text) => (Some(text), Installed::Added, KeptTimeout::None),
+        None => (None, Installed::AlreadyThere, KeptTimeout::None),
+    })
+}
+
+fn merge_new(
+    existing: Option<&str>,
+    agent: Agent,
+    bin: &str,
+    timeout: Option<u64>,
+    file: &str,
+) -> Result<Option<String>> {
     let existing = existing.filter(|text| !text.trim_start_matches('\u{feff}').trim().is_empty());
     let mut root: Value = match existing {
         None => json!({}),
@@ -929,7 +1069,11 @@ pub fn merge_hook(existing: Option<&str>, agent: Agent, bin: &str) -> Result<Opt
     let mut also = "";
     let (list, entry) = match agent {
         Agent::Claude | Agent::Codex => {
-            let entry = json!({ "hooks": [{ "type": "command", "command": command }] });
+            let mut hook = json!({ "type": "command", "command": command });
+            if let (Some(seconds), Some(map)) = (timeout, hook.as_object_mut()) {
+                map.insert("timeout".to_owned(), json!(seconds));
+            }
+            let entry = json!({ "hooks": [hook] });
             let hooks = object_mut(child(top, "hooks", json!({})), file, "\"hooks\"")?;
             let stop = child(hooks, "Stop", json!([]));
             array_mut(stop, file, "\"hooks.Stop\"")?.push(entry.clone());
@@ -967,6 +1111,17 @@ fn resolve(root: &Path, file: &str) -> PathBuf {
 /// Installs the hook for one agent. Returns true when the file was written,
 /// false when the hook was already installed.
 pub fn install_hook(root: &Path, agent: Agent, bin: &str) -> Result<bool> {
+    install_hook_with(root, agent, bin, None).map(|(state, _)| state != Installed::AlreadyThere)
+}
+
+/// [`install_hook`] with a `timeout` for Claude Code's entry
+/// ([`merge_hook_with`]).
+pub fn install_hook_with(
+    root: &Path,
+    agent: Agent,
+    bin: &str,
+    timeout: Option<u64>,
+) -> Result<(Installed, KeptTimeout)> {
     let file = agent.config_file();
     let path = resolve(root, file);
     let existing = match fs::read_to_string(&path) {
@@ -978,8 +1133,9 @@ pub fn install_hook(root: &Path, agent: Agent, bin: &str) -> Result<bool> {
             )));
         }
     };
-    let Some(content) = merge_hook(existing.as_deref(), agent, bin)? else {
-        return Ok(false);
+    let (content, state, kept) = merge_hook_with(existing.as_deref(), agent, bin, timeout)?;
+    let Some(content) = content else {
+        return Ok((state, kept));
     };
     let failed = |error: std::io::Error| {
         Error::user(format!(
@@ -990,7 +1146,7 @@ pub fn install_hook(root: &Path, agent: Agent, bin: &str) -> Result<bool> {
         fs::create_dir_all(parent).map_err(failed)?;
     }
     fs::write(&path, content).map_err(failed)?;
-    Ok(true)
+    Ok((state, kept))
 }
 
 /// True when the repo has our stop hook installed for this agent.
@@ -1281,6 +1437,61 @@ mod tests {
         assert!(
             cursor.contains("\"command\": \"fscale hooks run --agent cursor\""),
             "{cursor}"
+        );
+    }
+
+    #[test]
+    fn the_hook_limit_is_twice_the_steps_and_the_base_run_in_whole_minutes() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(hook_timeout_for(min(20), min(5)), 45 * 60);
+        // Never under Claude Code's default.
+        assert_eq!(
+            hook_timeout_for(Duration::ZERO, min(5)),
+            CLAUDE_DEFAULT_TIMEOUT
+        );
+        assert_eq!(hook_timeout_for(min(1), min(5)), CLAUDE_DEFAULT_TIMEOUT);
+        // Rounded up: 2 x 10m 0.5s + 5m is 25m 1s, so 26m.
+        assert_eq!(
+            hook_timeout_for(min(10) + Duration::from_millis(500), min(5)),
+            26 * 60
+        );
+        assert_eq!(hook_timeout_for(Duration::MAX, min(5)), u64::MAX);
+    }
+
+    #[test]
+    fn only_claude_codes_entry_gets_a_timeout_and_a_timeout_in_the_file_is_kept() {
+        let (claude, state, _) = merge_hook_with(None, Agent::Claude, "fscale", Some(900)).unwrap();
+        assert_eq!(state, Installed::Added);
+        let claude = claude.unwrap();
+        assert!(claude.contains("\"timeout\": 900"), "{claude}");
+        for agent in [Agent::Codex, Agent::Cursor] {
+            let (text, _, _) = merge_hook_with(None, agent, "fscale", Some(900)).unwrap();
+            assert!(!text.unwrap().contains("timeout"));
+        }
+        // Installed before without one: added as a new line, then left.
+        let before = merge_hook(None, Agent::Claude, "fscale").unwrap().unwrap();
+        let (after, state, kept) =
+            merge_hook_with(Some(&before), Agent::Claude, "fscale", Some(900)).unwrap();
+        assert_eq!((state, kept), (Installed::TimeoutAdded, KeptTimeout::None));
+        let after = after.unwrap();
+        assert!(every_line_is_kept(&before, &after), "{after}");
+        assert_eq!(after.lines().count(), before.lines().count() + 1);
+        let (again, state, kept) =
+            merge_hook_with(Some(&after), Agent::Claude, "fscale", Some(1200)).unwrap();
+        assert_eq!(
+            (again, state, kept),
+            (None, Installed::AlreadyThere, KeptTimeout::Kept(900))
+        );
+        // An entry on one line cannot take the new line.
+        let one_line = "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n";
+        assert_eq!(
+            merge_hook_with(Some(one_line), Agent::Claude, "fscale", Some(900)).unwrap(),
+            (None, Installed::AlreadyThere, KeptTimeout::CannotAdd)
+        );
+        // With no limit asked for, an installed hook is left alone.
+        assert_eq!(
+            merge_hook_with(Some(&before), Agent::Claude, "fscale", None).unwrap(),
+            (None, Installed::AlreadyThere, KeptTimeout::None)
         );
     }
 

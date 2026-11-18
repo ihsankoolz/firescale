@@ -3826,6 +3826,54 @@ pub fn format_budget_plan(plan: &VerifyPlan, times: &StepTimes, budget: Duration
     )
 }
 
+/// The kept times of the steps a plan would run, added up (ADR 0082).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlannedTimes {
+    /// The sum of every kept time, finished or not.
+    pub total: Duration,
+    /// How many planned commands have a kept time.
+    pub known: usize,
+    /// How many have none: they count as nothing in `total`.
+    pub unknown: usize,
+}
+
+/// Adds up the kept time of every command the plan would run, one after
+/// another, as a run with one job does: the root's steps and every
+/// project's that the plan runs.
+///
+/// # Errors
+///
+/// When the kept times are there but could not be read.
+pub fn planned_times(
+    plan: &VerifyPlan,
+    times: &StepTimes,
+) -> std::result::Result<PlannedTimes, crate::steptimes::Unreadable> {
+    let runs =
+        |project: Option<&ProjectPlan>| plan.affected.as_ref().is_none_or(|a| a.runs(project));
+    let root = runs(None).then_some((None, plan.steps.as_slice()));
+    let projects = plan
+        .projects
+        .iter()
+        .filter(|project| runs(Some(project)))
+        .map(|project| (Some(project.root.as_str()), project.steps.as_slice()));
+    let mut sum = PlannedTimes::default();
+    for (project, steps) in root.into_iter().chain(projects) {
+        for (name, planned) in steps {
+            let Planned::Command(command) = planned else {
+                continue;
+            };
+            match times.last(project, name, command)? {
+                Some(known) => {
+                    sum.total += known.duration;
+                    sum.known += 1;
+                }
+                None => sum.unknown += 1,
+            }
+        }
+    }
+    Ok(sum)
+}
+
 /// `fscale verify --dry-run`: what would run, and for `--affected` why,
 /// without running anything (not even the check).
 #[must_use]

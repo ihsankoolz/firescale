@@ -1432,7 +1432,7 @@ describe("the stop hook's time limit (ADR 0082)", () => {
       '  warning  .claude/settings.json: the steps the stop hook would run took 20m in all when they last ran, more than its limit of 10m (`timeout`). Claude Code ends a stop hook that runs past its limit, and the agent stops without verify having finished.\n',
     );
     expect(result.stdout).toContain(
-      'run fscale verify --affected, or work on a branch, so that only the projects a change reaches run; or give the hook a smaller scope (a faster command for the slow steps under verify in the config); or raise the limit: edit `timeout` in .claude/settings.json.',
+      'work on a branch: the stop hook then runs only the projects a change reaches, as fscale verify --affected does; or give the hook a smaller scope (a faster command for the slow steps under verify in the config); or raise the limit: edit `timeout` in .claude/settings.json.',
     );
     // A hook with no limit has Claude Code's default, 10m: the same warning.
     const entry = { type: 'command', command: `${PINNED} hooks run --agent claude` };

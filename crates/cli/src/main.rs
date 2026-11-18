@@ -33,15 +33,16 @@ use firescale_core::graph::{
     affected_except, build_graph, format_graph_human, format_graph_json, Graph,
 };
 use firescale_core::hooks::{
-    block_summary, check_path, check_start, decide, default_bin, has_fscale_script, hook_command,
-    hook_file_changes, install_hook, installed_prefixes, launch_note, max_blocks_from_env,
-    may_start, no_download, not_downloaded, not_started, parse_hook_input, pinned_answer,
-    pinned_version, probe_line, reply, start_verdict, Agent, HookFileChanges, AGENTS,
+    block_summary, check_path, check_start, claude_hook_timeout, decide, default_bin,
+    has_fscale_script, hook_command, hook_file_changes, hook_timeout_for, install_hook_with,
+    installed_prefixes, launch_note, max_blocks_from_env, may_start, no_download, not_downloaded,
+    not_started, parse_hook_input, pinned_answer, pinned_version, probe_line, reply, start_verdict,
+    Agent, HookFileChanges, Installed, KeptTimeout, AGENTS, CLAUDE_DEFAULT_TIMEOUT,
 };
 use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
 use firescale_core::process::{install_stop_handler, EXIT_STOPPED, STOP};
-use firescale_core::progress::{format_duration, heartbeat_from_env, Progress};
+use firescale_core::progress::{format_duration, format_limit, heartbeat_from_env, Progress};
 use firescale_core::report::{format_human, format_json, CheckReport};
 use firescale_core::rule::{fix_rule_with, BuiltinPack, Change, FixOutcome};
 use firescale_core::runs::RunRecord;
@@ -55,8 +56,9 @@ use firescale_core::tamper;
 use firescale_core::verify::add_tamper;
 use firescale_core::verify::{
     check_project_folders, format_budget_plan, format_verify_human, format_verify_json,
-    format_verify_plan, limit_to_affected, plan_verify, run_verify_with, stopped_in_check,
-    CheckStep, RunOptions, VerifyPlan, VerifyReport, VerifyResult, STOPPED_IN_CHECK, TAIL_LINES,
+    format_verify_plan, limit_to_affected, plan_verify, planned_times, run_verify_with,
+    stopped_in_check, CheckStep, Limit, RunOptions, VerifyPlan, VerifyReport, VerifyResult,
+    DEFAULT_BASE_BUDGET, STOPPED_IN_CHECK, TAIL_LINES,
 };
 use firescale_core::{version, Error, Result};
 
@@ -123,6 +125,8 @@ Options:
   --bin <command>  hooks install: how the hook starts fscale (default: the repo's own
                    fscale package script, else the firescale it installs, else
                    npx --yes firescale@<this version>)
+  --timeout <time> hooks install: the time limit written on Claude Code's stop hook
+                   (30m, 1h 30m; default: from the steps' kept times, at least 10m)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
   --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
                    took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is
@@ -166,6 +170,8 @@ struct Args {
     jobs: Option<String>,
     /// `--budget <time>`: verify leaves out steps known to take longer.
     budget: Option<String>,
+    /// `--timeout <time>`: hooks install, Claude Code's stop hook limit.
+    timeout: Option<String>,
     shared_cache: Option<String>,
     /// `--pr-base`: the base from GitHub's pull request event (ADR 0045).
     pr_base: bool,
@@ -209,6 +215,7 @@ const VALUE_OPTIONS: &[&str] = &[
     "--packs",
     "--jobs",
     "--budget",
+    "--timeout",
     "--shared-cache",
     "--head",
     "--approvals",
@@ -284,6 +291,7 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Args> {
                 "--base" => args.base = Some(value),
                 "--agent" => args.agent = Some(value),
                 "--bin" => args.bin = Some(value),
+                "--timeout" => args.timeout = Some(value),
                 "--packs" => args.packs = Some(value),
                 "--jobs" => args.jobs = Some(value),
                 "--budget" => args.budget = Some(value),
@@ -959,6 +967,7 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let settings = load_doctor_settings(root)?;
     let mut report = run_doctor_with(root, &facts, &ThisMachine, settings);
     add_checks(&mut report, hook_findings(root));
+    add_checks(&mut report, hook_limit_findings(root));
     let text = if args.json {
         format_doctor_json(&report)
     } else {
@@ -1952,6 +1961,46 @@ fn check_hook_starts(root: &Path, files: &[&str], allowed: &[&str], out: &mut St
     all_start
 }
 
+/// `fscale doctor`'s check of Claude Code's stop hook limit (ADR 0082): a
+/// warning when the kept times of the steps the hook would run add up to
+/// more than its `timeout`, or Claude Code's default when it sets none.
+fn hook_limit_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
+    use firescale_core::doctor::{Finding, Status as Health};
+    let Some(timeout) = claude_hook_timeout(root) else {
+        return Vec::new();
+    };
+    let Ok((times, _)) = kept_plan_times(root) else {
+        return Vec::new();
+    };
+    let file = Agent::Claude.config_file();
+    let (limit, whose, raise) = match timeout {
+        Some(seconds) => (seconds, "`timeout`", format!("edit `timeout` in {file}.")),
+        None => (
+            CLAUDE_DEFAULT_TIMEOUT,
+            "Claude Code's default",
+            "run fscale hooks install --agent claude, which adds a `timeout` set from these times."
+                .to_owned(),
+        ),
+    };
+    if times.total <= Duration::from_secs(limit) {
+        return Vec::new();
+    }
+    vec![Finding {
+        section: "hooks",
+        project: None,
+        subject: file.to_owned(),
+        status: Health::Warning,
+        detail: format!(
+            "the steps the stop hook would run took {} in all when they last ran, more than its limit of {} ({whose}). Claude Code ends a stop hook that runs past its limit, and the agent stops without verify having finished.",
+            format_limit(times.total),
+            format_limit(Duration::from_secs(limit))
+        ),
+        fix: Some(format!(
+            "work on a branch: the stop hook then runs only the projects a change reaches, as fscale verify --affected does; or give the hook a smaller scope (a faster command for the slow steps under verify in the config); or raise the limit: {raise}"
+        )),
+    }]
+}
+
 /// `fscale doctor`'s checks of the agent hooks: each stop hook in the
 /// repo's hook files that fscale would write here is started the same way
 /// as after `hooks install`, on this machine (ADR 0064).
@@ -2006,6 +2055,133 @@ fn hook_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
         .collect()
 }
 
+/// The time limit `hooks install` writes on Claude Code's stop hook, and
+/// why (ADR 0082).
+struct HookLimit {
+    seconds: u64,
+    /// Why this limit: the end of the line that says it.
+    why: String,
+}
+
+impl HookLimit {
+    /// The line `hooks install` prints about the limit.
+    fn line(&self, kept: KeptTimeout) -> String {
+        let file = Agent::Claude.config_file();
+        let wanted = format_limit(Duration::from_secs(self.seconds));
+        match kept {
+            KeptTimeout::Kept(have) if have == self.seconds => format!(
+                "Claude Code's stop hook keeps the `timeout` of {wanted} in {file}.
+"
+            ),
+            KeptTimeout::Kept(have) => format!(
+                "Claude Code's stop hook keeps the `timeout` of {} in {file}: firescale does not change a value in the file. To give it {wanted}, edit that value.
+",
+                format_limit(Duration::from_secs(have))
+            ),
+            KeptTimeout::CannotAdd => format!(
+                "Claude Code's stop hook in {file} has no `timeout`, and it cannot go in as a new line: its entry is written on one line. Add \"timeout\": {} to that entry by hand ({wanted}{}); without it Claude Code ends the hook after {}.
+",
+                self.seconds,
+                self.why,
+                format_limit(Duration::from_secs(CLAUDE_DEFAULT_TIMEOUT))
+            ),
+            KeptTimeout::None => format!(
+                "Claude Code's stop hook may run for {wanted} (`timeout` in {file}){}.
+",
+                self.why
+            ),
+        }
+    }
+}
+
+/// The value of `--timeout`, or the limit worked out from the kept step
+/// times; `None` when no Claude Code hook is being installed.
+fn hook_limit(root: &Path, args: &Args, agents: &[Agent]) -> Result<Option<HookLimit>> {
+    if let Some(value) = &args.timeout {
+        if !agents.contains(&Agent::Claude) {
+            return Err(Error::usage(
+                "--timeout is written only on the Claude Code hook: Codex and Cursor have no time limit field firescale writes. Pass --agent claude or --all.",
+            ));
+        }
+        let text = value.trim();
+        let seconds = if !text.is_empty() && text.chars().all(|c| c.is_ascii_digit()) {
+            text.parse::<u64>().ok()
+        } else {
+            firescale_core::config::time_text_seconds(text)
+        };
+        return match seconds {
+            Some(seconds) if seconds > 0 => Ok(Some(HookLimit {
+                seconds,
+                why: ", as --timeout says".to_owned(),
+            })),
+            _ => Err(Error::usage(format!(
+                "--timeout needs a time longer than zero, such as \"30m\" or \"1h 30m\", or a number of seconds; got \"{value}\"."
+            ))),
+        };
+    }
+    if !agents.contains(&Agent::Claude) {
+        return Ok(None);
+    }
+    let default = |why: String| HookLimit {
+        seconds: CLAUDE_DEFAULT_TIMEOUT,
+        why,
+    };
+    let again = "After a fscale verify, run this again to set it from the steps' times, or pass --timeout <time>";
+    let kept = match kept_plan_times(root) {
+        Ok(kept) => kept,
+        Err(why) => {
+            return Ok(Some(default(format!(
+                ", its default: {why}, so the steps' kept times are not known. {again}"
+            ))));
+        }
+    };
+    let Some((times, base)) = Some(kept).filter(|(times, _)| times.known > 0) else {
+        return Ok(Some(default(format!(
+            ", its default: no step has a kept time yet. {again}"
+        ))));
+    };
+    let seconds = hook_timeout_for(times.total, base);
+    let unknown = match times.unknown {
+        0 => String::new(),
+        1 => " (1 planned step has no kept time and is not counted)".to_owned(),
+        n => format!(" ({n} planned steps have no kept time and are not counted)"),
+    };
+    let why = if seconds == CLAUDE_DEFAULT_TIMEOUT
+        && 2 * times.total + base <= Duration::from_secs(CLAUDE_DEFAULT_TIMEOUT)
+    {
+        format!(
+            ", its default: the planned steps took {} when they last ran{unknown}",
+            format_limit(times.total)
+        )
+    } else {
+        format!(
+            ": twice the {} the planned steps took when they last ran, and {} for the base run{unknown}",
+            format_limit(times.total),
+            format_limit(base)
+        )
+    };
+    Ok(Some(HookLimit { seconds, why }))
+}
+
+/// The kept times of every step a full verify plans, and the time the base
+/// run may take (`verify.baseBudget`). An error says why the plan or the
+/// times are not known.
+fn kept_plan_times(
+    root: &Path,
+) -> std::result::Result<(firescale_core::verify::PlannedTimes, Duration), String> {
+    let config = load_verify_config(root).map_err(|error| error.message().to_owned())?;
+    let facts = detect_facts(root).map_err(|error| error.message().to_owned())?;
+    let plan = plan_verify(root, &facts, &config, false, None);
+    let times = planned_times(&plan, &StepTimes::new(root)).map_err(|error| error.to_string())?;
+    let base = match config.base_budget {
+        Some(Limit::After(budget)) => budget,
+        // No budget: the base run may take as long as the steps.
+        Some(Limit::Off) => times.total,
+        None => DEFAULT_BASE_BUDGET,
+    };
+    Ok((times, base))
+}
+
 /// `fscale hooks install` and `fscale hooks run`.
 fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
     // The stop hook decides whether an agent may stop: a run that leaves
@@ -2037,14 +2213,26 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             // The check starts only a command fscale writes: this one, or
             // the repo's default (review of ADR 0064).
             let allowed = [bin, writes.as_str()];
+            // Claude Code's entry gets a time limit (ADR 0082).
+            let limit = hook_limit(root, args, &agents)?;
             let mut out = String::new();
             let mut notes = Vec::new();
             let mut ready = Vec::new();
             let mut refused = Vec::new();
+            let mut limit_line = None;
             for agent in agents {
-                let state = match install_hook(root, agent, bin) {
-                    Ok(true) => "installed",
-                    Ok(false) => "already installed",
+                let timeout = limit.as_ref().map(|limit| limit.seconds);
+                let state = match install_hook_with(root, agent, bin, timeout) {
+                    Ok((state, kept)) => {
+                        if let (Agent::Claude, Some(limit)) = (agent, &limit) {
+                            limit_line = Some(limit.line(kept));
+                        }
+                        match state {
+                            Installed::Added => "installed",
+                            Installed::TimeoutAdded => "timeout added",
+                            Installed::AlreadyThere => "already installed",
+                        }
+                    }
                     // With --all, a file that is refused does not stop the
                     // others: each is tried, and the output says which were
                     // written and which were not (ADR 0060).
@@ -2094,6 +2282,9 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                         ready.join(", ")
                     ));
                 }
+            }
+            if let Some(line) = limit_line {
+                out.push_str(&line);
             }
             let starts = check_hook_starts(root, &ready, &allowed, &mut out);
             let code = if !refused.is_empty() {
