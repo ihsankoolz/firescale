@@ -2706,6 +2706,9 @@ mod tests {
             ),
             ("backend/shared/db.py", "URL = 1\n"),
             ("shared/db.py", "URL = 2\n"),
+            // Another project imports the root's `shared`, so it is a node.
+            ("tools/job/requirements.txt", "x\n"),
+            ("tools/job/main.py", "from shared import db\n"),
         ]);
         let graph = graph_of(&fixture);
         assert_eq!(
@@ -2722,13 +2725,62 @@ mod tests {
             ["backend/svc/main.py:2: `from shared.db import URL` could come from 2 places in the repo (backend/shared/db.py, shared/db.py), and firescale cannot tell which one Python picks. It counts as depending on each."]
         );
         // A change in either place reaches the importer.
-        for file in ["backend/shared/db.py", "shared/db.py"] {
-            assert_eq!(
-                affected_projects(&graph, &[file]),
-                ["backend/svc"],
-                "{file}"
-            );
-        }
+        assert_eq!(
+            affected_projects(&graph, &["backend/shared/db.py"]),
+            ["backend/svc"]
+        );
+        assert_eq!(
+            affected_projects(&graph, &["shared/db.py"]),
+            ["backend/svc", "tools/job"]
+        );
+    }
+
+    /// From the fresh review: a new shared node takes its files out of the
+    /// files that belong to no project, which every key holds and which
+    /// affect everything. A second place must never do that.
+    #[test]
+    fn a_second_place_that_is_no_node_stays_a_file_of_no_project() {
+        let files = [
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared.db import URL\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("shared/db.py", "URL = 2\n"),
+            ("web/package.json", r#"{"name":"web"}"#),
+            ("web/src/app.ts", "export const app = 1;\n"),
+        ];
+        let graph = graph_of(&fixture(&files));
+        assert!(
+            graph.nodes.iter().all(|node| node.path != "shared"),
+            "{:?}",
+            graph.nodes
+        );
+        assert!(edge(&graph, "backend/svc", "backend/shared").is_some());
+        // As before: it affects everything, the importer included.
+        let set = affected(&graph, &changed(&["shared/db.py"]));
+        assert!(set.everything.is_some(), "{set:?}");
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
+    }
+
+    /// From the fresh review: the repo root's project holding the package
+    /// is the same place as the package found in the folder above.
+    #[test]
+    fn a_package_of_the_root_project_found_from_above_is_one_place() {
+        let graph = graph_of(&fixture(&[
+            ("pyproject.toml", "[project]\nname = \"mono\"\n"),
+            ("common/__init__.py", ""),
+            ("common/x.py", "X = 1\n"),
+            ("services/a/requirements.txt", "x\n"),
+            ("services/a/main.py", "from common import x\n"),
+        ]));
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .all(|node| node.path != "." || node.node_type == NodeType::Project),
+            "{:?}",
+            graph.nodes
+        );
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
     }
 
     #[test]
