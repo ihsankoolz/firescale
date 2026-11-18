@@ -130,6 +130,25 @@ Real-repo bug 4. There is a clear rule, so it is built:
 
 **What changes for a Maven repo with modules:** the test step also packages and runs integration tests (Failsafe), so it takes longer, and tests that need a service can now fail where `mvn test` passed. `verify.test` in the config names another command.
 
+**Pull request 5: the third real-repo run, the measured budget run, and diagrams**
+
+- **The 15 real repos, third run** ([run 44273588176](https://github.com/ihsankoolz/firescale/actions/runs/44273588176), fscale at `521fa66`): **13 right, 2 wrong, 0 not judged.** It was 8, 6 and 1 in the first run and 9, 5 and 1 in the second. GuardClauses, serilog and gson are right now; SwiftyJSON can be judged now and is right; `dotnet test` and `flutter test` ran through fscale for the first time. The review has the table and the limits.
+- **Still wrong: swift-argument-parser and provider.** Each has a config file for its linter, so the lint is not a guess and it blocks, and fscale runs it more strictly than the repo's CI does. Their tests now run and pass, and the output shows it.
+- **README:** the budget run that was measured on 2026-11-17 is in "One real project", and the real-repo numbers are the third run's.
+- **Five diagrams in the README and eight in the new `docs/architecture.md`**, as Mermaid code blocks. A subagent compared every box, arrow and sentence with the code. It confirmed none exactly as first written, corrected all 13 and deleted none; the graph diagram was redrawn. It also replaced the ADR links, which were first written from memory.
+- **`node scripts/check-mermaid.mjs`** renders every diagram with `mmdc` and exits 1 when one does not parse. All 13 render.
+- **The npm package's README has no diagram.** `scripts/npm-readme.mjs` puts a link to the README on GitHub in place of the section between the two `diagrams` marks, and `scripts/pack-npm.mjs` writes that. The test `has no diagram, and links to the README on GitHub in their place` was seen failing with the diagrams left in.
+
+**Decided on your behalf**
+
+- **The diagram check is a local command, not a CI step.** `mmdc` downloads a browser, and CI would need it on every run. The command is in AGENTS.md. Say so if you want it in CI.
+
+**Not done**
+
+- The third run used the Maven rule as first pushed, before it was narrowed. gson's command is the same either way; the merged code was not run on the 15 repos.
+- What the fact-check did not open: the inside of `narrow_report`, `lintsource.rs`, and the adapters' TypeScript. ADRs were matched to sections by title and headings, not read in full.
+- Two research reports on what firescale could take from other tools are in `C:\Users\ihsan\firescale-research\`, outside the repo. Nothing from them is built. One discusses the held-out tamper cases, so read it before making it public.
+
 ## 0.5.3 — the overnight run of 2026-11-18
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.

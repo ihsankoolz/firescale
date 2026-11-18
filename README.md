@@ -144,11 +144,166 @@ Dependencies
 doctor: 6 problems, 6 warnings - run the `next:` commands above, then `fscale doctor` again.
 ```
 
+<!-- diagrams:start -->
+
+## How it works
+
+Five pictures. [docs/architecture.md](docs/architecture.md) has the same ones with more detail, and the decision behind each part.
+
+The pieces: a small Node launcher starts one native binary, and the binary reads and writes a few files in your repo.
+
+```mermaid
+flowchart LR
+  launcher["npm package firescale:<br/>the launcher"]
+  binary["@firescale/cli-&lt;platform&gt;:<br/>the fscale binary"]
+  cli["crate firescale-cli:<br/>commands, init, adopt, sync, agent runs"]
+  core["crate firescale-core:<br/>check, verify, caches, graph,<br/>labels, tamper guard, doctor"]
+  rules["crate firescale-rules:<br/>the built-in rule packs"]
+  host["Node host:<br/>a .ts config, your own rules,<br/>generators"]
+  sdk["@firescale/sdk:<br/>defineRule"]
+  agents["agent adapters:<br/>Claude Code, Codex"]
+  config["firescale.config.json<br/>or .ts"]
+  state[".firescale/:<br/>caches, step times, ledger"]
+  written["AGENTS.md block, agent hooks,<br/>CI workflows"]
+
+  launcher -->|starts| binary
+  binary --- cli
+  cli --> core
+  cli --> rules
+  binary -->|"starts, only when one of these is needed"| host
+  host --> sdk
+  binary -->|"starts, for fix --agent"| agents
+  config -->|read| binary
+  binary <-->|"reads and writes"| state
+  binary -->|"writes, through rule fixes"| written
+```
+
+One `fscale verify`, from start to end.
+
+```mermaid
+flowchart TD
+  base["Choose the base commit<br/>to compare with"]
+  check["check: run the rules"]
+  plan["Detect the projects, and plan lint, typecheck<br/>and test for the root and for each project"]
+  affected{"--affected?"}
+  pgraph["Project graph: keep only the projects<br/>the change can reach"]
+  cache{"Step cache: did this step pass<br/>before on the same inputs?"}
+  cached["Reuse the pass"]
+  run["Run the command.<br/>Remember it only if it passes"]
+  compare{"Is there a base<br/>to compare with?"}
+  label["Get each failing step's result on the base<br/>(run in a separate git worktree when it is<br/>not known already), and label the failure"]
+  tamper["Tamper guard: read the diff for<br/>weakened tests and checks"]
+  headline["Headline, summary<br/>and exit code"]
+
+  base --> check --> plan --> affected
+  affected -->|yes| pgraph --> cache
+  affected -->|no| cache
+  cache -->|yes| cached --> compare
+  cache -->|no| run --> compare
+  compare -->|yes| label --> tamper --> headline
+  compare -->|no| headline
+```
+
+How a failure gets its label: only `new` and a failure with no label block.
+
+```mermaid
+flowchart TD
+  fails["A step fails"]
+  hasbase{"Is there a base commit?"}
+  nolabel["No label: it blocks"]
+  onbase{"The same step<br/>on the base commit"}
+  again{"Run it once more:<br/>does it pass?"}
+  new["new: it blocks"]
+  flaky["flaky: does not block"]
+  pre["pre-existing: does not block"]
+  notjudged["Not judged: no label, it blocks,<br/>with a note that says why"]
+  passes["A step passes"]
+  fixed["fixed"]
+
+  fails --> hasbase
+  hasbase -->|no| nolabel
+  hasbase -->|yes| onbase
+  onbase -->|passed| again
+  again -->|no| new
+  again -->|yes| flaky
+  onbase -->|"failed the same way"| pre
+  onbase -->|"failed another way, needed setup,<br/>timed out, or ran over its budget"| notjudged
+  passes -->|"verify.labelFixed is on, it failed on the base,<br/>and it passes in a worktree of your change"| fixed
+```
+
+The rules are the scaffold: `init`, `adopt` and `sync` run the same loop of rule fixes.
+
+```mermaid
+flowchart TD
+  init["init: a new repo,<br/>with a starter config"]
+  adopt["adopt: a repo<br/>you already have"]
+  sync["sync: a repo with a config,<br/>to repair drift"]
+  plan["Plan: the rules that are on<br/>and have a fix, in order"]
+  loop["A pass: run each<br/>rule's fix once"]
+  settled{"A pass with<br/>no change?"}
+  done["Done: check once more, say what changed<br/>and what is left for a person"]
+  stop["Stop with an error: a fix failed,<br/>two rules fight over a file, a fix changed<br/>nothing twice, or 10 passes were not enough"]
+  may["A fix may: create a file where there is none,<br/>replace its own marked block,<br/>add lines to a JSON file"]
+  maynot["A fix may not: create a file over one that exists,<br/>change text outside its block,<br/>write through a symbolic link"]
+
+  init --> plan
+  adopt --> plan
+  sync --> plan
+  plan --> loop --> settled
+  settled -->|yes| done
+  settled -->|no| loop
+  loop -->|"cannot go on"| stop
+  loop -.- may
+  loop -.- maynot
+```
+
+A guarded agent run, `fscale fix --agent`: the agent works in a copy, and its change is kept only if every check passes.
+
+```mermaid
+flowchart TD
+  start["fscale fix --agent &lt;name&gt; --rule &lt;id&gt;"]
+  preflight["Before: the tree is clean<br/>and holds no tracked secret"]
+  worktree["A new git worktree<br/>on a new branch"]
+  agent["The agent works there<br/>(Claude Code or Codex)"]
+  early{"Nothing changed outside the worktree,<br/>no commit by the agent, no error,<br/>in budget, and something changed?"}
+  diff{"Diff guard: only allowed files,<br/>no secret, no protected path,<br/>no link?"}
+  rule{"Does the rule<br/>pass now?"}
+  tamper{"Tamper guard:<br/>no finding?"}
+  verify{"verify, compared with<br/>the starting commit: passes?"}
+  accept["Accept: one commit on the branch,<br/>kept for you to merge"]
+  reject["Reject: the worktree and<br/>the branch are removed"]
+  ledger["One line in<br/>.firescale/ledger.jsonl"]
+
+  start --> preflight --> worktree --> agent --> early
+  early -->|yes| diff
+  early -->|no| reject
+  diff -->|yes| rule
+  rule -->|yes| tamper
+  tamper -->|yes| verify
+  verify -->|yes| accept
+  diff -->|no| reject
+  rule -->|no| reject
+  tamper -->|no| reject
+  verify -->|no| reject
+  accept --> ledger
+  reject --> ledger
+```
+
+<!-- diagrams:end -->
+
 ## One real project
 
 A course repo with six projects: five Python services and a web app.
 A full `fscale verify`, three projects at a time, took 1h 41m on a laptop. One test suite took 1h 36m of that.
-`--budget 10m` leaves out the two suites known to take longer than that. The steps that are left took about 5 minutes in that run, added up.
+`--budget 10m` leaves out the suites known to take longer than that.
+
+That was then measured. On 2026-11-17, with firescale 0.5.2 on a Windows 11 laptop, `fscale verify --budget 10m --jobs 3` on the six projects:
+
+- left out the two suites whose kept times were 31m 26s and 1h 36m, and listed each as `NOT RUN`;
+- ran everything else, and finished in about 4m 45s (the slowest step that ran took 4m 42s);
+- labelled the web app's failure `pre-existing`, so it did not block.
+
+This is one run on one machine.
 A run with a budget never says `OK`, and it names each step it did not run.
 `--budget` is refused in CI and in the agent stop hook, where a run must stand for the whole repo.
 
@@ -178,7 +333,7 @@ Every number is from [bench/RESULTS.md](bench/RESULTS.md) or [DECISIONS.md](DECI
 
 ## Known limits
 
-- **Some languages' commands have run nowhere yet.** `dotnet test`, `flutter test` and `xcodebuild test` have never run through `fscale verify` on a real project. On 15 public repos the result was right in 8 and wrong in 6 in the first run, and right in 9 and wrong in 5 after three fixes (two repos could not be judged in the second run, because their downloads failed, and keep their first verdict). In four of the five a lint command that fscale guessed failed, and the repo's passing tests were then not run ([the review](docs/reviews/real-repos-0.5.3.md)).
+- **Some languages' commands have run nowhere yet.** `xcodebuild test` has never run through `fscale verify` on a real project, and `dotnet test` and `flutter test` have run in one run only. On 15 public repos the result was right in 8 and wrong in 6 in the first run, right in 9 and wrong in 5 after three fixes, and right in 13 and wrong in 2 in the third run, after a failing lint stopped hiding the tests and a guessed lint became report-only. In the two that are still wrong, a lint the repo has a config file for fails more strictly than the repo's own CI runs it; their tests now run and pass. That is one commit per repo, judged by an AI from the outputs ([the review](docs/reviews/real-repos-0.5.3.md)).
 - **Codex is unverified.** Its hook and settings files follow Codex's source code. `fscale fix --agent codex` has had no real run, and the Codex settings file was never loaded by a real Codex. Claude Code had a real run.
 - **Slow suites need `--budget`.** Verify runs the whole test command of every project it runs. A suite that takes an hour takes an hour. `--budget` leaves it out only after one run has recorded how long it takes.
 - **A test moved to another file is not followed.** The tamper guard compares expected values one file at a time. A test that moves to another file with its expected value changed is not reported.
@@ -209,6 +364,7 @@ pnpm fscale --version
 - Commands: [verify](docs/verify.md), [doctor](docs/doctor.md), [fix](docs/fix.md), [init, adopt and sync](docs/init.md), [hooks](docs/hooks.md), [graph and affected](docs/graph.md), [generators](docs/generators.md)
 - Rules: [the built-in rules](docs/rules.md), [config](docs/config.md), [writing your own](docs/writing-rules.md)
 - Output for tools: [check JSON](docs/check-json.md), [SARIF](docs/sarif.md), [facts](docs/facts.md), [CI](docs/ci.md)
+- How it is built: [architecture](docs/architecture.md), with diagrams and the decision behind each part
 - Design and history: [SPEC.md](SPEC.md), [PLAN.md](PLAN.md), [DECISIONS.md](DECISIONS.md), [docs/decisions/](docs/decisions/), [RELEASING.md](RELEASING.md)
 
 ## Licence

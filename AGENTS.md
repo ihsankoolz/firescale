@@ -45,6 +45,7 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - Verify latency benchmark: `cargo build --release -p firescale-cli`, then `node bench/verify-bench.mjs`
 - Blame-aware verify and stop hook latency: `cargo build --release -p firescale-cli`, then `node bench/blame-bench.mjs`
 - Print the README's output blocks again, from this repo's fixtures: `pnpm build`, then `node scripts/readme-output.mjs`
+- Check that every diagram in the README and `docs/architecture.md` parses: `node scripts/check-mermaid.mjs` (needs `mmdc`: `npm install --global @mermaid-js/mermaid-cli`)
 - Tamper guard on its labelled corpus (caught, missed, false positives): `pnpm build`, then `node bench/tamper-rates.mjs`
 
 ## Hard rules

@@ -9,6 +9,7 @@ import { chmod, copyFile, cp, mkdir, readFile, rm, stat, writeFile } from 'node:
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { npmReadme } from './npm-readme.mjs';
 
 const PLATFORMS = [
   'linux-x64',
@@ -216,7 +217,10 @@ try {
     filter: builtFrom(path.join(root, 'packages', 'agents', 'src')),
   });
   await copyFile(license, path.join(cliDir, 'LICENSE'));
-  await copyFile(path.join(root, 'README.md'), path.join(cliDir, 'README.md'));
+  await writeFile(
+    path.join(cliDir, 'README.md'),
+    npmReadme(await readFile(path.join(root, 'README.md'), 'utf8')),
+  );
 
   await mkdir(out, { recursive: true });
   const tarballs = {
