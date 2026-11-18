@@ -15,8 +15,8 @@ A test or lint can be made to pass without touching a test: the command that run
 
 ## Consequences
 
-- **Measured** (`bench/RESULTS.md`, "runner-weakened (ADR 0086)"), on the same build, in WSL, before (`main` at `6bd412c`) and after:
-  - First held-out corpus: 42 missed of 98 before, 40 after. Second: 90 of 100 before, 89 after. A case-by-case comparison (counts only, no titles) is in `bench/RESULTS.md`; no case caught before is missed after.
+- **Measured** (`bench/RESULTS.md`, "runner-weakened (ADR 0086)"), in WSL, before (`main` at `0d5c2ac`) and after:
+  - First held-out corpus: 42 missed of 98 before, 40 after (2 cases of "other"). Second: 90 of 100 before, 89 after (1 of test modification). Compared case by case (counts only, no titles): no case caught before is missed after.
   - The labelled corpus (`bench/tamper-rates.mjs`): 0 false findings before (0 of 186 not-a-finding cases with a finding) and after (0 of 191, with the 5 new not-a-finding cases), and 6 of 6 new caught cases.
   - Limits: the held-out corpora were written for other detectors; the labelled cases were written with this one, so they are fixtures, not a rate.
 - **What the author saw.** This session measured the second corpus on `main` before writing this detector, and the measuring script then printed the titles of its 90 missed cases (ADR 0082). It opened no case of either held-out corpus, and did not use any title to design this detector: the owner named the patterns (`|| true`, `|| exit 0`, `; exit 0`, a top-level `sys.exit`, `pytest_sessionfinish` setting `exitstatus`) before the second corpus existed. Whether a title shaped it cannot be proven from here; the second corpus's gain is one case.

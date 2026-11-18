@@ -39,6 +39,13 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **Failing tests first:** 3 in `doctor.test.ts`, 2 seen failing on `main` in WSL; the third guards the not-judged case.
 - **From the fresh review, fixed:** a step naming a path (`tools/make`) took that tool off doctor's own list and doctor ran the file, so a doctor pass could be easier to get than before; it no longer does either. Also: the step's command (which may hold a password) is no longer printed; more `cmd` and `sh` builtins are not judged; on Windows the step's folder is searched as `cmd` does; a config that cannot give a plan, or a `firescale.config.ts`, gives a warning instead of nothing. 4 tests from the review, seen failing first. **Not done:** no test of the Windows folder lookup (CI is Linux only).
 
+**Pull request 5: a runner made unable to fail (verification idea 7, first step, ADR 0086)**
+
+- **A new kind, `runner-weakened`, report only even when the guard is enforced**: a check script of a `package.json` (`test`, `lint`, ...) whose check command gains `|| true`, `|| exit 0`, `|| echo ...` or `; exit 0`; a `conftest.py` that gains `sys.exit`, `os._exit` or `raise SystemExit` at the top level, or a `pytest_sessionfinish` that sets `exitstatus`. CI's matcher is reused. Shown with `[report only: it never fails verify; a reviewer judges it]`; when every finding is report only, the heading no longer says "fails verify".
+- **Measured** (`bench/RESULTS.md`), before (`main` at `0d5c2ac`) and after, same machine: first held-out corpus 42 to 40 missed of 98; second 90 to 89 of 100. Case by case, no case caught before is missed after. Labelled corpus: 0 false findings before and after (0 of 191 not-a-finding cases with a finding).
+- **Failing tests first:** 6 caught corpus cases and the report-only test, seen failing on `main` in WSL; the 5 not-a-finding cases pass before and after. A second test for the heading, seen failing before its fix.
+- **What this run's author saw:** the 90 missed titles of the second corpus (ADR 0082). The patterns were named in the task before that corpus existed (ADR 0086).
+
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
 Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.
