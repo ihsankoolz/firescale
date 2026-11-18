@@ -129,6 +129,15 @@ Build idea 5, first step only.
 - **Decided on your behalf:** a unit reached only through an edge is not first; `--dry-run` does not show the start order.
 - **Failing test first:** three tests in `crates/core/src/verify.rs`, three of three failed in WSL before the change.
 
+**Pull request 9: the affected plan as JSON, with typed reasons (ADR 0079)**
+
+Build idea 7, first step only.
+
+- `fscale verify --affected --dry-run --json` prints which units a change would run and why: `{ "type": "changed-file", "files": [...], "text": "..." }`, `depends-on`, `ci-file`, `not-affected` and 14 more. Nothing runs. Schema: `docs/schemas/affected-plan.schema.json`. Types: `AffectedPlan` in `packages/sdk/src/types.ts`.
+- `--dry-run --json` without `--affected` is still refused. The output of a real run did not change.
+- **Could this repo's own `changes` CI job use it? Not as it is.** Three reasons, in ADR 0079: the job runs before fscale is built; its docs-only rule is narrower than firescale's (here `docs/rules.md`, `docs/schemas/`, `README.md` and `AGENTS.md` are read by tests and rules, and firescale counts each as a document that runs nothing); and there is no `--exit-code` yet. I did not change the job.
+- **Failing test first:** `packages/cli/src/affected-plan-json.test.ts`, 6 of 6 failed in WSL before the change.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

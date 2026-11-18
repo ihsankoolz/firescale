@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/ihsankoolz/firescale/blob/main/docs/schemas/affected-plan.schema.json",
+  "title": "firescale affected plan",
+  "description": "What `fscale verify --affected --dry-run --json` prints: which units a change would run, and why (ADR 0079). Nothing is run to make it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "base", "changedFiles", "everything", "units", "notes", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "base": {
+      "description": "The --base ref, or null when the change is the uncommitted one.",
+      "type": ["string", "null"]
+    },
+    "changedFiles": { "type": "integer", "minimum": 0 },
+    "everything": {
+      "description": "Why every unit runs, or null when the change reaches only some.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/reason" }]
+    },
+    "units": {
+      "description": "The repo root's own steps first (no project), then each project, in plan order.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["affected", "reason", "steps"],
+        "properties": {
+          "project": {
+            "description": "The project's folder. Absent for the repo root's own steps.",
+            "type": "string"
+          },
+          "kind": { "type": "string" },
+          "affected": { "description": "True when a run would run this unit.", "type": "boolean" },
+          "reason": { "$ref": "#/definitions/reason" },
+          "steps": {
+            "description": "The steps of the unit that have a command.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "command"],
+              "properties": {
+                "name": { "type": "string" },
+                "command": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "notes": { "type": "array", "items": { "type": "string" } },
+    "warnings": {
+      "description": "What the project graph cannot see, such as dynamic imports.",
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "definitions": {
+    "reason": {
+      "description": "A reason with a type to switch on and the same reason in words. A new type may be added without a new schemaVersion: treat an unknown type as `other`.",
+      "type": "object",
+      "required": ["type", "text"],
+      "properties": {
+        "type": {
+          "enum": [
+            "changed-file",
+            "depends-on",
+            "root-lockfile",
+            "ci-file",
+            "compose-file",
+            "config-file",
+            "unowned-file",
+            "root-file",
+            "agent-hook-file",
+            "config-setting",
+            "reads-whole-repo",
+            "no-base",
+            "shallow-clone",
+            "nothing-to-compare",
+            "root-commands",
+            "undetected-project",
+            "not-affected",
+            "other"
+          ]
+        },
+        "text": { "type": "string" },
+        "files": {
+          "description": "changed-file: the changed files the unit holds.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "on": {
+          "description": "depends-on: the folder of the node it depends on.",
+          "type": "string"
+        },
+        "sources": {
+          "description": "depends-on: the kinds of evidence for the edge, as `fscale graph --explain` names them.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "file": {
+          "description": "The file that makes everything run.",
+          "type": "string"
+        },
+        "steps": {
+          "description": "config-setting: the steps the changed setting reaches. Empty for a setting every step shares.",
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

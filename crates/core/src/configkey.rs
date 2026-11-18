@@ -316,6 +316,12 @@ impl ConfigEffect {
             };
             unit.affected = true;
             unit.reason = format!("{JSON_CONFIG} changes what its {listed}");
+            affected.typed.insert(
+                (unit.project.clone(), unit.kind.clone()),
+                crate::graph::Why::ConfigSetting {
+                    steps: steps.iter().map(|step| (*step).to_owned()).collect(),
+                },
+            );
         }
     }
 }
@@ -373,6 +379,10 @@ pub fn mark_file_readers(plan: &mut VerifyPlan, graph: &Graph, reason: &str) -> 
         if !unit.affected {
             unit.affected = true;
             reason.clone_into(&mut unit.reason);
+            affected.typed.insert(
+                (unit.project.clone(), unit.kind.clone()),
+                crate::graph::Why::ReadsWholeRepo,
+            );
         }
     }
     any
