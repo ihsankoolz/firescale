@@ -4,7 +4,7 @@ A running log, newest milestone first. For each milestone: what was built, decis
 
 ## 0.5.3 — the overnight run of 2026-11-18
 
-**Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings still need labels (Stage 3).
+**Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.
 
 **Stage 0, after the run: 16 of 17 history jobs passed; this repo's own job is taken out.** Both builds and the 16 public repos passed, and their findings are the run's artifacts (kept 14 days). The job `history / ihsankoolz/firescale` failed in its clone step: `fatal: remote error: upload-pack: not our ref 18bdbe7a04f94bc7820112791eacc785d553a901`. That head, recorded in `bench/tamper-history.json` for M26's 150 commits of this repo, was the tip of a branch that was merged and deleted; no clone has the commit now, so those commits cannot be read again. The job is removed from the matrix, with a comment that says why. No test pins the workflow, so the failed run is the failing proof.
 
@@ -29,27 +29,33 @@ From the artifacts of run 44128788594: `bench/tamper-history-0.5.2.json` (new; e
 
 - **Right in 8 of 15, wrong in 6, not judged in 1.** Detection was right in all 15.
 - `fscale verify` has now run real commands for Swift, Xcode (`xcodebuild build`), .NET (`dotnet format`), Flutter (`flutter analyze`), Dart, Go, Maven, Gradle and CMake. **`dotnet test`, `flutter test` and `xcodebuild test` have still run on no real repo**: the lint step failed first in the .NET and Flutter repos.
-- **Five bugs found, none fixed** (the review lists each with the failing test it needs): a guessed lint the repo does not hold itself to fails and keeps the tests from running (4 repos); Dart packages not fetched read as a lint failure, and doctor says OK; doctor does not look for the linter verify will run (swiftlint); `mvn -B test` for a Maven build that documents `mvn clean verify`; a CMake build folder not named `build` is read as a project.
+- **Five bugs found, none fixed in the first half of the run** (bugs 2, 3 and 5 were fixed later the same day: "Continued in the morning" and the blocks after it) (the review lists each with the failing test it needs): a guessed lint the repo does not hold itself to fails and keeps the tests from running (4 repos); Dart packages not fetched read as a lint failure, and doctor says OK; doctor does not look for the linter verify will run (swiftlint); `mvn -B test` for a Maven build that documents `mvn clean verify`; a CMake build folder not named `build` is read as a project.
 - **Needs your decision:** what a guessed linter may do. Today `dotnet format --verify-no-changes`, `swift format lint --strict` and `flutter analyze` are steps like any other, and their failure stops the unit before its tests. On repos that never adopted them this made 4 of 15 results wrong.
-- **Not done:** the fixes, and so the "after" half of the table and the second run. They need fscale built and tested, which this run did not do on the laptop.
+- **Not done in the first half of the run:** the fixes and the second run. Both came later the same day ("The real repos, run again"); bugs 1 and 4 are still not fixed.
 - The README's "Known limits" says what ran and what did not, with the 8 and the 6.
 - "Right" is an AI's judgement from the outputs, not a person's.
 
-**Not done in this run, in one place:**
+**What was not done by the end of the first half of the run, and what became of it:**
 
-- Stage 1, doctor: a missing env variable as a warning. Not started.
-- Stage 2: the five bug fixes above.
-- Stage 4, the project-type table: not started.
-- Stage 5, version 0.5.3: not started; it waits for Stage 1.
-- No scheduled check-in was kept: the session stayed in one turn, and no cloud session could be started to schedule one for.
-- No fresh review of the workflow pull requests (#70, #71) or of the two data-and-docs ones (#72 and this one), beyond the labeller and the README's fact-check.
+- Stage 1, doctor: done later the same day ([#74](https://github.com/ihsankoolz/firescale/pull/74), ADR 0068).
+- Stage 2: bugs 2, 3 and 5 were fixed later the same day (#77, #76, #75) and the repos were run again. **Bugs 1 and 4 are not fixed.**
+- Stage 4, the project-type table: step 1 only, open and not merged ([#80](https://github.com/ihsankoolz/firescale/pull/80), ADR 0069). The rest of part C is not started.
+- Stage 5, version 0.5.3: merged ([#79](https://github.com/ihsankoolz/firescale/pull/79)), green on Linux, macOS and Windows. No tag was pushed.
+- No scheduled check-in was kept: no cloud session could be started to schedule one for.
+- No fresh review of the workflow pull requests (#70, #71) or of the two data-and-docs ones (#72, #73), beyond the labeller and the README's fact-check.
 
-**Morning list for you:**
+**Morning list for you** (as the run ended on 2026-11-18):
 
-1. Connect GitHub to Claude (`/web-setup`), then give the same brief to a cloud session. HANDOFF.md "In progress" says where it stands.
-2. Decide what a guessed linter may do (above). It is the main thing the real repos showed.
-3. If you measured a real `--budget 10m` run on the course project, say so: the README does not claim "about 5 minutes" as a measured time.
-4. `C:Usersihsans-readme` on the laptop is this run's scratch worktree (with a `target` folder from one build). Remove it with `git worktree remove --force ../fs-readme` from your checkout when you like. Your own checkout was not touched.
+1. **Release 0.5.3 when you want it:** the version is on `main`; tag `v0.5.3` on the merged commit and push the tag (RELEASING.md, step 3). Read "Version 0.5.3, and what you should see change" below first: doctor's exit code changes for a missing env variable.
+2. **Read and decide on [#80](https://github.com/ihsankoolz/firescale/pull/80)**, the first step of the project-type table (ADR 0069). It is open, green on Linux and not merged.
+3. **Decide what a guessed linter may do** (real-repo bug 1): be a blocking step, report without blocking, or never keep the tests from running. It is wrong in 4 of 15 real repos and is the main thing they showed.
+4. **#74 to #77, #79 and #80 were written with no local build.** GitHub CI was their only build and test, and no tests-first commit was seen to fail on its own. At the next local build: run `pnpm build && pnpm fscale verify`, print the README's doctor block again (`node scripts/readme-output.mjs`; two labels and the last line were changed by hand), and pin the exit code in the three older doctor tests whose exit code now follows the printed `PROBLEM` lines.
+5. `doctor.missingEnv` cannot be set by a repo whose config is `firescale.config.ts` (ADR 0068, Consequences). Say if doctor should load that config through Node.
+6. If you measured a real `--budget 10m` run on the course project, say so: the README does not claim "about 5 minutes" as a measured time.
+7. `C:\Users\ihsan\fs-readme` on the laptop is this run's scratch worktree (with a `target` folder from one build). Remove it with `git worktree remove --force ../fs-readme` from your checkout when you like. Your own checkout and the course project were not touched.
+8. To run the next brief in the cloud, connect GitHub to Claude first (`/web-setup`). A cloud routine was refused twice on 2026-11-18 for that reason.
+
+**Not done, in one place:** real-repo bugs 1 and 4; all of part C of the audit but its first step; M36 to M39 (not to be started). No scheduled check-in was kept. Fresh reviews: every pull request from #74 on had one (a subagent reading the diff, or checking the claims against the run's files); #70 to #73 had none beyond the labeller and the README's fact-check. #78 was merged about a minute before the Linux jobs of its last, docs-only push had finished; they passed, and so did the run on `main`.
 
 **Blocked: the run could not move to the cloud.** Your rule is "Run in the cloud. Never touch my laptop or the course project." The session that received the brief runs on the laptop. Two ways to the cloud were tried on 2026-11-18:
 
@@ -58,10 +64,10 @@ From the artifacts of run 44128788594: `bench/tamper-history-0.5.2.json` (new; e
 
 What was done instead, so that the night is not lost and the laptop is left alone as far as it can be:
 
-- Only work that runs on GitHub: workflows started with `gh`, files written in one scratch worktree (`C:Usersihsans-readme`), nothing in your own checkout and nothing of the course project. The README pull request had built fscale once in that worktree before the rule arrived; no build or test ran on the laptop after it.
-- **So every stage that needs fscale built and tested locally is not done:** the doctor change (Stage 1, second half), bug fixes from the real repos (Stage 2), the project-type table (Stage 4) and the version (Stage 5, which waits for them). Each is listed under "Not done" where it belongs.
+- Only work that runs on GitHub: workflows started with `gh`, files written in one scratch worktree (`C:\Users\ihsan\fs-readme`), nothing in your own checkout and nothing of the course project. The README pull request had built fscale once in that worktree before the rule arrived; no build or test ran on the laptop after it.
+- **So, in the first half of the run, every stage that needs fscale built and tested was left:** the doctor change, the bug fixes from the real repos, the project-type table and the version. After the owner said "continue", they were written on the laptop with no build there, and built and tested by GitHub CI only (#74 to #77, #79, #80).
 
-**For you:** connect GitHub to Claude, then give the same brief to a cloud session; HANDOFF.md "In progress" says where it stands.
+**For you:** connect GitHub to Claude before the next brief that is to run in the cloud (the morning list, item 8).
 
 **Pull request 1: the README, for a reader who has 2 minutes**
 
@@ -91,7 +97,7 @@ README.md is rewritten for a student team lead and for an engineer reading a CV:
 
 **Not done:**
 
-- The doctor block shows `PROBLEM` for the env variables; the doctor pull request of this run changes it and must paste the block again.
+- The doctor block shows `PROBLEM` for the env variables; the doctor pull request of this run (#74) changed two labels and the last line by hand and did not print the block again (the morning list, item 4).
 - `docs/install.md` gives `npx firescale check` without `@latest` and states no Node version. Not changed.
 - The blocks are from Windows. On macOS and Linux the doctor block's paths differ.
 
@@ -133,7 +139,7 @@ Limits: doctor only looks for the file; it does not compare it with `pubspec.loc
 
 ### Version 0.5.3, and what you should see change
 
-The version is set to 0.5.3 with `node scripts/bump-version.mjs 0.5.3`, and the three snapshots that hold the version follow it. **No tag was pushed**: the release is yours (RELEASING.md, step 3). The version pull request carries the label `release`, so macOS and Windows ran on it. That run is the first time the code of #74 to #77 was built or tested on macOS and Windows.
+The version is set to 0.5.3 with `node scripts/bump-version.mjs 0.5.3`, and the three snapshots that hold the version follow it. **No tag was pushed**: the release is yours (RELEASING.md, step 3). The version pull request carries the label `release`, so macOS and Windows ran on it and passed (macOS in 12 minutes, Windows in 28). That run is the first time the code of #74 to #77 was built or tested on macOS and Windows.
 
 Compared with 0.5.2. Nothing here was run on the course project or on any machine of yours; each line is from the tests and from the second real-repos run.
 
