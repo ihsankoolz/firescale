@@ -51,6 +51,79 @@ fn full_id(text: &str) -> bool {
 
 const FETCH: &str = "Check out the whole history (actions/checkout with fetch-depth: 0).";
 
+/// The merge group a merge queue run is for, as GitHub's `merge_group`
+/// event gives it (ADR 0080).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeGroup {
+    /// The commit the group is built on (`merge_group.base_sha`): the base
+    /// branch, with the groups ahead of this one in the queue.
+    pub base: String,
+    /// The commit of the group (`merge_group.head_sha`), which the run
+    /// checked out.
+    pub head: String,
+}
+
+/// True when this is a GitHub Actions run for a `merge_group` event.
+#[must_use]
+pub fn is_merge_group(read: &dyn Fn(&str) -> Option<String>) -> bool {
+    read("GITHUB_ACTIONS").as_deref() == Some("true")
+        && read("GITHUB_EVENT_NAME").as_deref() == Some("merge_group")
+}
+
+/// Reads the merge group this GitHub Actions run is for. The commits come
+/// from the event's payload, never from a ref in the clone: a step of the
+/// job can move a ref, and the event names `refs/heads/gh-readonly-queue/…`
+/// branches that a clone need not have. `read` reads one environment
+/// variable.
+///
+/// # Errors
+///
+/// When the event file cannot be read, names no two full commit ids, when
+/// `GITHUB_SHA` is not the group's commit, or when the commits are not in
+/// the clone or the base is not part of the group's history.
+pub fn merge_group(root: &Path, read: &dyn Fn(&str) -> Option<String>) -> Result<MergeGroup> {
+    let payload = read("GITHUB_EVENT_PATH")
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .ok_or_else(|| {
+            Error::user("--pr-base could not read the event file GITHUB_EVENT_PATH names.")
+        })?;
+    let sha = |key: &str| {
+        payload
+            .get("merge_group")
+            .and_then(|group| group.get(key))
+            .and_then(serde_json::Value::as_str)
+            .filter(|sha| full_id(sha))
+            .map(str::to_owned)
+    };
+    let (Some(base), Some(head)) = (sha("base_sha"), sha("head_sha")) else {
+        return Err(Error::user(
+            "--pr-base: the event names no merge_group.base_sha and merge_group.head_sha as full commit ids.",
+        ));
+    };
+    let checked_out = read("GITHUB_SHA")
+        .filter(|sha| full_id(sha))
+        .ok_or_else(|| Error::user("--pr-base: GITHUB_SHA is not set to a commit id."))?;
+    if checked_out != head {
+        return Err(Error::user(format!(
+            "--pr-base: GITHUB_SHA {checked_out} is not the merge group's commit {head}."
+        )));
+    }
+    for (name, commit) in [("commit", &head), ("base", &base)] {
+        if parents(root, commit).is_none() {
+            return Err(Error::user(format!(
+                "--pr-base: the merge group's {name} {commit} is not in this clone. {FETCH}"
+            )));
+        }
+    }
+    if base == head || !is_ancestor(root, &base, &head) {
+        return Err(Error::user(format!(
+            "--pr-base: the event's base {base} is not part of the merge group at {head}, or the history is shallow. {FETCH}"
+        )));
+    }
+    Ok(MergeGroup { base, head })
+}
+
 /// Reads the pull request this GitHub Actions run is for. `read` reads one
 /// environment variable.
 ///

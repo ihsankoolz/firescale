@@ -23,6 +23,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 7. A Python import that more than one place could hold is an edge to each, with a warning in `fscale graph` (ADR 0077; `python_targets` and `python_file` in `crates/core/src/graph.rs`).
 8. With `--affected`, units that hold a changed file start first; print order stays (ADR 0078; `Affected.direct` in `graph.rs`, `AffectedPlan.changed_first` and the start order in `run_verify_with` in `verify.rs`).
 9. `fscale verify --affected --dry-run --json`: the affected plan with typed reasons (ADR 0079; `Why` in `graph.rs`, `AffectedPlan.typed` and `format_affected_plan_json` in `verify.rs`, `docs/schemas/affected-plan.schema.json`). This repo's `changes` job cannot use it yet; the ADR says why.
+10. `verify --pr-base` in a merge queue run takes the base from the `merge_group` event (ADR 0080; `merge_group` in `crates/core/src/tamper/github.rs`, `with_pr_base` in `crates/cli/src/main.rs`). The starter workflow has no `merge_group` trigger yet.
 
 **The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
 

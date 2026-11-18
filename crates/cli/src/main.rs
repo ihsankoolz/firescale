@@ -1612,9 +1612,28 @@ fn with_pr_base(root: &Path, args: &Args) -> Result<Args> {
             "--pr-base and --base both name the base. Pass one of them.",
         ));
     }
-    let pr = tamper::github::pull_request(root, &|name| env::var(name).ok())?;
-    let head = firescale_core::git::run_git(root, &["rev-parse", "HEAD"])?;
-    let head = head.stdout.trim();
+    let read = |name: &str| env::var(name).ok();
+    let checkout = || -> Result<String> {
+        let head = firescale_core::git::run_git(root, &["rev-parse", "HEAD"])?;
+        Ok(head.stdout.trim().to_owned())
+    };
+    // A merge queue run (ADR 0080): the base is the commit the group is
+    // built on, from the merge_group event.
+    if tamper::github::is_merge_group(&read) {
+        let group = tamper::github::merge_group(root, &read)?;
+        let head = checkout()?;
+        if head != group.head {
+            return Err(Error::user(format!(
+                "--pr-base: the checkout is at {head}, not at the merge group's commit ({}).",
+                group.head
+            )));
+        }
+        let mut args = args.clone();
+        args.base = Some(group.base);
+        return Ok(args);
+    }
+    let pr = tamper::github::pull_request(root, &read)?;
+    let head = checkout()?;
     if head != pr.checked_out && head != pr.head {
         return Err(Error::user(format!(
             "--pr-base: the checkout is at {head}, not at the commit GitHub ran for ({}) or the pull request's head ({}).",
