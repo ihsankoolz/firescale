@@ -65,6 +65,18 @@ Build idea 1, first step only.
 - **Failing test first:** `packages/cli/src/step-cache-env.test.ts`, 4 of 5 failed in WSL before the change (`expected 3 to be 6`). The fifth is the guard that no value is kept.
 - **Later (ADR 0074):** the variables an `.env.example` names, and the framework prefixes. **Not done:** other ignored files (`.env.test`), an env file in a folder between the root and the unit.
 
+**Pull request 4: on a cache miss, which files differ from the step's last pass (ADR 0075)**
+
+Build idea 3, first step only.
+
+- **What changed:** beside each stored pass, `.firescale/steps/last-<id>.digests` keeps one digest per project and shared folder the step's key covers. On a miss, `FSCALE_LOG=cache` prints `cache: why test in backend/auth_service ran again: these differ from its last pass (…): files in backend/shared`. A step that took a minute or more says the same in one line of the normal output (`Not from the cache: …`).
+- **Digests only.** No content, no value, no file's path beyond the name of a graph node. A test reads the kept file.
+- **It never decides a hit.** The key is made as before.
+- **Cut back to the first step:** my first version also named the command, each tool, each variable and the env files. The brief names the graph nodes only, so those are under "Later" in the ADR. When no file differs, the line says that something else in the key does.
+- **Decided on your behalf:** the wording of the lines; one manifest per step (the last pass), not one per kept pass; the line for a slow step is not in `--json`.
+- **Failing test first:** `packages/cli/src/step-cache-why.test.ts`, 6 of 7 failed in WSL before the change.
+- **The fresh review** found no change to any key or hit. It found that a manifest a repo commits could put any text into the log and the summary; a manifest is now checked before it is read. Also fixed: the summary line showed for every slow step of a fresh checkout, the log said "ran again" for a step the budget left out, and the manifest was made on every key. The rest is in ADR 0075.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.
