@@ -2645,6 +2645,104 @@ mod tests {
         assert_eq!(targets, ["python:lib", "shared:shared"]);
     }
 
+    // An import with more than one place that could hold it (ADR 0077).
+
+    #[test]
+    fn a_python_import_that_two_folders_above_could_hold_is_an_edge_to_each_with_a_warning() {
+        let fixture = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            (
+                "backend/svc/main.py",
+                "import os\nfrom shared.db import URL\n",
+            ),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("shared/db.py", "URL = 2\n"),
+        ]);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "backend/shared")),
+            [Source::PythonImport]
+        );
+        // Not only the first folder above that has the module.
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "shared")),
+            [Source::PythonImport]
+        );
+        assert_eq!(
+            graph.warnings,
+            ["backend/svc/main.py:2: `from shared.db import URL` could come from 2 places in the repo (backend/shared, shared), and firescale cannot tell which one Python picks. It counts as depending on each."]
+        );
+        // A change in either place reaches the importer.
+        for file in ["backend/shared/db.py", "shared/db.py"] {
+            assert_eq!(
+                affected_projects(&graph, &[file]),
+                ["backend/svc"],
+                "{file}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_python_import_that_a_folder_above_and_another_project_could_hold_is_an_edge_to_each() {
+        let fixture = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared import db\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("lib/pyproject.toml", "[project]\nname = \"lib\"\n"),
+            ("lib/shared/__init__.py", ""),
+            ("lib/shared/db.py", "URL = 2\n"),
+        ]);
+        let graph = graph_of(&fixture);
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "backend/shared")),
+            [Source::PythonImport]
+        );
+        assert_eq!(
+            sources(edge(&graph, "backend/svc", "lib")),
+            [Source::PythonImport]
+        );
+        assert_eq!(graph.warnings.len(), 1, "{:?}", graph.warnings);
+        assert!(
+            graph.warnings[0].starts_with(
+                "backend/svc/main.py:1: `from shared import db` could come from 2 places in the repo (backend/shared, lib)"
+            ),
+            "{:?}",
+            graph.warnings
+        );
+    }
+
+    #[test]
+    fn a_python_import_with_one_place_or_in_the_importer_s_own_code_has_no_warning() {
+        // One place above: as before, one edge and nothing said.
+        let one = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared.db import URL\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+        ]);
+        let graph = graph_of(&one);
+        assert!(edge(&graph, "backend/svc", "backend/shared").is_some());
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
+        // The importer's own code comes first on Python's path: no edge,
+        // whatever folders above also have the name.
+        let own = fixture(&[
+            ("backend/svc/requirements.txt", "fastapi\n"),
+            ("backend/svc/main.py", "from shared.db import URL\n"),
+            ("backend/svc/shared/db.py", "URL = 0\n"),
+            ("backend/shared/db.py", "URL = 1\n"),
+            ("shared/db.py", "URL = 2\n"),
+        ]);
+        let graph = graph_of(&own);
+        assert!(
+            graph
+                .edges
+                .iter()
+                .all(|edge| edge.from != "python:backend/svc"),
+            "{:?}",
+            graph.edges
+        );
+        assert!(graph.warnings.is_empty(), "{:?}", graph.warnings);
+    }
+
     #[test]
     fn a_relative_python_import_out_of_the_project_is_an_edge() {
         let fixture = fixture(&[
