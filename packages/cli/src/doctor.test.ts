@@ -152,7 +152,7 @@ describe('fscale doctor', () => {
       'PROBLEM  node: node 18.19.0 is installed, but package.json (engines.node) asks for >=20.',
     );
     expect(out).toContain(
-      'PROBLEM  .env.example: 1 of 3 variables are not set in the environment or .env: DATABASE_URL.\n           next: add DATABASE_URL to .env',
+      'warning  .env.example: 1 of 3 variables are not set in the environment or .env: DATABASE_URL.\n           next: add DATABASE_URL to .env',
     );
     expect(out).toContain(
       'PROBLEM  node_modules: the dependencies of package.json are not installed.\n           next: bun install --frozen-lockfile',
@@ -450,14 +450,14 @@ describe('doctor and env files in the folders above a project', () => {
     expect(checks).toEqual([
       {
         subject: 'backend/other/.env.example',
-        status: 'problem',
+        status: 'warning',
         detail:
           '1 of 1 variables are not set in the environment or backend/.env.local, .env, and there is no backend/other/.env: OTHER_TOKEN.',
         fix: 'add OTHER_TOKEN to the env file that backend/other reads: backend/.env.local, .env, or a new backend/other/.env (see backend/other/.env.example for what each one is)',
       },
       {
         subject: 'backend/own/.env.example',
-        status: 'problem',
+        status: 'warning',
         detail:
           '1 of 2 variables are not set in the environment or backend/own/.env, backend/.env.local, .env: OWN_B.',
         fix: 'add OWN_B to backend/own/.env (see backend/own/.env.example for what each one is)',
@@ -471,7 +471,7 @@ describe('doctor and env files in the folders above a project', () => {
       },
       {
         subject: 'lonely/.env.example',
-        status: 'problem',
+        status: 'warning',
         detail:
           '1 of 1 variables are not set in the environment or .env, and there is no lonely/.env: LONELY.',
         fix: 'add LONELY to the env file that lonely reads: .env, or a new lonely/.env (see lonely/.env.example for what each one is)',
@@ -500,9 +500,11 @@ describe('doctor and env files in the folders above a project', () => {
     await writeVersionTools(tools, {});
     const result = await runCli(['doctor'], repo.root, toolPath(tools));
     expect(result.stdout).toContain(
-      '  PROBLEM  lonely/.env.example: 1 of 1 variables are not set in the environment, and there is no lonely/.env, nor a .env in a folder above it: LONELY.\n           next: copy lonely/.env.example to lonely/.env and fill in the values (or set the variables in your shell)\n',
+      '  warning  lonely/.env.example: 1 of 1 variables are not set in the environment, and there is no lonely/.env, nor a .env in a folder above it: LONELY.\n           next: copy lonely/.env.example to lonely/.env and fill in the values (or set the variables in your shell)\n',
     );
-    expect(result.code).toBe(EXIT_VIOLATIONS);
+    // The exit code follows the problems, and a variable set nowhere is no
+    // longer one (ADR 0068).
+    expect(result.code).toBe(result.stdout.includes('  PROBLEM  ') ? EXIT_VIOLATIONS : EXIT_OK);
   });
 
   // Making a symlink to a file needs a privilege on Windows.
@@ -531,9 +533,11 @@ describe('doctor and env files in the folders above a project', () => {
       const json = await runCli(['doctor', '--json'], repo.root, toolPath(tools));
       // The name in the linked file does not count as set.
       expect(human.stdout).toContain(
-        '  PROBLEM  svc/.env.example: 1 of 1 variables are not set in the environment: LINKED_KEY. svc/.env is a symbolic link, so it was not read.\n           next: replace svc/.env with a real file that sets LINKED_KEY, or set the variables in your shell (see svc/.env.example for what each one is)\n',
+        '  warning  svc/.env.example: 1 of 1 variables are not set in the environment: LINKED_KEY. svc/.env is a symbolic link, so it was not read.\n           next: replace svc/.env with a real file that sets LINKED_KEY, or set the variables in your shell (see svc/.env.example for what each one is)\n',
       );
-      expect(human.code).toBe(EXIT_VIOLATIONS);
+      // The exit code follows the problems, and a variable set nowhere is no
+      // longer one (ADR 0068).
+      expect(human.code).toBe(human.stdout.includes('  PROBLEM  ') ? EXIT_VIOLATIONS : EXIT_OK);
       // The database it names is not checked either.
       const report = await validate(json.stdout);
       expect(report.checks.filter((check) => check.section === 'services')).toEqual([]);
@@ -562,10 +566,105 @@ describe('doctor and env files in the folders above a project', () => {
     await writeVersionTools(tools, {});
     const result = await runCli(['doctor'], path.join(outer.root, 'repo'), toolPath(tools));
     expect(result.stdout).toContain(
-      '  PROBLEM  svc/.env.example: 1 of 1 variables are not set in the environment, and there is no svc/.env, nor a .env in a folder above it: ABOVE_ROOT_KEY.\n',
+      '  warning  svc/.env.example: 1 of 1 variables are not set in the environment, and there is no svc/.env, nor a .env in a folder above it: ABOVE_ROOT_KEY.\n',
     );
     expect(result.stdout + result.stderr).not.toContain('above-root-secret-987');
-    expect(result.code).toBe(EXIT_VIOLATIONS);
+    // The exit code follows the problems, and a variable set nowhere is no
+    // longer one (ADR 0068).
+    expect(result.code).toBe(result.stdout.includes('  PROBLEM  ') ? EXIT_VIOLATIONS : EXIT_OK);
+  });
+});
+
+// A variable that a `.env.example` names and that is set nowhere (ADR 0068).
+describe('doctor and a variable that is set nowhere', () => {
+  const NAME = 'FSCALE_TEST_UNSET_NAME_0068';
+  const LINE = `.env.example: 1 of 1 variables are not set in the environment, and there is no .env: ${NAME}.\n           next: copy .env.example to .env and fill in the values (or set the variables in your shell)\n`;
+
+  /** A repo with nothing but an env example, and the config given. */
+  async function onlyAnExample(
+    config?: Record<string, string>,
+  ): Promise<{ root: string; env: Record<string, string | undefined> }> {
+    const repo = await fixtures.create({ files: { '.env.example': `${NAME}=\n`, ...config } });
+    const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+    await writeVersionTools(tools, {});
+    return { root: repo.root, env: { ...toolPath(tools), [NAME]: undefined } };
+  }
+
+  it('is a warning by default: doctor says OK with warnings and exits 0', async () => {
+    for (const config of [
+      undefined,
+      { 'firescale.config.json': JSON.stringify({ packs: ['core'] }) },
+      { 'firescale.config.json': JSON.stringify({ doctor: { missingEnv: 'warning' } }) },
+      { 'firescale.config.json': JSON.stringify({ doctor: {} }) },
+    ]) {
+      const { root, env } = await onlyAnExample(config);
+      const human = await runCli(['doctor'], root, env);
+      expect(human.stdout).toBe(
+        `Environment variables\n  warning  ${LINE}\ndoctor: OK with 1 warning - read them above.\n`,
+      );
+      expect(human.code).toBe(EXIT_OK);
+      const json = await runCli(['doctor', '--json'], root, env);
+      const report = await validate(json.stdout);
+      expect(report).toMatchObject({ ok: true, problems: 0, warnings: 1 });
+      expect(report.checks.map((check) => check.status)).toEqual(['warning']);
+      expect(json.code).toBe(EXIT_OK);
+    }
+  });
+
+  it('is a problem again with doctor.missingEnv set to "problem": doctor exits 1', async () => {
+    const { root, env } = await onlyAnExample({
+      'firescale.config.json': JSON.stringify({ doctor: { missingEnv: 'problem' } }),
+    });
+    const human = await runCli(['doctor'], root, env);
+    expect(human.stdout).toBe(
+      `Environment variables\n  PROBLEM  ${LINE}\ndoctor: 1 problem - run the \`next:\` commands above, then \`fscale doctor\` again.\n`,
+    );
+    expect(human.code).toBe(EXIT_VIOLATIONS);
+    const json = await runCli(['doctor', '--json'], root, env);
+    const report = await validate(json.stdout);
+    expect(report).toMatchObject({ ok: false, problems: 1, warnings: 0 });
+    expect(json.code).toBe(EXIT_VIOLATIONS);
+  });
+
+  it('refuses a doctor setting it does not know, in doctor and in check', async () => {
+    for (const [doctor, message] of [
+      [
+        { missingEnv: 'error' },
+        'firescale.config.json: doctor.missingEnv must be "warning" or "problem".',
+      ],
+      [
+        { missingEnv: true },
+        'firescale.config.json: doctor.missingEnv must be "warning" or "problem".',
+      ],
+      [
+        { missingEnvs: 'problem' },
+        'firescale.config.json: unknown key "missingEnvs" in doctor. Allowed keys: missingEnv.',
+      ],
+      [
+        'problem',
+        'firescale.config.json: "doctor" must be an object, such as { "missingEnv": "problem" }.',
+      ],
+    ] as const) {
+      const { root, env } = await onlyAnExample({
+        'firescale.config.json': JSON.stringify({ doctor }),
+      });
+      for (const command of ['doctor', 'check']) {
+        const result = await runCli([command], root, command === 'doctor' ? env : undefined);
+        expect(result.stderr, command).toBe(`fscale: ${message}\n`);
+        expect(result.code, command).toBe(EXIT_USAGE);
+      }
+    }
+  });
+
+  it('says that a firescale.config.ts is not run, so the setting in it is not read', async () => {
+    const { root, env } = await onlyAnExample({
+      'firescale.config.ts': "export default { doctor: { missingEnv: 'problem' } };\n",
+    });
+    const human = await runCli(['doctor'], root, env);
+    expect(human.stdout).toBe(
+      `Environment variables\n  warning  ${LINE}  warning  firescale.config.ts: doctor does not run firescale.config.ts (it is code), so doctor.missingEnv in it is not read: a variable that is set nowhere is a warning.\n\ndoctor: OK with 2 warnings - read them above.\n`,
+    );
+    expect(human.code).toBe(EXIT_OK);
   });
 });
 

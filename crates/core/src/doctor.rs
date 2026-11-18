@@ -2111,7 +2111,7 @@ mod tests {
             [(
                 "env",
                 ".env.example",
-                Status::Problem,
+                Status::Warning,
                 "1 of 1 variables are not set in the environment: LINKED_NAME. .env is a symbolic link, so it was not read.",
                 Some("replace .env with a real file that sets LINKED_NAME, or set the variables in your shell (see .env.example for what each one is)"),
             )]

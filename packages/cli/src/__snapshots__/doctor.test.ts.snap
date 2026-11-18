@@ -4,8 +4,8 @@ exports[`fscale doctor > prints JSON that matches its schema 1`] = `
 "{
   "schemaVersion": 2,
   "ok": false,
-  "problems": 7,
-  "warnings": 0,
+  "problems": 6,
+  "warnings": 1,
   "checks": [
     {
       "section": "tools",
@@ -32,7 +32,7 @@ exports[`fscale doctor > prints JSON that matches its schema 1`] = `
     {
       "section": "env",
       "subject": ".env.example",
-      "status": "problem",
+      "status": "warning",
       "detail": "1 of 3 variables are not set in the environment or .env: DATABASE_URL.",
       "fix": "add DATABASE_URL to .env (see .env.example for what each one is)"
     },
@@ -81,7 +81,7 @@ exports[`fscale doctor > reports a missing tool, a wrong version, a missing vari
            next: install Python 3.12, then make the virtual environment again with it
 
 Environment variables
-  PROBLEM  .env.example: 1 of 3 variables are not set in the environment or .env: DATABASE_URL.
+  warning  .env.example: 1 of 3 variables are not set in the environment or .env: DATABASE_URL.
            next: add DATABASE_URL to .env (see .env.example for what each one is)
 
 Dependencies
@@ -95,6 +95,6 @@ Services
   PROBLEM  PostgreSQL on localhost:<port>: not reachable: nothing listens on port <port> (.env.example (DATABASE_URL)).
            next: start PostgreSQL so it listens on port <port> (no Compose file names it; for example: docker run -d -p <port>:5432 -e POSTGRES_PASSWORD=<password> postgres)
 
-doctor: 7 problems - run the \`next:\` commands above, then \`fscale doctor\` again.
+doctor: 6 problems, 1 warning - run the \`next:\` commands above, then \`fscale doctor\` again.
 "
 `;
