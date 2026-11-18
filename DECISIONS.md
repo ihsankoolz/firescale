@@ -150,6 +150,30 @@ Real-repo bug 4. There is a clear rule, so it is built:
 - What the fact-check did not open: the inside of `narrow_report`, `lintsource.rs`, and the adapters' TypeScript. ADRs were matched to sections by title and headings, not read in full.
 - Two research reports on what firescale could take from other tools were written in this run and are on the laptop, outside the repo. Nothing from them is built.
 
+**Pull request 6: version 0.5.4, and what you should see change**
+
+The version is set to 0.5.4 with `node scripts/bump-version.mjs 0.5.4`, and the three snapshots that hold the version follow it, with the digest of the adopted tamper-guard workflow. **No tag was pushed**: the release is yours (RELEASING.md, step 3). The pull request carries the label `release`, so Linux, macOS and Windows all ran on it.
+
+Compared with 0.5.3. Nothing here was run on the course project; each line is from the tests and from the third real-repos run.
+
+1. **A failing lint no longer stops the tests of its project** (ADR 0070). You see the lint failure and the test result in one run. A failing `typecheck` still stops the tests when there is no base to compare with.
+2. **A lint command that fscale guessed only reports.** `cargo clippy`, `go vet`, `dotnet format`, `dart analyze` and `flutter analyze`, and Gradle's Android `lint` are guesses unless the repo declares them (a config file, or the command in its CI). A guessed lint that fails shows as `report-only`, does not fail the run, and the summary gives the config line that makes it block. Verify's JSON is schema version 8 for this.
+3. **A Maven build with modules is tested with `mvn -B verify`** (ADR 0071). Without `<modules>` it stays `mvn -B test`. The step takes longer where it changes.
+4. **Three rules read their cache inputs from the project-type table** (ADR 0069, #80). No output changes. `fix --agent` may now be allowed to edit more files for those rules; this needs your decision (below).
+5. **Doctor, verify and the scaffold are otherwise as in 0.5.3.** The tests that came with 0.5.3's fixes are now each shown to fail without their fix.
+6. **After the upgrade every step runs once more**: the version is part of the step cache key.
+
+**Morning list for you** (as the run ended on 2026-11-18):
+
+1. **Release 0.5.4 when you want it**: tag the merged commit and push the tag (RELEASING.md, step 3). 0.5.3 was never tagged, so npm's latest is still 0.5.2.
+2. **Decide: may `fix --agent` edit every file a rule's inputs match?** After #80 the inputs of three rules come from the table and are wider, and they double as the allowed list.
+3. **Decide: `typecheck` is off for Go, Dart, Flutter and a Rust root while their lint is only a guess.** So for those a compile error can show only in the test step. Say if a guessed lint should block there.
+4. **Decide: the two real repos still wrong** (swift-argument-parser, provider). The repo has a config file for the linter, and fscale runs it more strictly than the repo's CI. Options: leave it, or read the repo's CI for the exact command.
+5. **Read the two research reports** on the laptop in `firescale-research`, beside the repo. The cheapest ideas: put `.env` files and the names in `.env.example` into the step cache key; never call a failure `flaky` when the change added or edited that test; give the stop hook a `timeout`. Nothing from them is built. Their numbers need a second look before they go into an ADR.
+6. **A quiet `fscale verify` on Windows is still owed.** The one in this run timed out under my own load; the same commit passed in WSL in 5m 23s.
+7. **Tests now run in WSL on the laptop in about 3.5 minutes** (HANDOFF.md says how). Not tried: a McAfee exclusion or a Dev Drive for the repo, which may be the larger win on Windows.
+8. **Still open from before:** connect GitHub to Claude for a cloud run; the rest of the project-type table; M36 to M39 (not started).
+
 ## 0.5.3 — the overnight run of 2026-11-18
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.

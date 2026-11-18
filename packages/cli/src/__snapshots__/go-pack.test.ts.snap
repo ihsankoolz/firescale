@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > .gitignore 1`] = `
+exports[`fscale init --packs core,go > gives the starter the go commands in facts > .gitignore 1`] = `
 "# Generated files and dependencies
 *.log
 # Go
@@ -13,14 +13,14 @@ go.work.sum
 "
 `;
 
-exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > go.mod 1`] = `
+exports[`fscale init --packs core,go > gives the starter the go commands in facts > go.mod 1`] = `
 "module example.com/app
 
 go 1.26.0
 "
 `;
 
-exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > main.go 1`] = `
+exports[`fscale init --packs core,go > gives the starter the go commands in facts > main.go 1`] = `
 "// Command app is the starting point of this module.
 package main
 
@@ -37,7 +37,7 @@ func main() {
 "
 `;
 
-exports[`fscale init --packs core,go > builds a starter where the go pack reports no violations (snapshots) > main_test.go 1`] = `
+exports[`fscale init --packs core,go > gives the starter the go commands in facts > main_test.go 1`] = `
 "package main
 
 import "testing"

@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > .gitignore 1`] = `
+exports[`fscale init --packs core,expo > builds a starter with the supabase pack too > .gitignore 1`] = `
 "# Generated files and dependencies
 *.log
 # Expo
@@ -16,7 +16,7 @@ node_modules/
 "
 `;
 
-exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > App.tsx 1`] = `
+exports[`fscale init --packs core,expo > builds a starter with the supabase pack too > App.tsx 1`] = `
 "import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -40,7 +40,7 @@ const styles = StyleSheet.create({
 "
 `;
 
-exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > app.json 1`] = `
+exports[`fscale init --packs core,expo > builds a starter with the supabase pack too > app.json 1`] = `
 "{
   "expo": {
     "name": "expo-app",
@@ -59,7 +59,7 @@ exports[`fscale init --packs core,expo > builds a starter where the expo pack re
 "
 `;
 
-exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > eslint.config.js 1`] = `
+exports[`fscale init --packs core,expo > builds a starter with the supabase pack too > eslint.config.js 1`] = `
 "// https://docs.expo.dev/guides/using-eslint/
 const { defineConfig } = require('eslint/config');
 const expoConfig = require('eslint-config-expo/flat');
@@ -73,7 +73,7 @@ module.exports = defineConfig([
 "
 `;
 
-exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > index.ts 1`] = `
+exports[`fscale init --packs core,expo > builds a starter with the supabase pack too > index.ts 1`] = `
 "import { registerRootComponent } from 'expo';
 
 import App from './App';
@@ -85,7 +85,7 @@ registerRootComponent(App);
 "
 `;
 
-exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > package.json 1`] = `
+exports[`fscale init --packs core,expo > builds a starter with the supabase pack too > package.json 1`] = `
 "{
   "name": "expo-app",
   "version": "1.0.0",
@@ -117,7 +117,7 @@ exports[`fscale init --packs core,expo > builds a starter where the expo pack re
 "
 `;
 
-exports[`fscale init --packs core,expo > builds a starter where the expo pack reports no violations (snapshots) > tsconfig.json 1`] = `
+exports[`fscale init --packs core,expo > builds a starter with the supabase pack too > tsconfig.json 1`] = `
 "{
   "extends": "expo/tsconfig.base",
   "compilerOptions": {

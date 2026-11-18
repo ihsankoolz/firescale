@@ -4,6 +4,17 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
+**The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
+
+1. The 0.5.3 run's tests, each shown to fail without its fix: [#83](https://github.com/ihsankoolz/firescale/pull/83).
+2. The project-type table's first step: [#80](https://github.com/ihsankoolz/firescale/pull/80) (ADR 0069). Do not go further without the owner's word.
+3. A failing lint never hides the tests, and a guessed lint only reports: [#82](https://github.com/ihsankoolz/firescale/pull/82) (ADR 0070).
+4. A Maven build with modules tests with `mvn -B verify`: [#84](https://github.com/ihsankoolz/firescale/pull/84) (ADR 0071).
+5. The third real-repos run (13 right, 2 wrong, 0 not judged), the measured budget run, the README's five diagrams and `docs/architecture.md`: [#85](https://github.com/ihsankoolz/firescale/pull/85). `node scripts/check-mermaid.mjs` checks that every diagram parses.
+6. Version 0.5.4: this pull request, with the label `release`. **No tag was pushed: the release is the owner's step.**
+
+Before it:
+
 **The 0.5.3 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.3 — the overnight run of 2026-11-18"; its "Morning list for you" says what waits for the owner). Its stages:
 
 **The run never reached the cloud** (DECISIONS.md, "Blocked: the run could not move to the cloud"): GitHub is not connected to the owner's Claude account. After the README, nothing was built or tested on the laptop: #74 to #77, #79 and #80 were written there and built and tested by GitHub CI only.
@@ -27,7 +38,7 @@ Before this run: the 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the cou
 
 The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged and released. The 0.5.2 run ended with its version pull request. Do not start M36 without the owner's word. Of the project-type table, the owner asked for an open pull request in the 0.5.3 run: step 1 is #80; do not go further without the owner's word.
 
-- **Version:** 0.5.3 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **0.5.3 is not released**: there is no tag `v0.5.3`. 0.5.2 is npm's latest (the tag `v0.5.2` is on commit `c9d8ffc`; seen on 2026-11-18).
+- **Version:** 0.5.4 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **0.5.4 is not released, and 0.5.3 never was**: there is no tag `v0.5.3` or `v0.5.4`. 0.5.2 is npm's latest (the tag `v0.5.2` is on commit `c9d8ffc`; seen on 2026-11-18).
 - **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON is schema version 7; the step cache format is 2; an ignored config is compared with a record of the last passing run; `fscale doctor` says PROBLEM for a `.env` that is a symbolic link when its variables are set nowhere else; `hooks install` no longer prints the note about the Cursor hook format.
 - **Verify's JSON is schema version 8** (version 7: `notRun`, `budgetMs`, the step status `over-budget`; version 8: the step status `report-only` and a step's `reportOnly`, ADR 0070).
 - **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.

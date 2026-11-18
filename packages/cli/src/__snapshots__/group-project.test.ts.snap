@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`fscale init --packs core,group-project > builds a repo where the pack reports no violations, with the template and guide pinned > CONTRIBUTING.md 1`] = `
+exports[`fscale init --packs core,group-project > writes the commands of each project into the guide > CONTRIBUTING.md 1`] = `
 "# Contributing
 
 <!-- Created by firescale (group-project/contributing). It is your team's to edit. -->
@@ -49,26 +49,6 @@ For example: \`git switch -c feat/login-page\`.
 - Fill in the pull request template.
 - CI runs \`npx firescale verify\`. It must pass before the pull request is merged.
 - A teammate reviews and approves it before it is merged.
-"
-`;
-
-exports[`fscale init --packs core,group-project > builds a repo where the pack reports no violations, with the template and guide pinned > pull_request_template.md 1`] = `
-"<!-- Created by firescale (group-project/pr-template). It is your team's to edit. -->
-
-## What this changes
-
-<!-- One or two sentences. Link the issue it closes, for example: Closes #12 -->
-
-## How to test it
-
-<!-- The steps a reviewer can follow to see it work. -->
-
-## Checklist
-
-- [ ] \`npx firescale verify\` passes on my machine.
-- [ ] The branch is named as CONTRIBUTING.md says.
-- [ ] Tests cover the change, or I wrote above why they do not.
-- [ ] A teammate is asked to review.
 "
 `;
 
@@ -141,5 +121,25 @@ For example: \`git switch -c feat/login-page\`.
 - Fill in the pull request template.
 - CI runs \`npx firescale verify\`. It must pass before the pull request is merged.
 - A teammate reviews and approves it before it is merged.
+"
+`;
+
+exports[`fscale init --packs core,group-project > writes the commands of each project into the guide > pull_request_template.md 1`] = `
+"<!-- Created by firescale (group-project/pr-template). It is your team's to edit. -->
+
+## What this changes
+
+<!-- One or two sentences. Link the issue it closes, for example: Closes #12 -->
+
+## How to test it
+
+<!-- The steps a reviewer can follow to see it work. -->
+
+## Checklist
+
+- [ ] \`npx firescale verify\` passes on my machine.
+- [ ] The branch is named as CONTRIBUTING.md says.
+- [ ] Tests cover the change, or I wrote above why they do not.
+- [ ] A teammate is asked to review.
 "
 `;

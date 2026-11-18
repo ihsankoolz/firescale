@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > .gitignore 1`] = `
+exports[`fscale check result cache with the nextjs pack > reports the app once package.json depends on next, not the cached "no finding" > .gitignore 1`] = `
 "# Generated files and dependencies
 *.log
 # Next.js build output
@@ -10,7 +10,7 @@ node_modules/
 "
 `;
 
-exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > app/layout.tsx 1`] = `
+exports[`fscale check result cache with the nextjs pack > reports the app once package.json depends on next, not the cached "no finding" > app/layout.tsx 1`] = `
 "import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
@@ -29,7 +29,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
 "
 `;
 
-exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > app/page.tsx 1`] = `
+exports[`fscale check result cache with the nextjs pack > reports the app once package.json depends on next, not the cached "no finding" > app/page.tsx 1`] = `
 "export default function Home() {
   return (
     <main>
@@ -41,7 +41,7 @@ exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pac
 "
 `;
 
-exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > eslint.config.mjs 1`] = `
+exports[`fscale check result cache with the nextjs pack > reports the app once package.json depends on next, not the cached "no finding" > eslint.config.mjs 1`] = `
 "import { defineConfig, globalIgnores } from 'eslint/config';
 import nextVitals from 'eslint-config-next/core-web-vitals';
 import nextTs from 'eslint-config-next/typescript';
@@ -56,7 +56,7 @@ export default eslintConfig;
 "
 `;
 
-exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > next.config.ts 1`] = `
+exports[`fscale check result cache with the nextjs pack > reports the app once package.json depends on next, not the cached "no finding" > next.config.ts 1`] = `
 "import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
@@ -67,7 +67,7 @@ export default nextConfig;
 "
 `;
 
-exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > package.json 1`] = `
+exports[`fscale check result cache with the nextjs pack > reports the app once package.json depends on next, not the cached "no finding" > package.json 1`] = `
 "{
   "name": "next-app",
   "version": "0.1.0",
@@ -98,7 +98,7 @@ exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pac
 "
 `;
 
-exports[`fscale init --packs core,nextjs > builds a starter where the nextjs pack reports no violations (snapshots) > tsconfig.json 1`] = `
+exports[`fscale check result cache with the nextjs pack > reports the app once package.json depends on next, not the cached "no finding" > tsconfig.json 1`] = `
 "{
   "compilerOptions": {
     "target": "ES2017",
