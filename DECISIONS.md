@@ -31,6 +31,13 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **From the fresh review, fixed:** the line came before the `SETUP NEEDED:` note and could tell an agent to stop instead of running the setup command; it is now left out of a setup block. Also: a fast Rust test of its place, the agents-md skill's description, a wrong ADR cited. **Not done:** an agent that takes the way out is blocked again with the same message, up to three times; letting a stated stop through would make a stop easier to get, so it waits for your decision (ADR 0084, Later).
 - **Not built (Later in ADR 0084):** a `PreToolUse` guard on the files the guard depends on; recording whether agents take the way out.
 
+**Pull request 4: doctor follows the verify plan (verification idea 10, part i, ADR 0085)**
+
+- **`fscale doctor` builds the plan of a full verify**, as `verify --dry-run` does, and looks up the first program of each step as the step would start it, with the step cache's lookup. Not found: a problem naming the step and its command. Before, a config step running a program doctor did not know left doctor saying "ready".
+- **A tool doctor's own list knows is asked its version as before**, and that list gives the tool to the step where a step runs it: one line, not two. Programs it does not know are looked up, never run.
+- **Not judged:** a step that starts with a shell builtin, a variable or shell syntax; only the first program of a command is looked up.
+- **Failing tests first:** 3 in `doctor.test.ts`, 2 seen failing on `main` in WSL; the third guards the not-judged case.
+
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
 Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.

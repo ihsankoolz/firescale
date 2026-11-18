@@ -50,6 +50,15 @@ Doctor changes nothing and downloads nothing. The only programs it runs are vers
 
 A tool that is missing is a problem with the page or command that installs it.
 
+**The programs verify will run** (ADR 0085). Doctor builds the plan of a full `fscale verify`, as `fscale verify --dry-run` shows it, and looks up the first word of each step's command as the step would start it: on the PATH (on Windows with the `PATHEXT` extensions, as `cmd` does), or, for a path such as `./gradlew`, in the step's folder. This is the step cache's lookup. A program that is not found is a **problem** that names the step and its command:
+
+```
+  PROBLEM  zzlint: zzlint is not on the PATH, and verify's lint step runs `zzlint --strict`.
+           next: install zzlint, or change the lint step's command under `verify` in the firescale config
+```
+
+A program doctor's own list knows (Maven, Gradle, .NET, CMake and the others of each ecosystem) is also asked its version, as that list asks it, and that list then leaves the tool to the step: one line, naming the step, not two. Any other program is only looked up, never run. A step whose command starts with a shell builtin (`cd`, `set`, `call`, ...), a variable (`FOO=1 cmd`) or shell syntax is not judged. Only the first program of a command is looked up: in `npm run lint && cargo test`, `cargo` is not.
+
 ### Environment variables
 
 For each `.env.example` at the root and in each project's folder, every name it lists is looked for: it counts as set when it is set (to something) in the environment, or be present in a `.env` or `.env.local` **in the same folder or in a folder above it, up to the repo root** (ADR 0059). **For this check only names are read from those files; values are dropped as each line is read, and never printed.** (The services check below reads one more thing from them: the host and port of a local database URL.) The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
@@ -150,6 +159,7 @@ When a `fscale verify` step ends as **setup needed**, the summary ends with one 
 
 ## Limits
 
+- The plan check looks up the first program of each step's command only, and judges no step that starts with a shell builtin or a variable. A program found on the PATH may still fail to start; for a program doctor's list does not know, nothing runs it.
 - Version checks know the declarations in the table. `engines` for package managers, `volta`, `.tool-versions` (asdf, mise) and `.sdkmanrc` are not read.
 - "Matching the lockfile" for Node is a file-time comparison, not a full comparison of versions. For uv and Poetry projects the packages are read from `pyproject.toml`'s `[project] dependencies`, not from `uv.lock` or `poetry.lock`.
 - Compose files are read with a small line reader, not a YAML parser: `services:`, `image:` and `ports:` in the short and long forms. Anchors, `extends` and `include` are not followed.
