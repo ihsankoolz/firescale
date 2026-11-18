@@ -1399,8 +1399,12 @@ pub fn setup_problem(
     }
     // Dart and Flutter: before `pub get` the analyzer cannot follow a
     // `package:` import, and every name that comes from one is undefined.
-    if (output.contains(" - uri_does_not_exist") || output.contains(" - undefined_"))
-        && dart_packages_not_fetched(root, dir)
+    // `dart analyze` puts ` - ` before the code of a finding; `flutter
+    // analyze` puts a bullet there on Linux and macOS.
+    if [" - ", " \u{2022} "].iter().any(|separator| {
+        output.contains(&format!("{separator}uri_does_not_exist"))
+            || output.contains(&format!("{separator}undefined_"))
+    }) && dart_packages_not_fetched(root, dir)
     {
         return Some(SetupProblem {
             reason:
