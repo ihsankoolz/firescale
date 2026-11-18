@@ -5,8 +5,8 @@
 //   node scripts/check-mermaid.mjs [file ...]
 //
 // It needs `mmdc`, the command of @mermaid-js/mermaid-cli, on the PATH
-// (`npm install --global @mermaid-js/mermaid-cli`), or MMDC set to it. The
-// package downloads a browser, so it is not a dependency of this repo.
+// (`npm install --global @mermaid-js/mermaid-cli`). The package downloads a
+// browser, so it is not a dependency of this repo.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,7 +33,25 @@ function blocks(text) {
   return found;
 }
 
-const mmdc = process.env.MMDC ?? 'mmdc';
+/**
+ * Runs mmdc. On Windows it is a `.cmd` file, which Node starts only through
+ * a shell, so the arguments are quoted here: a temp folder may hold a space.
+ */
+function mmdc(args) {
+  if (process.platform === 'win32') {
+    const line = ['mmdc', ...args.map((arg) => `"${arg}"`)].join(' ');
+    return spawnSync(line, { encoding: 'utf8', shell: true });
+  }
+  return spawnSync('mmdc', args, { encoding: 'utf8' });
+}
+
+if (mmdc(['--version']).status !== 0) {
+  console.error(
+    'check-mermaid: mmdc was not found. Install it with: npm install --global @mermaid-js/mermaid-cli',
+  );
+  process.exit(2);
+}
+
 const work = mkdtempSync(path.join(tmpdir(), 'firescale-mermaid-'));
 let failed = 0;
 let count = 0;
@@ -45,16 +63,7 @@ try {
       const input = path.join(work, `diagram-${count}.mmd`);
       const output = path.join(work, `diagram-${count}.svg`);
       writeFileSync(input, `${block.code}\n`);
-      const result = spawnSync(mmdc, ['--quiet', '--input', input, '--output', output], {
-        encoding: 'utf8',
-        shell: process.platform === 'win32',
-      });
-      if (result.error?.code === 'ENOENT') {
-        console.error(
-          `check-mermaid: ${mmdc} was not found. Install it with: npm install --global @mermaid-js/mermaid-cli`,
-        );
-        process.exit(2);
-      }
+      const result = mmdc(['--quiet', '--input', input, '--output', output]);
       let size = 0;
       try {
         size = statSync(output).size;
@@ -74,4 +83,5 @@ try {
   rmSync(work, { recursive: true, force: true });
 }
 console.log(`${count} diagrams, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
+if (count === 0) console.error('check-mermaid: no diagram was found in the files given.');
+process.exit(failed === 0 && count > 0 ? 0 : 1);
