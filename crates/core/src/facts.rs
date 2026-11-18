@@ -1826,7 +1826,8 @@ fn rust_projects(root: &Path, cargo: &[TomlEntry], warnings: &mut Vec<String>) -
 /// Repo-relative folders below the root, down to `DISCOVERY_DEPTH` levels,
 /// that `.gitignore` does not ignore, with the names of their files. Sorted,
 /// parents before children. Dot folders and `DISCOVERY_SKIPPED_DIRS` are left
-/// out, and so is a folder that holds a `CMakeCache.txt` (a CMake build tree). Only `.gitignore` files inside the repo count, so the answer is the
+/// out, and so is a folder that holds a `CMakeCache.txt` and no
+/// `CMakeLists.txt` (a CMake build tree). Only `.gitignore` files inside the repo count, so the answer is the
 /// same on every machine.
 fn searchable_dirs(root: &Path) -> Vec<String> {
     let mut dirs = Vec::new();
@@ -1843,8 +1844,14 @@ fn searchable_dirs(root: &Path) -> Vec<String> {
         .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(|entry| {
             // A CMake build tree, whatever its name: its generated Makefile
-            // is not a project (found on a real repo, 0.5.3).
-            if entry.depth() > 0 && entry.path().join("CMakeCache.txt").is_file() {
+            // is not a project (found on a real repo, 0.5.3). A folder with
+            // its own CMakeLists.txt beside the cache was built in place and
+            // is still searched.
+            if entry.depth() > 0
+                && entry.file_type().is_some_and(|kind| kind.is_dir())
+                && entry.path().join("CMakeCache.txt").is_file()
+                && !entry.path().join("CMakeLists.txt").is_file()
+            {
                 return false;
             }
             entry.file_name().to_str().is_none_or(|name| {
