@@ -22,7 +22,7 @@ use firescale_core::config::{
 use firescale_core::configkey;
 use firescale_core::diff::unified_diff;
 use firescale_core::doctor::{
-    add_checks, format_doctor_human, format_doctor_json, run_doctor_with, ThisMachine,
+    add_checks, format_doctor_human, format_doctor_json, run_doctor_with_plan, ThisMachine,
 };
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
@@ -966,7 +966,12 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     }
     let facts = detect_facts(root)?;
     let settings = load_doctor_settings(root)?;
-    let mut report = run_doctor_with(root, &facts, &ThisMachine, settings);
+    // The plan a full verify would run, built as --dry-run builds it: each
+    // step's program is checked as the step would start it (ADR 0085).
+    let plan = load_verify_config(root)
+        .ok()
+        .map(|config| plan_verify(root, &facts, &config, false, None));
+    let mut report = run_doctor_with_plan(root, &facts, &ThisMachine, settings, plan.as_ref());
     add_checks(&mut report, hook_findings(root));
     add_checks(&mut report, hook_limit_findings(root));
     let text = if args.json {
