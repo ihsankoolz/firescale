@@ -358,6 +358,20 @@ struct Builder<'a> {
     shared: BTreeMap<String, bool>,
     edges: BTreeMap<(String, String), BTreeSet<EdgeSource>>,
     warnings: BTreeSet<String>,
+    /// Python imports with more places that could hold them, to link once
+    /// every node is known (ADR 0077).
+    more_places: Vec<MorePlaces>,
+}
+
+/// A Python import, the nodes it led to with the place that led to each,
+/// and the other places that could hold the module.
+struct MorePlaces {
+    importer: Importer,
+    file: String,
+    line: usize,
+    text: String,
+    places: BTreeMap<String, String>,
+    more: Vec<String>,
 }
 
 impl<'a> Builder<'a> {
@@ -382,6 +396,7 @@ impl<'a> Builder<'a> {
             shared: BTreeMap::new(),
             edges: BTreeMap::new(),
             warnings: BTreeSet::new(),
+            more_places: Vec::new(),
         }
     }
 
@@ -929,15 +944,15 @@ impl<'a> Builder<'a> {
                     places.entry(to).or_insert_with(|| target.clone());
                 }
             }
-            if found.any_of && places.len() > 1 {
-                let named: BTreeSet<&str> = places.values().map(String::as_str).collect();
-                self.warnings.insert(format!(
-                    "{file}:{}: `{}` could come from {} places in the repo ({}), and firescale cannot tell which one Python picks. It counts as depending on each.",
-                    import.line,
-                    import.text,
-                    named.len(),
-                    named.into_iter().collect::<Vec<_>>().join(", ")
-                ));
+            if found.any_of {
+                self.more_places.push(MorePlaces {
+                    importer: importer.clone(),
+                    file: file.to_owned(),
+                    line: import.line,
+                    text: import.text.clone(),
+                    places,
+                    more: found.more,
+                });
             }
         }
         for call in &imports.dynamic {
@@ -1014,7 +1029,69 @@ impl<'a> Builder<'a> {
                 root_fallback = true;
             }
         }
+        self.link_more_places();
         self.dynamic_imports(&dynamic, sources);
+    }
+
+    /// Links each Python import to the other places that could hold its
+    /// module, and warns when the places are more than one (ADR 0077). A
+    /// place gets an edge only when a node holds it already: a project, or
+    /// a shared folder something else made. It never makes a shared node,
+    /// because that would take the folder's files out of the files that
+    /// belong to no project, which every key holds.
+    fn link_more_places(&mut self) {
+        for import in std::mem::take(&mut self.more_places) {
+            let MorePlaces {
+                importer,
+                file,
+                line,
+                text,
+                mut places,
+                more,
+            } = import;
+            for target in &more {
+                let owners: Vec<String> = self
+                    .owners(target)
+                    .into_iter()
+                    .map(|project| project.id.clone())
+                    .collect();
+                let nodes: Vec<String> = if !owners.is_empty() {
+                    owners.into_iter().filter(|id| *id != importer.id).collect()
+                } else if importer.is_root_project || inside(target, &importer.root) {
+                    Vec::new()
+                } else {
+                    let path = if is_dir(self.root, target) {
+                        target.clone()
+                    } else {
+                        self.narrow(reach(&importer.root, target), target)
+                    };
+                    if self.shared.contains_key(&path) {
+                        vec![shared_id(&path)]
+                    } else {
+                        Vec::new()
+                    }
+                };
+                for to in nodes {
+                    self.add(
+                        &importer.id,
+                        &to,
+                        Source::PythonImport,
+                        &file,
+                        Some(line),
+                        text.clone(),
+                    );
+                    places.entry(to).or_insert_with(|| target.clone());
+                }
+            }
+            let named: BTreeSet<&str> = places.values().map(String::as_str).collect();
+            if named.len() > 1 {
+                self.warnings.insert(format!(
+                    "{file}:{line}: `{text}` could come from {} places in the repo ({}), and firescale cannot tell which one Python picks. It counts as depending on each.",
+                    named.len(),
+                    named.into_iter().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
     }
 
     /// A dynamic import may load any Python code: the importer depends on
@@ -1273,6 +1350,9 @@ fn deepest(root: &Path, start: String, names: &[&str]) -> String {
 struct PythonTargets {
     /// Repo-relative paths outside the importer's own code.
     paths: Vec<String>,
+    /// With `any_of`: the other places the module could come from, beside
+    /// the one in `paths` that was always followed.
+    more: Vec<String>,
     /// True when the paths are the places one module could come from, of
     /// which Python picks one by an import path the repo does not state
     /// (ADR 0077). False when each path is imported.
@@ -1283,6 +1363,7 @@ impl PythonTargets {
     fn each(paths: Vec<String>) -> Self {
         Self {
             paths,
+            more: Vec::new(),
             any_of: false,
         }
     }
@@ -1354,8 +1435,9 @@ fn python_targets(
     }
     // A folder above the importer's own: `backend/` holding `shared/` for
     // services that run with `backend/` on the import path.
-    // Every folder above that has the module, not only the first: which one
-    // Python picks depends on an import path the repo does not state.
+    // Every folder above that has the module. The first was always
+    // followed; the others are places it could also come from, since which
+    // one Python picks depends on an import path the repo does not state.
     let mut places: Vec<String> = Vec::new();
     let mut above = importer.root.clone();
     while above != "." {
@@ -1377,15 +1459,26 @@ fn python_targets(
         }
     }
     // Another Python project's top-level package.
-    places.extend(
-        projects
-            .iter()
-            .filter(|project| project.kind == "python" && project.id != importer.id)
-            .filter(|project| python_packages(root, &project.root).contains(*first))
-            .map(|project| project.root.clone()),
-    );
+    let packages = projects
+        .iter()
+        .filter(|project| project.kind == "python" && project.id != importer.id)
+        .filter(|project| python_packages(root, &project.root).contains(*first))
+        .map(|project| project.root.clone());
+    if places.is_empty() {
+        return PythonTargets {
+            paths: packages.collect(),
+            more: Vec::new(),
+            any_of: true,
+        };
+    }
+    // A project that holds a place found above is that same place.
+    let packages: Vec<String> = packages
+        .filter(|project| !places.iter().any(|place| inside(place, project)))
+        .collect();
+    let more = places.split_off(1).into_iter().chain(packages).collect();
     PythonTargets {
         paths: places,
+        more,
         any_of: true,
     }
 }

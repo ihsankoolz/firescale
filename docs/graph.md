@@ -37,7 +37,7 @@ Python finds modules on its import path, which the repo's files do not fully sta
 3. **Another Python project's package**: a folder with an `__init__.py` in another project's folder or its `src/`.
 4. Anything else is the standard library or an installed package: no edge.
 
-**When more than one place could hold the module** (two folders above, or a folder above and another project's package), the importer gets an edge to each, and `fscale graph` prints a warning that names the import and the places: which one Python picks depends on an import path the repo does not state (ADR 0077). Before, the first folder above won and the others got no edge. The importer's own code still comes first and gives no edge.
+**When more than one place could hold the module** (two folders above, or a folder above and another project's package), the importer gets an edge to each place that a node holds (a project, or a shared folder something else uses), and `fscale graph` prints a warning that names the import and the places: which one Python picks depends on an import path the repo does not state (ADR 0077). Before, the first folder above won and the others got no edge. The importer's own code still comes first and gives no edge. A second place that no node holds gets no edge and makes no shared folder: its files stay files of no project, which affect every project anyway.
 
 Relative imports (`from ..common import x`) resolve from the file's folder. An imported file stands for the package it is part of: `backend/shared/db.py` gives the node `backend/shared`.
 

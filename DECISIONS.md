@@ -113,10 +113,11 @@ Build idea 11, the test only.
 
 Build idea 6, item 2. Adds edges only.
 
-- Before, the first folder above the project that had the module won. Now every folder above that has it, and every other Python project with it as a top-level package, gets an edge, and `fscale graph` warns with the import and the places. The importer's own code still comes first.
+- Before, the first folder above the project that had the module won. Now every folder above that has it, and every other Python project with it as a top-level package, gets an edge when a node holds it already, and `fscale graph` warns with the import and the places. The importer's own code still comes first.
 - A project with such an import has more in its key, so its kept passes are not reused once.
 - **Decided on your behalf:** the wording of the warning; `fscale verify` does not print it.
 - **Failing test first:** two tests in `crates/core/src/graph.rs` failed in WSL before the change (no edge to the second place).
+- **The fresh review found that my first form narrowed**: a second place made a new shared node, and a shared node takes its files out of every other project's key. Reworked before merge, two tests seen failing first: a second place never makes a node.
 
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
