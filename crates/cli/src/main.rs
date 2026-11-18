@@ -37,7 +37,8 @@ use firescale_core::hooks::{
     has_fscale_script, hook_command, hook_file_changes, hook_timeout_for, install_hook_with,
     installed_prefixes, launch_note, max_blocks_from_env, may_start, no_download, not_downloaded,
     not_started, parse_hook_input, pinned_answer, pinned_version, probe_line, reply, start_verdict,
-    Agent, HookFileChanges, Installed, KeptTimeout, AGENTS, CLAUDE_DEFAULT_TIMEOUT,
+    timeout_seconds, Agent, HookFileChanges, Installed, KeptTimeout, AGENTS,
+    CLAUDE_DEFAULT_TIMEOUT, MAX_HOOK_TIMEOUT,
 };
 use firescale_core::model::Status;
 use firescale_core::node::NodeHost;
@@ -1973,16 +1974,29 @@ fn hook_limit_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
         return Vec::new();
     };
     let file = Agent::Claude.config_file();
+    let edit = format!("edit `timeout` in {file}.");
     let (limit, whose, raise) = match timeout {
-        Some(seconds) => (seconds, "`timeout`", format!("edit `timeout` in {file}.")),
+        // Seconds, a point allowed: whole seconds are what it is read to.
+        Some(value) => match timeout_seconds(&value) {
+            Some(seconds) => (
+                Duration::try_from_secs_f64(seconds.floor()).unwrap_or(Duration::MAX),
+                "`timeout`".to_owned(),
+                edit,
+            ),
+            None => (
+                Duration::from_secs(CLAUDE_DEFAULT_TIMEOUT),
+                format!("Claude Code's default: the `timeout` in the file, {value}, is not a number of seconds"),
+                edit,
+            ),
+        },
         None => (
-            CLAUDE_DEFAULT_TIMEOUT,
-            "Claude Code's default",
+            Duration::from_secs(CLAUDE_DEFAULT_TIMEOUT),
+            "Claude Code's default".to_owned(),
             "run fscale hooks install --agent claude, which adds a `timeout` set from these times."
                 .to_owned(),
         ),
     };
-    if times.total <= Duration::from_secs(limit) {
+    if times.total <= limit {
         return Vec::new();
     }
     vec![Finding {
@@ -1993,7 +2007,7 @@ fn hook_limit_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
         detail: format!(
             "the steps the stop hook would run took {} in all when they last ran, more than its limit of {} ({whose}). Claude Code ends a stop hook that runs past its limit, and the agent stops without verify having finished.",
             format_limit(times.total),
-            format_limit(Duration::from_secs(limit))
+            format_limit(limit)
         ),
         fix: Some(format!(
             "work on a branch: the stop hook then runs only the projects a change reaches, as fscale verify --affected does; or give the hook a smaller scope (a faster command for the slow steps under verify in the config); or raise the limit: {raise}"
@@ -2058,38 +2072,54 @@ fn hook_findings(root: &Path) -> Vec<firescale_core::doctor::Finding> {
 /// The time limit `hooks install` writes on Claude Code's stop hook, and
 /// why (ADR 0083).
 struct HookLimit {
-    seconds: u64,
+    /// `None` when nothing is known to set it from: no `timeout` is
+    /// written, so a later install can still write one (review of ADR 0083).
+    seconds: Option<u64>,
     /// Why this limit: the end of the line that says it.
     why: String,
+}
+
+/// A `timeout` value as people read it: a time when it is a whole number
+/// of seconds, else the value as the file has it.
+fn shown_timeout(value: &serde_json::Value) -> String {
+    match value.as_u64().filter(|seconds| *seconds > 0) {
+        Some(seconds) => format_limit(Duration::from_secs(seconds)),
+        None => value.to_string(),
+    }
 }
 
 impl HookLimit {
     /// The line `hooks install` prints about the limit.
     fn line(&self, kept: KeptTimeout) -> String {
         let file = Agent::Claude.config_file();
-        let wanted = format_limit(Duration::from_secs(self.seconds));
+        let default = format_limit(Duration::from_secs(CLAUDE_DEFAULT_TIMEOUT));
+        let why = &self.why;
+        let Some(seconds) = self.seconds else {
+            return match kept {
+                KeptTimeout::Kept(have) => format!(
+                    "Claude Code's stop hook keeps the `timeout` of {} in {file}{why}.\n",
+                    shown_timeout(&have)
+                ),
+                _ => format!(
+                    "Claude Code's stop hook has no `timeout` in {file}, so Claude Code's default of {default} applies{why}.\n"
+                ),
+            };
+        };
+        let wanted = format_limit(Duration::from_secs(seconds));
         match kept {
-            KeptTimeout::Kept(have) if have == self.seconds => format!(
-                "Claude Code's stop hook keeps the `timeout` of {wanted} in {file}.
-"
-            ),
+            KeptTimeout::Kept(have) if have.as_u64() == Some(seconds) => {
+                format!("Claude Code's stop hook keeps the `timeout` of {wanted} in {file}.\n")
+            }
             KeptTimeout::Kept(have) => format!(
-                "Claude Code's stop hook keeps the `timeout` of {} in {file}: firescale does not change a value in the file. To give it {wanted}, edit that value.
-",
-                format_limit(Duration::from_secs(have))
+                "Claude Code's stop hook keeps the `timeout` of {} in {file}: firescale does not change a value in the file. To give it {wanted}, edit that value.\n",
+                shown_timeout(&have)
             ),
             KeptTimeout::CannotAdd => format!(
-                "Claude Code's stop hook in {file} has no `timeout`, and it cannot go in as a new line: its entry is written on one line. Add \"timeout\": {} to that entry by hand ({wanted}{}); without it Claude Code ends the hook after {}.
-",
-                self.seconds,
-                self.why,
-                format_limit(Duration::from_secs(CLAUDE_DEFAULT_TIMEOUT))
+                "Claude Code's stop hook in {file} has no `timeout`, and it cannot go in as a new line without changing a line already there. Add \"timeout\": {seconds} to that entry by hand ({wanted}{why}); without it Claude Code ends the hook after {default}.\n"
             ),
-            KeptTimeout::None => format!(
-                "Claude Code's stop hook may run for {wanted} (`timeout` in {file}){}.
-",
-                self.why
-            ),
+            KeptTimeout::None => {
+                format!("Claude Code's stop hook may run for {wanted} (`timeout` in {file}){why}.\n")
+            }
         }
     }
 }
@@ -2110,34 +2140,31 @@ fn hook_limit(root: &Path, args: &Args, agents: &[Agent]) -> Result<Option<HookL
             firescale_core::config::time_text_seconds(text)
         };
         return match seconds {
-            Some(seconds) if seconds > 0 => Ok(Some(HookLimit {
-                seconds,
+            Some(seconds) if (1..=MAX_HOOK_TIMEOUT).contains(&seconds) => Ok(Some(HookLimit {
+                seconds: Some(seconds),
                 why: ", as --timeout says".to_owned(),
             })),
             _ => Err(Error::usage(format!(
-                "--timeout needs a time longer than zero, such as \"30m\" or \"1h 30m\", or a number of seconds; got \"{value}\"."
+                "--timeout needs a time longer than zero and at most {MAX_HOOK_TIMEOUT} seconds (about 24 days, the longest a timer waits), such as \"30m\" or \"1h 30m\", or a number of seconds; got \"{value}\"."
             ))),
         };
     }
     if !agents.contains(&Agent::Claude) {
         return Ok(None);
     }
-    let default = |why: String| HookLimit {
-        seconds: CLAUDE_DEFAULT_TIMEOUT,
-        why,
-    };
+    let unknown = |why: String| HookLimit { seconds: None, why };
     let again = "After a fscale verify, run this again to set it from the steps' times, or pass --timeout <time>";
     let kept = match kept_plan_times(root) {
         Ok(kept) => kept,
         Err(why) => {
-            return Ok(Some(default(format!(
-                ", its default: {why}, so the steps' kept times are not known. {again}"
+            return Ok(Some(unknown(format!(
+                ": {why}, so the steps' kept times are not known. {again}"
             ))));
         }
     };
     let Some((times, base)) = Some(kept).filter(|(times, _)| times.known > 0) else {
-        return Ok(Some(default(format!(
-            ", its default: no step has a kept time yet. {again}"
+        return Ok(Some(unknown(format!(
+            ": no step has a kept time yet. {again}"
         ))));
     };
     let seconds = hook_timeout_for(times.total, base);
@@ -2160,7 +2187,10 @@ fn hook_limit(root: &Path, args: &Args, agents: &[Agent]) -> Result<Option<HookL
             format_limit(base)
         )
     };
-    Ok(Some(HookLimit { seconds, why }))
+    Ok(Some(HookLimit {
+        seconds: Some(seconds),
+        why,
+    }))
 }
 
 /// The kept times of every step a full verify plans, and the time the base
@@ -2221,7 +2251,7 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             let mut refused = Vec::new();
             let mut limit_line = None;
             for agent in agents {
-                let timeout = limit.as_ref().map(|limit| limit.seconds);
+                let timeout = limit.as_ref().and_then(|limit| limit.seconds);
                 let state = match install_hook_with(root, agent, bin, timeout) {
                     Ok((state, kept)) => {
                         if let (Agent::Claude, Some(limit)) = (agent, &limit) {
@@ -2433,6 +2463,15 @@ fn run() -> Result<Output> {
     };
     if args.help {
         return Ok(Output::ok(HELP));
+    }
+    // A limit no other command reads must not look as if it set one
+    // (review of ADR 0083).
+    if args.timeout.is_some()
+        && !(command == "hooks" && rest.first().is_some_and(|sub| sub == "install"))
+    {
+        return Err(Error::usage(
+            "--timeout is for `fscale hooks install`: it is the time limit written on Claude Code's stop hook. No other command takes it.",
+        ));
     }
     // `init` makes a repo root out of the folder it is run in. Every other
     // command works on the root found from there.

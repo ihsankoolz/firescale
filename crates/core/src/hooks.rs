@@ -922,8 +922,14 @@ pub fn hook_timeout_for(steps: Duration, base: Duration) -> u64 {
     wanted
         .div_ceil(60)
         .saturating_mul(60)
-        .max(CLAUDE_DEFAULT_TIMEOUT)
+        .clamp(CLAUDE_DEFAULT_TIMEOUT, MAX_HOOK_TIMEOUT)
 }
+
+/// The longest `timeout` firescale writes, in seconds: 2^31 - 1
+/// milliseconds, the longest a JavaScript timer waits, about 24 days. How
+/// Claude Code times a hook is not documented, and a longer value could,
+/// in such a timer, fire at once (review of ADR 0083).
+pub const MAX_HOOK_TIMEOUT: u64 = 2_147_483;
 
 /// What installing a hook did to its file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -938,14 +944,14 @@ pub enum Installed {
 
 /// What [`merge_hook_with`] found about the Claude Code entry's `timeout`
 /// when it left the entry as it was.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum KeptTimeout {
     /// Nothing to say: no limit was asked for, or it was written.
     #[default]
     None,
-    /// The entry has a `timeout` of its own (seconds), which is kept: no
-    /// value in the file is ever changed.
-    Kept(u64),
+    /// The entry has a `timeout` of its own, whatever its value, which is
+    /// kept: no value in the file is ever changed.
+    Kept(Value),
     /// The entry has none, and it cannot go in as a new line (the entry is
     /// written on one line).
     CannotAdd,
@@ -990,13 +996,22 @@ fn claude_entry_mut(value: &mut Value) -> Option<&mut Map<String, Value>> {
 
 /// The time limit of the repo's Claude Code stop hook that runs firescale:
 /// `None` when there is no such hook, `Some(None)` when its entry sets no
-/// `timeout` (Claude Code's default applies), else the seconds it sets.
+/// `timeout` (Claude Code's default applies), else the value it sets, which
+/// may be anything JSON allows.
 #[must_use]
-pub fn claude_hook_timeout(root: &Path) -> Option<Option<u64>> {
+pub fn claude_hook_timeout(root: &Path) -> Option<Option<Value>> {
     let text = fs::read_to_string(resolve(root, Agent::Claude.config_file())).ok()?;
     let value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     let entry = claude_entry(&value)?;
-    Some(entry.get("timeout").and_then(Value::as_u64))
+    Some(entry.get("timeout").cloned())
+}
+
+/// A `timeout` value as a number of seconds, when it is one above zero.
+#[must_use]
+pub fn timeout_seconds(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
 }
 
 /// Adds the stop hook to an agent's config. A file that has something in it
@@ -1023,15 +1038,24 @@ pub fn merge_hook_with(
     let parsed = existing
         .filter(|text| !text.trim_start_matches('\u{feff}').trim().is_empty())
         .and_then(|text| serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok());
-    if let (Some(text), Some(mut root), Some(seconds)) = (existing, parsed, timeout) {
+    // Claude Code's entry, when firescale's hook is already there: a
+    // `timeout` in it is kept and reported whether or not a limit was asked
+    // for; with none, the limit asked for goes in as a new line.
+    if let (Some(text), Some(mut root), Agent::Claude) = (existing, parsed, agent) {
         if mentions_hook(&root, agent) {
             let Some(entry) = claude_entry_mut(&mut root) else {
                 return Ok((None, Installed::AlreadyThere, KeptTimeout::None));
             };
             if let Some(have) = entry.get("timeout") {
-                let kept = have.as_u64().map_or(KeptTimeout::None, KeptTimeout::Kept);
-                return Ok((None, Installed::AlreadyThere, kept));
+                return Ok((
+                    None,
+                    Installed::AlreadyThere,
+                    KeptTimeout::Kept(have.clone()),
+                ));
             }
+            let Some(seconds) = timeout else {
+                return Ok((None, Installed::AlreadyThere, KeptTimeout::None));
+            };
             entry.insert("timeout".to_owned(), json!(seconds));
             return Ok(match crate::jsonedit::insert_merge(text, &root) {
                 Some(merged) => (Some(merged), Installed::TimeoutAdded, KeptTimeout::None),
@@ -1455,7 +1479,7 @@ mod tests {
             hook_timeout_for(min(10) + Duration::from_millis(500), min(5)),
             26 * 60
         );
-        assert_eq!(hook_timeout_for(Duration::MAX, min(5)), u64::MAX);
+        assert_eq!(hook_timeout_for(Duration::MAX, min(5)), MAX_HOOK_TIMEOUT);
     }
 
     #[test]
@@ -1480,7 +1504,7 @@ mod tests {
             merge_hook_with(Some(&after), Agent::Claude, "fscale", Some(1200)).unwrap();
         assert_eq!(
             (again, state, kept),
-            (None, Installed::AlreadyThere, KeptTimeout::Kept(900))
+            (None, Installed::AlreadyThere, KeptTimeout::Kept(json!(900)))
         );
         // An entry on one line cannot take the new line.
         let one_line = "{\n  \"hooks\": {\n    \"Stop\": [\n      {\n        \"hooks\": [\n          { \"type\": \"command\", \"command\": \"fscale hooks run --agent claude\" }\n        ]\n      }\n    ]\n  }\n}\n";
