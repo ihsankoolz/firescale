@@ -119,6 +119,16 @@ Build idea 6, item 2. Adds edges only.
 - **Failing test first:** two tests in `crates/core/src/graph.rs` failed in WSL before the change (no edge to the second place).
 - **The fresh review found that my first form narrowed**: a second place made a new shared node, and a shared node takes its files out of every other project's key. Reworked before merge, two tests seen failing first: a second place never makes a node.
 
+**Pull request 8: with a known change set, changed projects start first (ADR 0078)**
+
+Build idea 5, first step only.
+
+- With `--affected`, a project that holds a changed file starts before the other projects. The repo root's own steps stay in front. Print order, the report and `--json` stay as they were. Every unit still runs.
+- No pass and no affected set changes. Where one project's step writes a file another project's key holds, the order can change a hit on that run, as `--jobs` already could.
+- **The fresh review** found that my first form let a project start before the root's own steps, whose key holds the whole repo. Fixed, test first.
+- **Decided on your behalf:** a unit reached only through an edge is not first; `--dry-run` does not show the start order.
+- **Failing test first:** three tests in `crates/core/src/verify.rs`, three of three failed in WSL before the change.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

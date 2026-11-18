@@ -1805,6 +1805,9 @@ pub struct Affected {
     /// a test ([`cannot_affect_builds`], and [`is_document_or_media`] when
     /// there is no root project): they affect no project.
     pub inert_files: Vec<String>,
+    /// The nodes that hold a changed file, as against those a change only
+    /// reaches through an edge.
+    pub direct: BTreeSet<String>,
 }
 
 impl Affected {
@@ -1975,6 +1978,7 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
     }
     let mut queue: VecDeque<String> = VecDeque::new();
     for (id, changed_here) in direct {
+        result.direct.insert(id.clone());
         result
             .nodes
             .insert(id.clone(), changed_reason(&changed_here));

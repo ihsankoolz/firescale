@@ -397,6 +397,9 @@ pub struct AffectedPlan {
     pub notes: Vec<String>,
     /// What the graph cannot see, such as dynamic imports.
     pub warnings: Vec<String>,
+    /// The units that hold a changed file, as folder and kind (the repo
+    /// root's own steps: `None`). Their steps start first (ADR 0078).
+    pub changed_first: Vec<(Option<String>, Option<String>)>,
 }
 
 /// One unit of an affected run.
@@ -450,6 +453,8 @@ pub fn limit_to_affected(
 ) {
     let anything = !affected.is_empty();
     let mut units = Vec::new();
+    // The units that hold a changed file: their steps start first.
+    let mut changed_first: Vec<(Option<String>, Option<String>)> = Vec::new();
     if plan
         .steps
         .iter()
@@ -540,6 +545,14 @@ pub fn limit_to_affected(
             ),
             None => (false, "nothing changed".to_owned()),
         };
+        if runs
+            && project
+                .kind
+                .as_ref()
+                .is_some_and(|kind| affected.direct.contains(&project_id(kind, &project.root)))
+        {
+            changed_first.push((Some(project.root.clone()), project.kind.clone()));
+        }
         units.push(AffectedUnit {
             project: Some(project.root.clone()),
             kind: project.kind.clone(),
@@ -554,6 +567,7 @@ pub fn limit_to_affected(
         units,
         notes: Vec::new(),
         warnings: graph.warnings.clone(),
+        changed_first,
     });
 }
 
@@ -3270,41 +3284,67 @@ pub fn run_verify_with(
         )
     }))
     .collect();
+    // The order the units start in: the repo root's own steps, then the
+    // projects that hold a changed file, then the rest, each group in the
+    // plan's order (ADR 0078). Every unit
+    // still runs, and the report lists them in the plan's order.
+    let first = |unit: &Unit<'_>| {
+        plan.affected.as_ref().is_some_and(|affected| {
+            affected
+                .changed_first
+                .iter()
+                .any(|(folder, kind)| match unit.project {
+                    None => folder.is_none(),
+                    Some(project) => {
+                        folder.as_deref() == Some(project.root.as_str()) && *kind == project.kind
+                    }
+                })
+        })
+    };
+    let mut order: Vec<usize> = (0..units.len()).collect();
+    // The repo root's own steps keep their place in front: their key is
+    // made when they start and holds every file of the repo, so a project
+    // that ran before them and wrote a file would change it.
+    order.sort_by_key(|index| {
+        let unit = &units[*index].1;
+        (unit.project.is_some(), !first(unit))
+    });
     let jobs = options.jobs.clamp(1, units.len().max(1));
-    let results: Vec<Result<Vec<StepReport>>> = if jobs == 1 {
-        units
-            .iter()
-            .map(|(unit_steps, unit)| run_unit(unit, unit_steps, check_failed, options))
-            .collect()
+    let slots: Vec<Mutex<Option<Result<Vec<StepReport>>>>> =
+        units.iter().map(|_| Mutex::new(None)).collect();
+    let run_at = |place: usize| -> bool {
+        let Some(index) = order.get(place).copied() else {
+            return false;
+        };
+        let (unit_steps, unit) = &units[index];
+        let result = run_unit(unit, unit_steps, check_failed, options);
+        *slots[index].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+        true
+    };
+    if jobs == 1 {
+        for place in 0..order.len() {
+            run_at(place);
+        }
     } else {
         let next = AtomicUsize::new(0);
-        let slots: Vec<Mutex<Option<Result<Vec<StepReport>>>>> =
-            units.iter().map(|_| Mutex::new(None)).collect();
         std::thread::scope(|scope| {
             for _ in 0..jobs {
-                scope.spawn(|| loop {
-                    let index = next.fetch_add(1, Ordering::SeqCst);
-                    let Some((unit_steps, unit)) = units.get(index) else {
-                        break;
-                    };
-                    let result = run_unit(unit, unit_steps, check_failed, options);
-                    *slots[index].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
-                });
+                scope.spawn(|| while run_at(next.fetch_add(1, Ordering::SeqCst)) {});
             }
         });
-        slots
-            .into_iter()
-            .map(|slot| {
-                slot.into_inner()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .unwrap_or_else(|| {
-                        Err(Error::internal(
-                            "A verify unit did not finish. Please report this.",
-                        ))
-                    })
-            })
-            .collect()
-    };
+    }
+    let results: Vec<Result<Vec<StepReport>>> = slots
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .unwrap_or_else(|| {
+                    Err(Error::internal(
+                        "A verify unit did not finish. Please report this.",
+                    ))
+                })
+        })
+        .collect();
     for result in results {
         steps.extend(result?);
     }
@@ -7381,6 +7421,140 @@ mod tests {
         );
     }
 
+    // ------------------------------- changed projects start first (ADR 0078)
+
+    /// A plan of the projects `a`, `b`, `c` and `d`, of which an affected
+    /// run runs all, and `changed` hold a changed file.
+    fn four_projects(changed: &[&str]) -> VerifyPlan {
+        let unit = |root: &str| AffectedUnit {
+            project: Some(root.to_owned()),
+            kind: None,
+            affected: true,
+            reason: "changed".to_owned(),
+        };
+        VerifyPlan {
+            runner: "projects".to_owned(),
+            projects: ["a", "b", "c", "d"]
+                .iter()
+                .map(|root| one_step(root, &format!("echo {root}")))
+                .collect(),
+            affected: Some(AffectedPlan {
+                changed_files: changed.len(),
+                units: ["a", "b", "c", "d"].iter().map(|root| unit(root)).collect(),
+                changed_first: changed
+                    .iter()
+                    .map(|root| (Some((*root).to_owned()), None))
+                    .collect(),
+                ..AffectedPlan::default()
+            }),
+            ..VerifyPlan::default()
+        }
+    }
+
+    /// The folders in the order their steps started, and in the order the
+    /// report lists them.
+    fn started_and_listed(plan: &VerifyPlan, jobs: usize) -> (Vec<String>, Vec<String>) {
+        let fixture = Fixture::new(
+            &[("a/x", ""), ("b/x", ""), ("c/x", ""), ("d/x", "")],
+            Track::NoGit,
+        )
+        .unwrap();
+        let config = VerifyConfig::default();
+        let shared = crate::progress::Shared::default();
+        let progress = Progress::new(Box::new(shared.clone()));
+        let options = RunOptions {
+            jobs,
+            progress: Some(&progress),
+            ..RunOptions::quiet(&config)
+        };
+        let report =
+            run_verify_with(fixture.root(), "0.0.0", passing_check(), plan, &options).unwrap();
+        assert_eq!(report.result, VerifyResult::Ok, "{report:?}");
+        let started = shared
+            .text()
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("[verify] test in ")?;
+                let (folder, rest) = rest.split_once(':')?;
+                rest.starts_with(" started").then(|| folder.to_owned())
+            })
+            .collect();
+        let listed = report
+            .steps
+            .iter()
+            .filter_map(|step| step.project.clone())
+            .collect();
+        (started, listed)
+    }
+
+    #[test]
+    fn units_that_hold_a_changed_file_start_first_and_the_report_keeps_its_order() {
+        let (started, listed) = started_and_listed(&four_projects(&["c"]), 1);
+        assert_eq!(started, ["c", "a", "b", "d"]);
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+        // Two changed units keep the plan's order among themselves.
+        let (started, listed) = started_and_listed(&four_projects(&["d", "b"]), 1);
+        assert_eq!(started, ["b", "d", "a", "c"]);
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+        // No unit known to hold a changed file: the plan's order.
+        let (started, listed) = started_and_listed(&four_projects(&[]), 1);
+        assert_eq!(started, ["a", "b", "c", "d"]);
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+    }
+
+    /// From the fresh review: the key of the repo root's steps is made
+    /// when they start and holds every file of the repo, so a project that
+    /// ran before them and wrote a file would change it.
+    #[test]
+    fn the_repo_root_s_own_steps_still_start_before_any_project() {
+        let fixture = Fixture::new(&[("a/x", ""), ("b/x", "")], Track::NoGit).unwrap();
+        let unit = |root: Option<&str>| AffectedUnit {
+            project: root.map(str::to_owned),
+            kind: None,
+            affected: true,
+            reason: "changed".to_owned(),
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            steps: vec![("test".to_owned(), Planned::Command("echo root".to_owned()))],
+            projects: vec![one_step("a", "echo a"), one_step("b", "echo b")],
+            affected: Some(AffectedPlan {
+                changed_files: 1,
+                units: vec![unit(None), unit(Some("a")), unit(Some("b"))],
+                changed_first: vec![(Some("b".to_owned()), None)],
+                ..AffectedPlan::default()
+            }),
+            ..VerifyPlan::default()
+        };
+        let config = VerifyConfig::default();
+        let shared = crate::progress::Shared::default();
+        let progress = Progress::new(Box::new(shared.clone()));
+        let options = RunOptions {
+            progress: Some(&progress),
+            ..RunOptions::quiet(&config)
+        };
+        run_verify_with(fixture.root(), "0.0.0", passing_check(), &plan, &options).unwrap();
+        let text = shared.text();
+        let started: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains(": started: "))
+            .map(|line| line.split(": started: ").next().unwrap())
+            .collect();
+        assert_eq!(
+            started,
+            ["[verify] test", "[verify] test in b", "[verify] test in a"]
+        );
+    }
+
+    #[test]
+    fn with_jobs_the_changed_unit_is_among_the_first_started_and_the_report_keeps_its_order() {
+        let (started, listed) = started_and_listed(&four_projects(&["d"]), 2);
+        assert_eq!(started.len(), 4, "{started:?}");
+        let place = started.iter().position(|folder| folder == "d").unwrap();
+        assert!(place < 2, "{started:?}");
+        assert_eq!(listed, ["a", "b", "c", "d"]);
+    }
+
     // ------------------------------------------------- --affected (M17)
 
     mod affected_runs {
@@ -7410,6 +7584,41 @@ mod tests {
 
         fn services(names: &[&str]) -> Vec<String> {
             names.iter().map(|name| format!("backend/{name}")).collect()
+        }
+
+        /// The units of the course project's plan that hold a changed file.
+        fn changed_first(files: &[&str]) -> Vec<String> {
+            let fixture = course_project().unwrap();
+            let facts = detect_facts_with(fixture.root(), None).unwrap();
+            let graph = build_graph(fixture.root(), &facts);
+            let mut plan =
+                plan_verify(fixture.root(), &facts, &VerifyConfig::default(), true, None);
+            let changed = Changed::Files(files.iter().map(|file| (*file).to_owned()).collect());
+            limit_to_affected(&mut plan, &facts, &graph, &affected(&graph, &changed), None);
+            plan.affected
+                .unwrap()
+                .changed_first
+                .into_iter()
+                .map(|(project, _)| project.unwrap_or_default())
+                .collect()
+        }
+
+        #[test]
+        fn the_units_that_hold_a_changed_file_are_known_to_the_plan() {
+            assert_eq!(changed_first(&["frontend/src/main.ts"]), ["frontend"]);
+            assert_eq!(
+                changed_first(&[
+                    "backend/market_service/unit_test/conftest.py",
+                    "backend/audit_service/unit_test/conftest.py",
+                ]),
+                services(&["audit_service", "market_service"])
+            );
+            // The shared folder is no unit: the services that import it run,
+            // and none of them holds the changed file.
+            assert_eq!(running(&["backend/shared/db.py"]).len(), 3);
+            assert!(changed_first(&["backend/shared/db.py"]).is_empty());
+            // Everything runs and no file is tied to a unit: the plan's order.
+            assert!(changed_first(&["docker-compose.yml"]).is_empty());
         }
 
         #[test]
