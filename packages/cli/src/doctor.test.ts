@@ -1,6 +1,7 @@
 // `fscale doctor`: is this machine ready for the repo? (SPEC §17, ADR 0026)
 // The tools doctor asks for their versions are stand-ins on a PATH the test
 // controls, so the results are the same on every machine.
+import { existsSync } from 'node:fs';
 import { chmod, copyFile, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
@@ -726,6 +727,26 @@ describe('doctor follows the verify plan (ADR 0085)', () => {
     return toolPath(dir);
   }
 
+  /**
+   * The stand-ins, and of the system only `sh` (doctor asks versions
+   * through it) and `git`: a tool this machine has installed is not found.
+   * GitHub's Ubuntu runners have Maven in /usr/bin.
+   */
+  async function onlyToolsFor(root: string, tools: Record<string, string>) {
+    if (WINDOWS) return toolsFor(root, tools);
+    const dir = path.join(root, '..', `${path.basename(root)}-tools`);
+    await writeVersionTools(dir, tools);
+    const system = path.join(root, '..', `${path.basename(root)}-system`);
+    await mkdir(system, { recursive: true });
+    for (const program of ['sh', 'git']) {
+      const found = ['/usr/bin', '/bin']
+        .map((folder) => path.join(folder, program))
+        .find((file) => existsSync(file));
+      if (found) await symlink(found, path.join(system, program));
+    }
+    return { PATH: [dir, system].join(path.delimiter) };
+  }
+
   it('finds a program a verify step runs that is not on the PATH, and names the step', async () => {
     const repo = await fixtures.create({
       files: {
@@ -768,7 +789,11 @@ describe('doctor follows the verify plan (ADR 0085)', () => {
           '<project><modelVersion>4.0.0</modelVersion><groupId>a</groupId><artifactId>b</artifactId><version>1</version></project>',
       },
     });
-    const missing = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    const missing = await runCli(
+      ['doctor', '--json'],
+      repo.root,
+      await onlyToolsFor(repo.root, {}),
+    );
     const checks = (await validate(missing.stdout)).checks;
     expect(checks.filter((c) => c.subject === 'mvn')).toEqual([
       {
