@@ -112,7 +112,7 @@ Test first (facts.test.ts, `fscale facts and a CMake build folder`): a folder wi
 
 ### Real-repo bug 3, fixed: doctor looks for swiftlint
 
-Test first (`a_swift_package_with_a_swiftlint_config_needs_swiftlint`, doctor.rs): a Swift package with a `.swiftlint.yml` on a machine with `swift` and no `swiftlint` got one tools line, `swift`. Fix: the Swift and Xcode ecosystems add SwiftLint to doctor's tools where the folder has a `.swiftlint.yml` or `.swiftlint.yaml`, the same condition that makes verify's lint step `swiftlint lint --strict`. Missing, it is a problem with the install step, or `verify.lint` as the way out.
+Test first (`a_swift_package_with_a_swiftlint_config_needs_swiftlint`, doctor.rs): a Swift package with a `.swiftlint.yml` on a machine with `swift` and no `swiftlint` got one tools line, `swift`. Fix: the Swift and Xcode ecosystems add SwiftLint to doctor's tools where the folder has a `.swiftlint.yml` or `.swiftlint.yaml`, the same condition that makes verify's lint step `swiftlint lint --strict`. Missing, it is a problem with the install step. From the fresh review of #76: the message first named `verify.lint` as a way out, but doctor reads no `verify` setting, so the line would have stayed; the clause was taken out. A repo that sets its own `verify.lint` and keeps a `.swiftlint.yml` still gets the problem line.
 
 Not done: only SwiftLint. Doctor still does not look for the other programs a guessed lint step runs (`clang-format`, `golangci-lint`, `ktlint` and others), and a lint command set in `verify.lint` is not looked at. Written without a local build; CI is the only run.
 

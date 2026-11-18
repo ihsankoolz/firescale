@@ -583,7 +583,7 @@ fn swiftlint_tool(f: &Folder) -> Option<Tool> {
     (f.has(".swiftlint.yml") || f.has(".swiftlint.yaml")).then_some(Tool {
         programs: &["swiftlint"],
         version_args: &["version"],
-        install: "install SwiftLint (https://github.com/realm/SwiftLint; on macOS: brew install swiftlint), or set verify.lint to the lint command the project uses",
+        install: "install SwiftLint (https://github.com/realm/SwiftLint; on macOS: brew install swiftlint)",
     })
 }
 

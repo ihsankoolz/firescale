@@ -2313,7 +2313,7 @@ mod tests {
                     "swiftlint".to_owned(),
                     Status::Problem,
                     Some(
-                        "install SwiftLint (https://github.com/realm/SwiftLint; on macOS: brew install swiftlint), or set verify.lint to the lint command the project uses"
+                        "install SwiftLint (https://github.com/realm/SwiftLint; on macOS: brew install swiftlint)"
                             .to_owned()
                     )
                 ),
