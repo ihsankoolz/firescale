@@ -148,8 +148,8 @@ impl BuiltinRule for GitignoreBasics {
                 "**/alembic.ini",
             ]
             .iter()
-            .chain(firescale_core::ecosystems::MARKER_GLOBS.iter())
             .map(|name| (*name).to_owned())
+            .chain(firescale_core::ecosystems::input_globs())
             .collect(),
             has_fix: true,
             after: Vec::new(),

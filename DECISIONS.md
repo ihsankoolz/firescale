@@ -54,6 +54,23 @@ Six pull requests, in order. This run builds and tests on the owner's Windows la
 - `node scripts/readme-output.mjs` printed the README's blocks again with a debug build of 0.5.3. **The doctor block that #74 changed by hand was right**: the printed output has six `warning` lines and six `PROBLEM` lines, the README shows two of each as before, and the last line is the same, `doctor: 6 problems, 6 warnings`. The README's note about the hand edit is gone, its date and version are today's, and the two commit ids in the blame and tamper blocks are this run's.
 - **The three older doctor tests pin their exit code again.** It is 1, not 0: beside the env warning each fixture has one real problem, `<project> has no virtual environment`. Each test now expects `doctor: 1 problem, 1 warning` and exit 1. The third of them is skipped on Windows (it makes a symbolic link); its value is the same fixture shape, and it ran and passed in WSL and on Linux CI.
 
+**Pull request 2: #80 merged, the project-type table's first step (ADR 0069)**
+
+By your word: rebased on main, built, its tests run, and each new test shown to fail without the fix. One conflict in the rebase, in this file only; both entries were kept. ADR 0069 is now `accepted`. **The next steps of the table are not started.**
+
+| Fix                                                           | Test                                                                                                                                                          | Failed without the fix                                                                            | Failure text                                              |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `feat(ecosystems)`: each entry lists the files it reads       | `facts-inputs-cache.test.ts` at the tests-first commit: `runs them again when app/.swiftlint.yml appears`, `… app/.swiftlint.yaml …`, `… app/.swift-format …` | yes, 3 of 26                                                                                      | `expected [] to deeply equal [ 'agent-ready/agents-md' ]` |
+| the same fix                                                  | `the_cache_inputs_are_built_from_the_table` (`ecosystems/tests.rs`), which came in the fix's own commit and calls what it adds                                | yes, by a mutation on the branch tip (each ecosystem's list cut to its first file, then restored) | `panicked at crates\core\src\ecosystems\tests.rs:68:9`    |
+| `fix(ecosystems)`: `Podfile.lock` and any Kotlin build script | the two globs that commit added to the same test, on the commit before it                                                                                     | yes                                                                                               | `panicked at crates\core\src\ecosystems\tests.rs:84:9`    |
+
+At the branch tip the 29 `ecosystems::` tests and the 26 tests of `facts-inputs-cache.test.ts` pass (on Windows), and the whole suite passes on Linux CI.
+
+**From the fresh review of #80, not done:**
+
+- **An agent fix for `agents-md`, `agent-permissions` or `gitignore-basics` may now change more files**, because the agent runner takes a rule's `inputs` as the files the agent may change, and #80 makes that list longer (linter configs, lock files, Gradle Kotlin scripts, the Maven and Gradle wrappers). ADR 0069 says so under Consequences. It widens a gap that was there (`pom.xml` and the like were already allowed). **Needs your decision:** keep the two lists apart, so that an agent may change only the files a rule writes.
+- Only the `agents-md` rule has a test that a new input makes it run again. Taking the table's inputs out of `agent-permissions` or `gitignore-basics` would fail no test.
+
 ## 0.5.3 — the overnight run of 2026-11-18
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.
@@ -201,6 +218,10 @@ Compared with 0.5.2. Nothing here was run on the course project or on any machin
 4. **A CMake build folder is not a project**, whatever its name, when it holds a `CMakeCache.txt` and no `CMakeLists.txt`.
 
 Known and not changed in 0.5.3: a guessed linter that fails still keeps the tests from running (real-repo bug 1, your decision), and `mvn -B test` is still the Maven test command (bug 4).
+
+### Stage 4, the project-type table: step 1 only, open and not merged (ADR 0069; merged later, in the 0.5.4 run)
+
+Part C of the audit is too large to write with no local build, so only its first step is built: each entry of the ecosystems table lists the files it reads (`inputs`), and `ecosystems::input_globs()` takes the place of the hand-kept `MARKER_GLOBS` as cache inputs of `agent-ready/agents-md`, `agent-ready/agent-permissions` and `core/gitignore-basics`. Tests first: three cases in facts-inputs-cache.test.ts (a Swift linter's config appears, and the cached pass must not stand). **The pull request is open and is not merged: it waits for you.** Not done of part C: Node, Python and Rust as entries; the packs' lists and the cmake pack's lists from the table; the step cache's probes.
 
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
