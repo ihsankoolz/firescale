@@ -5,7 +5,13 @@
 // list of categories (ADR 0046). Every case is a cheat, so a case with no
 // finding is a miss.
 //
-// Usage: node bench/tamper-misses.mjs [--bin target/release/fscale] [--json]
+// A second held-out corpus, bench/tamper-cheats-2.json, was written the
+// same way from ImpossibleBench's and METR's categories (ADR 0082), after
+// the first one's titles had been read by the author of the research that
+// new detectors come from. Never tune a detector on either file.
+//
+// Usage: node bench/tamper-misses.mjs [--bin target/release/fscale]
+//          [--corpus bench/tamper-cheats-2.json] [--json]
 //
 // Each case becomes a git repo: its `base` files committed on main, its
 // `head` files in the working tree of a branch. `fscale tamper --json` runs
@@ -23,7 +29,10 @@ const binIndex = args.indexOf('--bin');
 const bin = path.resolve(
   binIndex >= 0 ? args[binIndex + 1] : path.join(here, '..', 'target', 'release', 'fscale'),
 );
-const cheats = JSON.parse(readFileSync(path.join(here, 'tamper-cheats.json'), 'utf8'));
+const corpusIndex = args.indexOf('--corpus');
+const corpus =
+  corpusIndex >= 0 ? path.resolve(args[corpusIndex + 1]) : path.join(here, 'tamper-cheats.json');
+const cheats = JSON.parse(readFileSync(corpus, 'utf8'));
 
 const git = (cwd, ...argv) =>
   execFileSync(
