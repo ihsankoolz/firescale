@@ -178,4 +178,42 @@ mod tests {
         )
         .is_empty());
     }
+
+    #[test]
+    fn a_hook_with_its_signature_on_several_lines_or_in_a_class_is_read() {
+        let black = "import pytest\n\n\ndef pytest_sessionfinish(\n    session: pytest.Session, exitstatus: int\n) -> None:\n    session.exitstatus = 0\n";
+        assert_eq!(
+            whats("conftest.py", black),
+            ["runner conftest.py: pytest_sessionfinish sets exitstatus @7: pytest_sessionfinish: session.exitstatus = 0"]
+        );
+        let plugin = "import sys\n\n\nclass Plugin:\n    def pytest_sessionfinish(self, session):\n        session.exitstatus = 0\n\n\nsys.exit(0)\n";
+        assert_eq!(
+            whats("conftest.py", plugin),
+            [
+                "runner conftest.py: pytest_sessionfinish sets exitstatus @6: pytest_sessionfinish: session.exitstatus = 0",
+                "runner conftest.py: exits at the top level @9: sys.exit(0)",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_hook_that_only_passes_or_prints_the_status_does_not_count() {
+        let text = "def pytest_sessionfinish(session, exitstatus):\n    notify(session, exitstatus=exitstatus)\n    print(f\"exitstatus={exitstatus}\")\n    log('exitstatus = %s', exitstatus)\n";
+        assert!(whats("conftest.py", text).is_empty());
+    }
+
+    #[test]
+    fn a_script_renamed_with_what_it_swallowed_is_the_same_place() {
+        let key = |text: &str| -> Vec<String> {
+            measures("package.json", text)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.key)
+                .collect()
+        };
+        assert_eq!(
+            key(r#"{"scripts": {"test": "vitest run || true"}}"#),
+            key(r#"{"scripts": {"test:unit": "vitest run || true"}}"#)
+        );
+    }
 }
