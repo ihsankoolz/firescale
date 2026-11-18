@@ -123,8 +123,9 @@ Build idea 6, item 2. Adds edges only.
 
 Build idea 5, first step only.
 
-- With `--affected`, a unit that holds a changed file starts before the others. Print order, the report and `--json` stay as they were. Every unit still runs.
-- No key, hit, pass or affected set changes.
+- With `--affected`, a project that holds a changed file starts before the other projects. The repo root's own steps stay in front. Print order, the report and `--json` stay as they were. Every unit still runs.
+- No pass and no affected set changes. Where one project's step writes a file another project's key holds, the order can change a hit on that run, as `--jobs` already could.
+- **The fresh review** found that my first form let a project start before the root's own steps, whose key holds the whole repo. Fixed, test first.
 - **Decided on your behalf:** a unit reached only through an edge is not first; `--dry-run` does not show the start order.
 - **Failing test first:** three tests in `crates/core/src/verify.rs`, three of three failed in WSL before the change.
 

@@ -515,15 +515,6 @@ pub fn limit_to_affected(
                 "no change reaches the projects the repo root's commands run".to_owned(),
             )
         };
-        if runs
-            && covered.iter().any(|project| {
-                affected
-                    .direct
-                    .contains(&project_id(&project.kind, &project.root))
-            })
-        {
-            changed_first.push((None, None));
-        }
         units.push(AffectedUnit {
             project: None,
             kind: None,
@@ -3293,8 +3284,9 @@ pub fn run_verify_with(
         )
     }))
     .collect();
-    // The order the units start in: those that hold a changed file first,
-    // then the rest, each group in the plan's order (ADR 0078). Every unit
+    // The order the units start in: the repo root's own steps, then the
+    // projects that hold a changed file, then the rest, each group in the
+    // plan's order (ADR 0078). Every unit
     // still runs, and the report lists them in the plan's order.
     let first = |unit: &Unit<'_>| {
         plan.affected.as_ref().is_some_and(|affected| {
@@ -3310,7 +3302,13 @@ pub fn run_verify_with(
         })
     };
     let mut order: Vec<usize> = (0..units.len()).collect();
-    order.sort_by_key(|index| !first(&units[*index].1));
+    // The repo root's own steps keep their place in front: their key is
+    // made when they start and holds every file of the repo, so a project
+    // that ran before them and wrote a file would change it.
+    order.sort_by_key(|index| {
+        let unit = &units[*index].1;
+        (unit.project.is_some(), !first(unit))
+    });
     let jobs = options.jobs.clamp(1, units.len().max(1));
     let slots: Vec<Mutex<Option<Result<Vec<StepReport>>>>> =
         units.iter().map(|_| Mutex::new(None)).collect();
