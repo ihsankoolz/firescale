@@ -75,6 +75,7 @@ Build idea 3, first step only.
 - **Cut back to the first step:** my first version also named the command, each tool, each variable and the env files. The brief names the graph nodes only, so those are under "Later" in the ADR. When no file differs, the line says that something else in the key does.
 - **Decided on your behalf:** the wording of the lines; one manifest per step (the last pass), not one per kept pass; the line for a slow step is not in `--json`.
 - **Failing test first:** `packages/cli/src/step-cache-why.test.ts`, 6 of 7 failed in WSL before the change.
+- **The fresh review** found no change to any key or hit. It found that a manifest a repo commits could put any text into the log and the summary; a manifest is now checked before it is read. Also fixed: the summary line showed for every slow step of a fresh checkout, the log said "ran again" for a step the budget left out, and the manifest was made on every key. The rest is in ADR 0075.
 
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
