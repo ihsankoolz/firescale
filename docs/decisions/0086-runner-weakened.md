@@ -10,7 +10,8 @@ A test or lint can be made to pass without touching a test: the command that run
 
 - **A new kind, `runner-weakened`**, from a new detector (`tamper/runner.rs`) in the config-and-CI family: measures compared over the whole change, so a place already there on the base is not new.
 - **`package.json`, in any folder**: a script whose name is a check (CI's detector's list: `test`, `lint`, `typecheck`, `check`, `verify`, `e2e`, …, and `name:suffix` forms) in which a command that checks, as CI's detector reads it (`ci::check_of`: `vitest`, `jest`, `eslint`, `pytest`, `npm run test:unit`, `cargo test`, …), is followed by what CI's detector calls swallowing (`|| true`, `|| :`, `|| exit 0`, `|| exit`, `|| echo …`) or by `; exit 0`. Package managers run scripts with `sh -c`, without `-e`, so `; exit 0` decides the script's result. CI's matcher is reused as it is: `commands`, `swallowed`, `is_check_script` and `check_of` (made `pub(crate)`).
-- **`conftest.py`, in any folder**: `sys.exit(…)`, `os._exit(…)` or `raise SystemExit` at the top level, and a `def pytest_sessionfinish(` at the top level whose body assigns `exitstatus` (`session.exitstatus = 0`, or `setattr(…, "exitstatus", …)`), one per hook. Read line by line, not parsed.
+- **`conftest.py`, in any folder**: `sys.exit(…)`, `os._exit(…)` or `raise SystemExit` at the top level, and a `def pytest_sessionfinish(`, at the top level or in a plugin class, with its signature on one line or several, whose body has a statement that assigns `exitstatus` (`session.exitstatus = 0`, `exitstatus |= …`, `setattr(…, "exitstatus", …)`; not a keyword argument or text), one per hook. Read line by line, not parsed.
+- **A script's place is what it swallows, not its name**: a script renamed with its `|| true` is the same place.
 - **Report only, even when the base enforces the guard.** `Kind::reports_only`; `TamperReport::counts_against` is false for it, so it never makes `blocks()` true. The finding is listed with `[report only: it never fails verify; a reviewer judges it]`, and when every finding is report-only, the summary's heading says so instead of "fails verify". It can be allowed with `verify.tamper.allow` like any kind.
 
 ## Consequences
@@ -25,10 +26,21 @@ A test or lint can be made to pass without touching a test: the command that run
 - A `conftest.py` that exits inside `if __name__ == "__main__":`, or a hook that rewrites the result in a plugin file other than `conftest.py`, is not read.
 - `pnpm test || true` in a script named `build` is not read: only check scripts are.
 
+## From the fresh review
+
+Fixed, each with a test written first: a hook whose signature Black spreads over lines, or a hook in a plugin class, was not read; `notify(exitstatus=exitstatus)` and `f"exitstatus={…}"` counted as setting it; renaming a script that already swallowed counted as new; `fscale tamper`'s headline said a report-only finding needs an approval; under `evaluated`, the heading said "enforced" would make a report-only finding fail. A test that a change with another finding still blocks under `enforced`, and keeps "fails verify" (it passed before the fix: it guards). The first unit test's expected key lost the script's name, on purpose.
+
+## Not done
+
+- A bare `|| exit` is counted, as CI's detector counts it, although `exit` with no number keeps the failing status. Narrowing CI's shared matcher would make a `ci-weakened` finding go away, so it is left for the owner.
+- The `conftest.py` reader looks only at column 0 for exits: a docstring line at column 0 holding `sys.exit(1)` is a false finding; an exit under a top-level `if`, and `pytest.exit(…, returncode=0)`, are missed.
+- Only `; exit 0` after a check is read; `; true` or `; echo done` decide a script's result too (Later).
+
 ## Later
 
 - Other runners' entry points: `jest.config` `testFailureExitCode`, a Vitest custom reporter that swallows failures, `pytest.ini` `addopts` with `--exitfirst`-style changes, Cargo `[[test]] harness = false` with a stub main (verification idea 7, the next steps).
 - `pytest_runtest_makereport` hooks that rewrite a test's outcome.
+- Any trailing command after `;` in a check script, `pytest.exit(…)`, and exits under a top-level `if` in `conftest.py`.
 - A blocking variant once the false-finding rate on real history is measured.
 
 ## Tests
