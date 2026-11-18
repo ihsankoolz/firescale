@@ -29,9 +29,15 @@ Nothing blocks. Decided on your behalf: tamper stays refused for this event; the
 
 ## Not done
 
+- **The base rests on the event file.** In a `pull_request` run that checks out GitHub's merge commit, the base is that commit's first parent, so rewriting the event file cannot move it. Here the base is `merge_group.base_sha` from the file, and the only check is that it is part of the head's history. A step that ran the change's own code before verify (a postinstall script) could rewrite the file and name an older commit inside the change, and verify would compare with less. The same trust is placed in the file for a `pull_request` run that checks out the head, and for `pull_request_target`. A tightening: require the base to be on the head's first-parent chain. Not built: it narrows but does not close this, and it waits for a run in a real queue.
+- `fscale --help` still says `--pr-base` reads the pull request event. Its text is pinned by the snapshot in `packages/cli/src/__snapshots__/cli.test.ts.snap`.
 - No run in a real merge queue. The test uses a fixture event file with the documented fields.
 - The starter workflow `fscale adopt` writes has no `merge_group` trigger.
 - `docs/ci.md` does not show a merge queue job.
+
+## From the fresh review
+
+It found nothing that changes a `pull_request`, `pull_request_target`, push or local run, no path that reads a ref, and no path that goes on without a base. After `--pr-base` is resolved, verify calls nothing that needs the pull request. It found a comment that named only the pull request event; fixed. It found the same in `fscale --help`; that text is pinned by a snapshot test, which this pull request does not change, so it is under "Not done". It found one hardening, logged under "Not done".
 
 ## Later
 

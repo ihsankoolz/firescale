@@ -1601,7 +1601,8 @@ fn verify_report(
 
 /// `fscale verify`: the one command that says whether the work is done.
 /// With `--pr-base`, `args` with `--base` set to the base branch's commit
-/// as GitHub's event gives it (ADR 0045); the working tree must be the
+/// as GitHub's event gives it (ADR 0045), or the commit a merge queue's
+/// group is built on (ADR 0080); the working tree must be the
 /// commit the run is for.
 fn with_pr_base(root: &Path, args: &Args) -> Result<Args> {
     if !args.pr_base {

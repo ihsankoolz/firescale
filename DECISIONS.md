@@ -161,6 +161,7 @@ Build idea 9, first step only.
 - In a GitHub Actions run for a `merge_group` event, `verify --pr-base` takes the base from the event's payload: `merge_group.base_sha`, the commit the group is built on. Never from a ref. The checkout and `GITHUB_SHA` must be `merge_group.head_sha`, and the base must be part of its history.
 - `tamper --pr-base` still refuses a `merge_group` event: the guard needs the pull request and its author, which that event does not carry.
 - The starter workflow has no `merge_group` trigger yet; a user adds it by hand.
+- **The fresh review** found no change to the other events and no path that reads a ref. Fixed: a comment. Logged: `fscale --help` still names only the pull request event (its text is pinned by a snapshot test); the base rests on the event file, which a step that ran the change's code before verify could rewrite (ADR 0080, "Not done").
 - **Failing test first:** `packages/cli/src/pr-base-merge-group.test.ts`, with a fixture event file: 4 of 5 failed in WSL before the change (the fifth says tamper still refuses).
 
 ## 0.5.4 — the run of 2026-11-18, on the laptop
