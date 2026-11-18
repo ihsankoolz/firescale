@@ -2144,6 +2144,41 @@ mod tests {
         assert!(give_up.stderr.contains("allowed to stop"));
     }
 
+    #[test]
+    fn the_way_out_is_the_second_line_and_is_left_out_of_a_setup_block() {
+        let block = Decision::Block { blocks: 1 };
+        for agent in AGENTS {
+            let code = reply(agent, &block, "verify: FAILED at test\n", 3);
+            let message = match agent {
+                Agent::Cursor => serde_json::from_str::<Value>(&code.stdout).unwrap()
+                    ["followup_message"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                _ => code.stderr,
+            };
+            assert_eq!(
+                message.lines().take(3).collect::<Vec<_>>(),
+                [
+                    "fscale verify failed, so the work is not done yet (attempt 1 of 3).",
+                    WAY_OUT,
+                    "",
+                ],
+                "{agent:?}"
+            );
+        }
+        // A setup problem is not a wrong test: the agent is told to run the
+        // setup command, and no line before it tells it to stop (review of
+        // ADR 0084).
+        let setup = block_summary(&report_with("ModuleNotFoundError: No module named 'jwt'"));
+        assert!(setup.starts_with("SETUP NEEDED:"), "{setup}");
+        let claude = reply(Agent::Claude, &block, &setup, 3);
+        assert!(!claude.stderr.contains(WAY_OUT), "{}", claude.stderr);
+        assert!(claude.stderr.starts_with(
+            "fscale verify failed, so the work is not done yet (attempt 1 of 3).\n\nSETUP NEEDED:"
+        ));
+    }
+
     fn report_with(output: &str) -> crate::verify::VerifyReport {
         use crate::verify::{run_verify, CheckStep, Planned, ProjectPlan, VerifyPlan};
         let fixture = Fixture::new(&[("svc/main.py", "")], Track::NoGit).unwrap();
