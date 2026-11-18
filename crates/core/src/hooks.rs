@@ -20,6 +20,12 @@ use serde_json::{json, Map, Value};
 
 use crate::error::{Error, Result};
 
+/// What an agent may do instead of editing a test or check it believes is
+/// wrong (ADR 0084). It is in the stop hook's block message and in the
+/// AGENTS.md block that `sync` writes.
+pub const WAY_OUT: &str =
+    "If you believe a test or check is wrong, do not edit it: say which and why, and stop.";
+
 /// How many times in a row a session is sent back before it is allowed to stop.
 pub const DEFAULT_MAX_BLOCKS: u32 = 3;
 /// Overrides `DEFAULT_MAX_BLOCKS`.
@@ -1418,7 +1424,7 @@ pub fn reply(agent: Agent, decision: &Decision, summary: &str, max_blocks: u32) 
         },
         Decision::Block { blocks } => {
             let message = format!(
-                "fscale verify failed, so the work is not done yet (attempt {blocks} of {max_blocks}).\n\n{summary}"
+                "fscale verify failed, so the work is not done yet (attempt {blocks} of {max_blocks}).\n{WAY_OUT}\n\n{summary}"
             );
             match agent {
                 Agent::Claude | Agent::Codex => {
