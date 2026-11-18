@@ -110,6 +110,12 @@ The owner said "continue". The cloud was still closed (a cloud routine was refus
 
 Test first (facts.test.ts, `fscale facts and a CMake build folder`): a folder with a generated `Makefile` and a `CMakeCache.txt`, named `cmake-build-debug`, `build-own` or `ci/_builds`, was listed as a Make project. Fix: `searchable_dirs` (facts.rs) leaves out any folder below the root that holds a `CMakeCache.txt`. A folder with a `Makefile` and no `CMakeCache.txt` is still a project (second test). Not covered: the walk of source files in graph.rs still enters such a folder; a build in the repo root itself (an in-source build) is not handled. From the fresh review of #75: a project built in its own folder (the cache beside its own `CMakeLists.txt`) was hidden by the first form of the fix; a test and a guard were added. The check reads the disk, not git, so a machine with a build folder and one without can list different projects; that was so before the fix too, in the other direction. `docs/facts.md` does not name the new rule yet. Written without a local build; CI is the only run.
 
+### Real-repo bug 3, fixed: doctor looks for swiftlint
+
+Test first (`a_swift_package_with_a_swiftlint_config_needs_swiftlint`, doctor.rs): a Swift package with a `.swiftlint.yml` on a machine with `swift` and no `swiftlint` got one tools line, `swift`. Fix: the Swift and Xcode ecosystems add SwiftLint to doctor's tools where the folder has a `.swiftlint.yml` or `.swiftlint.yaml`, the same condition that makes verify's lint step `swiftlint lint --strict`. Missing, it is a problem with the install step, or `verify.lint` as the way out.
+
+Not done: only SwiftLint. Doctor still does not look for the other programs a guessed lint step runs (`clang-format`, `golangci-lint`, `ktlint` and others), and a lint command set in `verify.lint` is not looked at. Written without a local build; CI is the only run.
+
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
 **Pull request 7: `*.log` in core/gitignore-basics**
