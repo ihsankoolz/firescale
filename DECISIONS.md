@@ -106,6 +106,10 @@ The owner said "continue". The cloud was still closed (a cloud routine was refus
 - **The fresh review of #74** (one subagent, reading only) found one wrong table cell in ADR 0058, fixed. Not done, from the same review: (a) the three older tests whose exit code now follows the printed `PROBLEM` lines no longer pin a known exit code, because nothing was run to learn it; pin them at the next local run. (b) With both config files present, doctor uses the default where other commands refuse both; a `firescale.config.json` that is not an object is also read as the default.
 - **Limit, for the owner:** a repo whose config is `firescale.config.ts` cannot set `doctor.missingEnv`: doctor runs no code from the repo. Doctor says so when a name is missing. Loading the config through Node from doctor would lift it (ADR 0068, Consequences).
 
+### Real-repo bug 5, fixed: a CMake build folder is not a project
+
+Test first (facts.test.ts, `fscale facts and a CMake build folder`): a folder with a generated `Makefile` and a `CMakeCache.txt`, named `cmake-build-debug`, `build-own` or `ci/_builds`, was listed as a Make project. Fix: `searchable_dirs` (facts.rs) leaves out any folder below the root that holds a `CMakeCache.txt`. A folder with a `Makefile` and no `CMakeCache.txt` is still a project (second test). Not covered: the walk of source files in graph.rs still enters such a folder; a build in the repo root itself (an in-source build) is not handled. From the fresh review of #75: a project built in its own folder (the cache beside its own `CMakeLists.txt`) was hidden by the first form of the fix; a test and a guard were added. The check reads the disk, not git, so a machine with a build folder and one without can list different projects; that was so before the fix too, in the other direction. `docs/facts.md` does not name the new rule yet. Written without a local build; CI is the only run.
+
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
 **Pull request 7: `*.log` in core/gitignore-basics**

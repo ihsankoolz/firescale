@@ -159,3 +159,52 @@ describe('fscale facts', () => {
     });
   });
 });
+
+// Found on a real repo (docs/reviews/real-repos-0.5.3.md, bug 5): a CMake
+// build folder holds a generated Makefile with a `test` target.
+describe('fscale facts and a CMake build folder', () => {
+  const SOURCES = {
+    'CMakeLists.txt': 'project(x LANGUAGES CXX)\nadd_executable(x main.cpp)\n',
+    'main.cpp': 'int main() {}\n',
+  };
+  const GENERATED = '# CMAKE generated file: DO NOT EDIT!\ntest:\n\tctest\n';
+
+  async function projects(files: Record<string, string>): Promise<string[]> {
+    const repo = await fixtures.create({ files });
+    const result = await runCli(['facts', '--json'], repo.root);
+    const facts = JSON.parse(result.stdout) as { projects: { kind: string; root: string }[] };
+    return facts.projects.map((project) => `${project.kind} ${project.root}`).sort();
+  }
+
+  it('does not read a build folder as a project, whatever its name', async () => {
+    for (const folder of ['cmake-build-debug', 'build-own', 'ci/_builds']) {
+      expect(
+        await projects({
+          ...SOURCES,
+          [`${folder}/Makefile`]: GENERATED,
+          [`${folder}/CMakeCache.txt`]: '# This is the CMakeCache file.\n',
+        }),
+        folder,
+      ).toEqual(['cmake .']);
+    }
+  });
+
+  // An in-source build (cmake . inside the project) leaves the cache beside
+  // the project's own CMakeLists.txt: the folder is still a project.
+  it('still reads a project that was built in its own folder', async () => {
+    expect(
+      await projects({
+        'native/CMakeLists.txt': SOURCES['CMakeLists.txt'],
+        'native/main.cpp': SOURCES['main.cpp'],
+        'native/CMakeCache.txt': '# This is the CMakeCache file.\n',
+      }),
+    ).toEqual(['cmake native']);
+  });
+
+  it('still reads a folder with a Makefile and no CMakeCache.txt as a project', async () => {
+    expect(await projects({ ...SOURCES, 'tools/Makefile': 'test:\n\ttrue\n' })).toEqual([
+      'cmake .',
+      'make tools',
+    ]);
+  });
+});
