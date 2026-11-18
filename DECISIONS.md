@@ -23,6 +23,14 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **From the fresh review, fixed:** writing 600 when nothing was known made the advice to install again useless; a `timeout` that is not a whole number counted as none; no ceiling; `--timeout` silently accepted by other commands; the by-hand message's reason. **Not done:** none.
 - **Decided on your behalf:** the formula (twice, plus the base budget, at least 600, at most 2147483 s); doctor sums every planned step, the worst case, since it cannot know the next change; `sync` writes no `timeout`.
 
+**Pull request 3: a way out for agents (verification idea 5, first step, wording only, ADR 0084)**
+
+- **One line**, in the stop hook's block message (its second line, for Claude Code, Codex and Cursor) and in the AGENTS.md block (after "Never skip, delete or weaken ..."): `If you believe a test or check is wrong, do not edit it: say which and why, and stop.`
+- **`fscale sync` puts it into an existing repo's block**; until then `sync --check` exits 1 and `agent-ready/agents-md` reports the block out of sync. This repo's block has it.
+- **Failing tests first:** 2, seen failing on `main` in WSL (the message for each agent; sync restoring the line). Two snapshots gain the line on purpose.
+- **From the fresh review, fixed:** the line came before the `SETUP NEEDED:` note and could tell an agent to stop instead of running the setup command; it is now left out of a setup block. Also: a fast Rust test of its place, the agents-md skill's description, a wrong ADR cited. **Not done:** an agent that takes the way out is blocked again with the same message, up to three times; letting a stated stop through would make a stop easier to get, so it waits for your decision (ADR 0084, Later).
+- **Not built (Later in ADR 0084):** a `PreToolUse` guard on the files the guard depends on; recording whether agents take the way out.
+
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
 Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.

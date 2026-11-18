@@ -165,6 +165,7 @@ The hook starts on this machine: \`npx --yes firescale@0.5.4 --version --json\` 
 
 exports[`fscale hooks run (the stop hook) > blocks Claude Code with exit code 2 and the verify summary on stderr 1`] = `
 "fscale verify failed, so the work is not done yet (attempt 1 of 3).
+If you believe a test or check is wrong, do not edit it: say which and why, and stop.
 
 verify: FAILED at test
   check      passed   8 rules, no enforced violations

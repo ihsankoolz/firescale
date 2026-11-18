@@ -97,6 +97,7 @@ Run each command in the folder it names.
 Before you say a task is done, run `pnpm --silent fscale verify` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.
 
 - Never skip, delete or weaken a test, a lint rule or a check to make it pass.
+- If you believe a test or check is wrong, do not edit it: say which and why, and stop.
 - `SETUP NEEDED` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. `pnpm --silent fscale doctor` lists what is missing.
 - To learn how to fix a rule's finding: `pnpm --silent fscale explain <rule>`.
 

@@ -1494,3 +1494,23 @@ describe("the stop hook's time limit (ADR 0083)", () => {
     expect(result.stdout).not.toContain('the steps the stop hook would run');
   });
 });
+
+describe('a way out for an agent that believes a test is wrong (ADR 0084)', () => {
+  const WAY_OUT =
+    'If you believe a test or check is wrong, do not edit it: say which and why, and stop.';
+
+  it('is in the block message for each agent', async () => {
+    const repo = await fixtures.create({ files: FAILING });
+    for (const agent of ['claude', 'codex'] as const) {
+      const result = await stop(repo.root, agent, { session_id: `w-${agent}` });
+      expect(result.code, agent).toBe(EXIT_BLOCK);
+      expect(result.stderr.split('\n').slice(0, 2), agent).toEqual([
+        'fscale verify failed, so the work is not done yet (attempt 1 of 3).',
+        WAY_OUT,
+      ]);
+    }
+    const cursor = await stop(repo.root, 'cursor', { conversation_id: 'w-cursor', loop_count: 0 });
+    const reply = JSON.parse(cursor.stdout) as { followup_message: string };
+    expect(reply.followup_message).toContain(`(attempt 1 of 3).\n${WAY_OUT}\n\nverify: FAILED`);
+  });
+});

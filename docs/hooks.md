@@ -110,6 +110,8 @@ firescale does not wrap the command to turn a failed start into a block: a stop 
 | verify fails, the cap is reached | exit 0, a one-line note on stderr             | exit 0, `{}`                          |
 | verify cannot run at all         | exit 1, the reason on stderr (does not block) | the same                              |
 
+The message that blocks starts with two lines: `fscale verify failed, so the work is not done yet (attempt 1 of 3).`, then `If you believe a test or check is wrong, do not edit it: say which and why, and stop.` The second line gives an agent a way out that is not editing the test (ADR 0084); the AGENTS.md block that `fscale sync` writes says the same. After it comes the verify summary. When a step needs setup, the second line is left out: a missing dependency is not a wrong test, and the `SETUP NEEDED:` note that follows says what to run (see [verify.md](verify.md)).
+
 ## The loop guard
 
 An agent that cannot fix a failure must not be held forever. The hook counts how many times in a row it has sent one session back, in `.firescale/hooks/<agent>-<session>.json` (the folder ignores itself in git).

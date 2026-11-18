@@ -129,7 +129,7 @@ A bad config, an unknown pack and a bad `after` declaration are all found before
 
 With `agent-ready` on (the default for `init`), the loop also writes what coding agents need (ADR 0027):
 
-- `AGENTS.md` with a **managed block**: the repo's commands from `fscale facts` and the definition of done. The block runs from `<!-- BEGIN firescale ...` to `<!-- END firescale -->`. Write your own notes outside it; `fscale sync` replaces only what is inside, and `fscale sync --check` fails after a hand edit inside it.
+- `AGENTS.md` with a **managed block**: the repo's commands from `fscale facts` and the definition of done, with what to do when a test or check seems wrong: say which and why, and stop, never edit it (ADR 0084). The block runs from `<!-- BEGIN firescale ...` to `<!-- END firescale -->`. Write your own notes outside it; `fscale sync` replaces only what is inside, and `fscale sync --check` fails after a hand edit inside it.
 - In an existing `CLAUDE.md` at the root, a three-line block at the end with `@AGENTS.md`, because Claude Code reads only `CLAUDE.md` when there is one. Nothing else in `CLAUDE.md` changes, and nested `CLAUDE.md` files are not touched.
 - The stop hooks for Claude Code, Codex and Cursor (see [hooks.md](hooks.md)).
 - Safe permissions: Claude Code and Cursor may not read env files (`.env`, `.env.local`, ...), keys or a `secrets/` folder, and Claude Code may run the repo's checks without asking; Codex gets a permission profile in a new `.codex/config.toml`. A Codex config you wrote is never edited.

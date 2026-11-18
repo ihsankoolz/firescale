@@ -3,6 +3,7 @@
 //! the files each agent reads.
 
 use firescale_core::facts::{Project, RepoFacts, UNNAMED_ROOT};
+use firescale_core::hooks::WAY_OUT;
 
 use crate::group_project::contributing::{places, portable};
 
@@ -307,7 +308,7 @@ pub(crate) fn agents_block(facts: &RepoFacts, bin: &str) -> String {
         out.push_str("\nFor a Python project, make a virtual environment in its folder first (`python -m venv .venv`) and activate it.\n");
     }
     out.push_str(&format!(
-        "\n## Definition of done\n\nBefore you say a task is done, run `{bin} verify` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.\n\n- Never skip, delete or weaken a test, a lint rule or a check to make it pass.\n- `SETUP NEEDED` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. `{bin} doctor` lists what is missing.\n- To learn how to fix a rule's finding: `{bin} explain <rule>`.\n\n{END}\n"
+        "\n## Definition of done\n\nBefore you say a task is done, run `{bin} verify` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.\n\n- Never skip, delete or weaken a test, a lint rule or a check to make it pass.\n- {WAY_OUT}\n- `SETUP NEEDED` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. `{bin} doctor` lists what is missing.\n- To learn how to fix a rule's finding: `{bin} explain <rule>`.\n\n{END}\n"
     ));
     out
 }
@@ -357,6 +358,19 @@ mod tests {
         assert!(!block_is_current(&edited, BLOCK));
         assert_eq!(with_block(&edited, BLOCK).unwrap(), first);
         assert_eq!(with_block(&first, BLOCK).unwrap(), first);
+    }
+
+    #[test]
+    fn the_block_gives_the_way_out_after_the_rule_on_tests() {
+        let block = agents_block(&RepoFacts::default(), "fscale");
+        assert!(
+            block.contains(&format!(
+                "- Never skip, delete or weaken a test, a lint rule or a check to make it pass.
+- {WAY_OUT}
+"
+            )),
+            "{block}"
+        );
     }
 
     #[test]

@@ -20,6 +20,15 @@ use serde_json::{json, Map, Value};
 
 use crate::error::{Error, Result};
 
+/// What an agent may do instead of editing a test or check it believes is
+/// wrong (ADR 0084). It is in the stop hook's block message and in the
+/// AGENTS.md block that `sync` writes.
+pub const WAY_OUT: &str =
+    "If you believe a test or check is wrong, do not edit it: say which and why, and stop.";
+
+/// How a block summary for a setup problem starts (ADR 0022).
+pub const SETUP_NOTE: &str = "SETUP NEEDED:";
+
 /// How many times in a row a session is sent back before it is allowed to stop.
 pub const DEFAULT_MAX_BLOCKS: u32 = 3;
 /// Overrides `DEFAULT_MAX_BLOCKS`.
@@ -1394,7 +1403,7 @@ pub fn block_summary(report: &crate::verify::VerifyReport) -> String {
         )
     };
     format!(
-        "SETUP NEEDED: {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}{also}\n\n{summary}",
+        "{SETUP_NOTE} {} could not run because the environment is not ready (a dependency or program is missing). That is not a problem in the code. Do not edit code, tests or config to get past it. {next}{also}\n\n{summary}",
         if setup.len() == 1 { "1 step" } else { "some steps" }
     )
 }
@@ -1417,8 +1426,16 @@ pub fn reply(agent: Agent, decision: &Decision, summary: &str, max_blocks: u32) 
             exit_code: 0,
         },
         Decision::Block { blocks } => {
+            // A setup problem is not a wrong test: its note says what to
+            // run, and no line before it may tell the agent to stop
+            // (review of ADR 0084).
+            let way_out = if summary.starts_with(SETUP_NOTE) {
+                String::new()
+            } else {
+                format!("\n{WAY_OUT}")
+            };
             let message = format!(
-                "fscale verify failed, so the work is not done yet (attempt {blocks} of {max_blocks}).\n\n{summary}"
+                "fscale verify failed, so the work is not done yet (attempt {blocks} of {max_blocks}).{way_out}\n\n{summary}"
             );
             match agent {
                 Agent::Claude | Agent::Codex => {
@@ -2136,6 +2153,41 @@ mod tests {
         assert_eq!(give_up.exit_code, 0);
         assert_eq!(give_up.stdout, "{}\n");
         assert!(give_up.stderr.contains("allowed to stop"));
+    }
+
+    #[test]
+    fn the_way_out_is_the_second_line_and_is_left_out_of_a_setup_block() {
+        let block = Decision::Block { blocks: 1 };
+        for agent in AGENTS {
+            let code = reply(agent, &block, "verify: FAILED at test\n", 3);
+            let message = match agent {
+                Agent::Cursor => serde_json::from_str::<Value>(&code.stdout).unwrap()
+                    ["followup_message"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                _ => code.stderr,
+            };
+            assert_eq!(
+                message.lines().take(3).collect::<Vec<_>>(),
+                [
+                    "fscale verify failed, so the work is not done yet (attempt 1 of 3).",
+                    WAY_OUT,
+                    "",
+                ],
+                "{agent:?}"
+            );
+        }
+        // A setup problem is not a wrong test: the agent is told to run the
+        // setup command, and no line before it tells it to stop (review of
+        // ADR 0084).
+        let setup = block_summary(&report_with("ModuleNotFoundError: No module named 'jwt'"));
+        assert!(setup.starts_with("SETUP NEEDED:"), "{setup}");
+        let claude = reply(Agent::Claude, &block, &setup, 3);
+        assert!(!claude.stderr.contains(WAY_OUT), "{}", claude.stderr);
+        assert!(claude.stderr.starts_with(
+            "fscale verify failed, so the work is not done yet (attempt 1 of 3).\n\nSETUP NEEDED:"
+        ));
     }
 
     fn report_with(output: &str) -> crate::verify::VerifyReport {

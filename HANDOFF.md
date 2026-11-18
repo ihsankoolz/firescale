@@ -7,7 +7,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 **Track B of 2026-11-18 (evening): the tamper guard, hooks and doctor** (DECISIONS.md, "Track B"; ADRs 0082 to 0091). A second session runs the other track at the same time. Pull requests so far:
 
 1. A second held-out corpus of cheats, `bench/tamper-cheats-2.json` (ADR 0082): 90 of 100 missed on `main`. Never tune a detector on it. Merged as [#88](https://github.com/ihsankoolz/firescale/pull/88).
-2. The stop hook's time limit: `hooks install` writes `timeout` on Claude Code's entry, `doctor` warns when the kept step times exceed it (ADR 0083).
+2. The stop hook's time limit: `hooks install` writes `timeout` on Claude Code's entry, `doctor` warns when the kept step times exceed it (ADR 0083). Merged as [#90](https://github.com/ihsankoolz/firescale/pull/90).
+3. A way out for agents: the stop hook's block message and the AGENTS.md block say to name a wrong test and stop, not edit it (ADR 0084). `fscale sync` updates existing blocks.
 
 **Track A (cache and verify), the run of 2026-11-18 after 0.5.4** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
 

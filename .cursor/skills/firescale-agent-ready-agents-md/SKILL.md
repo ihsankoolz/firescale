@@ -9,7 +9,7 @@ description: Fixes violations of the firescale rule agent-ready/agents-md by wri
 
 ## What this rule enforces and why
 
-`AGENTS.md` exists at the repo root and holds firescale's **managed block**, up to date. The block starts with a line that begins `<!-- BEGIN firescale` and ends with the line `<!-- END firescale -->`. Inside it are the repo's install, build, lint, typecheck and test commands, taken from `fscale facts` (for the root and for each project in a subfolder), and the definition of done: run `fscale verify` before saying a task is done, never weaken a test to pass it, and treat `SETUP NEEDED` as a machine that is not ready rather than a code problem.
+`AGENTS.md` exists at the repo root and holds firescale's **managed block**, up to date. The block starts with a line that begins `<!-- BEGIN firescale` and ends with the line `<!-- END firescale -->`. Inside it are the repo's install, build, lint, typecheck and test commands, taken from `fscale facts` (for the root and for each project in a subfolder), and the definition of done: run `fscale verify` before saying a task is done, never weaken a test to pass it, if a test or check seems wrong say which and why and stop rather than edit it (ADR 0084), and treat `SETUP NEEDED` as a machine that is not ready rather than a code problem.
 
 When a `CLAUDE.md` exists at the root, it must import `AGENTS.md` (a line `@AGENTS.md`, outside a code fence), because Claude Code reads only `CLAUDE.md` when there is one.
 
