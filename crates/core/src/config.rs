@@ -22,13 +22,14 @@ pub const JSON_CONFIG: &str = "firescale.config.json";
 /// Status of a rule that the config does not mention.
 pub const DEFAULT_STATUS: Status = Status::Evaluated;
 
-pub(crate) const TOP_LEVEL_KEYS: [&str; 6] = [
+pub(crate) const TOP_LEVEL_KEYS: [&str; 7] = [
     "$schema",
     "packs",
     "rules",
     "protectedPaths",
     "verify",
     "agent",
+    "doctor",
 ];
 
 /// Where a rule's code lives.
@@ -64,6 +65,25 @@ pub struct ResolvedConfig<'a> {
     pub verify: VerifyConfig,
     /// The `agent` section: the limits of `fscale fix --agent`.
     pub agent: AgentLimits,
+    /// The `doctor` section: what `fscale doctor` makes of a finding.
+    pub doctor: DoctorSettings,
+}
+
+/// What `fscale doctor` makes of a variable that a `.env.example` names
+/// and that is set nowhere (`doctor.missingEnv`, ADR 0068).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MissingEnv {
+    /// It is reported, and doctor still exits 0.
+    #[default]
+    Warning,
+    /// It is reported, and doctor exits 1.
+    Problem,
+}
+
+/// The `doctor` section of the config.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DoctorSettings {
+    pub missing_env: MissingEnv,
 }
 
 /// The limits of an agent run as the config sets them (`agent`). `None`
@@ -199,7 +219,7 @@ pub fn resolve_config<'a>(
         .find(|key| !TOP_LEVEL_KEYS.contains(&key.as_str()))
     {
         return Err(Error::user(format!(
-            "{name}: unknown key \"{key}\". Allowed keys: packs, rules, protectedPaths, verify, agent."
+            "{name}: unknown key \"{key}\". Allowed keys: packs, rules, protectedPaths, verify, agent, doctor."
         )));
     }
 
@@ -327,6 +347,7 @@ pub fn resolve_config<'a>(
 
     let verify = verify_settings(name, raw)?;
     let agent = check_agent(name, object.get("agent"))?;
+    let doctor = check_doctor(name, object.get("doctor"))?;
 
     rules.sort_by(|a, b| a.meta.id.cmp(&b.meta.id));
     Ok(ResolvedConfig {
@@ -336,6 +357,7 @@ pub fn resolve_config<'a>(
         protected_paths,
         verify,
         agent,
+        doctor,
     })
 }
 
@@ -764,6 +786,53 @@ pub fn verify_settings(name: &str, raw: &Value) -> Result<VerifyConfig> {
     Ok(verify)
 }
 
+/// Reads only the `doctor` settings, never starting Node: `fscale doctor`
+/// runs no code from the repo. A `firescale.config.ts` is code, so it is
+/// not read and the defaults stand (doctor says so where it matters, ADR
+/// 0068). Nothing else of `firescale.config.json` is checked.
+pub fn load_doctor_settings(root: &Path) -> Result<DoctorSettings> {
+    if root.join(TS_CONFIG).exists() || !root.join(JSON_CONFIG).exists() {
+        return Ok(DoctorSettings::default());
+    }
+    let raw = read_json(root)?;
+    check_doctor(JSON_CONFIG, raw.get("doctor"))
+}
+
+/// Checks the shape of `doctor`: `missingEnv` is `"warning"` or
+/// `"problem"` (ADR 0068).
+fn check_doctor(name: &str, value: Option<&Value>) -> Result<DoctorSettings> {
+    let mut settings = DoctorSettings::default();
+    let Some(value) = value.filter(|v| !v.is_null()) else {
+        return Ok(settings);
+    };
+    let Some(object) = value.as_object() else {
+        return Err(Error::user(format!(
+            "{name}: \"doctor\" must be an object, such as {{ \"missingEnv\": \"problem\" }}."
+        )));
+    };
+    for (key, value) in object {
+        if key != "missingEnv" {
+            return Err(Error::user(format!(
+                "{name}: unknown key \"{key}\" in doctor. Allowed keys: missingEnv."
+            )));
+        }
+        // A key set to null means "use the default".
+        if value.is_null() {
+            continue;
+        }
+        settings.missing_env = match value.as_str() {
+            Some("warning") => MissingEnv::Warning,
+            Some("problem") => MissingEnv::Problem,
+            _ => {
+                return Err(Error::user(format!(
+                    "{name}: doctor.missingEnv must be \"warning\" or \"problem\"."
+                )))
+            }
+        };
+    }
+    Ok(settings)
+}
+
 /// Checks the shape of `agent` (the limits of `fscale fix --agent`, M27):
 /// `maxTurns` and `timeoutSeconds` whole numbers of at least 1,
 /// `maxCostUsd` a number above 0. Returns the ones that are set.
@@ -921,6 +990,44 @@ mod tests {
         let options_only =
             resolve(&json!({ "rules": { RULE: { "options": {} } } }), &packs).unwrap();
         assert_eq!(options_only.rules[0].status, Status::Evaluated);
+    }
+
+    #[test]
+    fn checks_the_doctor_settings() {
+        assert_eq!(
+            check_doctor("c", None).unwrap().missing_env,
+            MissingEnv::Warning
+        );
+        for (value, expected) in [
+            (json!({}), MissingEnv::Warning),
+            (json!({ "missingEnv": null }), MissingEnv::Warning),
+            (json!({ "missingEnv": "warning" }), MissingEnv::Warning),
+            (json!({ "missingEnv": "problem" }), MissingEnv::Problem),
+        ] {
+            assert_eq!(
+                check_doctor("c", Some(&value)).unwrap().missing_env,
+                expected,
+                "{value}"
+            );
+        }
+        for (value, message) in [
+            (json!([]), "c: \"doctor\" must be an object"),
+            (
+                json!({ "missingEnv": "Problem" }),
+                "c: doctor.missingEnv must be \"warning\" or \"problem\".",
+            ),
+            (
+                json!({ "missingEnv": 1 }),
+                "c: doctor.missingEnv must be \"warning\" or \"problem\".",
+            ),
+            (
+                json!({ "env": "problem" }),
+                "c: unknown key \"env\" in doctor. Allowed keys: missingEnv.",
+            ),
+        ] {
+            let error = check_doctor("c", Some(&value)).unwrap_err();
+            assert!(error.message().starts_with(message), "{}", error.message());
+        }
     }
 
     #[test]

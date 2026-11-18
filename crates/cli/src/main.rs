@@ -16,12 +16,13 @@ use firescale_core::blame::{
 };
 use firescale_core::check::run_check;
 use firescale_core::config::{
-    find_root, load_config, load_verify_config, ConfiguredRule, RuleSource, JSON_CONFIG, TS_CONFIG,
+    find_root, load_config, load_doctor_settings, load_verify_config, ConfiguredRule, RuleSource,
+    JSON_CONFIG, TS_CONFIG,
 };
 use firescale_core::configkey;
 use firescale_core::diff::unified_diff;
 use firescale_core::doctor::{
-    add_checks, format_doctor_human, format_doctor_json, run_doctor, ThisMachine,
+    add_checks, format_doctor_human, format_doctor_json, run_doctor_with, ThisMachine,
 };
 use firescale_core::explain::{explain_rule, find_rule};
 use firescale_core::facts::{detect_facts, format_facts_human, format_facts_json};
@@ -955,7 +956,8 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
         )));
     }
     let facts = detect_facts(root)?;
-    let mut report = run_doctor(root, &facts, &ThisMachine);
+    let settings = load_doctor_settings(root)?;
+    let mut report = run_doctor_with(root, &facts, &ThisMachine, settings);
     add_checks(&mut report, hook_findings(root));
     let text = if args.json {
         format_doctor_json(&report)

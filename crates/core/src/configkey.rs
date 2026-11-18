@@ -41,9 +41,10 @@ use crate::stepcache::unit_scope;
 use crate::verify::{plan_verify, Planned, ProjectPlan, VerifyConfig, VerifyPlan};
 
 /// The top-level keys that are in no step's key: `$schema` (only editors
-/// read it), `protectedPaths` and `agent` (read only by `fix --agent`).
+/// read it), `protectedPaths` and `agent` (read only by `fix --agent`),
+/// and `doctor` (read only by `fscale doctor`).
 /// `verify` is taken out too, and read setting by setting.
-const NOT_IN_OTHER_SETTINGS: [&str; 4] = ["$schema", "protectedPaths", "agent", "verify"];
+const NOT_IN_OTHER_SETTINGS: [&str; 5] = ["$schema", "protectedPaths", "agent", "doctor", "verify"];
 
 /// The top-level keys outside `verify` that every step's key holds under
 /// their own name.
@@ -523,7 +524,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::{AgentLimits, TOP_LEVEL_KEYS};
+    use crate::config::{AgentLimits, DoctorSettings, TOP_LEVEL_KEYS};
     use crate::facts::detect_facts;
     use crate::testing::course_project;
     use crate::verify::ProjectTimeouts;
@@ -599,6 +600,12 @@ mod tests {
                 "agent.timeoutSeconds",
                 json!({}),
                 json!({ "agent": { "timeoutSeconds": 60 } }),
+                Side::Out,
+            ),
+            (
+                "doctor.missingEnv",
+                json!({}),
+                json!({ "doctor": { "missingEnv": "problem" } }),
                 Side::Out,
             ),
             // A root command runs once, in place of every project's own.
@@ -839,6 +846,7 @@ mod tests {
             max_cost_usd: _,
             timeout_seconds: _,
         } = AgentLimits::default();
+        let DoctorSettings { missing_env: _ } = DoctorSettings::default();
         vec![
             // steps
             "verify.<step>",
@@ -874,12 +882,14 @@ mod tests {
             "rules.<id>.status",
             "rules.<id>.options",
             "(unknown)",
-            // Top-level keys that are in no key, and the agent limits.
+            // Top-level keys that are in no key, the agent limits and the
+            // doctor settings.
             "$schema",
             "protectedPaths",
             "agent.maxTurns",
             "agent.maxCostUsd",
             "agent.timeoutSeconds",
+            "doctor.missingEnv",
         ]
     }
 

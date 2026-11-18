@@ -7,7 +7,7 @@ fscale doctor
 fscale doctor --json
 ```
 
-It exits **0** when nothing is wrong (warnings are allowed) and **1** when something is. Every problem comes with a `next:` line, the command or step that fixes it:
+It exits **0** when nothing is wrong (warnings are allowed) and **1** when something is. Every problem comes with a `next:` line, the command or step that fixes it. Some warnings have one too:
 
 ```
 Tools
@@ -16,7 +16,7 @@ Tools
            next: npm install -g pnpm@9.12.0
 
 Environment variables
-  PROBLEM  backend/.env.example: 2 of 6 variables are not set in the environment or backend/.env: JWT_SECRET, SMTP_HOST.
+  warning  backend/.env.example: 2 of 6 variables are not set in the environment or backend/.env: JWT_SECRET, SMTP_HOST.
            next: add JWT_SECRET, SMTP_HOST to backend/.env (see backend/.env.example for what each one is)
 
 Dependencies
@@ -29,8 +29,10 @@ Services
   PROBLEM  PostgreSQL on localhost:5432: not reachable: nothing listens on port 5432 (docker-compose.yml (service db)).
            next: docker compose up -d db
 
-doctor: 3 problems - run the `next:` commands above, then `fscale doctor` again.
+doctor: 3 problems, 1 warning - run the `next:` commands above, then `fscale doctor` again.
 ```
+
+With warnings and no problem, the last line is `doctor: OK with 1 warning - read them above.` and the exit code is 0.
 
 Doctor changes nothing and downloads nothing. The only programs it runs are version commands (`node --version`, `pnpm --version`, the project's Python with `--version`, `go version`, `rustup toolchain list`), each with a 10-second limit, with `COREPACK_ENABLE_NETWORK=0` and `GOTOOLCHAIN=local` so neither corepack nor Go fetches anything. It opens a TCP connection to each service's port, which it closes at once.
 
@@ -50,7 +52,7 @@ A tool that is missing is a problem with the page or command that installs it.
 
 ### Environment variables
 
-For each `.env.example` at the root and in each project's folder, every name it lists must be set (to something) in the environment, or be present in a `.env` or `.env.local` **in the same folder or in a folder above it, up to the repo root** (ADR 0059). **For this check only names are read from those files; values are dropped as each line is read, and never printed.** (The services check below reads one more thing from them: the host and port of a local database URL.) The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
+For each `.env.example` at the root and in each project's folder, every name it lists is looked for: it counts as set when it is set (to something) in the environment, or be present in a `.env` or `.env.local` **in the same folder or in a folder above it, up to the repo root** (ADR 0059). **For this check only names are read from those files; values are dropped as each line is read, and never printed.** (The services check below reads one more thing from them: the host and port of a local database URL.) The fix is to copy the example to `.env` and fill it in, or to add the missing names to the `.env` that exists.
 
 A repo with one `.env` at the root and services below it is common: `backend/orders/.env.example` lists the names, and the root's `.env` sets them. Doctor then says in which file it found each name:
 
@@ -58,19 +60,27 @@ A repo with one `.env` at the root and services below it is common: `backend/ord
   ok       backend/orders/.env.example: all 2 variables are set in the environment, or in an env file of a folder above (ORDERS_REGION in backend/.env.local; ORDERS_API_KEY in .env)
 ```
 
-A name found nowhere is a problem, and the line names every env file that was read:
+A name found nowhere is a **warning**, and the line names every env file that was read:
 
 ```
-  PROBLEM  backend/orders/.env.example: 1 of 2 variables are not set in the environment or .env, and there is no backend/orders/.env: ORDERS_API_KEY.
+  warning  backend/orders/.env.example: 1 of 2 variables are not set in the environment or .env, and there is no backend/orders/.env: ORDERS_API_KEY.
            next: add ORDERS_API_KEY to the env file that backend/orders reads: .env, or a new backend/orders/.env (see backend/orders/.env.example for what each one is)
 ```
 
+**A warning, not a problem (ADR 0068).** A `.env.example` often lists names that only some work needs, and doctor cannot tell which ones the tests need. So a missing name does not make doctor exit 1. To make it a problem again, as it was before 0.5.3, set this in `firescale.config.json`:
+
+```json
+{ "doctor": { "missingEnv": "problem" } }
+```
+
+`missingEnv` is `"warning"` (the default) or `"problem"`; anything else is a config error. Doctor reads it from `firescale.config.json` only. It runs no code from the repo, and a `firescale.config.ts` is code, so the setting in one is not read: a missing name is then a warning, and doctor adds a line that says the setting was not read.
+
 **What this check can and cannot know.** `fscale verify` loads no env file: a step gets the environment verify was started in, plus `CI`, `NO_COLOR`, `FORCE_COLOR` and `PYTHONUNBUFFERED`. The project's own tools read the files, each in its own way: python-dotenv's `load_dotenv()` looks in the folders above; pydantic-settings and Vite read the folder they are pointed at (often the root, by a path in the code or `envDir`); Docker Compose reads the `.env` beside the Compose file. Doctor cannot tell which of these a project uses, so a name in any `.env` or `.env.local` at or above the project counts as set, the same folders the services check and the rule `core/env-example` look in. A file above the repo root is never read.
 
-**A `.env` or `.env.local` that is a symbolic link is not read**, by this check or by the services check: a link can point at a file outside the repo, and the base run of `fscale verify` does not copy a linked env file into its worktree either. A name set only in such a file is a problem, and the line names the link:
+**A `.env` or `.env.local` that is a symbolic link is not read**, by this check or by the services check: a link can point at a file outside the repo, and the base run of `fscale verify` does not copy a linked env file into its worktree either. A name set only in such a file counts as set nowhere, and the line names the link:
 
 ```
-  PROBLEM  backend/orders/.env.example: 1 of 1 variables are not set in the environment: ORDERS_API_KEY. backend/orders/.env is a symbolic link, so it was not read.
+  warning  backend/orders/.env.example: 1 of 1 variables are not set in the environment: ORDERS_API_KEY. backend/orders/.env is a symbolic link, so it was not read.
            next: replace backend/orders/.env with a real file that sets ORDERS_API_KEY, or set the variables in your shell (see backend/orders/.env.example for what each one is)
 ```
 
