@@ -6,6 +6,8 @@
 
 pub mod activity;
 pub mod affected;
+#[cfg(test)]
+mod affected_covers_key;
 pub mod agentrun;
 pub mod blame;
 pub mod cache;
