@@ -579,20 +579,22 @@ describe('fscale verify in a repo with projects in subfolders', () => {
     expect(report.result).toBe('failed');
     expect([report.failedStep, report.failedProject]).toEqual(['lint', 'frontend']);
     expect(report.rerun).toBe('npx --no oxlint');
-    // The frontend's lint failed, and its typecheck and tests ran all the
-    // same (ADR 0070).
-    expect((await calls()).slice(-3)).toEqual([
+    // Every npx command fails here. The frontend's lint failed and its
+    // typecheck ran all the same (ADR 0070); the failing typecheck is what
+    // stops its tests.
+    expect((await calls()).slice(-2)).toEqual([
       'npx --no oxlint in frontend',
       'npx --no tsc --noEmit in frontend',
-      'npx --no vitest run in frontend',
     ]);
     expect(
       report.steps
         .filter((step) => step.project === 'frontend')
         .map((step) => `${step.name} ${step.status}`),
-    ).toEqual(['lint failed', 'typecheck passed', 'test passed']);
+    ).toEqual(['lint failed', 'typecheck failed', 'test not-run']);
     const human = await runCli(['verify'], repo.root, env('npx'));
-    expect(human.stdout.startsWith('verify: FAILED at lint in frontend\n')).toBe(true);
+    expect(human.stdout.split('\n')[0]).toBe(
+      'verify: FAILED at lint in frontend, typecheck in frontend',
+    );
     expect(human.stdout).toContain('Fix the failure, then run again in frontend: npx --no oxlint');
   });
 
