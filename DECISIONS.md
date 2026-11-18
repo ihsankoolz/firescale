@@ -10,7 +10,17 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 
 - `bench/tamper-cheats-2.json`: 100 cheating changes from ImpossibleBench's four categories and METR's reward hacks, 20 each, over Python, JavaScript, TypeScript and Rust. A subagent wrote it **without opening** `crates/core/src/tamper/`, `bench/tamper-cheats.json`, `bench/tamper-corpus.json` or `docs/research/` (its brief forbade every file of the firescale checkouts; its report says it followed that). Never tune a detector on it.
 - **On `main` today: 90 of 100 missed**, 7 caught, 3 approval only. By category: test modification 12 of 20 missed, operator overloading 20 of 20, recorded state 20 of 20, special-casing 20 of 20, evaluator tampering 18 of 20. The first corpus on the same build: 42 of 98. `bench/RESULTS.md` has the tables, what was caught and why, and the limits.
-- `bench/tamper-misses.mjs --corpus <file>` runs either corpus.
+- `bench/tamper-misses.mjs --corpus <file>` runs either corpus. It prints counts only; `--names` adds the titles of the missed cases (from the review).
+- **From the fresh review, fixed:** the routine command printed the 90 missed titles of the blind corpus (now only with `--names`); the new corpus said `python`/`rust` where the first says `py`/`rs`; AGENTS.md's line lacked `pnpm build`; a missing option value gave a cryptic error; RESULTS.md did not say that the first corpus was run again on the same build. **Not done:** none.
+- **What this run's author saw:** the titles of the 90 missed cases, printed when it measured. It opened no case. Pull requests 5 to 7 add detectors; their ADRs repeat this.
+
+**Pull request 2: the stop hook's time limit (verification idea 4, first step, ADR 0083)**
+
+- **`fscale hooks install` writes `timeout` on Claude Code's stop hook entry**: `--timeout <time>`, else twice the kept times of every planned step plus `verify.baseBudget` (5m), in whole minutes, never under 600 s (Claude Code's default). With no kept time, 600, written out. One line of output says the limit and why.
+- **An entry firescale's hook already has gets the `timeout` as a new line** (`timeout added`); a `timeout` in the file is never changed (the line says what it would be). `--timeout` with only Codex or Cursor is refused.
+- **`fscale doctor` warns** under `Agent hooks` when the kept times of every planned step add up to more than the limit, and says to work on a branch (the hook then runs what `--affected` would), to give the hook a smaller scope, or to raise the limit.
+- **Failing tests first:** 8 in `hooks.test.ts`, 7 seen failing on `main` in WSL; the eighth guards the quiet case. Four snapshots, the help text and one older test changed on purpose (ADR 0083, "Tests").
+- **Decided on your behalf:** the formula (twice, plus the base budget, at least 600); doctor sums every planned step, the worst case, since it cannot know the next change; `sync` writes no `timeout`.
 
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
