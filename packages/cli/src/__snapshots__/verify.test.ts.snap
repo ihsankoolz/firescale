@@ -110,7 +110,7 @@ exports[`fscale verify > prints schema-valid JSON for a failing repo 1`] = `
   "rerun": "node test.js",
   "result": "failed",
   "runner": "config",
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "scope": "all",
   "skipped": [],
   "steps": [
@@ -238,7 +238,7 @@ exports[`fscale verify in a repo with projects in subfolders > runs the backend'
   "ok": true,
   "result": "partial",
   "runner": "projects",
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "scope": "all",
   "skipped": [
     {

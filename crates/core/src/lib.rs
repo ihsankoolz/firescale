@@ -26,6 +26,7 @@ pub mod hooks;
 pub mod imports;
 pub mod jsonedit;
 pub mod ledger;
+pub mod lintsource;
 pub mod model;
 pub mod node;
 pub mod ownfolder;

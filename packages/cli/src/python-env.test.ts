@@ -160,7 +160,7 @@ describe('projects run independently', () => {
     const result = await runCli(['verify', '--json'], repo.root, env({}, 'python'));
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const report = await validate<VerifyReport>('verify-output.schema.json', result.stdout);
-    expect(report.schemaVersion).toBe(7);
+    expect(report.schemaVersion).toBe(8);
     expect(report.result).toBe('failed');
     expect([report.failedStep, report.failedProject]).toEqual(['test', 'backend/audit_service']);
     // The frontend still ran, after five failing services.
@@ -170,21 +170,28 @@ describe('projects run independently', () => {
       'typecheck passed',
       'test passed',
     ]);
-    // Only auth_service, whose lint failed first, has a step that did not run.
+    // No step was left out: auth_service's lint failed first, and its
+    // tests ran all the same (ADR 0070).
     expect(
       report.steps
         .filter((step) => step.status === 'not-run')
         .map((step) => `${step.name} in ${step.project ?? '.'}`),
-    ).toEqual(['test in backend/auth_service']);
+    ).toEqual([]);
+    expect(
+      report.steps
+        .filter((step) => step.project === 'backend/auth_service')
+        .map((step) => `${step.name} ${step.status}`),
+    ).toEqual(['lint failed', 'typecheck skipped', 'test failed']);
     expect(await calls()).toContain('npx --no oxlint in frontend');
 
     const human = await runCli(['verify'], repo.root, env({}, 'python'));
     expect(human.stdout.split('\n')[0]).toBe(
-      'verify: FAILED at test in backend/audit_service, lint in backend/auth_service, test in backend/ledger_service, test in backend/market_service, test in backend/realtime_service',
+      'verify: FAILED at test in backend/audit_service, lint in backend/auth_service, test in backend/auth_service, test in backend/ledger_service, test in backend/market_service, test in backend/realtime_service',
     );
-    // Within a project, the first failure still stops the rest.
+    // Within a project, a failing lint does not keep the tests from
+    // running: both are reported (ADR 0070).
     expect(human.stdout).toMatch(
-      /in backend\/auth_service:\n {4}lint {7}FAILED .*\n.*\n {4}test {7}not run/,
+      /in backend\/auth_service:\n {4}lint {7}FAILED .*\n.*\n {4}test {7}FAILED /,
     );
   });
 });
@@ -245,11 +252,11 @@ describe('setup problems are not test failures', () => {
     const result = await runCli(['verify'], repo.root, env());
     expect(result.code).toBe(EXIT_VIOLATIONS);
     const out = result.stdout;
-    // auth_service's lint stops at ruff; the other four services share pytest.
-    const others = COURSE_SERVICES.filter((service) => service !== 'auth_service');
+    // auth_service's lint needs ruff, and its tests run all the same (ADR
+    // 0070): the five services share pytest.
     const group = [
-      "Setup needed for 4 steps, all for one reason: the Python module 'pytest' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.",
-      ...others.flatMap((service) => [
+      "Setup needed for 5 steps, all for one reason: the Python module 'pytest' is not installed. The environment is not ready, so this is not a problem in the code. Do not change code for it.",
+      ...COURSE_SERVICES.flatMap((service) => [
         `- test in backend/${service}`,
         `  Set it up in backend/${service}: python -m pip install -r requirements-dev.txt`,
         `  Then run again in backend/${service}: python -m pytest`,
@@ -260,7 +267,7 @@ describe('setup problems are not test failures', () => {
     expect(out.match(/the Python module 'pytest' is not installed\. The/g)).toHaveLength(1);
     // The last lines of the first service only.
     expect(out).toContain(
-      'Last lines of test in backend/audit_service (the first of 4 with this reason; `fscale verify --json` has the output of each):\n',
+      'Last lines of test in backend/audit_service (the first of 5 with this reason; `fscale verify --json` has the output of each):\n',
     );
     expect(out).not.toContain('Last lines of test in backend/ledger_service');
     // A reason of its own keeps the layout of a single project.
@@ -278,6 +285,7 @@ describe('setup problems are not test failures', () => {
     expect(setup.map((step) => `${step.name} in ${step.project ?? '.'}`)).toEqual([
       'test in backend/audit_service',
       'lint in backend/auth_service',
+      'test in backend/auth_service',
       'test in backend/ledger_service',
       'test in backend/market_service',
       'test in backend/realtime_service',

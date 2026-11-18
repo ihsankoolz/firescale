@@ -140,7 +140,10 @@ describe('a lint command fscale guessed, in a repo that does not declare it', ()
       reportOnly:
         'fscale guessed this command, and nothing in this repo asks for it (looked for `dotnet format` in a CI file)',
     });
-    expect(step('test')).toMatchObject({ status: 'passed', command: 'dotnet test "GuardClauses.sln"' });
+    expect(step('test')).toMatchObject({
+      status: 'passed',
+      command: 'dotnet test "GuardClauses.sln"',
+    });
     expect(report.ok).toBe(true);
     expect(report.result).toBe('ok');
     expect(json.code).toBe(EXIT_OK);
@@ -155,9 +158,7 @@ describe('a lint command fscale guessed, in a repo that does not declare it', ()
 
     // The summary says it plainly, with the config line that makes it block.
     const lines = human.stdout.split('\n');
-    expect(lines[0]).toBe(
-      'verify: OK - report-only: lint failed (a lint command fscale guessed)',
-    );
+    expect(lines[0]).toBe('verify: OK - report-only: lint failed (a lint command fscale guessed)');
     expect(human.stdout).toContain(`  lint       failed   report-only: ${DOTNET_LINT} (exit 2)\n`);
     expect(human.stdout).toContain('  test       passed   dotnet test "GuardClauses.sln"\n');
     expect(human.stdout).toContain(
@@ -254,7 +255,7 @@ describe('a lint command fscale guessed, in a repo that does not declare it', ()
       reportOnly:
         'fscale guessed this command, and nothing in this repo asks for it (looked for `go vet` in a CI file)',
     });
-    expect(human.stdout.split('\n')[0]).toBe('verify: OK - 3 of 3 steps passed');
+    expect(human.stdout.split('\n')[0]).toBe('verify: OK');
     expect(human.stdout).not.toContain('eport-only');
     expect(human.code).toBe(EXIT_OK);
   });
