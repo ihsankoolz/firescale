@@ -103,8 +103,8 @@ impl BuiltinRule for AgentsMdExists {
         inputs.extend(
             FACTS_INPUTS
                 .iter()
-                .chain(firescale_core::ecosystems::MARKER_GLOBS.iter())
-                .map(|input| (*input).to_owned()),
+                .map(|input| (*input).to_owned())
+                .chain(firescale_core::ecosystems::input_globs()),
         );
         RuleMeta {
             id: ID.to_owned(),

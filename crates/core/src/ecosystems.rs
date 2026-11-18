@@ -5,7 +5,8 @@
 //! with no command is not needed or skipped, the programs it needs, and the
 //! build output git should ignore. `facts`, `verify`, `doctor`, `setup`,
 //! the step cache and `core/gitignore-basics` read the table; adding an
-//! ecosystem is adding an entry.
+//! ecosystem is adding an entry. The cache inputs of the rules that read
+//! facts are built from the entries too ([`input_globs`], ADR 0069).
 //!
 //! Node, Python and Rust have workspaces, interpreters and lockfile rules of
 //! their own and stay in `facts`.
@@ -119,6 +120,12 @@ pub struct Tool {
 pub struct Ecosystem {
     /// The project kind, as `fscale facts` reports it.
     pub kind: &'static str,
+    /// Every file this entry reads to recognise the folder, to name the
+    /// project and to choose its commands and tools, by its path in the
+    /// project's folder (`*` for any name): the cache inputs of the rules
+    /// that read facts ([`input_globs`], ADR 0069). A new read in `marks`,
+    /// `name`, `found` or `doctor` gets its file added here.
+    pub inputs: &'static [&'static str],
     /// True when the folder holds a project of this kind.
     pub marks: fn(&Folder) -> bool,
     /// Kinds that take the folder when they are there too: a Makefile
@@ -151,33 +158,21 @@ pub struct Ecosystem {
     pub ignored: &'static [&'static str],
 }
 
-/// The files whose presence decides which ecosystems a folder holds, as
-/// globs: the inputs of every rule that reads facts, so adding one
-/// invalidates a cached result.
-pub const MARKER_GLOBS: [&str; 22] = [
-    "**/go.mod",
-    "**/pom.xml",
-    "**/build.gradle",
-    "**/build.gradle.kts",
-    "**/settings.gradle",
-    "**/settings.gradle.kts",
-    "**/Package.swift",
-    "**/*.xcodeproj/project.pbxproj",
-    "**/*.xcworkspace/contents.xcworkspacedata",
-    "**/CMakeLists.txt",
-    "**/meson.build",
-    "**/*.sln",
-    "**/*.slnx",
-    "**/*.csproj",
-    "**/*.fsproj",
-    "**/*.vbproj",
-    "**/pubspec.yaml",
-    "**/Makefile",
-    "**/makefile",
-    "**/GNUmakefile",
-    "**/binding.gyp",
-    "**/Podfile",
-];
+/// The inputs of every entry, as globs for any folder of the repo
+/// (`**/go.mod`), sorted and without repeats: cache inputs of every rule
+/// that reads facts, so a file that appears or changes invalidates a cached
+/// result. Built from the table, so no list is kept by hand (ADR 0069).
+#[must_use]
+pub fn input_globs() -> Vec<String> {
+    let mut globs: Vec<String> = ECOSYSTEMS
+        .iter()
+        .flat_map(|eco| eco.inputs.iter())
+        .map(|input| format!("**/{input}"))
+        .collect();
+    globs.sort();
+    globs.dedup();
+    globs
+}
 
 /// The ecosystems, in the order a folder is matched.
 pub const ECOSYSTEMS: [Ecosystem; 10] = [
@@ -302,6 +297,7 @@ fn code(text: &str) -> String {
 
 const GO: Ecosystem = Ecosystem {
     kind: "go",
+    inputs: &["go.mod", "go.sum"],
     marks: |f| f.has("go.mod"),
     yields_to: &[],
     only_on: None,
@@ -364,6 +360,7 @@ fn maven_name(f: &Folder) -> Option<String> {
 
 const MAVEN: Ecosystem = Ecosystem {
     kind: "maven",
+    inputs: &["pom.xml", "mvnw", "mvnw.cmd"],
     marks: |f| f.has("pom.xml"),
     yields_to: &[],
     only_on: None,
@@ -464,6 +461,15 @@ fn gradle_scripts(f: &Folder) -> String {
 
 const GRADLE: Ecosystem = Ecosystem {
     kind: "gradle",
+    inputs: &[
+        "build.gradle",
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "gradlew",
+        "gradlew.bat",
+        "gradle.lockfile",
+    ],
     marks: |f| GRADLE_FILES.iter().any(|name| f.has(name)),
     yields_to: &[],
     only_on: None,
@@ -627,6 +633,14 @@ fn c_first(f: &Folder) -> bool {
 
 const SWIFT: Ecosystem = Ecosystem {
     kind: "swift",
+    inputs: &[
+        "Package.swift",
+        "Package.resolved",
+        ".swiftlint.yml",
+        ".swiftlint.yaml",
+        ".swift-format",
+        "CMakeLists.txt",
+    ],
     marks: |f| f.has("Package.swift") && !(f.has("CMakeLists.txt") && c_first(f)),
     yields_to: &[],
     only_on: None,
@@ -740,6 +754,16 @@ fn xcode_destination(f: &Folder) -> &'static str {
 
 const XCODE: Ecosystem = Ecosystem {
     kind: "xcode",
+    inputs: &[
+        "*.xcodeproj/project.pbxproj",
+        "*.xcworkspace/contents.xcworkspacedata",
+        "*.xcodeproj/xcshareddata/xcschemes/*.xcscheme",
+        "*.xcworkspace/xcshareddata/xcschemes/*.xcscheme",
+        "Podfile",
+        ".swiftlint.yml",
+        ".swiftlint.yaml",
+        ".swift-format",
+    ],
     marks: |f| {
         !f.dirs_ending(".xcodeproj").is_empty() || !f.dirs_ending(".xcworkspace").is_empty()
     },
@@ -919,6 +943,19 @@ const CLANG_FORMAT: Tool = Tool {
 
 const CMAKE: Ecosystem = Ecosystem {
     kind: "cmake",
+    inputs: &[
+        "CMakeLists.txt",
+        "cmake/lint.cmake",
+        "conanfile.txt",
+        "conanfile.py",
+        "vcpkg.json",
+        "Package.swift",
+        "binding.gyp",
+        "package.json",
+        "pyproject.toml",
+        "setup.py",
+        "Cargo.toml",
+    ],
     marks: |f| {
         f.has("CMakeLists.txt") && !(f.has("Package.swift") && !c_first(f)) && !native_extension(f)
     },
@@ -1002,6 +1039,17 @@ const CMAKE: Ecosystem = Ecosystem {
 
 const MESON: Ecosystem = Ecosystem {
     kind: "meson",
+    inputs: &[
+        "meson.build",
+        "conanfile.txt",
+        "conanfile.py",
+        "vcpkg.json",
+        "binding.gyp",
+        "package.json",
+        "pyproject.toml",
+        "setup.py",
+        "Cargo.toml",
+    ],
     marks: |f| f.has("meson.build") && !native_extension(f),
     yields_to: &["cmake"],
     only_on: None,
@@ -1075,6 +1123,14 @@ fn dotnet_target(f: &Folder) -> Option<String> {
 
 const DOTNET: Ecosystem = Ecosystem {
     kind: "dotnet",
+    inputs: &[
+        "*.sln",
+        "*.slnx",
+        "*.csproj",
+        "*.fsproj",
+        "*.vbproj",
+        "packages.lock.json",
+    ],
     marks: |f| {
         [".sln", ".slnx"]
             .iter()
@@ -1154,6 +1210,7 @@ fn is_flutter(f: &Folder) -> bool {
 
 const DART: Ecosystem = Ecosystem {
     kind: "dart",
+    inputs: &["pubspec.yaml", "pubspec.lock"],
     marks: |f| f.has("pubspec.yaml"),
     yields_to: &[],
     only_on: None,
@@ -1255,6 +1312,7 @@ fn make_targets(f: &Folder) -> Vec<String> {
 
 const MAKE: Ecosystem = Ecosystem {
     kind: "make",
+    inputs: &["Makefile", "makefile", "GNUmakefile"],
     // A Makefile is a project of its own only for C-family code or when it
     // says how to test: a Makefile that wraps another tool, or builds docs,
     // is not.

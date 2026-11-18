@@ -5,7 +5,7 @@
 use crate::facts::detect_facts_with;
 use crate::testing::{Fixture, Track};
 
-use super::{ecosystem, matching, wrapper, Folder, Missing, ECOSYSTEMS};
+use super::{ecosystem, input_globs, matching, wrapper, Folder, Missing, ECOSYSTEMS};
 
 fn fixture(files: &[(&str, &str)]) -> Fixture {
     Fixture::new(files, Track::All).unwrap()
@@ -33,6 +33,60 @@ fn every_ecosystem_has_a_kind_of_its_own_and_reasons_for_missing_steps() {
             assert!(!text.is_empty(), "{}", eco.kind);
         }
         assert!(!eco.programs.is_empty(), "{}", eco.kind);
+    }
+}
+
+// ADR 0069: the list that was kept by hand, and what it missed.
+#[test]
+fn the_cache_inputs_are_built_from_the_table() {
+    let globs = input_globs();
+    // Every glob of the hand-kept list this replaced is still an input.
+    for old in [
+        "**/go.mod",
+        "**/pom.xml",
+        "**/build.gradle",
+        "**/build.gradle.kts",
+        "**/settings.gradle",
+        "**/settings.gradle.kts",
+        "**/Package.swift",
+        "**/*.xcodeproj/project.pbxproj",
+        "**/*.xcworkspace/contents.xcworkspacedata",
+        "**/CMakeLists.txt",
+        "**/meson.build",
+        "**/*.sln",
+        "**/*.slnx",
+        "**/*.csproj",
+        "**/*.fsproj",
+        "**/*.vbproj",
+        "**/pubspec.yaml",
+        "**/Makefile",
+        "**/makefile",
+        "**/GNUmakefile",
+        "**/binding.gyp",
+        "**/Podfile",
+    ] {
+        assert!(globs.iter().any(|glob| glob == old), "{old} is missing");
+    }
+    // Files that decide a command or a tool, which that list did not name.
+    for new in [
+        "**/.swiftlint.yml",
+        "**/.swiftlint.yaml",
+        "**/.swift-format",
+        "**/cmake/lint.cmake",
+        "**/conanfile.txt",
+        "**/vcpkg.json",
+        "**/*.xcodeproj/xcshareddata/xcschemes/*.xcscheme",
+        "**/mvnw",
+        "**/gradlew",
+    ] {
+        assert!(globs.iter().any(|glob| glob == new), "{new} is missing");
+    }
+    let mut sorted = globs.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(globs, sorted, "sorted, with no repeats");
+    for eco in &ECOSYSTEMS {
+        assert!(!eco.inputs.is_empty(), "{} names no input", eco.kind);
     }
 }
 

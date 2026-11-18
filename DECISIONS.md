@@ -202,6 +202,10 @@ Compared with 0.5.2. Nothing here was run on the course project or on any machin
 
 Known and not changed in 0.5.3: a guessed linter that fails still keeps the tests from running (real-repo bug 1, your decision), and `mvn -B test` is still the Maven test command (bug 4).
 
+### Stage 4, the project-type table: step 1 only, open and not merged (ADR 0069)
+
+Part C of the audit is too large to write with no local build, so only its first step is built: each entry of the ecosystems table lists the files it reads (`inputs`), and `ecosystems::input_globs()` takes the place of the hand-kept `MARKER_GLOBS` as cache inputs of `agent-ready/agents-md`, `agent-ready/agent-permissions` and `core/gitignore-basics`. Tests first: three cases in facts-inputs-cache.test.ts (a Swift linter's config appears, and the cached pass must not stand). **The pull request is open and is not merged: it waits for you.** Not done of part C: Node, Python and Rust as entries; the packs' lists and the cmake pack's lists from the table; the step cache's probes.
+
 ## 0.5.2 — fixes after running 0.5.1 on the course project (run of 2026-11-16)
 
 **Pull request 7: `*.log` in core/gitignore-basics**
