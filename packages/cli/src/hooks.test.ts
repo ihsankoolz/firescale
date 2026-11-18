@@ -656,9 +656,9 @@ describe('the command the hook starts (ADR 0064)', () => {
       repo.root,
       await onlyStandIns(dir),
     );
-    // The hook was there: only its time limit is added (ADR 0083), and its
-    // command is kept.
-    expect(result.stdout).toContain('timeout added     .claude/settings.json');
+    // The hook was there, and no step has a kept time: nothing is added,
+    // and its command is kept (ADR 0083).
+    expect(result.stdout).toContain('already installed .claude/settings.json');
     expect(await read(repo.root, HOOK_FILES.claude)).toContain(
       `"command": "${old} hooks run --agent claude"`,
     );
