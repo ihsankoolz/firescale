@@ -8,15 +8,27 @@ fscale hooks install --agent claude       # one agent
 fscale hooks install --all --bin fscale   # a command of your own, written as it is
 ```
 
-| Agent       | File written            | Hook                                                       |
-| ----------- | ----------------------- | ---------------------------------------------------------- |
-| Claude Code | `.claude/settings.json` | `hooks.Stop[].hooks[]`: `{ "type": "command", "command" }` |
-| Codex       | `.codex/hooks.json`     | The same shape as Claude Code.                             |
-| Cursor      | `.cursor/hooks.json`    | `version: 1`, `hooks.stop[]`: `{ "command" }`.             |
+| Agent       | File written            | Hook                                                                  |
+| ----------- | ----------------------- | --------------------------------------------------------------------- |
+| Claude Code | `.claude/settings.json` | `hooks.Stop[].hooks[]`: `{ "type": "command", "command", "timeout" }` |
+| Codex       | `.codex/hooks.json`     | The same shape as Claude Code.                                        |
+| Cursor      | `.cursor/hooks.json`    | `version: 1`, `hooks.stop[]`: `{ "command" }`.                        |
 
 The Claude Code format was checked against its documentation and the Codex format against its source on 2026-11-11. Cursor's documentation could not be reached from the build environment; on 2026-11-12 its format was checked against Cursor's own example repositories on GitHub (`cursor/cookbook`, `cursor/plugins`), and it matches (ADR 0027). So `hooks install` no longer prints a note that the Cursor format is unchecked. `fscale sync` with the `agent-ready` pack writes the same hooks (see [init.md](init.md)).
 
 Installing never rewrites a file that has something in it. The hook goes in as new lines, in the file's own indentation and line endings, first in its list, and every line you wrote stays as it was (ADR 0027). Running it again changes nothing. A hook counts as installed only when the command is under the agent's stop event. A file that is not valid JSON is left alone and reported. So is a file the hook cannot go into as new lines: one written on one line, or with the object or list the hook goes into written on one line (`"hooks": {}`) or set to `null`. The error then shows what to add by hand. With `--all`, a refused file does not stop the others: every agent's file is tried, the list printed at the end says `installed`, `already installed` or `refused` for each, each refusal's reason is on stderr, and the command exits with 2 when any file was refused (ADR 0060). Commit the files so every teammate's agent gets the hook.
+
+## `--timeout`: how long Claude Code lets the hook run
+
+Claude Code ends a command hook that runs past its `timeout`, in seconds, and its default for a command hook is 600 (code.claude.com, hooks reference, read on 2026-11-18). An agent whose stop hook is ended stops without verify having finished. So `hooks install` writes an explicit `timeout` on the Claude Code entry (ADR 0082):
+
+- with `--timeout <time>` (`30m`, `1h 30m`, or a number of seconds), that;
+- otherwise from the kept step times in `.firescale/step-times.json`: twice the sum of the kept times of every step a full `fscale verify` plans (a new failure is run again, and a step whose pass is not cached runs in full), plus `verify.baseBudget` (5 minutes by default) for the base run, rounded up to whole minutes, and never less than 600;
+- with no kept time yet, 600, Claude Code's default, written out. Run `hooks install --agent claude` again after a verify to set it from the times.
+
+The output says which, in one line: `Claude Code's stop hook may run for 45m (`timeout` in .claude/settings.json): twice the 20m the planned steps took when they last ran, and 5m for the base run.`
+
+A stop hook entry that firescale's command already has gets the `timeout` as a new line when it has none (the list says `timeout added`), and every other line stays as it was. **A `timeout` already in the file is never changed**: the line says what firescale would have written, and you edit the value. An entry written on one line cannot take a new line: the output says what to add by hand. `--timeout` with only Codex or Cursor is refused (exit 2): neither has a field firescale writes. `fscale sync` does not write a `timeout`. `fscale doctor` warns when the kept times exceed the limit (see [doctor.md](doctor.md)).
 
 ## `--bin`: how the hook starts fscale
 
@@ -116,7 +128,7 @@ An agent that cannot fix a failure must not be held forever. The hook counts how
 
 - There is no `hooks uninstall`. Remove the entry by hand.
 - Hooks are written to the repo's project config only, never to user-level settings.
-- The hook runs the whole of `fscale verify`. If the repo's tests take longer than the agent's own hook time limit, the agent ends the hook. Give the hook a faster command with the `verify` config key if that happens.
+- The hook runs the whole of `fscale verify` (on a branch, for the projects the change reaches). If that takes longer than the agent's own hook time limit, the agent ends the hook and stops without verify having finished. For Claude Code, `hooks install` writes the limit (below) and `fscale doctor` warns when the kept step times exceed it. Codex and Cursor: no time limit field is written, and none is checked. Give the hook a faster command with the `verify` config key if that happens.
 - Gemini CLI is not supported yet.
 
 ## When verify is only partial
