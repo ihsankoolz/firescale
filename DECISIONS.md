@@ -2,6 +2,16 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
+
+Seven pull requests from `docs/research/research-verification.md`, one idea each, in the owner's order; ADRs 0082 to 0091. Another session works on the other track at the same time. Built and tested in WSL on the laptop (a clone of its own, `~/fs-wsl-b`), from the worktree `C:\Users\ihsan\fs-trackb`; the course project is not touched.
+
+**Pull request 1: a second held-out corpus of cheats (verification idea 11, ADR 0082)**
+
+- `bench/tamper-cheats-2.json`: 100 cheating changes from ImpossibleBench's four categories and METR's reward hacks, 20 each, over Python, JavaScript, TypeScript and Rust. A subagent wrote it **without opening** `crates/core/src/tamper/`, `bench/tamper-cheats.json`, `bench/tamper-corpus.json` or `docs/research/` (its brief forbade every file of the firescale checkouts; its report says it followed that). Never tune a detector on it.
+- **On `main` today: 90 of 100 missed**, 7 caught, 3 approval only. By category: test modification 12 of 20 missed, operator overloading 20 of 20, recorded state 20 of 20, special-casing 20 of 20, evaluator tampering 18 of 20. The first corpus on the same build: 42 of 98. `bench/RESULTS.md` has the tables, what was caught and why, and the limits.
+- `bench/tamper-misses.mjs --corpus <file>` runs either corpus.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

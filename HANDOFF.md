@@ -4,6 +4,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
+**Track B of 2026-11-18 (evening): the tamper guard, hooks and doctor** (DECISIONS.md, "Track B"; ADRs 0082 to 0091). A second session runs the other track at the same time. Pull requests so far:
+
+1. A second held-out corpus of cheats, `bench/tamper-cheats-2.json` (ADR 0082): 90 of 100 missed on `main`. Never tune a detector on it.
+
 **The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
 
 1. The 0.5.3 run's tests, each shown to fail without its fix: [#83](https://github.com/ihsankoolz/firescale/pull/83).
