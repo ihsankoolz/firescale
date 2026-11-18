@@ -7504,6 +7504,50 @@ mod tests {
         assert_eq!(listed, ["a", "b", "c", "d"]);
     }
 
+    /// From the fresh review: the key of the repo root's steps is made
+    /// when they start and holds every file of the repo, so a project that
+    /// ran before them and wrote a file would change it.
+    #[test]
+    fn the_repo_root_s_own_steps_still_start_before_any_project() {
+        let fixture = Fixture::new(&[("a/x", ""), ("b/x", "")], Track::NoGit).unwrap();
+        let unit = |root: Option<&str>| AffectedUnit {
+            project: root.map(str::to_owned),
+            kind: None,
+            affected: true,
+            reason: "changed".to_owned(),
+        };
+        let plan = VerifyPlan {
+            runner: "projects".to_owned(),
+            steps: vec![("test".to_owned(), Planned::Command("echo root".to_owned()))],
+            projects: vec![one_step("a", "echo a"), one_step("b", "echo b")],
+            affected: Some(AffectedPlan {
+                changed_files: 1,
+                units: vec![unit(None), unit(Some("a")), unit(Some("b"))],
+                changed_first: vec![(Some("b".to_owned()), None)],
+                ..AffectedPlan::default()
+            }),
+            ..VerifyPlan::default()
+        };
+        let config = VerifyConfig::default();
+        let shared = crate::progress::Shared::default();
+        let progress = Progress::new(Box::new(shared.clone()));
+        let options = RunOptions {
+            progress: Some(&progress),
+            ..RunOptions::quiet(&config)
+        };
+        run_verify_with(fixture.root(), "0.0.0", passing_check(), &plan, &options).unwrap();
+        let text = shared.text();
+        let started: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains(": started: "))
+            .map(|line| line.split(": started: ").next().unwrap())
+            .collect();
+        assert_eq!(
+            started,
+            ["[verify] test", "[verify] test in b", "[verify] test in a"]
+        );
+    }
+
     #[test]
     fn with_jobs_the_changed_unit_is_among_the_first_started_and_the_report_keeps_its_order() {
         let (started, listed) = started_and_listed(&four_projects(&["d"]), 2);
