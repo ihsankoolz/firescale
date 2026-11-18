@@ -42,6 +42,17 @@ Build idea 4, part 1, and verification idea 3, part (i).
 - **What it can cost:** an honest edit to a file that holds an already flaky test blocks when that test fails. Running verify again is the way out.
 - **The fresh review found nothing the change broke, and ways a test of the change is not recognised.** Two are fixed, test first: a parametrised Rust test (`tests::doubles::case_1`) and a Rust doc test. The rest are in ADR 0073 under "Not done": macro-generated Rust tests, a Jest `FAIL` line that ends with a time, a Vitest project name before the file, a test file outside the runner's root, two runners in one command. In each the failure is run again as before this change.
 
+**Pull request 3: the env files git ignores are in the step key (ADR 0074)**
+
+Build idea 1, first step only.
+
+- **What changed:** the bytes of `.env` and `.env.local`, at the repo root and in the step's project folder, are part of the step's key, as a hash. Edit one and the steps that can read it run again; put the old bytes back and the old pass is found.
+- **No value appears anywhere:** not in output, the cache log, `.firescale/` or the temp folder. A test greps all of them for a planted value. One function reads the files, for the step key and for the base run's key.
+- **Decided on your behalf:** a step is not cached while one of those four paths is a link or cannot be read, and the summary says why. Links are not followed, so what the tests read through one cannot be in the key. Before, such a step was cached.
+- **What it costs:** every kept pass misses once after the upgrade. A repo whose `.env` is rewritten on every run never hits.
+- **Failing test first:** `packages/cli/src/step-cache-env.test.ts`, 4 of 5 failed in WSL before the change (`expected 3 to be 6`). The fifth is the guard that no value is kept.
+- **Later (ADR 0074):** the variables an `.env.example` names, and the framework prefixes. **Not done:** other ignored files (`.env.test`), an env file in a folder between the root and the unit.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

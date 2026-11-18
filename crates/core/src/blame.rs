@@ -709,12 +709,9 @@ fn env_files(root: &Path, plan: &VerifyPlan) -> Vec<(String, String)> {
     for folder in folders {
         for name in ENV_FILES {
             let path = folder_of(root, Some(&folder)).join(name);
-            // A link to elsewhere is not followed.
-            let plain = fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file());
-            if !plain {
-                continue;
-            }
-            let Ok(bytes) = fs::read(&path) else {
+            // A link to elsewhere is not followed. The same reading as the
+            // step cache's key (ADR 0074).
+            let crate::stepcache::EnvFile::Plain(hash) = crate::stepcache::env_file(&path) else {
                 continue;
             };
             let rel = if folder == "." {
@@ -722,7 +719,7 @@ fn env_files(root: &Path, plan: &VerifyPlan) -> Vec<(String, String)> {
             } else {
                 format!("{folder}/{name}")
             };
-            found.push((rel, blake3::hash(&bytes).to_hex()[..16].to_owned()));
+            found.push((rel, hash[..16].to_owned()));
         }
     }
     found

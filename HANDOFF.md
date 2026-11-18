@@ -12,6 +12,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 1. A test command that exits 0 while its per-test results hold failing tests is `FAILED` and never cached (ADR 0072; `run_step` in `crates/core/src/verify.rs`, `pertest::is_test`).
 2. A new failing test in a file the change added or edited is never labelled `flaky`, and its step is not run again (ADR 0073; `own_tests` and `touched` in `crates/core/src/blame.rs`, `pertest::file_of`).
+3. `.env` and `.env.local` at the repo root and in the unit's folder are in every step's key, as a hash (ADR 0074; `env_files_line` and `env_file` in `crates/core/src/stepcache.rs`, which `blame::env_files` now calls).
 
 **The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
 
