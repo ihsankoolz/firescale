@@ -630,6 +630,17 @@ describe('doctor and a variable that is set nowhere', () => {
     const report = await validate(json.stdout);
     expect(report).toMatchObject({ ok: false, problems: 1, warnings: 0 });
     expect(json.code).toBe(EXIT_VIOLATIONS);
+
+    // The setting is what decides: the same repo with "warning" has no
+    // problem. Without this the test passed before the setting existed,
+    // when every missing name was a problem.
+    await writeFile(
+      path.join(root, 'firescale.config.json'),
+      JSON.stringify({ doctor: { missingEnv: 'warning' } }),
+    );
+    const warned = await runCli(['doctor'], root, env);
+    expect(warned.stdout).toContain(`\n  warning  ${LINE}\n`);
+    expect(warned.code).toBe(EXIT_OK);
   });
 
   it('refuses a doctor setting it does not know, in doctor and in check', async () => {
