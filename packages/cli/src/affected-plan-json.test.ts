@@ -150,8 +150,10 @@ describe('verify --affected --dry-run --json', () => {
     await repo.write('.github/workflows/ci.yml', 'on: [push]\n');
     const everything = await plan(repo);
     expect(valid(everything), JSON.stringify(valid.errors)).toBe(true);
-    const broken = structuredClone(found) as unknown as { units: { reason: object }[] };
-    broken.units[0]!.reason = { text: 'changed' };
+    const broken = {
+      ...found,
+      units: found.units.map((unit) => ({ ...unit, reason: { text: 'changed' } })),
+    };
     expect(valid(broken)).toBe(false);
   });
 
