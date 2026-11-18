@@ -1764,10 +1764,19 @@ pub fn is_document_or_media(file: &str) -> bool {
 /// CI workflow, a Compose file or the firescale config.
 #[must_use]
 pub fn widening_reason(file: &str) -> Option<String> {
+    widening(file).map(|(_, reason)| reason)
+}
+
+/// [`widening_reason`], with the kind of file as a type.
+fn widening(file: &str) -> Option<(Why, String)> {
+    let named = || file.to_owned();
     let name = file_name(file);
     let at_root = !file.contains('/');
     if at_root && LOCKFILE_NAMES.contains(&name) {
-        return Some(format!("the root lockfile {file} changed"));
+        return Some((
+            Why::RootLockfile { file: named() },
+            format!("the root lockfile {file} changed"),
+        ));
     }
     let ci = file.starts_with(".github/workflows/")
         || file.starts_with(".github/actions/")
@@ -1781,15 +1790,74 @@ pub fn widening_reason(file: &str) -> Option<String> {
                     | "Jenkinsfile"
             ));
     if ci {
-        return Some(format!("the CI file {file} changed"));
+        return Some((
+            Why::CiFile { file: named() },
+            format!("the CI file {file} changed"),
+        ));
     }
     if is_compose_file(name) {
-        return Some(format!("the Compose file {file} changed"));
+        return Some((
+            Why::ComposeFile { file: named() },
+            format!("the Compose file {file} changed"),
+        ));
     }
     if at_root && name.starts_with("firescale.config.") {
-        return Some(format!("the firescale config {file} changed"));
+        return Some((
+            Why::ConfigFile { file: named() },
+            format!("the firescale config {file} changed"),
+        ));
     }
     None
+}
+
+/// Why a change reaches a unit, or why it does not, as a type a program can
+/// switch on (ADR 0079). The words for people are kept beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum Why {
+    /// It holds changed files.
+    ChangedFile { files: Vec<String> },
+    /// It depends on a node the change reaches. `on` is that node's folder,
+    /// `sources` the kinds of evidence for the edge.
+    DependsOn { on: String, sources: Vec<String> },
+    /// A lockfile at the repo root changed: everything runs.
+    RootLockfile { file: String },
+    /// A CI file changed: everything runs.
+    CiFile { file: String },
+    /// A Compose file changed: everything runs.
+    ComposeFile { file: String },
+    /// The firescale config changed as a file: everything runs.
+    ConfigFile { file: String },
+    /// A file that belongs to no project changed: everything runs.
+    UnownedFile { file: String },
+    /// A file at the repo root, where settings every project may read are
+    /// kept, changed: everything runs.
+    RootFile { file: String },
+    /// An agent hook file changed outside the entry firescale writes:
+    /// everything runs.
+    AgentHookFile { file: String },
+    /// A setting of the firescale config changed what these steps run. No
+    /// steps named: a setting every step shares, or the base's config
+    /// could not be read, so every setting counts as changed.
+    ConfigSetting { steps: Vec<String> },
+    /// Its steps can read every file of the repo, and a file only such a
+    /// step can read changed (the config, an agent hook file).
+    ReadsWholeRepo,
+    /// There is no commit to compare with: everything runs.
+    NoBase,
+    /// The clone is too shallow to compare: everything runs.
+    ShallowClone,
+    /// Nothing changed and no base was given: everything runs.
+    NothingToCompare,
+    /// The repo root's own commands, which run whenever something they may
+    /// read changed.
+    RootCommands,
+    /// A folder named only in the config: it runs whenever anything changed.
+    UndetectedProject,
+    /// No change reaches it.
+    NotAffected,
+    /// A reason with no type of its own. The words say it.
+    Other,
 }
 
 /// What a change affects.
@@ -1808,9 +1876,22 @@ pub struct Affected {
     /// The nodes that hold a changed file, as against those a change only
     /// reaches through an edge.
     pub direct: BTreeSet<String>,
+    /// The type of `everything`'s reason.
+    pub everything_why: Option<Why>,
+    /// The type of each node's reason in `nodes`.
+    pub why: BTreeMap<String, Why>,
 }
 
 impl Affected {
+    /// Why `id` is affected, as a type.
+    #[must_use]
+    pub fn why_of(&self, id: &str) -> Option<Why> {
+        match &self.everything {
+            Some(_) => Some(self.everything_why.clone().unwrap_or(Why::Other)),
+            None => self.why.get(id).cloned(),
+        }
+    }
+
     /// True when the project node `id` is affected.
     #[must_use]
     pub fn contains(&self, id: &str) -> bool {
@@ -1863,12 +1944,14 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
         Changed::Everything => {
             return Affected {
                 everything: Some("there is no commit to compare with".to_owned()),
+                everything_why: Some(Why::NoBase),
                 ..Affected::default()
             }
         }
         Changed::Shallow(note) => {
             return Affected {
                 everything: Some(note.clone()),
+                everything_why: Some(Why::ShallowClone),
                 ..Affected::default()
             }
         }
@@ -1887,6 +1970,7 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
     // Once a file affects everything, the walk goes on only to list the
     // inert files, so the note names them whatever else changed (ADR 0058).
     let mut everything: Option<String> = None;
+    let mut everything_why: Option<Why> = None;
     for file in files {
         if settled.contains(&file.as_str()) {
             for root in projects.iter().filter(|node| node.path == ".") {
@@ -1894,7 +1978,10 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
             }
             continue;
         }
-        if let Some(reason) = widening_reason(file) {
+        if let Some((why, reason)) = widening(file) {
+            if everything.is_none() {
+                everything_why = Some(why);
+            }
             everything.get_or_insert(reason);
             continue;
         }
@@ -1949,12 +2036,18 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
         }
         if unowned && !media {
             if roots.is_empty() {
+                if everything.is_none() {
+                    everything_why = Some(Why::UnownedFile { file: file.clone() });
+                }
                 everything.get_or_insert_with(|| format!("{file} belongs to no project"));
                 continue;
             }
             if !file.contains('/') {
                 // Settings that projects below may read (ruff.toml,
                 // tsconfig.base.json, .prettierrc) live at the repo root.
+                if everything.is_none() {
+                    everything_why = Some(Why::RootFile { file: file.clone() });
+                }
                 everything.get_or_insert_with(|| {
                     format!(
                         "{file} is at the repo root, where settings every project may read are kept"
@@ -1974,11 +2067,18 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
     }
     if everything.is_some() {
         result.everything = everything;
+        result.everything_why = everything_why;
         return result;
     }
     let mut queue: VecDeque<String> = VecDeque::new();
     for (id, changed_here) in direct {
         result.direct.insert(id.clone());
+        result.why.insert(
+            id.clone(),
+            Why::ChangedFile {
+                files: changed_here.iter().map(|file| (*file).clone()).collect(),
+            },
+        );
         result
             .nodes
             .insert(id.clone(), changed_reason(&changed_here));
@@ -1996,6 +2096,15 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect();
+            result.why.insert(
+                edge.from.clone(),
+                Why::DependsOn {
+                    on: graph
+                        .node(&id)
+                        .map_or_else(|| id.clone(), |node| node.path.clone()),
+                    sources: how.iter().map(|source| (*source).to_owned()).collect(),
+                },
+            );
             result.nodes.insert(
                 edge.from.clone(),
                 format!("depends on {} ({})", graph.display(&id), how.join(", ")),

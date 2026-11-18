@@ -585,7 +585,55 @@ Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
 
 ### Dry run
 
-`fscale verify --dry-run` prints the plan and runs nothing: not the check, not a script, not an install, not Node. It reads only the `verify` settings of `firescale.config.json`; a `firescale.config.ts` is code, so a dry run refuses it (exit 2). With `--affected` it says which projects would run and why. With `--budget <time>` it names the steps a run would leave out for their kept time. It has no `--json` form.
+`fscale verify --dry-run` prints the plan and runs nothing: not the check, not a script, not an install, not Node. It reads only the `verify` settings of `firescale.config.json`; a `firescale.config.ts` is code, so a dry run refuses it (exit 2). With `--affected` it says which projects would run and why. With `--budget <time>` it names the steps a run would leave out for their kept time. Without `--affected` it has no `--json` form.
+
+**`fscale verify --affected --dry-run --json` prints the affected plan as JSON** (ADR 0079; schema: [schemas/affected-plan.schema.json](schemas/affected-plan.schema.json)). Nothing runs. Each unit, in plan order, has `affected`, the commands of its `steps`, and a `reason` with a `type` to switch on and the same reason as `text`:
+
+```json
+{
+  "schemaVersion": 1,
+  "base": "origin/main",
+  "changedFiles": 1,
+  "everything": null,
+  "units": [
+    {
+      "project": "backend/auth_service",
+      "kind": "python",
+      "affected": true,
+      "reason": {
+        "type": "changed-file",
+        "files": ["backend/auth_service/main.py"],
+        "text": "changed: backend/auth_service/main.py"
+      },
+      "steps": [{ "name": "test", "command": "pytest" }]
+    },
+    {
+      "project": "frontend",
+      "kind": "node",
+      "affected": false,
+      "reason": { "type": "not-affected", "text": "no change reaches this project" },
+      "steps": [{ "name": "test", "command": "npm run test" }]
+    }
+  ],
+  "notes": [],
+  "warnings": []
+}
+```
+
+| `type`                                                                                                    | Means                                                                                                                                                 | More fields     |
+| --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `changed-file`                                                                                            | The unit holds changed files                                                                                                                          | `files`         |
+| `depends-on`                                                                                              | It depends on a project or shared folder the change reaches                                                                                           | `on`, `sources` |
+| `root-lockfile`, `ci-file`, `compose-file`, `config-file`, `unowned-file`, `root-file`, `agent-hook-file` | A file that makes every unit run                                                                                                                      | `file`          |
+| `config-setting`                                                                                          | A setting of `firescale.config.json` changed what these steps run. With no steps: a setting every step shares, or the base's config could not be read | `steps`         |
+| `reads-whole-repo`                                                                                        | Its steps can read every file of the repo, and the config or an agent hook file changed                                                               |                 |
+| `no-base`, `shallow-clone`, `nothing-to-compare`                                                          | There is nothing to compare with, so every unit runs                                                                                                  |                 |
+| `root-commands`                                                                                           | The repo root's own commands, which run whenever something they may read changed                                                                      |                 |
+| `undetected-project`                                                                                      | A folder named only in the config: it runs whenever anything changed                                                                                  |                 |
+| `not-affected`                                                                                            | No change reaches it                                                                                                                                  |                 |
+| `other`                                                                                                   | Read `text`                                                                                                                                           |                 |
+
+When every unit runs, `everything` holds the reason and each detected project has the same one. A folder named only in the config keeps `undetected-project`. A program should treat a type it does not know as `other`. The exit code is 0 whatever is affected.
 
 On Windows the command line is handed to `cmd` exactly as written, so `cmd` quoting works (`node -e "..."`, `"C:\Program Files\tool\tool.exe" arg`).
 

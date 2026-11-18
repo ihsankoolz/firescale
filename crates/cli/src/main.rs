@@ -1183,14 +1183,19 @@ fn verify_plan(
             let mut settled = hook_changes.settled.clone();
             settled.push(JSON_CONFIG);
             let mut set = affected_except(&graph, &changed, &settled);
-            if set.everything.is_none() {
+            if set.everything.is_none() && effect.everything.is_some() {
                 set.everything.clone_from(&effect.everything);
+                set.everything_why =
+                    Some(firescale_core::graph::Why::ConfigSetting { steps: Vec::new() });
             }
             set
         }
         None => affected_except(&graph, &changed, &hook_changes.settled),
     };
     if let Some(first) = hook_changes.outside.first() {
+        set.everything_why = Some(firescale_core::graph::Why::AgentHookFile {
+            file: first.to_string(),
+        });
         set.everything = Some(format!(
             "{first} changed outside the stop hook entry firescale writes, and what is there reaches every step (Claude Code gives its env to every command it starts, and another hook can set that env)"
         ));
@@ -1205,6 +1210,7 @@ fn verify_plan(
             set.everything = Some(
                 "nothing changed since the last commit and no --base was given, so there is nothing to compare with".to_owned(),
             );
+            set.everything_why = Some(firescale_core::graph::Why::NothingToCompare);
             notes.push(
                 "--affected found no uncommitted change and no --base was given, so there was nothing to compare with and every project ran. Pass --base <ref> (for example --base origin/main) to compare with a branch.".to_owned(),
             );
@@ -1280,6 +1286,13 @@ fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
     check_project_folders(root, &verify_config)?;
     let facts = detect_facts(root)?;
     let (plan, _) = verify_plan(root, args, &facts, &verify_config, None)?;
+    if args.json {
+        // Only with --affected (ADR 0079): the affected plan, and nothing else.
+        budget(args)?;
+        let text = firescale_core::verify::format_affected_plan_json(&plan)
+            .ok_or_else(|| Error::internal("The affected plan is missing. Please report this."))?;
+        return Ok(Output::ok(text));
+    }
     let check_command = if args.affected {
         "fscale check --affected"
     } else {
@@ -1788,9 +1801,9 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     let resolved = with_pr_base(root, args)?;
     let args = &resolved;
     if args.dry_run {
-        if args.json {
+        if args.json && !args.affected {
             return Err(Error::usage(
-                "verify --dry-run prints the plan for people and has no --json form. Drop one of them.",
+                "verify --dry-run prints the plan for people and has no --json form. Drop one of them, or add --affected: verify --affected --dry-run --json prints which units a change runs, and why.",
             ));
         }
         return verify_dry_run(root, args);

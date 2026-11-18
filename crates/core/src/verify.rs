@@ -19,7 +19,7 @@ use crate::services::{listening, services_for_folder, Service, PROBE_TIMEOUT};
 
 use crate::error::{Error, Result};
 use crate::facts::{source, Project, RepoFacts};
-use crate::graph::{project_id, Affected, Graph};
+use crate::graph::{project_id, Affected, Graph, Why};
 use crate::process::{run_tree, Ending, Watch};
 use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT};
 use crate::runs::{RunRecord, RunningStep};
@@ -400,6 +400,11 @@ pub struct AffectedPlan {
     /// The units that hold a changed file, as folder and kind (the repo
     /// root's own steps: `None`). Their steps start first (ADR 0078).
     pub changed_first: Vec<(Option<String>, Option<String>)>,
+    /// The type of `everything`'s reason (ADR 0079).
+    pub everything_why: Option<Why>,
+    /// The type of each unit's reason, by folder and kind. A unit not
+    /// listed: [`AffectedPlan::why`] says.
+    pub typed: BTreeMap<(Option<String>, Option<String>), Why>,
 }
 
 /// One unit of an affected run.
@@ -417,6 +422,16 @@ pub struct AffectedUnit {
 }
 
 impl AffectedPlan {
+    /// The type of a unit's reason.
+    #[must_use]
+    pub fn why(&self, unit: &AffectedUnit) -> Why {
+        match self.typed.get(&(unit.project.clone(), unit.kind.clone())) {
+            Some(why) => why.clone(),
+            None if unit.affected => Why::Other,
+            None => Why::NotAffected,
+        }
+    }
+
     fn unit(&self, project: Option<&ProjectPlan>) -> Option<&AffectedUnit> {
         self.units.iter().find(|unit| match project {
             None => unit.project.is_none(),
@@ -455,6 +470,7 @@ pub fn limit_to_affected(
     let mut units = Vec::new();
     // The units that hold a changed file: their steps start first.
     let mut changed_first: Vec<(Option<String>, Option<String>)> = Vec::new();
+    let mut typed: BTreeMap<(Option<String>, Option<String>), Why> = BTreeMap::new();
     if plan
         .steps
         .iter()
@@ -481,6 +497,16 @@ pub fn limit_to_affected(
                 }
             })
         });
+        let hit_why = covered
+            .iter()
+            .find_map(|project| affected.why_of(&project_id(&project.kind, &project.root)));
+        let why = if affected.everything.is_some() || hit.is_some() {
+            hit_why
+                .or_else(|| affected.everything_why.clone())
+                .unwrap_or(Why::Other)
+        } else {
+            Why::RootCommands
+        };
         let (runs, reason) = if let Some(reason) = &affected.everything {
             (true, reason.clone())
         } else if let Some(reason) = hit {
@@ -515,6 +541,7 @@ pub fn limit_to_affected(
                 "no change reaches the projects the repo root's commands run".to_owned(),
             )
         };
+        typed.insert((None, None), if runs { why } else { Why::NotAffected });
         units.push(AffectedUnit {
             project: None,
             kind: None,
@@ -553,6 +580,14 @@ pub fn limit_to_affected(
         {
             changed_first.push((Some(project.root.clone()), project.kind.clone()));
         }
+        let why = match &project.kind {
+            _ if !runs => Why::NotAffected,
+            Some(kind) => affected
+                .why_of(&project_id(kind, &project.root))
+                .unwrap_or(Why::Other),
+            None => Why::UndetectedProject,
+        };
+        typed.insert((Some(project.root.clone()), project.kind.clone()), why);
         units.push(AffectedUnit {
             project: Some(project.root.clone()),
             kind: project.kind.clone(),
@@ -568,7 +603,85 @@ pub fn limit_to_affected(
         notes: Vec::new(),
         warnings: graph.warnings.clone(),
         changed_first,
+        everything_why: affected
+            .everything
+            .as_ref()
+            .map(|_| affected.everything_why.clone().unwrap_or(Why::Other)),
+        typed,
     });
+}
+
+/// The version of the JSON that [`format_affected_plan_json`] prints.
+pub const AFFECTED_PLAN_SCHEMA_VERSION: u32 = 1;
+
+/// The affected plan as `fscale verify --affected --dry-run --json` prints
+/// it (ADR 0079; `docs/schemas/affected-plan.schema.json`): each unit, in
+/// plan order, with whether it would run, a typed reason and the commands
+/// of its steps. `None` when the plan is not an affected one.
+#[must_use]
+pub fn format_affected_plan_json(plan: &VerifyPlan) -> Option<String> {
+    let affected = plan.affected.as_ref()?;
+    let reason = |why: &Why, text: &str| {
+        let mut value = serde_json::to_value(why).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(object) = value.as_object_mut() {
+            object.insert("text".to_owned(), serde_json::Value::from(text));
+        }
+        value
+    };
+    let units: Vec<serde_json::Value> = affected
+        .units
+        .iter()
+        .map(|unit| {
+            let steps = match &unit.project {
+                None => Some(plan.steps.as_slice()),
+                Some(folder) => plan
+                    .projects
+                    .iter()
+                    .find(|project| &project.root == folder && project.kind == unit.kind)
+                    .map(|project| project.steps.as_slice()),
+            };
+            let steps: Vec<serde_json::Value> = steps
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|(name, planned)| match planned {
+                    Planned::Command(command) => {
+                        Some(serde_json::json!({ "name": name, "command": command }))
+                    }
+                    Planned::Skipped(_) | Planned::NotNeeded(_) => None,
+                })
+                .collect();
+            let mut value = serde_json::Map::new();
+            if let Some(project) = &unit.project {
+                value.insert("project".to_owned(), project.as_str().into());
+            }
+            if let Some(kind) = &unit.kind {
+                value.insert("kind".to_owned(), kind.as_str().into());
+            }
+            value.insert("affected".to_owned(), unit.affected.into());
+            value.insert(
+                "reason".to_owned(),
+                reason(&affected.why(unit), &unit.reason),
+            );
+            value.insert("steps".to_owned(), steps.into());
+            serde_json::Value::Object(value)
+        })
+        .collect();
+    let everything = match &affected.everything {
+        Some(text) => reason(&affected.everything_why.clone().unwrap_or(Why::Other), text),
+        None => serde_json::Value::Null,
+    };
+    let report = serde_json::json!({
+        "schemaVersion": AFFECTED_PLAN_SCHEMA_VERSION,
+        "base": affected.base,
+        "changedFiles": affected.changed_files,
+        "everything": everything,
+        "units": units,
+        "notes": affected.notes,
+        "warnings": affected.warnings,
+    });
+    let mut text = serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_owned());
+    text.push('\n');
+    Some(text)
 }
 
 const OFF_IN_CONFIG: &str = "turned off in your firescale config";

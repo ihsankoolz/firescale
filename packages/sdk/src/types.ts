@@ -286,3 +286,71 @@ export interface VerifyConfig extends VerifySteps {
   /** Per project, keyed by its folder: `false` turns it off, an object sets single steps. */
   projects?: Record<string, false | VerifyProjectSettings>;
 }
+
+/**
+ * Why a change reaches a unit, or why it does not, in
+ * `fscale verify --affected --dry-run --json` (ADR 0079). `type` is for a
+ * program, `text` says the same for people. A new type may be added without
+ * a new `schemaVersion`: treat an unknown one as `other`.
+ */
+export interface AffectedReason {
+  type:
+    | 'changed-file'
+    | 'depends-on'
+    | 'root-lockfile'
+    | 'ci-file'
+    | 'compose-file'
+    | 'config-file'
+    | 'unowned-file'
+    | 'root-file'
+    | 'agent-hook-file'
+    | 'config-setting'
+    | 'reads-whole-repo'
+    | 'no-base'
+    | 'shallow-clone'
+    | 'nothing-to-compare'
+    | 'root-commands'
+    | 'undetected-project'
+    | 'not-affected'
+    | 'other';
+  text: string;
+  /** `changed-file`: the changed files the unit holds. */
+  files?: string[];
+  /** `depends-on`: the folder of the node it depends on. */
+  on?: string;
+  /** `depends-on`: the kinds of evidence for the edge. */
+  sources?: string[];
+  /** The file that makes everything run. */
+  file?: string;
+  /** `config-setting`: the steps the changed setting reaches. Empty for a setting every step shares, and when the base's config could not be read. */
+  steps?: string[];
+}
+
+/** One unit of an affected plan: the repo root's own steps, or a project. */
+export interface AffectedPlanUnit {
+  /** The project's folder. Absent for the repo root's own steps. */
+  project?: string;
+  kind?: string;
+  /** True when a run would run this unit. */
+  affected: boolean;
+  reason: AffectedReason;
+  /** The steps of the unit that have a command. */
+  steps: { name: string; command: string }[];
+}
+
+/**
+ * What `fscale verify --affected --dry-run --json` prints
+ * (`docs/schemas/affected-plan.schema.json`, ADR 0079).
+ */
+export interface AffectedPlan {
+  schemaVersion: 1;
+  /** The `--base` ref, or null when the change is the uncommitted one. */
+  base: string | null;
+  changedFiles: number;
+  /** Why every unit runs, or null when the change reaches only some. */
+  everything: AffectedReason | null;
+  /** The repo root's own steps first, then each project, in plan order. */
+  units: AffectedPlanUnit[];
+  notes: string[];
+  warnings: string[];
+}
