@@ -196,8 +196,7 @@ describe('fscale facts and a CMake build folder', () => {
       await projects({
         'native/CMakeLists.txt': SOURCES['CMakeLists.txt'],
         'native/main.cpp': SOURCES['main.cpp'],
-        'native/CMakeCache.txt': '# This is the CMakeCache file.
-',
+        'native/CMakeCache.txt': '# This is the CMakeCache file.\n',
       }),
     ).toEqual(['cmake native']);
   });
