@@ -207,10 +207,34 @@ export interface VerifySteps {
   test?: VerifyStepSetting;
 }
 
+/**
+ * One more thing a step's cache key must hold (ADR 0076). Inputs can only
+ * add to a key; there is no entry that removes one.
+ *
+ * - `{ ignored: "dist/**" }`: the files the glob names under the project's
+ *   folder, also when git ignores them.
+ * - `{ env: "API_URL" }`: the value of that environment variable, as a hash.
+ */
+export type VerifyInput = { ignored: string } | { env: string };
+
+/** A step's setting under `verify.projects`: as at the top level, or an object that may also name `inputs`. */
+export type VerifyProjectStepSetting =
+  | string
+  | false
+  | (VerifyStepObject & {
+      /** More inputs of this step's key. */
+      inputs?: VerifyInput[];
+    });
+
 /** A project's settings under `verify.projects`. */
-export interface VerifyProjectSettings extends VerifySteps {
+export interface VerifyProjectSettings {
+  lint?: VerifyProjectStepSetting;
+  typecheck?: VerifyProjectStepSetting;
+  test?: VerifyProjectStepSetting;
   /** The time limit of each of the project's steps. */
   timeout?: VerifyTimeout;
+  /** More inputs of the key of every step of the project (ADR 0076). */
+  inputs?: VerifyInput[];
 }
 
 /** The `verify` section of the config. The top-level steps apply to the whole repo. */

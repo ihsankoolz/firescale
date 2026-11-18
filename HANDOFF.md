@@ -15,6 +15,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 2. A new failing test in a file the change added or edited is never labelled `flaky`, and its step is not run again (ADR 0073; `own_tests` and `touched` in `crates/core/src/blame.rs`, `pertest::file_of`).
 3. `.env` and `.env.local` at the repo root and in the unit's folder are in every step's key, as a hash (ADR 0074; `env_files_line` and `env_file` in `crates/core/src/stepcache.rs`, which `blame::env_files` now calls).
 4. On a cache miss, `FSCALE_LOG=cache` names the projects and shared folders whose files differ from the step's last pass, and a step over a minute says so in the normal output (ADR 0075; `files_manifest`, `why_text`, `StepCache::why_ran` and `remember_manifest` in `crates/core/src/stepcache.rs`; `ran_again_lines` and `RAN_AGAIN_NOTE_MS` in `crates/core/src/verify.rs`). File parts only: the other parts of the key are under "Later" in the ADR.
+5. `verify.projects.<folder>.inputs` and `verify.projects.<folder>.<step>.inputs`: `{ "ignored": "<glob>" }` and `{ "env": "NAME" }`, which only add to a key (ADR 0076; `parse_inputs` in `crates/core/src/config.rs`, `DeclaredInput`, `ProjectInputs` and `inputs_of` in `verify.rs`, `declared_inputs_line` and `StepCache::with_inputs` in `stepcache.rs`, two rows in `configkey.rs`).
 
 **The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
 

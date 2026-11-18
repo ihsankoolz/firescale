@@ -113,6 +113,9 @@ fn shared_parts(config: &VerifyConfig) -> BTreeMap<String, String> {
         // is in its key, or into "off".
         steps: _,
         projects: _,
+        // In, per step: the inputs a project names are a line of the keys
+        // of its steps ([`effect_between`] compares them, ADR 0076).
+        project_inputs: _,
         // In, every step.
         fail_on_skipped,
         no_ci_variable,
@@ -453,7 +456,17 @@ pub fn effect_between(
         let same_unit =
             |other: &&ProjectPlan| other.root == project.root && other.kind == project.kind;
         let before = old.projects.iter().find(same_unit);
-        let steps = reached(&project.steps, before.map(|plan| plan.steps.as_slice()));
+        let mut steps = reached(&project.steps, before.map(|plan| plan.steps.as_slice()));
+        // A step whose named inputs differ has another key (ADR 0076).
+        for (step, planned) in &project.steps {
+            let folder = Some(project.root.as_str());
+            if matches!(planned, Planned::Command(_))
+                && !steps.contains(step)
+                && base.inputs_for(folder, step) != head.inputs_for(folder, step)
+            {
+                steps.push(step.clone());
+            }
+        }
         if !steps.is_empty() {
             units.insert((Some(project.root.clone()), project.kind.clone()), steps);
         }
@@ -741,6 +754,19 @@ mod tests {
                 Side::Out,
             ),
             (
+                "verify.projects.<folder>.inputs",
+                json!({}),
+                project(json!({ "inputs": [{ "ignored": "dist/**" }] })),
+                // The ledger service has one step with a command.
+                Side::InSteps(&[(LEDGER, "test")]),
+            ),
+            (
+                "verify.projects.<folder>.<step>.inputs",
+                project(json!({ "test": { "inputs": [{ "env": "A" }] } })),
+                project(json!({ "test": { "inputs": [{ "env": "B" }] } })),
+                Side::InSteps(&[(LEDGER, "test")]),
+            ),
+            (
                 "verify.projects.<folder>.<step>.timeout",
                 project(json!({ "test": { "timeout": "1h" } })),
                 project(json!({ "test": { "timeout": "2h" } })),
@@ -832,6 +858,7 @@ mod tests {
             label_fixed: _,
             step_timeouts: _,
             project_timeouts: _,
+            project_inputs: _,
             no_ci_variable: _,
             keep_running_when_service_down: _,
             stop_after_errors: _,
@@ -841,6 +868,8 @@ mod tests {
             other_settings: _,
         } = VerifyConfig::default();
         let ProjectTimeouts { all: _, steps: _ } = ProjectTimeouts::default();
+        let crate::verify::ProjectInputs { all: _, steps: _ } =
+            crate::verify::ProjectInputs::default();
         let AgentLimits {
             max_turns: _,
             max_cost_usd: _,
@@ -868,6 +897,9 @@ mod tests {
             // project_timeouts: all, steps
             "verify.projects.<folder>.timeout",
             "verify.projects.<folder>.<step>.timeout",
+            // project_inputs: all, steps
+            "verify.projects.<folder>.inputs",
+            "verify.projects.<folder>.<step>.inputs",
             // no_ci_variable, keep_running_when_service_down, stop_after_errors
             "verify.ci",
             "verify.stopWhenServiceDown",

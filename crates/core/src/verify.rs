@@ -96,6 +96,49 @@ pub struct ProjectTimeouts {
     pub steps: BTreeMap<String, Limit>,
 }
 
+/// One more thing a step's key must hold, named in the config (ADR 0076).
+/// An input can only add to the key: there is no kind that removes one.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeclaredInput {
+    /// `{ "ignored": "<glob>" }`: the bytes of the files the glob names
+    /// under the project's folder, also when git ignores them.
+    Ignored(String),
+    /// `{ "env": "NAME" }`: the value of that environment variable, as a
+    /// hash, or that it is not set.
+    Env(String),
+}
+
+/// The inputs named for one project under `verify.projects`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectInputs {
+    /// `verify.projects.<folder>.inputs`: every step of the project.
+    pub all: Vec<DeclaredInput>,
+    /// `verify.projects.<folder>.<step>.inputs`.
+    pub steps: BTreeMap<String, Vec<DeclaredInput>>,
+}
+
+/// The inputs `named` holds for a step of a project: the project's own and
+/// the step's, sorted, each once.
+#[must_use]
+pub fn inputs_of(
+    named: &BTreeMap<String, ProjectInputs>,
+    project: Option<&str>,
+    step: &str,
+) -> Vec<DeclaredInput> {
+    let Some(settings) = project.and_then(|folder| named.get(folder)) else {
+        return Vec::new();
+    };
+    let mut inputs: Vec<DeclaredInput> = settings
+        .all
+        .iter()
+        .chain(settings.steps.get(step).into_iter().flatten())
+        .cloned()
+        .collect();
+    inputs.sort();
+    inputs.dedup();
+    inputs
+}
+
 /// The `verify` section of the config.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VerifyConfig {
@@ -124,6 +167,8 @@ pub struct VerifyConfig {
     pub step_timeouts: BTreeMap<String, Limit>,
     /// Limits per project, keyed by the project's folder.
     pub project_timeouts: BTreeMap<String, ProjectTimeouts>,
+    /// Inputs named per project, keyed by the project's folder (ADR 0076).
+    pub project_inputs: BTreeMap<String, ProjectInputs>,
     /// `verify.ci: false`: do not set `CI=1` for the commands.
     pub no_ci_variable: bool,
     /// `verify.stopWhenServiceDown: false`: a step whose output shows that
@@ -153,6 +198,13 @@ pub struct VerifyConfig {
 }
 
 impl VerifyConfig {
+    /// The inputs the config names for a step of a project: the project's
+    /// own and the step's, sorted, each once (ADR 0076).
+    #[must_use]
+    pub fn inputs_for(&self, project: Option<&str>, step: &str) -> Vec<DeclaredInput> {
+        inputs_of(&self.project_inputs, project, step)
+    }
+
     /// The error count at which a test step with no pass and no failure is
     /// stopped, or `None` when that is turned off.
     #[must_use]
@@ -723,6 +775,21 @@ pub fn check_project_folders(root: &Path, config: &VerifyConfig) -> Result<()> {
         if !project_dir(root, folder).is_dir() {
             return Err(Error::user(format!(
                 "verify.projects names \"{folder}\", but there is no such folder. Fix the path in your firescale config; `fscale facts` lists the projects that were found."
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Checks that every folder with `inputs` under `verify.projects` is a
+/// project of the plan: inputs named for any other folder would be part of
+/// no step's key, while their writer believes a stale pass is prevented
+/// (ADR 0076).
+pub fn check_project_inputs(config: &VerifyConfig, plan: &VerifyPlan) -> Result<()> {
+    for folder in config.project_inputs.keys() {
+        if !plan.projects.iter().any(|project| &project.root == folder) {
+            return Err(Error::user(format!(
+                "verify.projects[\"{folder}\"] names inputs, but verify runs no project in that folder, so they would be part of no key. Name the project's own folder, in the letter case `fscale facts` prints it, or give the folder a command."
             )));
         }
     }

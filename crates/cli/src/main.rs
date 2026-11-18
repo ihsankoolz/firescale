@@ -1112,6 +1112,7 @@ fn verify_plan(
 ) -> Result<(VerifyPlan, Option<Graph>)> {
     let base = args.base.as_deref();
     let mut plan = plan_verify(root, facts, verify_config, args.affected, base);
+    firescale_core::verify::check_project_inputs(verify_config, &plan)?;
     if !args.affected {
         return Ok((plan, None));
     }
@@ -1423,7 +1424,8 @@ fn verify_report(
             read_env: &read_env,
         },
     )
-    .with_ci(ci.as_ref().map(CiRun::key_salt), shared);
+    .with_ci(ci.as_ref().map(CiRun::key_salt), shared)
+    .with_inputs(verify_config.project_inputs.clone());
     // What the config's difference from the base commit's reaches, so that
     // a step it does not reach can count as the same on the base (ADR 0058).
     // Not for a `firescale.config.ts`: it is a file of every key, and its

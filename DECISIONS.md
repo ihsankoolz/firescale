@@ -77,6 +77,21 @@ Build idea 3, first step only.
 - **Failing test first:** `packages/cli/src/step-cache-why.test.ts`, 6 of 7 failed in WSL before the change.
 - **The fresh review** found no change to any key or hit. It found that a manifest a repo commits could put any text into the log and the summary; a manifest is now checked before it is read. Also fixed: the summary line showed for every slow step of a fresh checkout, the log said "ran again" for a step the budget left out, and the manifest was made on every key. The rest is in ADR 0075.
 
+**Pull request 5: a project can name more inputs of its keys, and can only add (ADR 0076)**
+
+Build idea 2, first step only.
+
+- **What changed:** `verify.projects.<folder>.inputs`, and `inputs` in a step's object under a project, take `{ "ignored": "<glob>" }` (files under the project's folder, also ones git ignores) and `{ "env": "NAME" }` (a variable's value, hashed). They are a line of the step's key.
+- **No way to remove an input.** Anything that is not one of the two kinds is an error that says so: `exclude`, a `!` glob, a plain glob, `runtime`. A test goes through each.
+- **No value appears anywhere.** A test greps the output and every stored file for a planted value.
+- **A step with no named input has the same key as before.**
+- **Decided on your behalf:** a glob is relative to the project's folder and cannot leave it; one glob may name at most 5,000 files, else the step is not cached and says why; `inputs` at the top level (`verify.test.inputs`) is an error; a change to a project's `inputs` runs that project's steps and no other (a row in the table of ADR 0058).
+- **Schema and docs:** `packages/sdk/src/types.ts`, `docs/verify.md`, `docs/config.md`.
+- **Not done (ADR 0076):** `--affected` and the stop hook do not see a change to a named ignored file or variable, as they see no ignored file. `runtime` inputs are under "Later".
+- **Failing test first:** `packages/cli/src/step-cache-inputs.test.ts`, 9 of 9 failed in WSL before the change.
+- **The fresh review** found nothing that removes or weakens an input. It found inputs that did nothing without saying so; fixed test first: a glob that names a folder now names its files, a link on the way is not walked through, and inputs for a folder that is no project are an error. Logged, not fixed: a kept base result is not keyed on the named inputs (ADR 0076, "Not done").
+- **One full local run had a test file fail with no failing test in it** (10 skipped instead of 4); the same tests passed when run again (60 files, 1469 passed). I did not find which file. Linux CI is the gate.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.
