@@ -715,3 +715,102 @@ describe('verify points at doctor', () => {
     expect((await runCli(['verify'], passing.root)).stdout).not.toContain('fscale doctor');
   });
 });
+
+// Doctor builds the verify plan, as `verify --dry-run` does, and looks up
+// the program of each step on the PATH the way the step cache does. Its own
+// list of tools gives way where a step runs that tool (ADR 0085).
+describe('doctor follows the verify plan (ADR 0085)', () => {
+  async function toolsFor(root: string, tools: Record<string, string>) {
+    const dir = path.join(root, '..', `${path.basename(root)}-tools`);
+    await writeVersionTools(dir, tools);
+    return toolPath(dir);
+  }
+
+  it('finds a program a verify step runs that is not on the PATH, and names the step', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: 'zzlint --strict', test: 'zztest run' },
+        }),
+      },
+    });
+    const env = await toolsFor(repo.root, { zztest: 'zztest 1.0' });
+    const result = await runCli(['doctor', '--json'], repo.root, env);
+    const report = await validate(result.stdout);
+    expect(report.checks.filter((c) => c.section === 'tools')).toEqual([
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'zzlint',
+        status: 'problem',
+        detail: "zzlint is not on the PATH, and verify's lint step runs `zzlint --strict`.",
+        fix: "install zzlint, or change the lint step's command under `verify` in the firescale config",
+      },
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'zztest',
+        status: 'ok',
+        detail: "zztest is on the PATH (verify's test step)",
+      },
+    ]);
+    expect(result.code).toBe(EXIT_VIOLATIONS);
+    const human = await runCli(['doctor'], repo.root, env);
+    expect(human.stdout).toContain(
+      "PROBLEM  zzlint: zzlint is not on the PATH, and verify's lint step runs `zzlint --strict`.",
+    );
+  });
+
+  it('gives its own entry for a tool to the plan where a step runs it, and keeps the rest of its list', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'pom.xml':
+          '<project><modelVersion>4.0.0</modelVersion><groupId>a</groupId><artifactId>b</artifactId><version>1</version></project>',
+      },
+    });
+    const missing = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    const checks = (await validate(missing.stdout)).checks;
+    expect(checks.filter((c) => c.subject === 'mvn')).toEqual([
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'mvn',
+        status: 'problem',
+        detail: "mvn is not on the PATH, and verify's test step runs `mvn -B test`.",
+        fix: 'install Maven from https://maven.apache.org, or add the Maven wrapper (mvnw) to the project',
+      },
+    ]);
+    // The JDK is no step's program: doctor's own list still asks for it.
+    expect(checks.filter((c) => c.subject === 'java').map((c) => c.status)).toEqual(['problem']);
+
+    const present = await fixtures.create({ files: { 'pom.xml': '<project/>' } });
+    const env = await toolsFor(present.root, {
+      mvn: 'Apache Maven 3.9.6',
+      java: 'openjdk version "21.0.2"',
+    });
+    const ready = await validate((await runCli(['doctor', '--json'], present.root, env)).stdout);
+    expect(ready.checks.filter((c) => c.subject === 'mvn')).toEqual([
+      {
+        section: 'tools',
+        project: '.',
+        subject: 'mvn',
+        status: 'ok',
+        detail: "mvn 3.9.6 (verify's test step)",
+      },
+    ]);
+  });
+
+  it('does not judge a step that starts with a shell builtin or sets a variable first', async () => {
+    const repo = await fixtures.create({
+      files: {
+        'firescale.config.json': JSON.stringify({
+          verify: { lint: 'FOO=1 zzlint', test: 'cd sub && zztest', typecheck: false },
+        }),
+      },
+    });
+    const result = await runCli(['doctor', '--json'], repo.root, await toolsFor(repo.root, {}));
+    const report = await validate(result.stdout);
+    expect(report.checks.filter((c) => c.section === 'tools')).toEqual([]);
+    expect(result.code).toBe(EXIT_OK);
+  });
+});
