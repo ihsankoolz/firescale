@@ -1111,6 +1111,28 @@ struct LastPass {
     parts: Manifest,
 }
 
+impl LastPass {
+    /// True when the manifest is one this version wrote: its format, at
+    /// most [`MAX_PARTS`] parts, each a name with no control character and
+    /// of a sane length, and a digest of 16 hex characters. A repo can
+    /// commit a file at the manifest's path; one that fails this is not
+    /// read, so nothing it holds is ever printed.
+    fn is_sound(&self) -> bool {
+        self.format == FORMAT
+            && self.parts.len() <= MAX_PARTS
+            && self.parts.iter().all(|(name, digest)| {
+                !name.is_empty()
+                    && name.len() <= 400
+                    && !name.chars().any(char::is_control)
+                    && digest.len() == 16
+                    && digest.chars().all(|c| c.is_ascii_hexdigit())
+            })
+    }
+}
+
+/// More parts than this are not kept: a manifest stays small.
+const MAX_PARTS: usize = 2000;
+
 /// Where the manifest of the latest pass of a step is kept: beside the
 /// passes, under a name made from the step, its project and its kind.
 fn last_pass_path(root: &Path, step: &str, folder: Option<&str>, kind: Option<&str>) -> PathBuf {
@@ -1119,7 +1141,8 @@ fn last_pass_path(root: &Path, step: &str, folder: Option<&str>, kind: Option<&s
         folder.unwrap_or("(root)"),
         kind.unwrap_or("-")
     );
-    cache_dir(root).join(format!("last-{}.json", short_digest(slot.as_bytes())))
+    // Not `.json`: only passes are counted against [`MAX_ENTRIES`].
+    cache_dir(root).join(format!("last-{}.digests", short_digest(slot.as_bytes())))
 }
 
 /// The names of the parts that differ between two manifests, or that only
@@ -1144,7 +1167,7 @@ fn why_text(last: Option<&LastPass>, now: &Manifest) -> String {
     let differing = differing_parts(&last.parts, now);
     if differing.is_empty() {
         return format!(
-            "ran again: no file it reads differs from its last pass ({when}), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept"
+            "ran again: no file it reads differs from its last pass ({when}), so something else in its key does (the command, a tool, what is installed, a variable, an env file, a setting or an agent's hook file), or that pass is no longer kept"
         );
     }
     let shown: Vec<&str> = differing.iter().take(6).map(String::as_str).collect();
@@ -1522,8 +1545,6 @@ pub struct CacheKey {
     files: String,
     /// The unit's env files when the key was made ([`env_files_line`]).
     env_files: String,
-    /// The digest of each part of the key (ADR 0075).
-    manifest: Manifest,
 }
 
 /// How a step's run uses the cache.
@@ -1697,32 +1718,44 @@ impl<'a> StepCache<'a> {
             .to_hex()
             .to_string();
         let key = self.salted(key);
-        // The files by project and shared folder, to say on a later miss
-        // which of them differ (ADR 0075).
-        let manifest = files_manifest(&snapshot, &scope, &self.digests.owned);
         Ok(CacheKey {
             key,
             files,
             env_files,
-            manifest,
         })
     }
 
-    /// For a step that is not served from the cache: which projects' and
-    /// shared folders' files differ from its last pass, as the rest of a
-    /// sentence about it ("ran again: these differ ..."). `None` with
-    /// `--no-cache`, which looks nothing up (ADR 0075).
+    /// The manifest of the unit's files as they are in the latest snapshot.
+    fn manifest(&self, folder: Option<&str>, kind: Option<&str>) -> Option<Manifest> {
+        let slot = (folder.map(str::to_owned), kind.map(str::to_owned));
+        let scope = self
+            .scopes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&slot)
+            .cloned()?
+            .ok()?;
+        let snapshot = self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let manifest = files_manifest(&snapshot, &scope, &self.digests.owned);
+        (manifest.len() <= MAX_PARTS).then_some(manifest)
+    }
+
+    /// For a step that was looked up and not found, called right after its
+    /// key was made: which projects' and shared folders' files differ from
+    /// its last pass, as the rest of a sentence about it ("ran again: these
+    /// differ ..."), or "ran: no pass ..." when no manifest of it is kept.
+    /// `None` with `--no-cache`, which looks nothing up (ADR 0075). It
+    /// never decides a hit.
     #[must_use]
-    pub fn why_ran(
-        &self,
-        folder: Option<&str>,
-        kind: Option<&str>,
-        step: &str,
-        key: &CacheKey,
-    ) -> Option<String> {
+    pub fn why_ran(&self, folder: Option<&str>, kind: Option<&str>, step: &str) -> Option<String> {
         if !self.read {
             return None;
         }
+        let now = self.manifest(folder, kind)?;
         let last = if cache_is_linked(&self.root) {
             None
         } else {
@@ -1731,21 +1764,15 @@ impl<'a> StepCache<'a> {
                 .then(|| fs::read_to_string(&path).ok())
                 .flatten()
                 .and_then(|text| serde_json::from_str::<LastPass>(&text).ok())
-                .filter(|last| last.format == FORMAT)
+                .filter(LastPass::is_sound)
         };
-        Some(why_text(last.as_ref(), &key.manifest))
+        Some(why_text(last.as_ref(), &now))
     }
 
     /// Keeps the manifest of a pass that was just stored, as the step's
     /// last pass. Written like a pass: beside it, to a temporary file
     /// first, and never through a link.
-    fn remember_manifest(
-        &self,
-        folder: Option<&str>,
-        kind: Option<&str>,
-        key: &CacheKey,
-        entry: &Entry,
-    ) {
+    fn remember_manifest(&self, folder: Option<&str>, kind: Option<&str>, entry: &Entry) {
         if cache_is_linked(&self.root) {
             return;
         }
@@ -1753,10 +1780,13 @@ impl<'a> StepCache<'a> {
         if is_symlink(&path) {
             return;
         }
+        let Some(parts) = self.manifest(folder, kind) else {
+            return;
+        };
         let last = LastPass {
             format: FORMAT,
             ran_at: entry.ran_at,
-            parts: key.manifest.clone(),
+            parts,
         };
         let Ok(text) = serde_json::to_string_pretty(&last) else {
             return;
@@ -1850,7 +1880,7 @@ impl<'a> StepCache<'a> {
         match store(&self.root, &entry) {
             Ok(()) => {
                 self.note(format!("cache: stored {place}"));
-                self.remember_manifest(folder, kind, key, &entry);
+                self.remember_manifest(folder, kind, &entry);
             }
             Err(error) => {
                 let why = format!("it could not be written to .firescale/steps ({error})");
@@ -2256,18 +2286,18 @@ mod tests {
         };
         let before = manifest(&[
             ("files in api", "1"),
-            ("the command", "2"),
-            ("the variable TZ", "3"),
+            ("files in lib", "2"),
+            ("files in old", "3"),
         ]);
         // Changed, gone and new parts all differ; the same digest does not.
         let now = manifest(&[
             ("files in api", "9"),
-            ("the command", "2"),
+            ("files in lib", "2"),
             ("files in web", "4"),
         ]);
         assert_eq!(
             differing_parts(&before, &now),
-            ["files in api", "files in web", "the variable TZ"]
+            ["files in api", "files in old", "files in web"]
         );
         assert_eq!(
             why_text(None, &now),
@@ -2280,11 +2310,11 @@ mod tests {
         };
         assert_eq!(
             why_text(Some(&last), &now),
-            "ran again: these differ from its last pass (1970-01-01 00:00 UTC): files in api; files in web; the variable TZ"
+            "ran again: these differ from its last pass (1970-01-01 00:00 UTC): files in api; files in old; files in web"
         );
         assert_eq!(
             why_text(Some(&last), &before),
-            "ran again: no file it reads differs from its last pass (1970-01-01 00:00 UTC), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept"
+            "ran again: no file it reads differs from its last pass (1970-01-01 00:00 UTC), so something else in its key does (the command, a tool, what is installed, a variable, an env file, a setting or an agent's hook file), or that pass is no longer kept"
         );
         let many: Vec<(String, String)> = (1..=9)
             .map(|n| (format!("files in p{n}"), "x".to_owned()))
@@ -2332,8 +2362,13 @@ mod tests {
                 )
                 .unwrap()
         };
-        let before = key();
-        let names: Vec<&str> = before.manifest.keys().map(String::as_str).collect();
+        let manifest = || {
+            cache
+                .manifest(Some("backend/auth_service"), Some("python"))
+                .unwrap()
+        };
+        let before = (key(), manifest());
+        let names: Vec<&str> = before.1.keys().map(String::as_str).collect();
         assert_eq!(
             names,
             [
@@ -2345,24 +2380,68 @@ mod tests {
             ]
         );
         assert!(before
-            .manifest
+            .1
             .values()
             .all(|digest| digest.len() == 16 && digest.chars().all(|c| c.is_ascii_hexdigit())));
-        assert!(!format!("{:?}", before.manifest).contains(".py"));
-        assert_eq!(before.manifest, key().manifest);
+        assert!(!format!("{:?}", before.1).contains(".py"));
+        key();
+        assert_eq!(before.1, manifest());
         // A file of the shared folder changes that part alone, and the key.
         fixture.write("backend/shared/db.py", "URL = 1\n").unwrap();
-        let after = key();
+        let after = (key(), manifest());
         assert_eq!(
-            differing_parts(&before.manifest, &after.manifest),
+            differing_parts(&before.1, &after.1),
             ["files in backend/shared"]
         );
-        assert_ne!(before.key, after.key);
+        assert_ne!(before.0.key, after.0.key);
         // A file of a project it does not use changes nothing of it.
         fixture
             .write("backend/audit_service/main.py", "app = 1\n")
             .unwrap();
-        assert_eq!(after.manifest, key().manifest);
+        key();
+        assert_eq!(after.1, manifest());
+    }
+
+    /// A repo can commit a file where the manifest is kept. One that this
+    /// version did not write is not read, so no name from it is printed.
+    #[test]
+    fn a_manifest_with_a_name_that_is_not_plain_text_is_not_read() {
+        let fixture = Fixture::new(&[("src/a.js", "a\n")], Track::Only(&["src/a.js"])).unwrap();
+        let root = fixture.root();
+        let read_env = |_: &str| None;
+        let settings = CacheSettings {
+            version: "1.0.0",
+            read: true,
+            sets_ci: false,
+            settings: "",
+            machine: &NoTools,
+            read_env: &read_env,
+        };
+        let cache = StepCache::new(root, None, &settings);
+        cache.key(None, None, "test", "node -e 0", root).unwrap();
+        let path = last_pass_path(root, "test", None, None);
+        assert!(path.to_string_lossy().ends_with(".digests"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let write = |name: &str, digest: &str| {
+            let parts: Manifest = [(name.to_owned(), digest.to_owned())].into_iter().collect();
+            let last = LastPass {
+                format: FORMAT,
+                ran_at: 0,
+                parts,
+            };
+            std::fs::write(&path, serde_json::to_string(&last).unwrap()).unwrap();
+            cache.why_ran(None, None, "test").unwrap()
+        };
+        let none = "ran: no pass of it is kept to compare with";
+        // A sound one is read: its part is named.
+        let sound = write("files in gone", "0123456789abcdef");
+        assert!(sound.contains("files in gone"), "{sound}");
+        // An escape code, a new line, a long name, a digest that is not one.
+        assert_eq!(write("files in \u{1b}[31mred", "0123456789abcdef"), none);
+        assert_eq!(write("x\nverify: OK", "0123456789abcdef"), none);
+        assert_eq!(write(&"n".repeat(401), "0123456789abcdef"), none);
+        assert_eq!(write("files in api", "not a digest"), none);
+        assert_eq!(write("", "0123456789abcdef"), none);
     }
 
     #[test]

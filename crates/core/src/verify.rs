@@ -2937,6 +2937,18 @@ pub(crate) fn run_base_step(
 /// cache, says why in the normal output (ADR 0075).
 pub const RAN_AGAIN_NOTE_MS: u64 = 60_000;
 
+/// What a step that was not served from the cache says in the normal
+/// output: `why`, when the step ran for [`RAN_AGAIN_NOTE_MS`] or more and
+/// has a last pass to compare with. A step that never passed here (a fresh
+/// checkout) and a step that did not run say nothing.
+fn ran_again_note(why: Option<String>, duration_ms: u64, status: StepStatus) -> Option<String> {
+    why.filter(|why| {
+        duration_ms >= RAN_AGAIN_NOTE_MS
+            && status != StepStatus::OverBudget
+            && why.starts_with("ran again: ")
+    })
+}
+
 /// A step's pass from the cache when nothing it depends on changed since it
 /// last passed; otherwise the step runs, and a pass is kept for the cache.
 fn cached_or_run(
@@ -3019,16 +3031,17 @@ fn cached_or_run(
                 report_only: None,
         });
     }
-    // What differs from the step's last pass, by name (ADR 0075).
-    let why = cache.why_ran(folder, kind, name, &key);
-    if let Some(why) = &why {
-        cache.note(format!("cache: why {place} {why}"));
-    }
+    // What differs from the step's last pass, by name, read before the
+    // step can change a file (ADR 0075).
+    let why = cache.why_ran(folder, kind, name);
     let ran_at = now_secs();
     let mut report = run_step(unit, name, command, options)?;
-    if report.duration_ms >= RAN_AGAIN_NOTE_MS && report.status != StepStatus::OverBudget {
-        report.ran_again = why;
+    if report.status != StepStatus::OverBudget {
+        if let Some(why) = &why {
+            cache.note(format!("cache: why {place} {why}"));
+        }
     }
+    report.ran_again = ran_again_note(why, report.duration_ms, report.status);
     if report.status == StepStatus::Passed {
         cache.note(format!(
             "cache: miss {place}{}",
@@ -3519,9 +3532,6 @@ fn step_place(step: &StepReport) -> String {
     }
 }
 
-/// The first line of the summary. It reads as a clean pass only when every
-/// step ran and passed, and it names every step that failed, timed out or
-/// needs setup.
 /// One line per step that took a minute or more and was not served from
 /// the cache: what differs from its last pass (ADR 0075).
 fn ran_again_lines(report: &VerifyReport) -> String {
@@ -3544,6 +3554,9 @@ fn ran_again_lines(report: &VerifyReport) -> String {
     }
 }
 
+/// The first line of the summary. It reads as a clean pass only when every
+/// step ran and passed, and it names every step that failed, timed out or
+/// needs setup.
 fn headline(report: &VerifyReport) -> String {
     let line = cache_headline(report);
     // A guessed lint that did not pass does not block, and is still in
@@ -5061,7 +5074,22 @@ mod tests {
         assert!(text.contains(line), "{text}");
         // Not in JSON.
         assert!(!format_verify_json(&report).contains("differ from its last pass"));
-        assert_eq!(RAN_AGAIN_NOTE_MS, 60_000);
+        // The line is for a step of a minute or more that has a last pass.
+        let why =
+            || Some("ran again: these differ from its last pass (x): files in api".to_owned());
+        assert_eq!(ran_again_note(why(), 60_000, StepStatus::Passed), why());
+        assert_eq!(ran_again_note(why(), 60_000, StepStatus::Failed), why());
+        assert_eq!(ran_again_note(why(), 59_999, StepStatus::Passed), None);
+        assert_eq!(ran_again_note(why(), 60_000, StepStatus::OverBudget), None);
+        assert_eq!(
+            ran_again_note(
+                Some("ran: no pass of it is kept to compare with".to_owned()),
+                600_000,
+                StepStatus::Passed
+            ),
+            None
+        );
+        assert_eq!(ran_again_note(None, 600_000, StepStatus::Passed), None);
     }
 
     /// From the 0.5.1 run on the course project (docs/reviews/cs464-0.5.1.md,

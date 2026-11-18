@@ -69,7 +69,7 @@ Build idea 1, first step only.
 
 Build idea 3, first step only.
 
-- **What changed:** beside each stored pass, `.firescale/steps/last-<id>.json` keeps one digest per project and shared folder the step's key covers. On a miss, `FSCALE_LOG=cache` prints `cache: why test in backend/auth_service ran again: these differ from its last pass (…): files in backend/shared`. A step that took a minute or more says the same in one line of the normal output (`Not from the cache: …`).
+- **What changed:** beside each stored pass, `.firescale/steps/last-<id>.digests` keeps one digest per project and shared folder the step's key covers. On a miss, `FSCALE_LOG=cache` prints `cache: why test in backend/auth_service ran again: these differ from its last pass (…): files in backend/shared`. A step that took a minute or more says the same in one line of the normal output (`Not from the cache: …`).
 - **Digests only.** No content, no value, no file's path beyond the name of a graph node. A test reads the kept file.
 - **It never decides a hit.** The key is made as before.
 - **Cut back to the first step:** my first version also named the command, each tool, each variable and the env files. The brief names the graph nodes only, so those are under "Later" in the ADR. When no file differs, the line says that something else in the key does.

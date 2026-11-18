@@ -69,14 +69,14 @@ describe('why a step ran again', () => {
     await writeFile(path.join(repo.root, '.env'), 'API_KEY=sk-test-never-shown-4d5e\n');
     const env = await verify();
     expect(why(env.stderr)).toEqual([
-      'cache: why lint ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
-      'cache: why test ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
+      "cache: why lint ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file, a setting or an agent's hook file), or that pass is no longer kept",
+      "cache: why test ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file, a setting or an agent's hook file), or that pass is no longer kept",
     ]);
 
     const zone = await verify({ TZ: 'Asia/Singapore' });
     expect(why(zone.stderr)).toEqual([
-      'cache: why lint ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
-      'cache: why test ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file or a setting), or that pass is no longer kept',
+      "cache: why lint ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file, a setting or an agent's hook file), or that pass is no longer kept",
+      "cache: why test ran again: no file it reads differs from its last pass (WHEN), so something else in its key does (the command, a tool, what is installed, a variable, an env file, a setting or an agent's hook file), or that pass is no longer kept",
     ]);
     // Nothing of this is in the normal output of a quick step.
     for (const result of [files, env, zone]) {
@@ -157,7 +157,7 @@ describe('why a step ran again', () => {
     const names = (await readdir(dir)).filter((name) => name.startsWith('last-'));
     expect(names).toHaveLength(2);
     for (const name of names) {
-      expect(name).toMatch(/^last-[0-9a-f]{16}\.json$/);
+      expect(name).toMatch(/^last-[0-9a-f]{16}\.digests$/);
       const text = await readFile(path.join(dir, name), 'utf8');
       expect(text).not.toContain(secret);
       expect(text).not.toContain('max-old-space-size');
