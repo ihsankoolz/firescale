@@ -289,3 +289,36 @@ describe('a repo shaped like the course project', () => {
     SLOW,
   );
 });
+
+describe('a way out for an agent that believes a test is wrong (ADR 0084)', () => {
+  const WAY_OUT =
+    '- If you believe a test or check is wrong, do not edit it: say which and why, and stop.\n';
+
+  it(
+    'is in the AGENTS.md block, and sync puts it into a block written before',
+    async () => {
+      const repo = await fixtures.create({
+        files: {
+          'firescale.config.json': AGENT_READY_CONFIG,
+          'AGENTS.md': '# Agents\n\nNotes of my own.\n',
+          'package.json': '{ "name": "x", "scripts": { "test": "node --test" } }\n',
+        },
+      });
+      expect((await runCli(['sync'], repo.root)).code).toBe(EXIT_OK);
+      const synced = await readFile(path.join(repo.root, 'AGENTS.md'), 'utf8');
+      expect(synced).toContain(
+        `- Never skip, delete or weaken a test, a lint rule or a check to make it pass.\n${WAY_OUT}`,
+      );
+      // The block as an older firescale wrote it: without the line.
+      const older = synced.replace(WAY_OUT, '');
+      await writeFile(path.join(repo.root, 'AGENTS.md'), older);
+      const check = await runCli(['sync', '--check'], repo.root);
+      expect(check.code).toBe(EXIT_VIOLATIONS);
+      expect(check.stdout).toContain('agent-ready/agents-md');
+      expect((await runCli(['sync'], repo.root)).code).toBe(EXIT_OK);
+      expect(await readFile(path.join(repo.root, 'AGENTS.md'), 'utf8')).toBe(synced);
+      expect(synced.startsWith('# Agents\n\nNotes of my own.\n')).toBe(true);
+    },
+    SLOW,
+  );
+});
