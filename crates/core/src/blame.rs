@@ -2265,37 +2265,50 @@ fn own_tests(
     let Some(runner) = crate::pertest::TestRunner::of(command, script.as_deref()) else {
         return Vec::new();
     };
-    // `cargo test` names a test by its modules, not by its file: the Rust
-    // files of the change are read for the tests they hold.
-    let rust_tests: Vec<(&String, BTreeSet<String>)> = if runner
-        == crate::pertest::TestRunner::Cargo
-    {
-        changed
-            .iter()
-            .filter(|path| path.ends_with(".rs"))
-            .filter_map(|path| {
-                let source = fs::read_to_string(folder_of(root, Some(path))).ok()?;
-                let file = crate::tamper::read_test_file(&source, crate::tamper::Language::Rust);
-                let names = file
-                    .tests
-                    .iter()
-                    .map(|test| last_segment(&test.id).to_owned())
-                    .collect();
-                Some((path, names))
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    failed
+    let new_tests: Vec<&crate::verify::FailedTest> = failed
         .iter()
         .filter(|test| test.label == Some(Label::New) && crate::pertest::is_test(&test.id))
+        .collect();
+    // `cargo test` names a test by its modules, not by its file: the Rust
+    // files of the change are read for the tests they hold.
+    let rust_tests: Vec<(&String, BTreeSet<String>)> =
+        if runner == crate::pertest::TestRunner::Cargo && !new_tests.is_empty() {
+            changed
+                .iter()
+                .filter(|path| path.ends_with(".rs"))
+                .filter_map(|path| {
+                    let source = fs::read_to_string(folder_of(root, Some(path))).ok()?;
+                    let file =
+                        crate::tamper::read_test_file(&source, crate::tamper::Language::Rust);
+                    let names = file
+                        .tests
+                        .iter()
+                        .map(|test| last_segment(&test.id).to_owned())
+                        .collect();
+                    Some((path, names))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+    new_tests
+        .into_iter()
         .filter_map(|test| {
             let file = match crate::pertest::file_of(runner, &test.id) {
                 Some(file) => touched(file, folder, changed)?,
                 None => rust_tests
                     .iter()
-                    .find(|(_, names)| names.contains(last_segment(&test.id)))
+                    .find(|(path, names)| {
+                        // Any part of the name: cargo writes a parametrised
+                        // test as `tests::doubles::case_1`. A doc test names
+                        // its file: `pay (doc)::src/lib.rs - charge (line 1)`.
+                        test.id.split("::").any(|part| names.contains(part))
+                            || test.id.split("::").any(|part| {
+                                part.split(" - ").next().is_some_and(|file| {
+                                    path.ends_with(file) && file.ends_with(".rs")
+                                })
+                            })
+                    })
                     .map(|(path, _)| (*path).clone())?,
             };
             Some((file, test.id.clone()))

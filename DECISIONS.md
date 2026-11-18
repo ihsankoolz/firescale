@@ -40,6 +40,7 @@ Build idea 4, part 1, and verification idea 3, part (i).
 - **The failing test first:** `packages/cli/src/flaky-own-tests.test.ts`. In WSL, before the change: 5 of 9 failed with `expected +0 to be 1` (the step was `flaky`). The other 4 are guards: with another file edited, the failure is still `flaky`.
 - **Decided on your behalf:** the step is not run again at all, since the second run could no longer change the label. Say if you want the rerun kept for what it shows.
 - **What it can cost:** an honest edit to a file that holds an already flaky test blocks when that test fails. Running verify again is the way out.
+- **The fresh review found nothing the change broke, and ways a test of the change is not recognised.** Two are fixed, test first: a parametrised Rust test (`tests::doubles::case_1`) and a Rust doc test. The rest are in ADR 0073 under "Not done": macro-generated Rust tests, a Jest `FAIL` line that ends with a time, a Vitest project name before the file, a test file outside the runner's root, two runners in one command. In each the failure is run again as before this change.
 
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
