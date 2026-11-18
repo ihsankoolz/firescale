@@ -33,6 +33,7 @@ const GRADLE = "plugins { id 'java' }\n";
 /** A Node project in a subfolder, with no scripts: its commands come from tool config files. */
 const WEB = `${JSON.stringify({ name: 'web', private: true }, null, 2)}\n`;
 const PYPROJECT = '[project]\nname = "demo"\nversion = "0.1.0"\n';
+const SWIFT_PACKAGE = '// swift-tools-version:6.0\n';
 
 interface Case {
   /** The file that appears, and what it is. */
@@ -125,6 +126,27 @@ const CASES: Case[] = [
     content: 'export default [];\n',
     files: { 'web/package.json': WEB },
     command: 'npx --no vitest run',
+    stale: [AGENTS_MD],
+  },
+  // A linter's config in a Swift package decides its lint command. These
+  // files were in no hand-kept list (ADR 0069).
+  {
+    adds: 'app/.swiftlint.yml',
+    files: { 'app/Package.swift': SWIFT_PACKAGE },
+    command: 'swiftlint lint --strict',
+    stale: [AGENTS_MD],
+  },
+  {
+    adds: 'app/.swiftlint.yaml',
+    files: { 'app/Package.swift': SWIFT_PACKAGE },
+    command: 'swiftlint lint --strict',
+    stale: [AGENTS_MD],
+  },
+  {
+    adds: 'app/.swift-format',
+    content: '{}\n',
+    files: { 'app/Package.swift': SWIFT_PACKAGE },
+    command: 'swift format lint --recursive --strict .',
     stale: [AGENTS_MD],
   },
   // A lockfile below the root names that project's package manager.
