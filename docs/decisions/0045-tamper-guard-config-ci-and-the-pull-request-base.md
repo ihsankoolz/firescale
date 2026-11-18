@@ -1,6 +1,6 @@
 # 0045 — The tamper guard: config and CI detectors, and the base GitHub gives
 
-Status: accepted (2026-11-14, M25). Extends ADR 0042 and ADR 0044. **Changes ADR 0041 on one point**: the generated workflow now uses `pull_request_target`, for one job that runs no code of the pull request (below, "Why `pull_request_target` here").
+Status: accepted (2026-11-14, M25). Extends ADR 0042 and ADR 0044. **Changes ADR 0041 on one point**: the generated workflow now uses `pull_request_target`, for one job that runs no code of the pull request (below, "Why `pull_request_target` here"). The owner accepted this use of `pull_request_target` on 2026-11-18.
 
 ## Context
 
