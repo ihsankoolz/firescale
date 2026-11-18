@@ -974,6 +974,21 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
     // Without the plan nothing says which programs verify's steps need:
     // say so, rather than check nothing in silence (review of ADR 0085).
     if let Err(error) = &plan {
+        let ts = root.join(firescale_core::config::TS_CONFIG).exists();
+        let (detail, fix) = if ts {
+            (
+                "doctor does not run firescale.config.ts (it is code), so the verify plan is not known and the programs of verify's steps were not checked.".to_owned(),
+                "keep the config in firescale.config.json to have them checked".to_owned(),
+            )
+        } else {
+            (
+                format!(
+                    "the verify plan could not be built, so the programs of verify's steps were not checked: {}",
+                    error.message()
+                ),
+                "fix the firescale config, then run fscale doctor again; fscale verify --dry-run shows the plan".to_owned(),
+            )
+        };
         add_checks(
             &mut report,
             vec![firescale_core::doctor::Finding {
@@ -981,11 +996,8 @@ fn doctor(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
                 project: None,
                 subject: "verify plan".to_owned(),
                 status: firescale_core::doctor::Status::Warning,
-                detail: format!(
-                    "the verify plan could not be built, so the programs of verify's steps were not checked: {}",
-                    error.message()
-                ),
-                fix: Some("fix the firescale config, then run fscale doctor again; fscale verify --dry-run shows the plan".to_owned()),
+                detail,
+                fix: Some(fix),
             }],
         );
     }
