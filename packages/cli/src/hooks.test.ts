@@ -1347,20 +1347,26 @@ describe("the stop hook's time limit (ADR 0083)", () => {
     return settings.hooks.Stop[0]?.hooks[0];
   }
 
-  it("writes Claude Code's default limit explicitly when no step has a kept time, and none for Codex or Cursor", async () => {
+  it('writes no limit while no step has a kept time, and one when install runs again after a verify', async () => {
     const repo = await timedRepo(null);
     const result = await install(['--all'], repo.root);
     expect(result.code).toBe(EXIT_OK);
+    // Nothing to set it from: Claude Code's default stays, and a later
+    // install can still write one (review of ADR 0083, finding 1).
     expect(await claudeEntry(repo.root)).toEqual({
       type: 'command',
       command: `${PINNED} hooks run --agent claude`,
-      timeout: 600,
     });
     expect(await read(repo.root, HOOK_FILES.codex)).not.toContain('timeout');
     expect(await read(repo.root, HOOK_FILES.cursor)).not.toContain('timeout');
     expect(result.stdout).toContain(
-      "Claude Code's stop hook may run for 10m (`timeout` in .claude/settings.json), its default: no step has a kept time yet. After a fscale verify, run this again to set it from the steps' times, or pass --timeout <time>.\n",
+      "Claude Code's stop hook has no `timeout` in .claude/settings.json, so Claude Code's default of 10m applies: no step has a kept time yet. After a fscale verify, run this again to set it from the steps' times, or pass --timeout <time>.\n",
     );
+    const verify = await runCli(['verify'], repo.root);
+    expect(verify.code).toBe(EXIT_OK);
+    const again = await install(['--agent', 'claude'], repo.root);
+    expect(again.stdout).toContain('timeout added     .claude/settings.json');
+    expect((await claudeEntry(repo.root))?.timeout).toBe(600);
   });
 
   it('sets the limit from the kept step times: twice their sum, and the base run, in whole minutes', async () => {
@@ -1446,6 +1452,39 @@ describe("the stop hook's time limit (ADR 0083)", () => {
     });
     const noLimit = await runCli(['doctor'], none.root, await npxOnly());
     expect(noLimit.stdout).toContain("more than its limit of 10m (Claude Code's default)");
+  });
+
+  it('keeps a limit in the file that is not a whole number, and doctor reads a number of seconds with a point', async () => {
+    const entry = (timeout: unknown) =>
+      `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `${PINNED} hooks run --agent claude`, timeout }] }] } }, null, 2)}
+`;
+    const point = await timedRepo(20, { '.claude/settings.json': entry(900.5) });
+    const before = await read(point.root, HOOK_FILES.claude);
+    const result = await install(['--agent', 'claude'], point.root);
+    expect(result.code).toBe(EXIT_OK);
+    expect(await read(point.root, HOOK_FILES.claude)).toBe(before);
+    expect(result.stdout).toContain(
+      "Claude Code's stop hook keeps the `timeout` of 900.5 in .claude/settings.json: firescale does not change a value in the file. To give it 45m, edit that value.\n",
+    );
+    const doctor = await runCli(['doctor'], point.root, await npxOnly());
+    expect(doctor.stdout).toContain('more than its limit of 15m (`timeout`)');
+    const text = await timedRepo(20, { '.claude/settings.json': entry('900') });
+    const odd = await runCli(['doctor'], text.root, await npxOnly());
+    expect(odd.stdout).toContain(
+      'more than its limit of 10m (Claude Code\'s default: the `timeout` in the file, "900", is not a number of seconds)',
+    );
+  });
+
+  it('refuses a limit longer than a timer can wait, and --timeout outside hooks install', async () => {
+    const repo = await timedRepo(20);
+    const long = await install(['--agent', 'claude', '--timeout', '3000000'], repo.root);
+    expect(long.code).toBe(EXIT_USAGE);
+    expect(long.stderr).toContain(
+      '--timeout needs a time longer than zero and at most 2147483 seconds',
+    );
+    const verify = await runCli(['verify', '--timeout', '5m'], repo.root);
+    expect(verify.code).toBe(EXIT_USAGE);
+    expect(verify.stderr).toContain('--timeout is for `fscale hooks install`');
   });
 
   it('doctor says nothing about the limit when the kept times fit in it', async () => {
