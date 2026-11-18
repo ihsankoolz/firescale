@@ -361,6 +361,21 @@ fn maven_name(f: &Folder) -> Option<String> {
     (!name.is_empty() && !name.contains("${")).then(|| name.to_owned())
 }
 
+/// A `pom.xml` without its `<!-- -->` comments.
+fn without_xml_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("-->") {
+            Some(end) => rest = &rest[start + end + "-->".len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 const MAVEN: Ecosystem = Ecosystem {
     kind: "maven",
     inputs: &["pom.xml", "mvnw", "mvnw.cmd"],
@@ -399,7 +414,14 @@ const MAVEN: Ecosystem = Ecosystem {
             tools: Vec::new(),
             commands: Commands {
                 build: Some(format!("{mvn} -B package -DskipTests")),
-                test: Some(format!("{mvn} -B test")),
+                // A build with modules is tested with `verify`: a module can
+                // test the packaged jar of another, and `test` stops before
+                // `package` (ADR 0071).
+                test: Some(if without_xml_comments(&pom).contains("<modules>") {
+                    format!("{mvn} -B verify")
+                } else {
+                    format!("{mvn} -B test")
+                }),
                 lint,
                 ..Commands::default()
             },

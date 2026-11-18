@@ -156,7 +156,7 @@ jobs:
               sha: e67037d17f94415179066c8301fee4a610d9515e,
               os: ubuntu-latest,
               dir: '.',
-              test: mvn -B test,
+              test: mvn -B verify,
             }
           - {
               ecosystem: gradle kotlin,

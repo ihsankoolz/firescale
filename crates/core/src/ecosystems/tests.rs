@@ -118,10 +118,16 @@ fn a_maven_build_with_modules_tests_with_verify() {
 </project>
 ",
         ),
-        ("gson/pom.xml", "<project><artifactId>gson</artifactId></project>
-"),
-        ("test-jpms/pom.xml", "<project><artifactId>test-jpms</artifactId></project>
-"),
+        (
+            "gson/pom.xml",
+            "<project><artifactId>gson</artifactId></project>
+",
+        ),
+        (
+            "test-jpms/pom.xml",
+            "<project><artifactId>test-jpms</artifactId></project>
+",
+        ),
     ]);
     assert_eq!(project.commands.test.as_deref(), Some("mvn -B verify"));
     assert_eq!(
@@ -148,7 +154,11 @@ fn a_maven_build_with_modules_tests_with_verify() {
 ",
     ] {
         let project = only_project(&[("pom.xml", pom)]);
-        assert_eq!(project.commands.test.as_deref(), Some("mvn -B test"), "{pom}");
+        assert_eq!(
+            project.commands.test.as_deref(),
+            Some("mvn -B test"),
+            "{pom}"
+        );
     }
 }
 
