@@ -1,6 +1,6 @@
 {
   "name": "@firescale/agents",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "private": true,
   "description": "Agent adapters for firescale's guarded fix runner: Claude Code and Codex behind one protocol.",
   "license": "MIT",
