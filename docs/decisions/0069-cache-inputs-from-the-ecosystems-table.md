@@ -1,6 +1,6 @@
 # 0069 — The project-type table, step 1: each ecosystem lists the files it reads, and the cache inputs are built from that
 
-Status: proposed (2026-11-18, 0.5.3 run). **Not merged: it waits for the owner.** Amends ADR 0051 (ecosystems). First step of part C of `docs/reviews/ponytail-audit.md`.
+Status: accepted (proposed in the 0.5.3 run; the owner had it merged on 2026-11-18, in the 0.5.4 run). Amends ADR 0051 (ecosystems). First step of part C of `docs/reviews/ponytail-audit.md`.
 
 ## Context
 
