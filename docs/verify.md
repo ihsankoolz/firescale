@@ -620,20 +620,20 @@ Affected only (uncommitted and untracked changes; 1 changed file). Why each ran:
 }
 ```
 
-| `type`                                                                                                    | Means                                                                                   | More fields     |
-| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | --------------- |
-| `changed-file`                                                                                            | The unit holds changed files                                                            | `files`         |
-| `depends-on`                                                                                              | It depends on a project or shared folder the change reaches                             | `on`, `sources` |
-| `root-lockfile`, `ci-file`, `compose-file`, `config-file`, `unowned-file`, `root-file`, `agent-hook-file` | A file that makes every unit run                                                        | `file`          |
-| `config-setting`                                                                                          | A setting of `firescale.config.json` changed what these steps run                       | `steps`         |
-| `reads-whole-repo`                                                                                        | Its steps can read every file of the repo, and the config or an agent hook file changed |                 |
-| `no-base`, `shallow-clone`, `nothing-to-compare`                                                          | There is nothing to compare with, so every unit runs                                    |                 |
-| `root-commands`                                                                                           | The repo root's own commands, which run whenever something they may read changed        |                 |
-| `undetected-project`                                                                                      | A folder named only in the config: it runs whenever anything changed                    |                 |
-| `not-affected`                                                                                            | No change reaches it                                                                    |                 |
-| `other`                                                                                                   | Read `text`                                                                             |                 |
+| `type`                                                                                                    | Means                                                                                                                                                 | More fields     |
+| --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `changed-file`                                                                                            | The unit holds changed files                                                                                                                          | `files`         |
+| `depends-on`                                                                                              | It depends on a project or shared folder the change reaches                                                                                           | `on`, `sources` |
+| `root-lockfile`, `ci-file`, `compose-file`, `config-file`, `unowned-file`, `root-file`, `agent-hook-file` | A file that makes every unit run                                                                                                                      | `file`          |
+| `config-setting`                                                                                          | A setting of `firescale.config.json` changed what these steps run. With no steps: a setting every step shares, or the base's config could not be read | `steps`         |
+| `reads-whole-repo`                                                                                        | Its steps can read every file of the repo, and the config or an agent hook file changed                                                               |                 |
+| `no-base`, `shallow-clone`, `nothing-to-compare`                                                          | There is nothing to compare with, so every unit runs                                                                                                  |                 |
+| `root-commands`                                                                                           | The repo root's own commands, which run whenever something they may read changed                                                                      |                 |
+| `undetected-project`                                                                                      | A folder named only in the config: it runs whenever anything changed                                                                                  |                 |
+| `not-affected`                                                                                            | No change reaches it                                                                                                                                  |                 |
+| `other`                                                                                                   | Read `text`                                                                                                                                           |                 |
 
-When every unit runs, `everything` holds the reason and each unit has the same one. A program should treat a type it does not know as `other`. The exit code is 0 whatever is affected.
+When every unit runs, `everything` holds the reason and each detected project has the same one. A folder named only in the config keeps `undetected-project`. A program should treat a type it does not know as `other`. The exit code is 0 whatever is affected.
 
 On Windows the command line is handed to `cmd` exactly as written, so `cmd` quoting works (`node -e "..."`, `"C:\Program Files\tool\tool.exe" arg`).
 

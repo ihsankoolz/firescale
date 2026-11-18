@@ -14,9 +14,9 @@ Status: accepted (2026-11-18, Track A of the run after 0.5.4; the owner's brief)
 - `units` has the repo root's own steps first (no `project`), then each project, in plan order. Each has `affected`, a `reason`, and the `steps` that have a command, with the command.
 - **A reason is `{ "type": ..., "text": ... }`**, with more fields by type: `changed-file` has `files`; `depends-on` has `on` (the folder it depends on) and `sources` (the evidence for the edge); the types for a file that runs everything (`root-lockfile`, `ci-file`, `compose-file`, `config-file`, `unowned-file`, `root-file`, `agent-hook-file`) have `file`; `config-setting` has `steps`. The others: `reads-whole-repo`, `no-base`, `shallow-clone`, `nothing-to-compare`, `root-commands`, `undetected-project`, `not-affected`, `other`.
 - `text` is the reason the plan for people prints. The type is set where the words are made, not read back out of them.
-- When every unit runs, `everything` is the reason and each unit carries it.
+- When every unit runs, `everything` is the reason and each detected project carries it. A folder named only in the config keeps `undetected-project`.
 - The exit code is 0 whatever is affected.
-- Without `--affected`, `--dry-run --json` is still refused: there the plan has no reasons to give.
+- Without `--affected`, `--dry-run --json` is still refused: there the plan has no reasons to give. Its message gained one sentence that names the new form.
 
 `Why` in `crates/core/src/graph.rs` is the type. `affected_except` sets it beside each reason. `limit_to_affected`, `ConfigEffect::mark` and `mark_file_readers` carry it into `AffectedPlan.typed`. `format_affected_plan_json` in `crates/core/src/verify.rs` prints it. Schema: `docs/schemas/affected-plan.schema.json`. Types: `AffectedPlan`, `AffectedPlanUnit` and `AffectedReason` in `packages/sdk/src/types.ts`.
 
@@ -44,8 +44,13 @@ Nothing blocks. Decided on your behalf: the names of the types; `on` is a folder
 - `--exit-code`.
 - The typed reason in the JSON of a real run.
 - With `--budget`, the JSON does not name the steps a run would leave out; the plan for people does.
+- `config-setting` with no steps stands for two things the words tell apart: a setting every step shares, and a base config that could not be read.
 - A reason has one type. A unit that holds a changed file and also depends on a changed one is `changed-file`.
 - When the repo root's own steps run for a workspace member, their reason is that member's (`changed-file` or `depends-on`), and the member's name is only in `text`.
+
+## From the fresh review
+
+It found no change to what is affected, to any reason's words, to a real run's output or to a key. It found three places where the new output or its docs were not exact: `config-setting` also stands for an unreadable base config; a folder named only in the config does not carry the reason for everything; the refusal without `--affected` has a longer message. The docs, the schema and the types now say each.
 
 ## Later
 
