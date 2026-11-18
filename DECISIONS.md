@@ -130,6 +130,26 @@ Real-repo bug 4. There is a clear rule, so it is built:
 
 **What changes for a Maven repo with modules:** the test step also packages and runs integration tests (Failsafe), so it takes longer, and tests that need a service can now fail where `mvn test` passed. `verify.test` in the config names another command.
 
+**Pull request 5: the third real-repo run, the measured budget run, and diagrams**
+
+- **The 15 real repos, third run** ([run 44273588176](https://github.com/ihsankoolz/firescale/actions/runs/44273588176), fscale at `521fa66`): **13 right, 2 wrong, 0 not judged.** It was 8, 6 and 1 in the first run and 9, 5 and 1 in the second. GuardClauses, serilog and gson are right now; SwiftyJSON can be judged now and is right; `dotnet test` and `flutter test` ran through fscale for the first time. The review has the table and the limits.
+- **Still wrong: swift-argument-parser and provider.** Each has a config file for its linter, so the lint is not a guess and it blocks, and fscale runs it more strictly than the repo's CI does. Their tests now run and the output shows the result: they pass in swift-argument-parser and in `packages/provider`, and fail in provider's devtools extension, whose code does not compile with this Flutter.
+- **README:** the budget run that was measured on 2026-11-17 is in "One real project", and the real-repo numbers are the third run's. The budget run's figures (0.5.2, `--budget 10m --jobs 3`, two suites of 31m 26s and 1h 36m not run, about 4m 45s in all, 4m 42s for the slowest step that ran, the web app's failure `pre-existing`) are the ones you gave in the brief for this run; no output of that run is in this repo. The older notes below that say no such run was measured were true when written.
+- **Five diagrams in the README and eight in the new `docs/architecture.md`**, as Mermaid code blocks. A subagent compared every box, arrow and sentence with the code. It confirmed none exactly as first written, corrected all 13 and deleted none; the graph diagram was redrawn. It also replaced the ADR links, which were first written from memory.
+- **`node scripts/check-mermaid.mjs`** renders every diagram with `mmdc` and exits 1 when one does not parse. All 13 render.
+- **The npm package's README has no diagram.** `scripts/npm-readme.mjs` puts a link to the README on GitHub in place of the section between the two `diagrams` marks, and `scripts/pack-npm.mjs` writes that. The test `has no diagram, and links to the README on GitHub in their place` was seen failing with the diagrams left in.
+
+**Decided on your behalf**
+
+- **The diagram check is a local command, not a CI step.** `mmdc` downloads a browser, and CI would need it on every run. The script takes no `MMDC` variable: the first push had one, and the repo's own `core/env-example` rule then failed the dogfooding test on Linux. The command is in AGENTS.md. Say so if you want it in CI.
+
+**Not done**
+
+- The third run used the Maven rule as first pushed, before it was narrowed. gson's command is the same either way; the merged code was not run on the 15 repos.
+- The review of this pull request found these, all fixed before the merge: the sentence "their tests now run and pass" was wrong for provider's devtools extension; older sentences in the review contradicted the third run; nothing tested the README that `pack-npm` writes; `check-mermaid.mjs` broke on a Windows path with a space, gave no hint when `mmdc` was missing, and passed with no diagram found; `npm-readme.mjs` printed nothing when run through a linked folder.
+- What the fact-check did not open: the inside of `narrow_report`, `lintsource.rs`, and the adapters' TypeScript. ADRs were matched to sections by title and headings, not read in full.
+- Two research reports on what firescale could take from other tools were written in this run and are on the laptop, outside the repo. Nothing from them is built.
+
 ## 0.5.3 — the overnight run of 2026-11-18
 
 **Stage 0: the tamper benchmark is started.** `.github/workflows/tamper-bench.yml` was started by hand for the first time on 2026-11-17, 16:42 UTC: before `v0.5.1`, after `v0.5.2`, [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594). Its findings were labelled in Stage 3, below.

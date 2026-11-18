@@ -145,6 +145,14 @@ describe('npm packaging', () => {
     }
   });
 
+  it('ships a README with no diagram, and a link to the one on GitHub', async () => {
+    // npm does not draw Mermaid (scripts/npm-readme.mjs).
+    const readme = await readFile(path.join(extracted['firescale'] ?? '', 'README.md'), 'utf8');
+    expect(readme).toContain('# firescale');
+    expect(readme).not.toContain('```mermaid');
+    expect(readme).toContain('(https://github.com/ihsankoolz/firescale#how-it-works)');
+  });
+
   it('ships no test-only file in the firescale or sdk package', async () => {
     // A test, a snapshot, a test helper or a fixture builder: `course-fixture`
     // is the fixture repo the CLI's own tests build. `dist/testing.js` of the
