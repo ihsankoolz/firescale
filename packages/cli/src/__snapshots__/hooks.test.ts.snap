@@ -8,7 +8,8 @@ fscale: .claude/settings.json was left as it is: the stop hook cannot go in as n
   "hooks": [
     {
       "type": "command",
-      "command": "npx --yes firescale@0.5.4 hooks run --agent claude"
+      "command": "npx --yes firescale@0.5.4 hooks run --agent claude",
+      "timeout": 600
     }
   ]
 }
@@ -76,6 +77,7 @@ installed         .cursor/hooks.json
 
 Not every hook is installed. Refused and left as it was: .codex/hooks.json. The reason, and what to add by hand, is printed above this list (on stderr). Do that, then run this again.
 The hook is in .claude/settings.json, .cursor/hooks.json: there the agent runs \`npx --yes firescale@0.5.4 hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+Claude Code's stop hook may run for 10m (\`timeout\` in .claude/settings.json), its default: no step has a kept time yet. After a fscale verify, run this again to set it from the steps' times, or pass --timeout <time>.
 The hook starts on this machine: \`npx --yes firescale@0.5.4 --version --json\` answered firescale 0.5.4.
 "
 `;
@@ -87,7 +89,8 @@ exports[`fscale hooks install > refuses a file written on one line, and says wha
   "hooks": [
     {
       "type": "command",
-      "command": "npx --yes firescale@0.5.4 hooks run --agent claude"
+      "command": "npx --yes firescale@0.5.4 hooks run --agent claude",
+      "timeout": 600
     }
   ]
 }
@@ -104,7 +107,8 @@ exports[`fscale hooks install > writes a hook file for each of the three agents 
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes firescale@0.5.4 hooks run --agent claude"
+            "command": "npx --yes firescale@0.5.4 hooks run --agent claude",
+            "timeout": 600
           }
         ]
       }
@@ -157,6 +161,7 @@ installed         .codex/hooks.json
 installed         .cursor/hooks.json
 
 Each agent now runs \`npx --yes firescale@0.5.4 hooks run --agent <name>\` before it stops, and keeps working while \`fscale verify\` fails.
+Claude Code's stop hook may run for 10m (\`timeout\` in .claude/settings.json), its default: no step has a kept time yet. After a fscale verify, run this again to set it from the steps' times, or pass --timeout <time>.
 The hook starts on this machine: \`npx --yes firescale@0.5.4 --version --json\` answered firescale 0.5.4.
 "
 `;

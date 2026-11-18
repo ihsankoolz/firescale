@@ -57,6 +57,8 @@ Options:
   --bin <command>  hooks install: how the hook starts fscale (default: the repo's own
                    fscale package script, else the firescale it installs, else
                    npx --yes firescale@<this version>)
+  --timeout <time> hooks install: the time limit written on Claude Code's stop hook
+                   (30m, 1h 30m; default: from the steps' kept times, at least 10m)
   --jobs <n>       verify: run up to <n> projects at once (default: 1)
   --budget <time>  verify, not in CI and not in the stop hook: do not start a step that
                    took longer than <time> (30m, 90s, 1h 30m) when it last ran; it is
