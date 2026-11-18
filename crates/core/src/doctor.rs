@@ -2321,6 +2321,49 @@ mod tests {
         );
     }
 
+    // Found on real repos (docs/reviews/real-repos-0.5.3.md, bug 2): doctor
+    // said OK for a Dart package whose packages were not fetched.
+    #[test]
+    fn a_dart_project_whose_packages_are_not_fetched_is_a_problem() {
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let app = root.join("app");
+        fs::create_dir_all(app.join("lib")).unwrap();
+        fs::write(app.join("pubspec.yaml"), "name: app\n").unwrap();
+        fs::write(app.join("lib").join("app.dart"), "void main() {}\n").unwrap();
+        let dependencies = |root: &Path| -> Vec<(String, Status, String, Option<String>)> {
+            let facts = crate::facts::detect_facts_with(root, None).unwrap();
+            run_doctor(root, &facts, &OnlySwift)
+                .checks
+                .into_iter()
+                .filter(|check| check.section == "dependencies")
+                .map(|check| (check.subject, check.status, check.detail, check.fix))
+                .collect()
+        };
+        assert_eq!(
+            dependencies(root),
+            [(
+                "app packages".to_owned(),
+                Status::Problem,
+                "the packages of app/pubspec.yaml are not fetched: there is no .dart_tool/package_config.json."
+                    .to_owned(),
+                Some("in app: dart pub get".to_owned())
+            )]
+        );
+        fs::create_dir_all(app.join(".dart_tool")).unwrap();
+        fs::write(app.join(".dart_tool").join("package_config.json"), "{}\n").unwrap();
+        assert_eq!(
+            dependencies(root),
+            [(
+                "app packages".to_owned(),
+                Status::Ok,
+                "the packages of app/pubspec.yaml are fetched (.dart_tool/package_config.json is there)"
+                    .to_owned(),
+                None
+            )]
+        );
+    }
+
     #[test]
     fn python_names_and_versions_compare_like_pip() {
         assert_eq!(

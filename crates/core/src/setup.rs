@@ -1595,6 +1595,43 @@ mod tests {
     }
 
     // ADR 0055: the cmake starter's lint target without clang-format.
+    // Found on real repos (docs/reviews/real-repos-0.5.3.md, bug 2): the
+    // analyzer before `pub get` read as a failed lint.
+    #[test]
+    fn dart_packages_that_are_not_fetched_are_a_setup_problem() {
+        const UNDEFINED: &str = "Analyzing app...\n\n  error - test/clock_test.dart:3:8 - Target of URI doesn't exist: 'package:test/test.dart'. Try creating the file referenced by the URI, or try using a URI for a file that does exist. - uri_does_not_exist\n  error - test/clock_test.dart:174:5 - The function 'test' isn't defined. Try importing the library that defines 'test', correcting the name to the name of an existing function, or defining a function named 'test'. - undefined_function\n\n2 issues found.\n";
+        const OTHER: &str = "Analyzing app...\n\n  error - lib/a.dart:1:9 - Expected to find ';'. - expected_token\n\n1 issue found.\n";
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let app = root.join("packages").join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        // No pubspec.yaml: not a Dart project, so nothing is concluded.
+        assert!(setup_problem(UNDEFINED, Some(3), root, &app).is_none());
+
+        std::fs::write(app.join("pubspec.yaml"), "name: app\n").unwrap();
+        let p = setup_problem(UNDEFINED, Some(3), root, &app).unwrap();
+        assert_eq!(
+            p.reason,
+            "the Dart packages are not fetched (there is no .dart_tool/package_config.json)"
+        );
+        assert_eq!(p.missing_program, None);
+        assert_eq!(p.missing_service, None);
+        // An error that fetching would not fix is a failure.
+        assert!(setup_problem(OTHER, Some(3), root, &app).is_none());
+
+        // Fetched, in the project or in a workspace root above it: the same
+        // output is a failure of the code.
+        let config = root.join(".dart_tool");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("package_config.json"), "{}\n").unwrap();
+        assert!(setup_problem(UNDEFINED, Some(3), root, &app).is_none());
+        std::fs::remove_dir_all(&config).unwrap();
+        let config = app.join(".dart_tool");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("package_config.json"), "{}\n").unwrap();
+        assert!(setup_problem(UNDEFINED, Some(3), root, &app).is_none());
+    }
+
     #[test]
     fn the_cmake_starter_without_clang_format_is_a_setup_problem() {
         let output = "clang-format was not found on the PATH; install it to run the lint target\ngmake[3]: *** [CMakeFiles/lint.dir/build.make:71: CMakeFiles/lint] Error 1\ngmake: *** [Makefile:174: lint] Error 2\n";
