@@ -1338,6 +1338,31 @@ fn mypy_missing(line: &str) -> Option<&str> {
     name_after(line, at + STUB.len())
 }
 
+/// True when `dir` is a Dart or Flutter project (it has a `pubspec.yaml`)
+/// and `pub get` has not run for it: no `.dart_tool/package_config.json`
+/// in it, nor in a folder above it up to `root` (a pub workspace keeps one
+/// at its root).
+pub(crate) fn dart_packages_not_fetched(root: &Path, dir: &Path) -> bool {
+    if !dir.join("pubspec.yaml").is_file() {
+        return false;
+    }
+    let mut at = Some(dir);
+    while let Some(folder) = at {
+        if folder
+            .join(".dart_tool")
+            .join("package_config.json")
+            .is_file()
+        {
+            return false;
+        }
+        if folder == root {
+            break;
+        }
+        at = folder.parent();
+    }
+    true
+}
+
 /// Looks at the output of a failed step for a sign that the environment is
 /// not set up. `dir` is the folder the step ran in, `root` the repo root.
 /// Returns `None` when unsure: then the step is a normal failure.
@@ -1371,6 +1396,25 @@ pub fn setup_problem(
     }
     if reports_failed_tests(output) {
         return None;
+    }
+    // Dart and Flutter: before `pub get` the analyzer cannot follow a
+    // `package:` import, and every name that comes from one is undefined.
+    // `dart analyze` puts ` - ` before the code of a finding; `flutter
+    // analyze` puts a bullet there on Linux and macOS.
+    if [" - ", " \u{2022} "].iter().any(|separator| {
+        output.contains(&format!("{separator}uri_does_not_exist"))
+            || output.contains(&format!("{separator}undefined_"))
+    }) && dart_packages_not_fetched(root, dir)
+    {
+        return Some(SetupProblem {
+            reason:
+                "the Dart packages are not fetched (there is no .dart_tool/package_config.json)"
+                    .to_owned(),
+            missing_program: None,
+            missing_service: None,
+            start_services: None,
+            missing_package: None,
+        });
     }
     let lines: Vec<&str> = output.lines().collect();
     let has_stack = output.contains("Require stack:") || output.contains("MODULE_NOT_FOUND");
@@ -1592,6 +1636,51 @@ mod tests {
             reason(collection, 2),
             "the Python module 'jwt' is not installed"
         );
+    }
+
+    // Found on real repos (docs/reviews/real-repos-0.5.3.md, bug 2): the
+    // analyzer before `pub get` read as a failed lint.
+    #[test]
+    fn dart_packages_that_are_not_fetched_are_a_setup_problem() {
+        const UNDEFINED: &str = "Analyzing app...\n\n  error - test/clock_test.dart:3:8 - Target of URI doesn't exist: 'package:test/test.dart'. Try creating the file referenced by the URI, or try using a URI for a file that does exist. - uri_does_not_exist\n  error - test/clock_test.dart:174:5 - The function 'test' isn't defined. Try importing the library that defines 'test', correcting the name to the name of an existing function, or defining a function named 'test'. - undefined_function\n\n2 issues found.\n";
+        const OTHER: &str = "Analyzing app...\n\n  error - lib/a.dart:1:9 - Expected to find ';'. - expected_token\n\n1 issue found.\n";
+        let repo = tempfile::tempdir().unwrap();
+        let root = repo.path();
+        let app = root.join("packages").join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        // No pubspec.yaml: not a Dart project, so nothing is concluded.
+        assert!(setup_problem(UNDEFINED, Some(3), root, &app).is_none());
+
+        std::fs::write(app.join("pubspec.yaml"), "name: app\n").unwrap();
+        let p = setup_problem(UNDEFINED, Some(3), root, &app).unwrap();
+        assert_eq!(
+            p.reason,
+            "the Dart packages are not fetched (there is no .dart_tool/package_config.json)"
+        );
+        assert_eq!(p.missing_program, None);
+        assert_eq!(p.missing_service, None);
+        // `flutter analyze` separates the fields with a bullet on Linux and
+        // macOS, as the real-repos run printed them.
+        const FLUTTER: &str = "Analyzing app...\n\n  error • Target of URI doesn't exist: 'package:flutter/material.dart'. Try creating the file referenced by the URI, or try using a URI for a file that does exist • lib/main.dart:1:8 • uri_does_not_exist\n  error • Undefined class 'Widget'. Try changing the name to the name of an existing class, or creating a class with the name 'Widget' • lib/main.dart:5:3 • undefined_class\n\n2 issues found. (ran in 1.2s)\n";
+        let p = setup_problem(FLUTTER, Some(1), root, &app).unwrap();
+        assert_eq!(
+            p.reason,
+            "the Dart packages are not fetched (there is no .dart_tool/package_config.json)"
+        );
+        // An error that fetching would not fix is a failure.
+        assert!(setup_problem(OTHER, Some(3), root, &app).is_none());
+
+        // Fetched, in the project or in a workspace root above it: the same
+        // output is a failure of the code.
+        let config = root.join(".dart_tool");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("package_config.json"), "{}\n").unwrap();
+        assert!(setup_problem(UNDEFINED, Some(3), root, &app).is_none());
+        std::fs::remove_dir_all(&config).unwrap();
+        let config = app.join(".dart_tool");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("package_config.json"), "{}\n").unwrap();
+        assert!(setup_problem(UNDEFINED, Some(3), root, &app).is_none());
     }
 
     // ADR 0055: the cmake starter's lint target without clang-format.
