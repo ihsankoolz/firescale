@@ -2434,14 +2434,59 @@ mod tests {
             found("test_auth.py", Some(".")).as_deref(),
             Some("tests/test_auth.py")
         );
-        // A whole path part must match: not `other-src/pay.test.ts`.
+        // From another folder of the change: it errs toward the change's own.
         assert_eq!(
             found("src/pay.test.ts", Some("api")).as_deref(),
             Some("web/src/pay.test.ts")
         );
+        // A whole path part must match: not `other-src/pay.test.ts`.
         assert_eq!(found("rc/pay.test.ts", None), None);
         assert_eq!(found("src/refund.test.ts", Some("web")), None);
         assert_eq!(found("", None), None);
+    }
+
+    #[test]
+    fn a_cargo_test_is_the_changes_own_by_its_name_in_a_changed_rust_file() {
+        let fixture = crate::testing::Fixture::new(
+            &[
+                (
+                    "src/lib.rs",
+                    "/// ```\n/// assert_eq!(pay::charge(), 1);\n/// ```\npub fn charge() -> u32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn charges() {\n        assert_eq!(super::charge(), 1);\n    }\n\n    #[rstest]\n    #[case(1)]\n    #[case(2)]\n    fn doubles(#[case] value: u32) {\n        assert_eq!(value * 2, value + value);\n    }\n}\n",
+                ),
+                ("src/money.rs", "#[test]\nfn rounds() {}\n"),
+            ],
+            crate::testing::Track::NoGit,
+        )
+        .unwrap();
+        let root = fixture.root();
+        let changed: BTreeSet<String> = ["src/lib.rs".to_owned()].into_iter().collect();
+        let own = |id: &str| {
+            let failed = vec![crate::verify::FailedTest {
+                id: id.to_owned(),
+                label: Some(Label::New),
+            }];
+            own_tests(
+                root,
+                Some(&changed),
+                Some("cargo test"),
+                None,
+                &failed,
+                root,
+            )
+            .into_iter()
+            .map(|(file, _)| file)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(own("pay::tests::charges"), ["src/lib.rs"]);
+        // A parametrised test: cargo adds the case's name after the test's.
+        assert_eq!(own("pay::tests::doubles::case_1"), ["src/lib.rs"]);
+        // A doc test names its file.
+        assert_eq!(
+            own("pay (doc)::src/lib.rs - charge (line 1)"),
+            ["src/lib.rs"]
+        );
+        // A test of a Rust file the change did not touch.
+        assert!(own("pay::money::rounds").is_empty());
     }
 
     #[test]
