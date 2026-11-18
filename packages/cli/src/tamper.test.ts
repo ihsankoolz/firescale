@@ -365,7 +365,11 @@ describe('the policy comes from the base commit', () => {
     expect(code).toBe(EXIT_OK);
     const human = await runCli(['verify', '--no-cache'], root);
     expect(human.stdout).toContain(
-      'runner weakened: package.json:5: test: vitest run || true [report only: it never fails verify; a reviewer judges it]',
+      'runner weakened: package.json:6: test: vitest run || true [report only: it never fails verify; a reviewer judges it]',
+    );
+    // An enforced guard with only report-only findings does not say it fails.
+    expect(human.stdout).toContain(
+      'Tamper guard (report only: these findings never fail verify, even with verify.tamper "enforced" on the base commit):',
     );
   });
 
