@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`fscale init --packs core,supabase > builds the same starter next to the nextjs pack > package.json 1`] = `
+exports[`fscale init --packs core,supabase > builds a starter where the supabase pack reports no violations (snapshots) > package.json 1`] = `
 "{
   "name": "supabase-app",
   "version": "0.1.0",
@@ -24,7 +24,7 @@ exports[`fscale init --packs core,supabase > builds the same starter next to the
 "
 `;
 
-exports[`fscale init --packs core,supabase > builds the same starter next to the nextjs pack > supabase/.gitignore 1`] = `
+exports[`fscale init --packs core,supabase > builds a starter where the supabase pack reports no violations (snapshots) > supabase/.gitignore 1`] = `
 "# Supabase
 .branches
 .temp
@@ -36,7 +36,7 @@ exports[`fscale init --packs core,supabase > builds the same starter next to the
 "
 `;
 
-exports[`fscale init --packs core,supabase > builds the same starter next to the nextjs pack > supabase/config.toml 1`] = `
+exports[`fscale init --packs core,supabase > builds a starter where the supabase pack reports no violations (snapshots) > supabase/config.toml 1`] = `
 "#:schema https://supabase.com/schemas/config/v1.json
 # Supabase CLI settings: https://supabase.com/docs/guides/local-development/cli/config
 # A setting not written here takes the CLI's default.
@@ -46,7 +46,7 @@ project_id = "supabase-app"
 "
 `;
 
-exports[`fscale init --packs core,supabase > builds the same starter next to the nextjs pack > supabase/tests/database/rls_test.sql 1`] = `
+exports[`fscale init --packs core,supabase > builds a starter where the supabase pack reports no violations (snapshots) > supabase/tests/database/rls_test.sql 1`] = `
 "-- Every table in the public schema has row level security on: the database
 -- the migrations build, checked by \`supabase test db\` (pgTAP).
 begin;

@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`fscale adopt --dry-run with the maven pack > proposes no change on a project that is already set up > pom.xml 1`] = `
+exports[`fscale init --packs core,maven > builds a starter where the maven pack reports no violations (snapshots) > pom.xml 1`] = `
 "<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -72,7 +72,7 @@ exports[`fscale adopt --dry-run with the maven pack > proposes no change on a pr
 "
 `;
 
-exports[`fscale adopt --dry-run with the maven pack > proposes no change on a project that is already set up > src/main/java/com/example/app/App.java 1`] = `
+exports[`fscale init --packs core,maven > builds a starter where the maven pack reports no violations (snapshots) > src/main/java/com/example/app/App.java 1`] = `
 "package com.example.app;
 
 /** The starting point of this project. */
@@ -92,7 +92,7 @@ public final class App {
 "
 `;
 
-exports[`fscale adopt --dry-run with the maven pack > proposes no change on a project that is already set up > src/test/java/com/example/app/AppTest.java 1`] = `
+exports[`fscale init --packs core,maven > builds a starter where the maven pack reports no violations (snapshots) > src/test/java/com/example/app/AppTest.java 1`] = `
 "package com.example.app;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;

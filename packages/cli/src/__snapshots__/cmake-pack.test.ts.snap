@@ -1,12 +1,12 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`fscale init --packs core,cmake > gives the starter the cmake commands in facts, lint included > .clang-format 1`] = `
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > .clang-format 1`] = `
 "---
 BasedOnStyle: Google
 "
 `;
 
-exports[`fscale init --packs core,cmake > gives the starter the cmake commands in facts, lint included > CMakeLists.txt 1`] = `
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > CMakeLists.txt 1`] = `
 "cmake_minimum_required(VERSION 3.20)
 project(app VERSION 0.1.0 LANGUAGES CXX)
 
@@ -42,7 +42,7 @@ add_custom_target(lint
 "
 `;
 
-exports[`fscale init --packs core,cmake > gives the starter the cmake commands in facts, lint included > cmake/lint.cmake 1`] = `
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > cmake/lint.cmake 1`] = `
 "# Checks the formatting of the C and C++ files under src/ and tests/
 # against .clang-format: \`cmake --build build --target lint\` runs it, or
 # \`cmake -P cmake/lint.cmake\`.
@@ -86,7 +86,7 @@ endif()
 "
 `;
 
-exports[`fscale init --packs core,cmake > gives the starter the cmake commands in facts, lint included > src/greeting.cpp 1`] = `
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > src/greeting.cpp 1`] = `
 "#include "greeting.hpp"
 
 #include <string>
@@ -102,7 +102,7 @@ std::string greeting(std::string_view name) {
 "
 `;
 
-exports[`fscale init --packs core,cmake > gives the starter the cmake commands in facts, lint included > src/greeting.hpp 1`] = `
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > src/greeting.hpp 1`] = `
 "#pragma once
 
 #include <string>
@@ -117,7 +117,7 @@ std::string greeting(std::string_view name);
 "
 `;
 
-exports[`fscale init --packs core,cmake > gives the starter the cmake commands in facts, lint included > src/main.cpp 1`] = `
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > src/main.cpp 1`] = `
 "#include <iostream>
 
 #include "greeting.hpp"
@@ -129,7 +129,7 @@ int main() {
 "
 `;
 
-exports[`fscale init --packs core,cmake > gives the starter the cmake commands in facts, lint included > tests/greeting_test.cpp 1`] = `
+exports[`fscale init --packs core,cmake > builds a starter where the cmake pack reports no violations (snapshots) > tests/greeting_test.cpp 1`] = `
 "#include "greeting.hpp"
 
 #include <cstdlib>
