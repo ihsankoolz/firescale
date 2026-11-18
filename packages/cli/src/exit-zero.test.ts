@@ -168,7 +168,7 @@ const RUNNERS: Runner[] = [
     tool: 'cargo',
     command: 'cargo test',
     answer: (failing) => ({ out: cargo(failing), err: CARGO_ERR }),
-    ids: ['tests::charges', 'tests::refunds'],
+    ids: ['pay::tests::charges', 'pay::tests::refunds'],
   },
 ];
 

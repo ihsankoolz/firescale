@@ -15,6 +15,17 @@ The repo root and each project are **independent**: every other project still ru
 | 2         | Bad usage or a bad config.                                                                                                  |
 | 130       | Verify was stopped by Ctrl+C or a termination signal. The summary lists what finished.                                      |
 
+## An exit code of 0 beside failing tests is a failure
+
+For pytest, Vitest, Jest and `cargo test`, verify reads which tests failed from the runner's own results ([per-test labels](#only-new-failures-block)). When the command exits 0 and those results still name a test that failed or errored, the step is `FAILED` (ADR 0072):
+
+```
+verify: FAILED at test
+  test       FAILED   vitest run (exit 0): the command reported success but 2 tests failed
+```
+
+That is what a test script ending in `|| exit 0` or `|| true` does, and a pytest hook that sets the session's exit status to 0. The failing tests are listed as for any failure, and get their labels when there is a base commit. In `--json` the step has the status `failed` and `exitCode: 0`. Such a step is never cached. A coverage threshold or Vitest's unhandled errors beside an exit code of 0 do not count: only a test does. A runner with no per-test results is judged by its exit code alone, as before.
+
 ## Setup needed is not a failure in the code
 
 A step can fail because the machine is not ready: a dependency is not installed, a program is not on the PATH, or a service the tests need on this machine (a database, a cache) is not running. Changing code cannot fix that, so verify reports such a step as **setup needed** (`SETUP` in the summary, `setup-needed` in JSON), with the command that sets it up, apart from real failures:

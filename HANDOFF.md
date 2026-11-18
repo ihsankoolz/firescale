@@ -8,6 +8,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 1. A second held-out corpus of cheats, `bench/tamper-cheats-2.json` (ADR 0082): 90 of 100 missed on `main`. Never tune a detector on it.
 
+**Track A (cache and verify), the run of 2026-11-18 after 0.5.4** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
+
+1. A test command that exits 0 while its per-test results hold failing tests is `FAILED` and never cached (ADR 0072; `run_step` in `crates/core/src/verify.rs`, `pertest::is_test`).
+
 **The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
 
 1. The 0.5.3 run's tests, each shown to fail without its fix: [#83](https://github.com/ihsankoolz/firescale/pull/83).

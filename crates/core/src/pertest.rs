@@ -152,6 +152,13 @@ pub const UNHANDLED_ERRORS: &str = "(unhandled errors)";
 /// which fails the step even when every test passed.
 pub const COVERAGE_THRESHOLD: &str = "(coverage threshold)";
 
+/// True for the identity of a test, false for the two identities above,
+/// which stand for something that failed beside the tests.
+#[must_use]
+pub fn is_test(id: &str) -> bool {
+    id != UNHANDLED_ERRORS && id != COVERAGE_THRESHOLD
+}
+
 /// The roots of a run as they can appear in its output: as given, with
 /// forward slashes, and resolved, longest first.
 #[must_use]

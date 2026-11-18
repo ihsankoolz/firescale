@@ -2559,6 +2559,29 @@ fn run_step(
         }
     };
     report.exit_code = code;
+    // The tests the runner's own results name as failed or errored. An exit
+    // code of 0 beside them is not a pass (ADR 0072): a script ending in
+    // `|| exit 0`, or a hook that sets the exit status, would hide them.
+    let hidden = report.test_results.as_ref().map_or(0, |results| {
+        results
+            .failed
+            .iter()
+            .filter(|id| crate::pertest::is_test(id))
+            .count()
+    });
+    if code == Some(0) && hidden > 0 {
+        report.signature = failure_signature(&text(), unit.root);
+        report.output_tail = tail(&finished.stdout, &finished.stderr);
+        report.status = StepStatus::Failed;
+        let tests = if hidden == 1 { "test" } else { "tests" };
+        report.detail = format!(
+            "{command} (exit 0): the command reported success but {hidden} {tests} failed"
+        );
+        options.say(&format!(
+            "{place}: FAILED after {took} (exit 0, but {hidden} {tests} failed)"
+        ));
+        return Ok(report);
+    }
     if code == Some(0) {
         options.say(&format!("{place}: passed after {took}"));
         let mut output = blake3::Hasher::new();

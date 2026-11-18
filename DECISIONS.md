@@ -12,6 +12,22 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **On `main` today: 90 of 100 missed**, 7 caught, 3 approval only. By category: test modification 12 of 20 missed, operator overloading 20 of 20, recorded state 20 of 20, special-casing 20 of 20, evaluator tampering 18 of 20. The first corpus on the same build: 42 of 98. `bench/RESULTS.md` has the tables, what was caught and why, and the limits.
 - `bench/tamper-misses.mjs --corpus <file>` runs either corpus.
 
+## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
+
+Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.
+
+ADR numbers 0072 to 0081 are this track's. Twelve ideas share ten numbers: ideas 6 and 7 share ADR 0077, and ideas 8 and 11 share ADR 0078.
+
+**Pull request 1: a test command that exits 0 with failing tests is FAILED (ADR 0072)**
+
+Verification idea 2, step one.
+
+- **A step that exits 0 while its per-test results hold a failed or errored test is `FAILED`**, with `<command> (exit 0): the command reported success but N tests failed`. It is never cached. For pytest, Vitest, Jest and `cargo test`.
+- That is what `|| exit 0` at the end of a test script does, and a pytest hook that sets the exit status to 0.
+- **The failing test first:** `packages/cli/src/exit-zero.test.ts`. On `main`, in WSL: 5 of 9 failed with `expected +0 to be 1` (verify exited 0), one per runner and one for the wording. The other 4 are guards and passed: the same stand-ins with no failing test pass and are cached.
+- **Decided on your behalf:** only tests count. A coverage threshold or Vitest's unhandled errors printed beside an exit code of 0 do not fail the step. Say if they should.
+- **What it can cost:** a script that retries its tests by hand (`cargo test || cargo test`) is `FAILED` when the first try's failures are in the output.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.
