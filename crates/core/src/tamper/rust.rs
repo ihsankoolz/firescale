@@ -554,7 +554,9 @@ pub(super) fn read(source: &str) -> TestFile {
                     .find(|scope| scope.function)
                     .and_then(|scope| scope.test);
                 let whole = text(node, src);
+                let shown = whole.split_whitespace().collect::<Vec<_>>().join(" ");
                 file.assertions.push(Assertion {
+                    weakened: super::weakened::why(node, src, &shown),
                     line: node.start_position().row + 1,
                     shape: whole.split_whitespace().collect(),
                     text: whole.split_whitespace().collect::<Vec<_>>().join(" "),

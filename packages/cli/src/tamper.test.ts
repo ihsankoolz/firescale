@@ -133,6 +133,8 @@ const DETECTORS: Record<string, string> = {
   'appr:': 'snapshot-changed',
   // A test runner made unable to fail (ADR 0086): report only.
   'run:': 'runner-weakened',
+  // An assertion made conditional or a tautology (ADR 0088): needs approval.
+  'weak:': 'assertion-weakened',
 };
 
 describe('the tamper guard on the labelled corpus', () => {
@@ -376,6 +378,30 @@ describe('the policy comes from the base commit', () => {
     expect(alone.stdout.split('\n')[0]).toBe('tamper: OK - 1 report-only finding');
   });
 
+  it('reports an assertion made conditional as needing approval, which does not block where the change runs (ADR 0088)', async () => {
+    const labelled = corpus.cases.find((c) => c.name === 'weak: py: an assert moved under an if');
+    if (!labelled) throw new Error('corpus case missing');
+    const root = await caseRepo(labelled.base, labelled.head, { base: 'enforced' });
+    const { code, tamper: report } = await tamper(root);
+    expect(report?.policy).toBe('enforced');
+    expect(report?.findings).toEqual([
+      {
+        kind: 'assertion-weakened',
+        file: 'tests/test_cart.py',
+        line: 7,
+        onBase: false,
+        what: 'assert result == 10 (now under an `if`: it runs only when the condition holds; in test_total)',
+      },
+    ]);
+    // As snapshot-changed and expected-changed: only CI, which reads the
+    // pull request's approvals, can hold it back (ADR 0046).
+    expect(code).toBe(EXIT_OK);
+    const human = await runCli(['verify', '--no-cache'], root);
+    expect(human.stdout).toContain(
+      "assertion weakened: tests/test_cart.py:7: assert result == 10 (now under an `if`: it runs only when the condition holds; in test_total) [needs a person's approval, given in the pull request; it does not block here]",
+    );
+  });
+
   it('does not say "enforced" makes a runner-weakened finding fail (ADR 0086)', async () => {
     const labelled = corpus.cases.find((c) => c.name === 'run: the test script gains || true');
     if (!labelled) throw new Error('corpus case missing');
@@ -520,13 +546,16 @@ describe('the policy keys come from the base commit too', () => {
           'rule-disabled',
           'snapshot-changed',
           'expected-changed',
+          // Named too, so a reviewer sees every exemption (review of ADR 0088).
+          'runner-weakened',
+          'assertion-weakened',
           'not-checked',
         ],
       },
     ]);
     const human = await runCli(['verify', '--no-cache'], root);
     expect(human.stdout).toContain(
-      'verify.tamper.allow on the base commit leaves out src/legacy/old.test.ts (test deleted, test skipped, assertion removed, suppression added, coverage lowered, CI weakened, hooks skipped, rule turned off, snapshot changed, expected value changed, not checked).',
+      'verify.tamper.allow on the base commit leaves out src/legacy/old.test.ts (test deleted, test skipped, assertion removed, suppression added, coverage lowered, CI weakened, hooks skipped, rule turned off, snapshot changed, expected value changed, runner weakened, assertion weakened, not checked).',
     );
   });
 

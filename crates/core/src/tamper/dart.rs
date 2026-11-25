@@ -603,6 +603,7 @@ pub(super) fn read(source: &str) -> TestFile {
                 weight: 1,
                 test,
                 conditional: false,
+                weakened: None,
                 checked: checked(node, whole, src),
             });
             return true;

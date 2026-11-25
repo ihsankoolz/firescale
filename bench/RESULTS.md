@@ -53,6 +53,21 @@ Labelled corpus (`bench/tamper-corpus.json`): before, 0 false positives and 0 of
 
 Limits: the labelled cases were written with the detector, so they are fixtures, not a rate. The gains on the held-out corpora are three cases. This session saw the titles of the 90 cases the second corpus missed on `main` before writing the detector (ADR 0082); it opened no case. The new kind is report only, so a case it catches is "caught" in these tables but never fails verify.
 
+## assertion-weakened (ADR 0088)
+
+`node bench/tamper-misses.mjs --bin <build>` on both held-out corpora and `node bench/tamper-rates.mjs`, macOS debug builds on the owner's Mac, 2026-11-25: before on `main` at `4252be3`, after on the pull request. `tamper-misses.mjs` now counts `assertion-weakened` as "needs approval only", as it does `snapshot-changed` and `expected-changed`. Missed of all cases (caught / approval only):
+
+| Corpus                                        | Before      | After        |
+| --------------------------------------------- | ----------- | ------------ |
+| First held-out (`tamper-cheats.json`, 98)     | 40 (50 / 8) | 37 (50 / 11) |
+| Second held-out (`tamper-cheats-2.json`, 100) | 89 (8 / 3)  | 89 (8 / 3)   |
+
+Case by case (`--json` rows compared by position, counts only): first corpus, category `assertion-weakened`, 3 missed to approval only; second corpus, no case changed. No case changed the other way on either.
+
+Labelled corpus (`bench/tamper-corpus.json`): before, 0 false positives and 0 of 191 not-a-finding cases with any finding; after, 0 and 0 of 196, with 14 new "Weakened assertions" cases (9 caught, 5 not a finding).
+
+Limits: the labelled cases were written with the detector, so they are fixtures, not a rate. No rate on real history was measured: `tamper-bench.yml` can, on CI. The first corpus is not blind (ADR 0082), and its gain is in the category the research report named; the second corpus, the blind one, gains nothing. Its author saw the titles of the 90 cases the second corpus missed in an earlier session's output (ADR 0082, 0086); this session opened no case of either corpus and printed no title.
+
 ## 0.5.1 and 0.5.2: the tamper guard on real commits, measured on CI
 
 `.github/workflows/tamper-bench.yml` (ADR 0067), [run 44128788594](https://github.com/ihsankoolz/firescale/actions/runs/44128788594) of 2026-11-17: release builds of the tags `v0.5.1` (`62b795b`) and `v0.5.2` (`c9d8ffc`) on Linux, `bench/tamper-history.mjs` of `v0.5.2` with both binaries over the commits recorded for M26 and M32, then `node bench/tamper-history-report.mjs --data bench/tamper-history-0.5.2.json` (every finding with its label, the reason and where the label comes from).

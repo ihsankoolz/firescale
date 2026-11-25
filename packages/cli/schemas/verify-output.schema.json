@@ -620,7 +620,7 @@
             "required": ["kind", "file", "line", "onBase", "what"],
             "properties": {
               "kind": {
-                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, a test that never runs or does nothing, or a new .only), assertion-removed (fewer assertions that run and can fail), suppression-added (more lint suppressions of a rule), coverage-lowered (a coverage threshold lower than on the base, or gone), ci-weakened (a CI check step removed or made unable to fail), no-verify (more ways to skip git hooks than on the base), rule-disabled (a lint or type-check rule turned off or made weaker in a config file), snapshot-changed (a stored snapshot rewritten: needs a person's approval), expected-changed (an assertion whose expected value changed and nothing else: needs a person's approval), runner-weakened (a test or lint script, or a conftest.py, made unable to fail: report only, never fails verify), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
+                "description": "test-deleted (fewer tests than on the base), test-skipped (more skipped tests, a test that never runs or does nothing, or a new .only), assertion-removed (fewer assertions that run and can fail), suppression-added (more lint suppressions of a rule), coverage-lowered (a coverage threshold lower than on the base, or gone), ci-weakened (a CI check step removed or made unable to fail), no-verify (more ways to skip git hooks than on the base), rule-disabled (a lint or type-check rule turned off or made weaker in a config file), snapshot-changed (a stored snapshot rewritten: needs a person's approval), expected-changed (an assertion whose expected value changed and nothing else: needs a person's approval), runner-weakened (a test or lint script, or a conftest.py, made unable to fail: report only, never fails verify), assertion-weakened (an assertion of a test on both sides now under an if, swallowed by a try, or a tautology: needs a person's approval), not-checked (a changed test file tree-sitter cannot read: never taken as clean).",
                 "enum": [
                   "test-deleted",
                   "test-skipped",
@@ -633,6 +633,7 @@
                   "snapshot-changed",
                   "expected-changed",
                   "runner-weakened",
+                  "assertion-weakened",
                   "not-checked"
                 ]
               },
@@ -687,6 +688,7 @@
                     "snapshot-changed",
                     "expected-changed",
                     "runner-weakened",
+                    "assertion-weakened",
                     "not-checked"
                   ]
                 }

@@ -5973,6 +5973,174 @@
       "head": {
         "conftest.py": "import sys\n\nimport pytest\n\n\n@pytest.fixture\ndef client():\n    return object()\n\n\ndef _abort(reason):\n    print(reason)\n    sys.exit(2)\n\n\ndef pytest_sessionfinish(session, exitstatus):\n    if exitstatus == 0:\n        print(\"all passed\")\n"
       }
+    },
+    {
+      "name": "weak: py: an assert moved under an if",
+      "expect": ["assertion-weakened"],
+      "note": "It runs only when the value is there, so a None passes.",
+      "base": {
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    result = total([4, 6])\n    assert result == 10\n"
+      },
+      "head": {
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    result = total([4, 6])\n    if result is not None and result > 100:\n        assert result == 10\n"
+      }
+    },
+    {
+      "name": "weak: py: an assert inside try/except AssertionError",
+      "expect": ["assertion-weakened"],
+      "note": "Its failure is caught and thrown away.",
+      "base": {
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([4, 6]) == 10\n"
+      },
+      "head": {
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    try:\n        assert total([4, 6]) == 10\n    except AssertionError:\n        pass\n"
+      }
+    },
+    {
+      "name": "weak: py: an assert replaced by a length that is never below 0",
+      "expect": ["assertion-weakened"],
+      "note": "len(x) >= 0 always holds.",
+      "base": {
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    items = [4, 6]\n    assert total(items) == 10\n"
+      },
+      "head": {
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    items = [4, 6]\n    total(items)\n    assert len(items) >= 0\n"
+      }
+    },
+    {
+      "name": "weak: py: an assert that gains or True",
+      "expect": ["assertion-weakened"],
+      "note": "The condition is always true.",
+      "base": {
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([4, 6]) == 10\n"
+      },
+      "head": {
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([4, 6]) == 10 or True\n"
+      }
+    },
+    {
+      "name": "weak: js: an expect moved under an if",
+      "expect": ["assertion-weakened"],
+      "note": "It runs only when the result is truthy.",
+      "base": {
+        "src/cart.js": "export const total = (items) => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.js": "import { expect, it } from 'vitest';\nimport { total } from './cart.js';\n\nit('adds the items', () => {\n  const result = total([4, 6]);\n  expect(result).toBe(10);\n});\n"
+      },
+      "head": {
+        "src/cart.test.js": "import { expect, it } from 'vitest';\nimport { total } from './cart.js';\n\nit('adds the items', () => {\n  const result = total([4, 6]);\n  if (result > 100) {\n    expect(result).toBe(10);\n  }\n});\n"
+      }
+    },
+    {
+      "name": "weak: ts: an expect wrapped in try/catch",
+      "expect": ["assertion-weakened"],
+      "note": "The catch swallows the assertion's error.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.ts": "import { expect, it } from 'vitest';\nimport { total } from './cart';\n\nit('adds the items', () => {\n  expect(total([4, 6])).toBe(10);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { expect, it } from 'vitest';\nimport { total } from './cart';\n\nit('adds the items', () => {\n  try {\n    expect(total([4, 6])).toBe(10);\n  } catch {\n    // flaky on CI\n  }\n});\n"
+      }
+    },
+    {
+      "name": "weak: ts: an expect replaced by a length that is never below 0",
+      "expect": ["assertion-weakened"],
+      "note": "toBeGreaterThanOrEqual(0) on a length always holds.",
+      "base": {
+        "src/cart.ts": "export const items = (n: number): number[] => Array.from({ length: n }, (_, i) => i);\n",
+        "src/cart.test.ts": "import { expect, it } from 'vitest';\nimport { items } from './cart';\n\nit('makes n items', () => {\n  expect(items(3)).toEqual([0, 1, 2]);\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { expect, it } from 'vitest';\nimport { items } from './cart';\n\nit('makes n items', () => {\n  expect(items(3).length).toBeGreaterThanOrEqual(0);\n});\n"
+      }
+    },
+    {
+      "name": "weak: rs: an assert_eq moved under if let",
+      "expect": ["assertion-weakened"],
+      "note": "It runs only when parse gives Some.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"cart\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn parse(s: &str) -> Option<u32> {\n    s.parse().ok()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn parses_a_number() {\n        let got = parse(\"12\");\n        assert_eq!(got.unwrap(), 12);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn parse(s: &str) -> Option<u32> {\n    s.parse().ok()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn parses_a_number() {\n        let got = parse(\"12\");\n        if let Some(value) = got {\n            assert_eq!(value, 12);\n        }\n    }\n}\n"
+      }
+    },
+    {
+      "name": "weak: rs: an assert_eq replaced by a length that is never below 0",
+      "expect": ["assertion-weakened"],
+      "note": "A usize is never below 0.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"cart\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn words(s: &str) -> Vec<&str> {\n    s.split(' ').collect()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn splits_words() {\n        let got = words(\"a b\");\n        assert_eq!(got, vec![\"a\", \"b\"]);\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn words(s: &str) -> Vec<&str> {\n    s.split(' ').collect()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn splits_words() {\n        let got = words(\"a b\");\n        assert!(got.len() >= 0);\n    }\n}\n"
+      }
+    },
+    {
+      "name": "weak: py: a new test with an assert under an if",
+      "expect": [],
+      "note": "A new test is not a weakened one.",
+      "base": {
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([4, 6]) == 10\n"
+      },
+      "head": {
+        "tests/test_cart.py": "import sys\n\nfrom app.cart import total\n\n\ndef test_total():\n    assert total([4, 6]) == 10\n\n\ndef test_big_total():\n    if sys.maxsize > 2**32:\n        assert total([2**40, 1]) == 2**40 + 1\n"
+      }
+    },
+    {
+      "name": "weak: py: an existing test gains one more assert under an if",
+      "expect": [],
+      "note": "Nothing it checked before is weaker.",
+      "base": {
+        "app/cart.py": "def total(items):\n    return sum(items)\n",
+        "tests/test_cart.py": "from app.cart import total\n\n\ndef test_total():\n    assert total([4, 6]) == 10\n"
+      },
+      "head": {
+        "tests/test_cart.py": "import sys\n\nfrom app.cart import total\n\n\ndef test_total():\n    assert total([4, 6]) == 10\n    if sys.maxsize > 2**32:\n        assert total([2**40, 1]) == 2**40 + 1\n"
+      }
+    },
+    {
+      "name": "weak: ts: an expect in a catch that checks the error",
+      "expect": [],
+      "note": "An assertion in the handler, after a call that must throw, is the usual way to check an error.",
+      "base": {
+        "src/cart.ts": "export const total = (items: number[]): number => {\n  if (items.length === 0) throw new Error('empty');\n  return items.reduce((a, b) => a + b, 0);\n};\n",
+        "src/cart.test.ts": "import { expect, it } from 'vitest';\nimport { total } from './cart';\n\nit('refuses no items', () => {\n  expect(() => total([])).toThrow('empty');\n});\n"
+      },
+      "head": {
+        "src/cart.test.ts": "import { expect, it } from 'vitest';\nimport { total } from './cart';\n\nit('refuses no items', () => {\n  expect.assertions(1);\n  try {\n    total([]);\n  } catch (error) {\n    expect((error as Error).message).toBe('empty');\n  }\n});\n"
+      }
+    },
+    {
+      "name": "weak: js: an if around an expect already there on the base",
+      "expect": [],
+      "note": "It was conditional before the change too.",
+      "base": {
+        "src/cart.js": "export const total = (items) => items.reduce((a, b) => a + b, 0);\n",
+        "src/cart.test.js": "import { expect, it } from 'vitest';\nimport { total } from './cart.js';\n\nit('adds the items', () => {\n  if (process.env.SLOW) {\n    expect(total([4, 6])).toBe(10);\n  }\n});\n"
+      },
+      "head": {
+        "src/cart.test.js": "import { expect, it } from 'vitest';\nimport { total } from './cart.js';\n\nit('adds the items', () => {\n  if (process.env.SLOW) {\n    expect(total([4, 6])).toBe(10);\n  }\n  expect(total([])).toBe(0);\n});\n"
+      }
+    },
+    {
+      "name": "weak: rs: an assert_eq that only moves",
+      "expect": [],
+      "note": "Same assertion, same test, a line lower.",
+      "base": {
+        "Cargo.toml": "[package]\nname = \"cart\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "src/lib.rs": "pub fn parse(s: &str) -> Option<u32> {\n    s.parse().ok()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn parses_a_number() {\n        assert_eq!(parse(\"12\"), Some(12));\n    }\n}\n"
+      },
+      "head": {
+        "src/lib.rs": "pub fn parse(s: &str) -> Option<u32> {\n    s.parse().ok()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn parses_a_number() {\n        let text = \"12\";\n        assert_eq!(parse(text), Some(12));\n    }\n}\n"
+      }
     }
   ]
 }

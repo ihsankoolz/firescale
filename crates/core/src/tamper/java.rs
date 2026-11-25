@@ -192,6 +192,7 @@ pub(super) fn assertion(node: Node<'_>, src: &[u8]) -> Assertion {
         weight: 1,
         test: None,
         conditional: false,
+        weakened: None,
         checked: None,
     }
 }

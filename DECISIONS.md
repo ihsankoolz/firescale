@@ -53,6 +53,13 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **See it:** a failing repo, `FSCALE_HOOK_MAX_BLOCKS=1`, then `echo '{"session_id":"s","stop_hook_active":true,"last_assistant_message":"test_x is wrong"}' | fscale hooks run --agent claude` twice.
 - **Failing test first:** `hooks.test.ts`, seen failing on `main`.
 
+**Pull request 7: an assertion made conditional or a tautology (verification idea 6, items ii and iii, ADR 0088)**
+
+- **A new kind, `assertion-weakened`, that needs a person's approval** as the snapshot kinds do: in a test on both sides, an assertion now under an `if`/`if let`/ternary/`&&`, in a `try` whose handler swallows its failure, under `suppress(AssertionError)` or in `catch_unwind`, or a tautology (a value compared with itself, a length `>= 0`, `or True`), while the test has fewer assertions that always check. Python, JavaScript, TypeScript, Rust.
+- **Measured:** first held-out corpus 40 to 37 missed (3 to approval only); second 89 to 89. No new miss on either. Labelled corpus: 0 false findings (0 of 196).
+- **Decided on your behalf:** "report-only, needing approval as the snapshot kinds do" read as `needs_approval` (never blocks where the change runs; CI's approval check applies under `enforced`). An assertion that became a tautology is named once, as weakened, not also as `expected-changed`.
+- **See it:** `fscale tamper --base main` on a branch that wraps an assert in `if`.
+
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
 Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.
