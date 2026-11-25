@@ -895,7 +895,7 @@ pub struct TamperReport {
 pub struct OldTests {
     /// The step, as verify names it: `test`, `test in packages/api`.
     pub step: String,
-    /// `failed`, `passed` or `not-judged`.
+    /// `failed`, `ran-no-failure` or `not-judged`.
     pub status: OldTestsStatus,
     /// The files taken from the base commit.
     pub files: Vec<String>,
@@ -909,9 +909,10 @@ pub struct OldTests {
 pub enum OldTestsStatus {
     /// A test of the base's files failed on the head's code.
     Failed,
-    /// They passed: the edits to them were not needed to pass. Never lowers
-    /// a finding.
-    Passed,
+    /// It ran, collected the base's tests of those files, and none failed.
+    /// Never shown as reassurance (ADR 0090): in JSON only, and it never
+    /// lowers a finding.
+    RanNoFailure,
     /// The run could not tell: no runner it reads, no time, nothing
     /// collected, a failure outside those files.
     NotJudged,

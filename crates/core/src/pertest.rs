@@ -87,6 +87,11 @@ pub struct TestResults {
     pub failed: BTreeSet<String>,
     /// How many tests passed.
     pub passed: u64,
+    /// What the runner says ran and did not fail, as it names it: a passing
+    /// test's id (pytest, `cargo test`), or a file all of whose tests
+    /// passed (Vitest's `✓ file`, Jest's `PASS file`). With `failed`, what
+    /// the run collected (ADR 0090).
+    pub ran: BTreeSet<String>,
     /// Why each failing test failed, where the runner says: its error's
     /// lines, without stack frames or code excerpts. A parser fills in the
     /// text; [`TestResults::hash_reasons`] then replaces it with hashes of
@@ -589,6 +594,7 @@ pub fn parse_junit(xml: &str) -> Option<TestResults> {
             results.failed.insert(id);
         } else if !body.contains("<skipped") {
             results.passed += 1;
+            results.ran.insert(id);
         }
         rest = &after[tag_end + 1..];
     }
@@ -696,6 +702,14 @@ pub fn parse_vitest(output: &str) -> Option<TestResults> {
         if in_failures {
             block.push(&line);
         }
+        // ` ✓ src/a.test.ts (2 tests) 3ms`: a file whose tests passed.
+        if let Some(rest) = line.strip_prefix("✓ ").filter(|_| !in_failures) {
+            if let Some(file) = rest.split(" (").next().map(str::trim) {
+                if !file.is_empty() {
+                    results.ran.insert(file.replace('\\', "/"));
+                }
+            }
+        }
         if let Some(rest) = line.strip_prefix("Tests ") {
             seen_summary = true;
             for part in rest.split('|') {
@@ -795,8 +809,15 @@ pub fn parse_jest(output: &str) -> Option<TestResults> {
                 .map(|word| word.replace('\\', "/"));
             continue;
         }
-        if line.starts_with("PASS ") {
+        if let Some(rest) = line.strip_prefix("PASS ") {
             file = None;
+            // `PASS src/a.test.js (1.2 s)`: a file whose tests passed.
+            if let Some(passed) = rest
+                .split_whitespace()
+                .find(|word| word.contains('/') || word.contains('\\') || word.contains('.'))
+            {
+                results.ran.insert(passed.replace('\\', "/"));
+            }
             continue;
         }
         if let Some(name) = line.strip_prefix("● ") {
@@ -947,7 +968,10 @@ pub fn parse_cargo(stdout: &str, stderr: &str) -> Option<TestResults> {
             format!("{binary}::{name}")
         };
         match outcome.trim() {
-            "ok" => results.passed += 1,
+            "ok" => {
+                results.passed += 1;
+                results.ran.insert(id);
+            }
             "FAILED" => {
                 results.failed.insert(id);
             }
@@ -1111,6 +1135,27 @@ pub fn script_text(dir: &std::path::Path, command: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_ran_and_did_not_fail_is_named_for_each_runner() {
+        let vitest = parse_vitest(" ✓ src/a.test.ts (2 tests) 3ms\n Test Files  1 passed (1)\n      Tests  2 passed (2)\n").unwrap();
+        assert_eq!(vitest.ran, BTreeSet::from(["src/a.test.ts".to_owned()]));
+        let jest =
+            parse_jest("PASS src/b.test.js (1.2 s)\nTests:       1 passed, 1 total\n").unwrap();
+        assert_eq!(jest.ran, BTreeSet::from(["src/b.test.js".to_owned()]));
+        let junit = parse_junit(r#"<testsuites><testsuite><testcase classname="tests.test_a" name="test_x" file="tests/test_a.py"></testcase></testsuite></testsuites>"#).unwrap();
+        assert_eq!(junit.ran.len(), 1);
+        assert!(junit
+            .ran
+            .iter()
+            .all(|id| id.starts_with("tests/test_a.py::")));
+        let cargo = parse_cargo(
+            "\nrunning 1 test\ntest totals ... ok\n\ntest result: ok. 1 passed; 0 failed\n",
+            "     Running tests/cart.rs (target/debug/deps/cart-1a2b3c)\n",
+        )
+        .unwrap();
+        assert_eq!(cargo.ran, BTreeSet::from(["cart::totals".to_owned()]));
+    }
 
     #[test]
     fn runners_are_found_in_commands_and_scripts() {

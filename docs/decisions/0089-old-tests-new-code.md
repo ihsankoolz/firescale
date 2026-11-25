@@ -1,6 +1,6 @@
 # 0089 — Old tests, new code: the base's tests on the head's code, as evidence
 
-Status: accepted (2026-11-25, Track B run). Amends ADR 0042 and ADR 0046 (the tamper guard and its approvals), ADR 0040 (the head's worktree) and ADR 0083 (the stop hook's time limit). Verification idea 1, first step only.
+Status: accepted (2026-11-25, Track B run). Amended by ADR 0090 (the hook's limit with the worktree's time, one budget, no pass shown, sure files only). Amends ADR 0042 and ADR 0046 (the tamper guard and its approvals), ADR 0040 (the head's worktree) and ADR 0083 (the stop hook's time limit). Verification idea 1, first step only.
 
 ## Context
 

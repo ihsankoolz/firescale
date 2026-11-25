@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::blame::{self, BaseCommit, Worktree, WorktreeSetup};
 use crate::git::run_git;
@@ -227,8 +227,8 @@ fn not_judged(step: &str, files: Vec<String>, detail: impl Into<String>) -> OldT
 
 /// What a run of the base's tests on the head's code works from: the repo,
 /// the base commit, the files the change touched, the verify plan and its
-/// options, the caller's own limit (the stop hook's), and where progress
-/// lines go.
+/// options, the stop hook's limit, the base budget's end, and where
+/// progress lines go.
 #[derive(Clone, Copy)]
 pub struct Run<'a, 'o> {
     pub root: &'a Path,
@@ -236,23 +236,41 @@ pub struct Run<'a, 'o> {
     pub changed: &'a BTreeSet<String>,
     pub plan: &'a VerifyPlan,
     pub options: &'a RunOptions<'o>,
+    /// The stop hook's limit (ADR 0083), less its margin; `None` outside
+    /// the hook. With one, nothing starts whose time is not kept (ADR 0090).
     pub deadline: Option<Instant>,
+    /// When `verify.baseBudget` ends, as the base run set it (ADR 0090):
+    /// `Some(None)` with no limit. `None` when no base run set it: the
+    /// budget then starts now.
+    pub budget_ends: Option<Option<Instant>>,
     pub say: &'a dyn Fn(&str),
+}
+
+/// The kept time of making and removing the worktree, beside the step
+/// times (ADR 0090).
+pub const WORKTREE_STEP: &str = "old tests: worktree";
+const WORKTREE_COMMAND: &str = "a worktree of the head, made and removed";
+
+/// Why nothing more could start: the budget the base run shares, or the
+/// stop hook's limit.
+fn out_of_time(budget_ends: Option<Instant>) -> &'static str {
+    if blame::past(budget_ends) {
+        "verify.baseBudget, which the base run shares, has run out"
+    } else {
+        "no time was left for it before the stop hook's limit"
+    }
 }
 
 /// Runs the base's tests on the head's code for the guard's findings, and
 /// adds what it shows to `tamper`: an entry per unit in `old_tests`, and the
-/// failing tests as evidence on the findings of their files. `deadline` is
-/// the caller's own limit (the stop hook's); `verify.baseBudget` also
-/// applies. Nothing it does changes which findings there are, or whether
-/// they block.
+/// failing tests as evidence on the findings. Nothing it does changes which
+/// findings there are, or whether they block.
 pub fn judge(run: &Run<'_, '_>, tamper: &mut TamperReport) {
     let Run {
         root,
         base,
         plan,
         options,
-        deadline,
         ..
     } = *run;
     if tamper.policy == crate::tamper::Policy::Off {
@@ -270,11 +288,10 @@ pub fn judge(run: &Run<'_, '_>, tamper: &mut TamperReport) {
     if files.is_empty() {
         return;
     }
-    let budget = blame::budget_of(options).map(|limit| Instant::now() + limit);
-    let deadline = match (deadline, budget) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
+    // One budget with the base run (ADR 0090).
+    let budget_ends = run
+        .budget_ends
+        .unwrap_or_else(|| blame::budget_of(options).map(|limit| Instant::now() + limit));
 
     // Each file to the test step of its unit.
     let mut units: BTreeMap<String, Unit<'_>> = BTreeMap::new();
@@ -331,16 +348,67 @@ pub fn judge(run: &Run<'_, '_>, tamper: &mut TamperReport) {
     }
 
     if !units.is_empty() {
-        let run = Run { deadline, ..*run };
-        run_units(&run, tamper, &units, &mut results);
+        run_units(run, budget_ends, tamper, &units, &mut results);
     }
     tamper.old_tests = results;
+}
+
+/// True when `need` from `now` ends no later than `end` (always, with no
+/// end). Never panics, whatever the kept time (review of ADR 0090).
+fn fits(now: Instant, end: Option<Instant>, need: Duration) -> bool {
+    end.is_none_or(|end| now.checked_add(need).is_some_and(|done| done <= end))
+}
+
+/// A run's status and detail from its failing tests tied for sure to the
+/// base's files, and those that could not be tied. Only the sure ones make
+/// it `failed`; a run whose failures are all unsure says it cannot tell
+/// (review of ADR 0090).
+fn status_of(sure: usize, unsure: usize) -> (OldTestsStatus, String) {
+    let untied = if unsure == 0 {
+        String::new()
+    } else {
+        format!(
+            "; {unsure} more failing test{} cannot be tied to one file for sure",
+            if unsure == 1 { "" } else { "s" }
+        )
+    };
+    if sure == 0 {
+        return (
+            OldTestsStatus::NotJudged,
+            format!(
+                "{unsure} failing test{} cannot be tied to one file for sure, so this run cannot tell whether the base's tests of these files fail",
+                if unsure == 1 { "" } else { "s" }
+            ),
+        );
+    }
+    (
+        OldTestsStatus::Failed,
+        format!(
+            "{sure} test{} of the base's versions of these files fail{} on the head's code: the change needed different tests to pass{untied}",
+            if sure == 1 { "" } else { "s" },
+            if sure == 1 { "s" } else { "" }
+        ),
+    )
+}
+
+/// The kept time of a command, if one is kept and readable.
+fn kept(
+    options: &RunOptions<'_>,
+    project: Option<&str>,
+    step: &str,
+    command: &str,
+) -> Option<Duration> {
+    options
+        .times
+        .and_then(|times| times.last(project, step, command).ok().flatten())
+        .map(|known| known.duration)
 }
 
 /// Makes the worktree, takes the base's files into it, and runs each unit's
 /// test step once.
 fn run_units(
     run: &Run<'_, '_>,
+    budget_ends: Option<Instant>,
     tamper: &mut TamperReport,
     units: &BTreeMap<String, Unit<'_>>,
     results: &mut Vec<OldTests>,
@@ -351,9 +419,14 @@ fn run_units(
         changed,
         plan,
         options,
-        deadline,
+        deadline: hook,
         say,
+        ..
     } = *run;
+    let deadline = match (hook, budget_ends) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
     let all_not_judged =
         |results: &mut Vec<OldTests>, units: &BTreeMap<String, Unit<'_>>, why: &str| {
             for unit in units.values() {
@@ -365,10 +438,57 @@ fn run_units(
         return;
     }
     if blame::past(deadline) {
-        all_not_judged(results, units, "no time was left for it");
+        all_not_judged(results, units, out_of_time(budget_ends));
+        return;
+    }
+    // The worktree's making and removal are timed and kept like a step
+    // (ADR 0090). In the stop hook nothing starts unless every part of the
+    // run has a kept time and all of it fits before the hook's limit: a hook
+    // that its agent ends lets the agent stop unverified.
+    let worktree_kept = kept(options, None, WORKTREE_STEP, WORKTREE_COMMAND);
+    if let Some(limit) = hook {
+        let steps: Option<Vec<Duration>> = units
+            .values()
+            .map(|unit| {
+                kept(
+                    options,
+                    unit.project.map(|project| project.root.as_str()),
+                    "test",
+                    &unit.command,
+                )
+            })
+            .collect();
+        let (Some(worktree), Some(steps)) = (worktree_kept, steps) else {
+            all_not_judged(
+                results,
+                units,
+                "no time is kept yet for this run (the worktree's making and removal, and the test step), so it could go past the stop hook's limit; a verify outside the hook keeps them",
+            );
+            return;
+        };
+        let total = worktree + steps.iter().sum::<Duration>();
+        if !fits(Instant::now(), Some(limit), total) {
+            all_not_judged(
+                results,
+                units,
+                &format!(
+                    "it took {} when it last ran (the worktree and the test step), longer than the time left before the stop hook's limit",
+                    crate::progress::format_duration(total)
+                ),
+            );
+            return;
+        }
+    }
+    // Room for removing the worktree after the last step; setup and steps
+    // stop before it (review of ADR 0090).
+    let reserve = worktree_kept.unwrap_or_default();
+    let step_deadline = deadline.map(|at| at.checked_sub(reserve).unwrap_or_else(Instant::now));
+    if blame::past(step_deadline) {
+        all_not_judged(results, units, out_of_time(budget_ends));
         return;
     }
     say("old tests, new code: running the base's versions of the changed test files on the head's code");
+    let setting_up = Instant::now();
     let head = match run_git(root, &["rev-parse", "--verify", "HEAD"]) {
         Ok(out) if out.code == 0 => out.stdout.trim().to_owned(),
         _ => {
@@ -387,8 +507,8 @@ fn run_units(
             return;
         }
     };
-    if let Err(problem) = blame::overlay_head(root, &worktree.root, deadline, options.stop) {
-        let why = problem.unwrap_or_else(|| "no time was left for it".to_owned());
+    if let Err(problem) = blame::overlay_head(root, &worktree.root, step_deadline, options.stop) {
+        let why = problem.unwrap_or_else(|| out_of_time(budget_ends).to_owned());
         all_not_judged(
             results,
             units,
@@ -408,7 +528,7 @@ fn run_units(
             .collect(),
     };
     if let Some(problem) =
-        blame::prepare_worktree(root, options, &worktree, &links, deadline, say, "head")
+        blame::prepare_worktree(root, options, &worktree, &links, step_deadline, say, "head")
     {
         all_not_judged(results, units, &problem);
         return;
@@ -426,6 +546,10 @@ fn run_units(
             .cloned(),
     );
     for path in &taken {
+        if blame::past(step_deadline) {
+            all_not_judged(results, units, out_of_time(budget_ends));
+            return;
+        }
         if let Err(problem) = put_base_file(root, base, &worktree.root, path) {
             all_not_judged(
                 results,
@@ -435,6 +559,8 @@ fn run_units(
             return;
         }
     }
+    let set_up = setting_up.elapsed();
+    // Each step stops early enough to remove the worktree in time.
 
     for unit in units.values() {
         let step = place(&unit.folder);
@@ -442,34 +568,34 @@ fn run_units(
             results.push(not_judged(&step, unit.files.clone(), "verify was stopped"));
             continue;
         }
-        if blame::past(deadline) {
+        if blame::past(step_deadline) {
             results.push(not_judged(
                 &step,
                 unit.files.clone(),
-                "no time was left for it",
+                out_of_time(budget_ends),
             ));
             continue;
         }
-        // Known to take longer than the time left (the stop hook's limit,
-        // ADR 0083, or the base budget): not started.
-        let known = options.times.and_then(|times| {
-            times
-                .last(
-                    unit.project.map(|project| project.root.as_str()),
-                    "test",
-                    &unit.command,
-                )
-                .ok()
-                .flatten()
-        });
-        if let (Some(known), Some(deadline)) = (known, deadline) {
-            if Instant::now() + known.duration > deadline {
+        // Known to take longer than the time left: not started.
+        let known = kept(
+            options,
+            unit.project.map(|project| project.root.as_str()),
+            "test",
+            &unit.command,
+        );
+        if let (Some(known), Some(at)) = (known, step_deadline) {
+            if !fits(Instant::now(), Some(at), known) {
                 results.push(not_judged(
                     &step,
                     unit.files.clone(),
                     format!(
-                        "{}, longer than the time left (verify.baseBudget, or the stop hook's timeout)",
-                        known.describe()
+                        "it took {} when it last ran, longer than the time left ({})",
+                        crate::progress::format_duration(known),
+                        if !fits(Instant::now(), budget_ends, known) {
+                            "verify.baseBudget, which the base run shares"
+                        } else {
+                            "the stop hook's limit"
+                        }
                     ),
                 ));
                 continue;
@@ -486,103 +612,324 @@ fn run_units(
             "test",
             &unit.command,
             options,
-            deadline,
+            step_deadline,
         );
-        let report = match ran {
-            Ok(report) => report,
-            Err(error) => {
-                results.push(not_judged(
-                    &step,
-                    unit.files.clone(),
-                    format!("it could not run: {}", error.message()),
-                ));
-                continue;
-            }
-        };
-        match report.status {
-            // The results, not the exit code alone: a step that exits 0
-            // while the base's tests fail is `failed` (review of ADR 0089).
-            StepStatus::Passed | StepStatus::Failed => {
-                let failing: Vec<&String> = report
-                    .test_results
-                    .as_ref()
-                    .map(|results| {
-                        results
-                            .failed
-                            .iter()
-                            .filter(|id| pertest::is_test(id))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let mut named = 0;
-                for file in &unit.files {
-                    let mine: Vec<&&String> = failing
-                        .iter()
-                        .filter(|id| in_file(unit.runner, id, &unit.folder, file))
-                        .collect();
-                    if mine.is_empty() {
-                        continue;
-                    }
-                    named += mine.len();
-                    let evidence: Vec<String> = mine
-                        .iter()
-                        .take(MAX_EVIDENCE)
-                        .map(|id| {
-                            let reason = report
-                                .reason_text
-                                .get(id.as_str())
-                                .filter(|lines| !lines.is_empty())
-                                .map_or_else(String::new, |lines| {
-                                    format!(": {}", lines.join(" / "))
-                                });
-                            let id = id.replace('\\', "/");
-                            format!("the base's version fails on the head's code: {id}{reason}")
-                        })
-                        .collect();
-                    for finding in tamper
-                        .findings
-                        .iter_mut()
-                        .filter(|finding| &finding.file == file && KINDS.contains(&finding.kind))
-                    {
-                        finding.evidence.clone_from(&evidence);
-                    }
-                }
-                if named > 0 {
-                    results.push(OldTests {
-                        step,
-                        status: OldTestsStatus::Failed,
-                        files: unit.files.clone(),
-                        detail: format!(
-                            "{named} test{} of the base's versions of these files fail{} on the head's code: the change needed different tests to pass",
-                            if named == 1 { "" } else { "s" },
-                            if named == 1 { "s" } else { "" }
-                        ),
-                    });
-                } else if report.status == StepStatus::Passed {
-                    // Not proof that the edits were not needed: the head's
-                    // own config may leave those tests out.
-                    results.push(OldTests {
-                        step,
-                        status: OldTestsStatus::Passed,
-                        files: unit.files.clone(),
-                        detail: "the step passed with the base's versions of these files on the head's code; no test of them was reported failing (this lowers no finding, and does not show that they ran)".to_owned(),
-                    });
-                } else if report.test_results.is_none() {
-                    results.push(not_judged(
-                        &step,
-                        unit.files.clone(),
-                        format!("it failed and its tests could not be read: they may not collect or build against the head's code ({})", report.detail),
-                    ));
-                } else {
-                    results.push(not_judged(
-                        &step,
-                        unit.files.clone(),
-                        "it failed, but no failing test is in these files",
-                    ));
-                }
-            }
-            _ => results.push(not_judged(&step, unit.files.clone(), report.detail.clone())),
+        match ran {
+            Ok(report) => results.push(read_run(root, unit, &report, step, tamper)),
+            Err(error) => results.push(not_judged(
+                &step,
+                unit.files.clone(),
+                format!("it could not run: {}", error.message()),
+            )),
         }
+    }
+    let removing = Instant::now();
+    drop(worktree);
+    if let Some(times) = options.times {
+        times.record_ended(
+            None,
+            WORKTREE_STEP,
+            WORKTREE_COMMAND,
+            set_up + removing.elapsed(),
+            crate::steptimes::Outcome::Passed,
+        );
+    }
+}
+
+/// What one unit's run showed, with evidence added to the findings: the
+/// runner's results, not its exit code alone (review of ADR 0089). A run
+/// with no failing test of the base's files adds nothing a person sees
+/// (ADR 0090).
+fn read_run(
+    root: &Path,
+    unit: &Unit<'_>,
+    report: &crate::verify::StepReport,
+    step: String,
+    tamper: &mut TamperReport,
+) -> OldTests {
+    if !matches!(report.status, StepStatus::Passed | StepStatus::Failed) {
+        return not_judged(&step, unit.files.clone(), report.detail.clone());
+    }
+    let Some(results) = report.test_results.as_ref() else {
+        return not_judged(
+            &step,
+            unit.files.clone(),
+            format!(
+                "its tests could not be read: they may not collect or build against the head's code ({})",
+                report.detail
+            ),
+        );
+    };
+    let line = |id: &str| {
+        let reason = report
+            .reason_text
+            .get(id)
+            .filter(|lines| !lines.is_empty())
+            .map_or_else(String::new, |lines| format!(": {}", lines.join(" / ")));
+        format!("{}{reason}", id.replace('\\', "/"))
+    };
+    // What cargo could build each binary from, read once per run.
+    let index = if unit.runner == TestRunner::Cargo {
+        CargoIndex::of(root)
+    } else {
+        CargoIndex::default()
+    };
+    let mut sure: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut unsure: Vec<(String, String)> = Vec::new();
+    for id in results.failed.iter().filter(|id| pertest::is_test(id)) {
+        match tie(&index, &unit.folder, unit.runner, id, &unit.files) {
+            Tie::File(file) => sure.entry(file).or_default().push(id.clone()),
+            Tie::Unsure(why) => unsure.push((id.clone(), why)),
+            Tie::Elsewhere => {}
+        }
+    }
+    for (file, ids) in &sure {
+        let evidence: Vec<String> = ids
+            .iter()
+            .take(MAX_EVIDENCE)
+            .map(|id| format!("the base's version fails on the head's code: {}", line(id)))
+            .collect();
+        for finding in tamper
+            .findings
+            .iter_mut()
+            .filter(|finding| &finding.file == file && KINDS.contains(&finding.kind))
+        {
+            finding.evidence.clone_from(&evidence);
+        }
+    }
+    // A failing test that cannot be tied to one file for sure: under every
+    // finding whose file it could be from, naming no file (ADR 0090).
+    for (id, why) in unsure.iter().take(MAX_EVIDENCE) {
+        let text = format!(
+            "a test failed on the head's code with the base's test files, but it cannot be tied to one file for sure ({why}): {}",
+            line(id)
+        );
+        for finding in tamper.findings.iter_mut().filter(|finding| {
+            KINDS.contains(&finding.kind)
+                && unit.files.contains(&finding.file)
+                && in_file(unit.runner, id, &unit.folder, &finding.file)
+        }) {
+            finding.evidence.push(text.clone());
+        }
+    }
+    let tied: usize = sure.values().map(Vec::len).sum();
+    if tied + unsure.len() > 0 {
+        let (status, detail) = status_of(tied, unsure.len());
+        return OldTests {
+            step,
+            status,
+            files: unit.files.clone(),
+            detail,
+        };
+    }
+    if report.status == StepStatus::Failed {
+        return not_judged(
+            &step,
+            unit.files.clone(),
+            "it failed, but no failing test is in these files",
+        );
+    }
+    // A pass: only when the results show a test of these files ran. Never
+    // reassurance (ADR 0090): `ran-no-failure` is in JSON only.
+    let collected = results.ran.iter().any(|id| {
+        matches!(
+            tie(&index, &unit.folder, unit.runner, id, &unit.files),
+            Tie::File(_)
+        )
+    });
+    if !collected {
+        return not_judged(
+            &step,
+            unit.files.clone(),
+            "the run collected none of the base's tests of these files, as far as its results show",
+        );
+    }
+    OldTests {
+        step,
+        status: OldTestsStatus::RanNoFailure,
+        files: unit.files.clone(),
+        detail: "it ran; no test of these files failed. This shows nothing about the change"
+            .to_owned(),
+    }
+}
+
+/// Which of the run's files a test the runner names belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Tie {
+    /// This file, for sure.
+    File(String),
+    /// Maybe one of them, maybe not: why it cannot be told.
+    Unsure(String),
+    /// None of them.
+    Elsewhere,
+}
+
+/// Folders a search for test files never enters.
+const SKIPPED_FOLDERS: [&str; 4] = ["target", "node_modules", ".git", ".firescale"];
+
+/// At most this many files are looked at for `cargo test`'s binaries.
+const MAX_FILES: usize = 50_000;
+
+/// What the repo's files say about the binaries `cargo test` builds, read
+/// once per run from the repo root (a workspace's step can run any crate's
+/// tests): its files, and every crate, library, binary and test target
+/// name, with `-` written `_`.
+#[derive(Debug, Default)]
+struct CargoIndex {
+    files: Vec<String>,
+    names: BTreeSet<String>,
+    /// More than [`MAX_FILES`] files: what is past them is not known, so no
+    /// tie is sure.
+    truncated: bool,
+}
+
+impl CargoIndex {
+    fn of(root: &Path) -> Self {
+        let mut index = Self::default();
+        let mut stack = vec![(root.to_path_buf(), String::new())];
+        while let Some((dir, prefix)) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if index.files.len() >= MAX_FILES {
+                    index.truncated = true;
+                    return index;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
+                    if !SKIPPED_FOLDERS.contains(&name.as_str()) {
+                        stack.push((entry.path(), format!("{prefix}{name}/")));
+                    }
+                } else if kind.is_file() {
+                    if name == "Cargo.toml" {
+                        if let Ok(text) = fs::read_to_string(entry.path()) {
+                            index.names.extend(target_names(&text));
+                        }
+                    }
+                    index.files.push(format!("{prefix}{name}"));
+                }
+            }
+        }
+        index
+    }
+}
+
+/// The `name` of each `[package]`, `[lib]`, `[[bin]]` and `[[test]]` of a
+/// `Cargo.toml`, with `-` written `_`. The value is read between its quotes,
+/// so a comment after it is left out.
+fn target_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut section = String::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            section = line.split('#').next().unwrap_or(line).trim().to_owned();
+            continue;
+        }
+        if !matches!(
+            section.as_str(),
+            "[package]" | "[lib]" | "[[bin]]" | "[[test]]"
+        ) {
+            continue;
+        }
+        let Some(rest) = line
+            .strip_prefix("name")
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(str::trim_start)
+        else {
+            continue;
+        };
+        let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+            continue;
+        };
+        if let Some(value) = rest[1..].split(quote).next() {
+            names.push(value.replace('-', "_"));
+        }
+    }
+    names
+}
+
+/// The name of the test binary cargo builds from an integration test file:
+/// `tests/cart.rs` and `tests/cart/main.rs` are `cart`; `-` is written `_`.
+fn cargo_binary(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let name = match parts.as_slice() {
+        [.., "tests", file] => file.strip_suffix(".rs")?,
+        [.., "tests", dir, "main.rs"] => dir,
+        _ => return None,
+    };
+    Some(name.replace('-', "_"))
+}
+
+/// The binary a file of another target builds, whose own tests cargo also
+/// runs under its name: `src/bin/cart.rs`, `src/bin/cart/main.rs`, and the
+/// same under `examples/` and `benches/`.
+fn other_binary(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let name = match parts.as_slice() {
+        [.., "src", "bin", file] | [.., "examples" | "benches", file] => {
+            file.strip_suffix(".rs")?
+        }
+        [.., "src", "bin", dir, "main.rs"] | [.., "examples" | "benches", dir, "main.rs"] => dir,
+        _ => return None,
+    };
+    Some(name.replace('-', "_"))
+}
+
+/// Ties a test the runner names (failing, or passing in `ran`) to one of
+/// `files`, only when no other file could hold it (ADR 0090). Pytest,
+/// Vitest and Jest name a file; `cargo test` names a binary, which a
+/// crate's library or binary, a `[[test]]` target, or another file of the
+/// same name could also be.
+fn tie(index: &CargoIndex, folder: &str, runner: TestRunner, id: &str, files: &[String]) -> Tie {
+    if runner != TestRunner::Cargo {
+        let mine: Vec<&String> = files
+            .iter()
+            .filter(|file| in_file(runner, id, folder, file))
+            .collect();
+        return match mine.as_slice() {
+            [] => Tie::Elsewhere,
+            [one] => Tie::File((*one).clone()),
+            many => Tie::Unsure(format!("{} of the files could hold it", many.len())),
+        };
+    }
+    let binary = id.split("::").next().unwrap_or(id);
+    if !files
+        .iter()
+        .any(|file| cargo_binary(file).as_deref() == Some(binary))
+    {
+        return Tie::Elsewhere;
+    }
+    if index.truncated {
+        return Tie::Unsure(format!(
+            "cargo names the test binary `{binary}`, and the repo has more files than are looked through to find what else could build it"
+        ));
+    }
+    if index.names.contains(binary) {
+        return Tie::Unsure(format!(
+            "cargo names the test binary `{binary}`, and a crate is named `{binary}` too, or a target of it: its own tests run under that name"
+        ));
+    }
+    let holders: Vec<&String> = index
+        .files
+        .iter()
+        .filter(|path| {
+            cargo_binary(path).as_deref() == Some(binary)
+                || other_binary(path).as_deref() == Some(binary)
+        })
+        .collect();
+    match holders.as_slice() {
+        [one] if files.contains(one) => Tie::File((*one).clone()),
+        [_] | [] => Tie::Elsewhere,
+        many => Tie::Unsure(format!(
+            "cargo names the test binary `{binary}`, and {} files could build it",
+            many.len()
+        )),
     }
 }
 
@@ -614,6 +961,146 @@ mod tests {
         assert!(holds_code("src/lib.rs"));
         assert!(!holds_code("tests/cart.rs"));
         assert!(!holds_code("tests/test_a.py"));
+    }
+
+    fn tree(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, text) in files {
+            let at = dir.path().join(path);
+            fs::create_dir_all(at.parent().unwrap()).unwrap();
+            fs::write(at, text).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_cargo_test_is_tied_to_a_file_only_when_no_other_could_be_it() {
+        let cand = |files: &[&str]| files.iter().map(|f| (*f).to_owned()).collect::<Vec<_>>();
+        // One crate `shop`, one `tests/cart.rs`: sure.
+        let clear = tree(&[
+            ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+            ("tests/cart.rs", ""),
+        ]);
+        assert_eq!(
+            tie(
+                &CargoIndex::of(clear.path()),
+                ".",
+                TestRunner::Cargo,
+                "cart::totals",
+                &cand(&["tests/cart.rs"])
+            ),
+            Tie::File("tests/cart.rs".to_owned())
+        );
+        // The crate is named `cart` too: its library's own tests run as `cart`.
+        let clash = tree(&[
+            ("Cargo.toml", "[package]\nname = \"cart\"\n"),
+            ("tests/cart.rs", ""),
+        ]);
+        assert!(matches!(
+            tie(&CargoIndex::of(clash.path()), ".", TestRunner::Cargo, "cart::totals", &cand(&["tests/cart.rs"])),
+            Tie::Unsure(why) if why.contains("a crate is named `cart`")
+        ));
+        // Two crates' `tests/x.rs` under one unit.
+        let two = tree(&[
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("a/tests/x.rs", ""),
+            ("b/Cargo.toml", "[package]\nname = \"b\"\n"),
+            ("b/tests/x.rs", ""),
+        ]);
+        assert!(matches!(
+            tie(&CargoIndex::of(two.path()), ".", TestRunner::Cargo, "x::totals", &cand(&["a/tests/x.rs"])),
+            Tie::Unsure(why) if why.contains("2 files")
+        ));
+        // A binary no candidate could be.
+        assert_eq!(
+            tie(
+                &CargoIndex::of(clear.path()),
+                ".",
+                TestRunner::Cargo,
+                "other::t",
+                &cand(&["tests/cart.rs"])
+            ),
+            Tie::Elsewhere
+        );
+        // Pytest names the file: sure.
+        assert_eq!(
+            tie(
+                &CargoIndex::of(clear.path()),
+                ".",
+                TestRunner::Pytest,
+                "tests/test_a.py::t",
+                &cand(&["tests/test_a.py"])
+            ),
+            Tie::File("tests/test_a.py".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_cargo_binary_a_bin_target_could_also_be_is_not_tied() {
+        let cand = vec!["tests/cart.rs".to_owned()];
+        for extra in [("src/bin/cart.rs", ""), ("src/bin/cart/main.rs", "")] {
+            let dir = tree(&[
+                ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+                ("tests/cart.rs", ""),
+                extra,
+            ]);
+            let index = CargoIndex::of(dir.path());
+            assert!(
+                matches!(
+                    tie(&index, ".", TestRunner::Cargo, "cart::t", &cand),
+                    Tie::Unsure(_)
+                ),
+                "{extra:?}"
+            );
+        }
+        // A `[[bin]]` named so, and a name with a comment after it.
+        for manifest in [
+            "[package]\nname = \"shop\"\n\n[[bin]]\nname = \"cart\"\npath = \"src/x.rs\"\n",
+            "[package]\nname = \"cart\" # the shop\n",
+        ] {
+            let dir = tree(&[("Cargo.toml", manifest), ("tests/cart.rs", "")]);
+            let index = CargoIndex::of(dir.path());
+            assert!(
+                matches!(
+                    tie(&index, ".", TestRunner::Cargo, "cart::t", &cand),
+                    Tie::Unsure(_)
+                ),
+                "{manifest}"
+            );
+        }
+        // A tree too large to read whole: never sure.
+        let dir = tree(&[
+            ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+            ("tests/cart.rs", ""),
+        ]);
+        let mut index = CargoIndex::of(dir.path());
+        index.truncated = true;
+        assert!(matches!(
+            tie(&index, ".", TestRunner::Cargo, "cart::t", &cand),
+            Tie::Unsure(_)
+        ));
+    }
+
+    #[test]
+    fn a_run_whose_failures_are_all_unsure_is_not_judged_and_never_panics_on_time() {
+        assert_eq!(status_of(0, 2).0, OldTestsStatus::NotJudged);
+        assert!(status_of(0, 2).1.contains("cannot be tied to one file"));
+        assert_eq!(status_of(1, 0).0, OldTestsStatus::Failed);
+        let (status, detail) = status_of(1, 2);
+        assert_eq!(status, OldTestsStatus::Failed);
+        assert!(
+            detail.starts_with("1 test of the base's versions"),
+            "{detail}"
+        );
+        // A kept time longer than the clock has run: no panic, and no time.
+        let now = Instant::now();
+        assert!(!fits(now, Some(now), Duration::from_secs(u64::MAX / 4)));
+        assert!(fits(now, None, Duration::from_secs(60)));
+        assert!(fits(
+            now,
+            Some(now + Duration::from_secs(120)),
+            Duration::from_secs(60)
+        ));
     }
 
     #[test]

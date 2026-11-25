@@ -68,6 +68,14 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **Decided on your behalf:** its time is `verify.baseBudget`; a Rust file with its tests beside the code is not judged; runner config read from `pyproject.toml`/`package.json` is not taken from the base.
 - **See it:** `fscale verify` on a branch that changes an expected value and the code together: the finding gains `evidence:` lines.
 
+**Pull request 10: old tests within their limits (your decisions on ADR 0089, ADR 0090)**
+
+- **The stop hook's limit**: the worktree's making and removal are timed and kept beside the step times; in the hook, old tests start only when the worktree and the step both have a kept time and fit before the limit, else `not judged`. See it: run `fscale verify`, then look for `old tests: worktree` in `.firescale/step-times.json`.
+- **One budget**: the base run and old tests share `verify.baseBudget`; when it has run out, `not judged`.
+- **No pass shown**: a run with no failure prints nothing; `--json` says `ran-no-failure`; a run whose results show none of the base's tests ran is `not judged`.
+- **Sure files only**: a failing `cargo test` that a crate's library or another file could also be is listed under the finding without a file, with why.
+- **Measured**: misses 37 of 98 and 89 of 100, unchanged; 0 false findings (0 of 196).
+
 **Track B: what changes for a user, and for the course project**
 
 Each with the command that shows it. None of it is released: it reaches the course project with the next version.
