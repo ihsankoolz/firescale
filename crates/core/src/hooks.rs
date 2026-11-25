@@ -1417,13 +1417,19 @@ pub fn block_summary(report: &crate::verify::VerifyReport) -> String {
 /// the loop guard lets it go; the rest is in the agent's own transcript.
 const LAST_MESSAGE_MAX_CHARS: usize = 4000;
 
+/// Why the loop guard let the agent go: on stderr, and opening what the
+/// person is shown.
+fn let_go_line(blocks: u32) -> String {
+    format!(
+        "fscale: verify still fails after {blocks} attempts, so the agent is allowed to stop. Run `fscale verify` to see what is left."
+    )
+}
+
 /// What the person is shown when the loop guard lets the agent go: why, and
 /// the agent's last message, which may say which test it believes wrong
 /// (ADR 0084, ADR 0087).
 fn give_up_text(blocks: u32, last_message: Option<&str>) -> String {
-    let mut text = format!(
-        "fscale: verify still fails after {blocks} attempts, so the agent is allowed to stop. Run `fscale verify` to see what is left."
-    );
+    let mut text = let_go_line(blocks);
     if let Some(message) = last_message
         .map(str::trim)
         .filter(|message| !message.is_empty())
@@ -1475,9 +1481,7 @@ pub fn reply_with(
                         format!("{}\n", json!({ "systemMessage": text }))
                     }
                 },
-                stderr: format!(
-                    "fscale: verify still fails after {blocks} attempts, so the agent is allowed to stop. Run `fscale verify` to see what is left.\n"
-                ),
+                stderr: format!("{}\n", let_go_line(*blocks)),
                 exit_code: 0,
             }
         }

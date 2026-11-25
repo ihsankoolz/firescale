@@ -28,3 +28,12 @@ ADR 0084 tells an agent that believes a test is wrong to say which and why, and 
 
 - `hooks.test.ts`, "loop guard: when it lets the agent go, the person sees the agent's last message (ADR 0087)": seen failing on `main` (no JSON on stdout).
 - `hooks::tests::letting_the_agent_go_shows_the_person_its_last_message`: the message for each agent, the cut, a blank message, and that a block carries nothing of it.
+
+## From the fresh review
+
+Fixed: the line saying why the agent was let go was written twice (stderr and `systemMessage`); one function now gives both.
+
+## Not done
+
+- The cut at 4000 characters can split a grapheme cluster (an emoji sequence, a combining accent): cosmetic, and no dependency is added for it.
+- That Claude Code and Codex never feed a Stop hook's `systemMessage` back to the model rests on their documentation. If one did, the agent would see its own message once, after it was already let go: no stop is made easier.

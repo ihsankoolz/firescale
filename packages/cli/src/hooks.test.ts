@@ -945,7 +945,12 @@ describe('fscale hooks run (the stop hook)', () => {
       'I believe test_total in tests/test_cart.py is wrong: it expects 11 but the spec says 10. Stopping.';
     for (const agent of ['claude', 'codex'] as const) {
       const session = `explain-${agent}`;
-      const blocked = await stop(repo.root, agent, { session_id: session, stop_hook_active: false }, env);
+      const blocked = await stop(
+        repo.root,
+        agent,
+        { session_id: session, stop_hook_active: false },
+        env,
+      );
       expect(blocked.code).toBe(EXIT_BLOCK);
       const released = await stop(
         repo.root,
@@ -961,7 +966,12 @@ describe('fscale hooks run (the stop hook)', () => {
     }
     // No message from the agent: the person still sees why it stopped.
     await stop(repo.root, 'claude', { session_id: 'quiet', stop_hook_active: false }, env);
-    const quiet = await stop(repo.root, 'claude', { session_id: 'quiet', stop_hook_active: true }, env);
+    const quiet = await stop(
+      repo.root,
+      'claude',
+      { session_id: 'quiet', stop_hook_active: true },
+      env,
+    );
     const shown = JSON.parse(quiet.stdout) as { systemMessage: string };
     expect(shown.systemMessage).toContain('allowed to stop');
     expect(shown.systemMessage).not.toContain("The agent's last message");
