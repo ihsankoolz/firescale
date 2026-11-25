@@ -225,23 +225,36 @@ fn not_judged(step: &str, files: Vec<String>, detail: impl Into<String>) -> OldT
     }
 }
 
+/// What a run of the base's tests on the head's code works from: the repo,
+/// the base commit, the files the change touched, the verify plan and its
+/// options, the caller's own limit (the stop hook's), and where progress
+/// lines go.
+#[derive(Clone, Copy)]
+pub struct Run<'a, 'o> {
+    pub root: &'a Path,
+    pub base: &'a BaseCommit,
+    pub changed: &'a BTreeSet<String>,
+    pub plan: &'a VerifyPlan,
+    pub options: &'a RunOptions<'o>,
+    pub deadline: Option<Instant>,
+    pub say: &'a dyn Fn(&str),
+}
+
 /// Runs the base's tests on the head's code for the guard's findings, and
 /// adds what it shows to `tamper`: an entry per unit in `old_tests`, and the
 /// failing tests as evidence on the findings of their files. `deadline` is
 /// the caller's own limit (the stop hook's); `verify.baseBudget` also
 /// applies. Nothing it does changes which findings there are, or whether
 /// they block.
-#[allow(clippy::too_many_arguments)]
-pub fn judge(
-    root: &Path,
-    base: &BaseCommit,
-    changed: &BTreeSet<String>,
-    tamper: &mut TamperReport,
-    plan: &VerifyPlan,
-    options: &RunOptions<'_>,
-    deadline: Option<Instant>,
-    say: &dyn Fn(&str),
-) {
+pub fn judge(run: &Run<'_, '_>, tamper: &mut TamperReport) {
+    let Run {
+        root,
+        base,
+        plan,
+        options,
+        deadline,
+        ..
+    } = *run;
     if tamper.policy == crate::tamper::Policy::Off {
         return;
     }
@@ -318,37 +331,29 @@ pub fn judge(
     }
 
     if !units.is_empty() {
-        run_units(
-            root,
-            base,
-            changed,
-            tamper,
-            plan,
-            options,
-            deadline,
-            say,
-            units,
-            &mut results,
-        );
+        let run = Run { deadline, ..*run };
+        run_units(&run, tamper, &units, &mut results);
     }
     tamper.old_tests = results;
 }
 
 /// Makes the worktree, takes the base's files into it, and runs each unit's
 /// test step once.
-#[allow(clippy::too_many_arguments)]
 fn run_units(
-    root: &Path,
-    base: &BaseCommit,
-    changed: &BTreeSet<String>,
+    run: &Run<'_, '_>,
     tamper: &mut TamperReport,
-    plan: &VerifyPlan,
-    options: &RunOptions<'_>,
-    deadline: Option<Instant>,
-    say: &dyn Fn(&str),
-    units: BTreeMap<String, Unit<'_>>,
+    units: &BTreeMap<String, Unit<'_>>,
     results: &mut Vec<OldTests>,
 ) {
+    let Run {
+        root,
+        base,
+        changed,
+        plan,
+        options,
+        deadline,
+        say,
+    } = *run;
     let all_not_judged =
         |results: &mut Vec<OldTests>, units: &BTreeMap<String, Unit<'_>>, why: &str| {
             for unit in units.values() {
@@ -356,18 +361,18 @@ fn run_units(
             }
         };
     if options.stop.load(Ordering::SeqCst) {
-        all_not_judged(results, &units, "verify was stopped");
+        all_not_judged(results, units, "verify was stopped");
         return;
     }
     if blame::past(deadline) {
-        all_not_judged(results, &units, "no time was left for it");
+        all_not_judged(results, units, "no time was left for it");
         return;
     }
     say("old tests, new code: running the base's versions of the changed test files on the head's code");
     let head = match run_git(root, &["rev-parse", "--verify", "HEAD"]) {
         Ok(out) if out.code == 0 => out.stdout.trim().to_owned(),
         _ => {
-            all_not_judged(results, &units, "git could not name the head commit");
+            all_not_judged(results, units, "git could not name the head commit");
             return;
         }
     };
@@ -376,7 +381,7 @@ fn run_units(
         Err(problem) => {
             all_not_judged(
                 results,
-                &units,
+                units,
                 &format!("a worktree of the head could not be made: {problem}"),
             );
             return;
@@ -386,7 +391,7 @@ fn run_units(
         let why = problem.unwrap_or_else(|| "no time was left for it".to_owned());
         all_not_judged(
             results,
-            &units,
+            units,
             &format!("the head's changes could not be copied into its worktree: {why}"),
         );
         return;
@@ -405,7 +410,7 @@ fn run_units(
     if let Some(problem) =
         blame::prepare_worktree(root, options, &worktree, &links, deadline, say, "head")
     {
-        all_not_judged(results, &units, &problem);
+        all_not_judged(results, units, &problem);
         return;
     }
     // The base's test files, and every changed conftest, snapshot and
@@ -424,7 +429,7 @@ fn run_units(
         if let Err(problem) = put_base_file(root, base, &worktree.root, path) {
             all_not_judged(
                 results,
-                &units,
+                units,
                 &format!("the base's {path} could not be put in the worktree: {problem}"),
             );
             return;

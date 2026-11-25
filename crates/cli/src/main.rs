@@ -1347,7 +1347,18 @@ pub(crate) fn old_tests_for(
         times: Some(&times),
         budget: None,
     };
-    firescale_core::oldtests::judge(root, base, changed, report, &plan, &options, None, &|_| {});
+    firescale_core::oldtests::judge(
+        &firescale_core::oldtests::Run {
+            root,
+            base,
+            changed,
+            plan: &plan,
+            options: &options,
+            deadline: None,
+            say: &|_| {},
+        },
+        report,
+    );
 }
 
 /// Runs check and then the planned lint, typecheck and test commands.
@@ -1595,14 +1606,16 @@ fn verify_report(
                             env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request_target");
                         if !target_run {
                             firescale_core::oldtests::judge(
-                                root,
-                                base,
-                                changed,
+                                &firescale_core::oldtests::Run {
+                                    root,
+                                    base,
+                                    changed,
+                                    plan: &plan,
+                                    options: &options,
+                                    deadline: hook_deadline,
+                                    say: &say,
+                                },
                                 &mut found,
-                                &plan,
-                                &options,
-                                hook_deadline,
-                                &say,
                             );
                         }
                         add_tamper(&mut verify, found);
