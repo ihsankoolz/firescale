@@ -2030,8 +2030,9 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
         let media = is_document_or_media(file);
         if unowned && media && roots.is_empty() {
             // image.png, report.pdf, submission.zip: nothing to run for it.
-            // With a root project it is that project's, like any other file
-            // below the repo root (its tests may read a fixture image).
+            // With a root project it is in every project's key, like any
+            // other file in no project below the root (its tests may read a
+            // fixture image), and affects every project below.
             result.inert_files.push(file.clone());
             continue;
         }

@@ -208,6 +208,22 @@ Build idea 10. Measured first, on the laptop, a scratch clone whose only step wa
 - **ADR 0080:** the first-parent check is under "Later", not built.
 - **Failing tests first:** the new gap-2 test and the property below a root project, then the two updated `graph.rs` tests, all seen failing before the change.
 
+**Track A, items 11 to 13 (2026-11-25): what changes**
+
+For a user:
+
+- `verify.projects.<folder>.<step>.expected: "1h 40m"` leaves a slow step out of a `--budget` run on a fresh clone, until a time is kept for it. See it: `fscale verify --dry-run --budget 30m`.
+- Verify's JSON is schema version 9: a step left out for its expected time has `expectedMs`, not `lastKnownMs`. See it: `fscale verify --budget 30m --json`.
+- A Rust repo's base runs keep their build folders in `firescale-base-target/` in the temp folder, so dependencies are not built again on each base run. See it: `FSCALE_LOG=cache fscale verify --progress` on a change with a failing Rust step, then the folder.
+- With a project at the repo root, a change to a file in no project below it runs every project under `--affected` and in the stop hook. See it: `fscale verify --affected --dry-run`.
+- `fscale --help` says `--pr-base` reads a merge queue's `merge_group` event. See it: `fscale --help`.
+
+For the course project:
+
+- Its slow suite can carry a hint, so a fresh worktree's `--budget` run leaves it out: add `"expected": "1h 40m"` to `verify.projects["backend/ledger_service"].test`, then `fscale verify --dry-run --budget 30m`.
+- A script that reads `fscale verify --json` sees `schemaVersion: 9`: `fscale verify --json` and look at the first field.
+- Nothing else: it has no Rust and no project at the root, so the base run and `--affected` are as they were. Check with `fscale verify --affected --dry-run`.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

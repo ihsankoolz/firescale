@@ -14,7 +14,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 6. The agent's explanation when the loop guard lets it go: a `systemMessage` with `last_assistant_message` for Claude Code and Codex; blocking unchanged (ADR 0087, the owner's decision on ADR 0084). Merged as [#103](https://github.com/ihsankoolz/firescale/pull/103).
 7. An assertion made conditional or a tautology: `assertion-weakened`, needs approval (ADR 0088). First corpus 40 to 37 missed, second 89 to 89, no new false finding.
 
-**Track A (cache and verify), the run of 2026-11-18 after 0.5.4** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
+**Track A (cache and verify), the run of 2026-11-18 after 0.5.4, finished on 2026-11-25 with items 11 to 13** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
 
 1. A test command that exits 0 while its per-test results hold failing tests is `FAILED` and never cached (ADR 0072; `run_step` in `crates/core/src/verify.rs`, `pertest::is_test`).
 2. A new failing test in a file the change added or edited is never labelled `flaky`, and its step is not run again (ADR 0073; `own_tests` and `touched` in `crates/core/src/blame.rs`, `pertest::file_of`).

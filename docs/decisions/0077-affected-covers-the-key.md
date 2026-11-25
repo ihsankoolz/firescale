@@ -110,3 +110,5 @@ The property after the change:
 | Workspace with a root project      | 60            | 7                              | 0      |
 | Projects below a plain root        | 173           | 13                             | 0      |
 | A root project with projects below | 175           | 5                              | 0      |
+
+The fresh review of this change found nothing newly broken: every earlier path of `affected_except` is as it was, the new case only widens, and each updated assertion is stronger. Logged: the new case reuses the type `unowned-file`, whose fixed meaning in ADR 0079's schema is "belongs to no project"; with a root project the file belongs to that project, and only the words (`text`) say "no project below the repo root's project". A type of its own would be a schema change.
