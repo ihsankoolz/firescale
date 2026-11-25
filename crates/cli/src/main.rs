@@ -1311,6 +1311,56 @@ fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
     Ok(Output::ok(text))
 }
 
+/// The base's tests on the head's code for a tamper report made outside a
+/// verify run (`fix --agent`'s referee, ADR 0089): the plan of a full
+/// verify of `root`, no cache, the base budget. Anything that keeps the
+/// plan from being made leaves the report as it is.
+pub(crate) fn old_tests_for(
+    root: &Path,
+    base: &firescale_core::blame::BaseCommit,
+    changed: &std::collections::BTreeSet<String>,
+    report: &mut tamper::TamperReport,
+) {
+    let packs = firescale_rules::builtin_packs();
+    let mut host = NodeHost::new(root);
+    let Ok(config) = load_config(root, &packs, &mut host) else {
+        return;
+    };
+    let Ok(facts) = detect_facts(root) else {
+        return;
+    };
+    let Ok((plan, _)) = verify_plan(root, &Args::default(), &facts, &config.verify, None) else {
+        return;
+    };
+    let times = StepTimes::new(root);
+    let options = RunOptions {
+        stop: &STOP,
+        progress: None,
+        jobs: 1,
+        config: &config.verify,
+        heartbeat: heartbeat_from_env(),
+        record: None,
+        cache: None,
+        every_step: true,
+        deadline: None,
+        base_run: false,
+        times: Some(&times),
+        budget: None,
+    };
+    firescale_core::oldtests::judge(
+        &firescale_core::oldtests::Run {
+            root,
+            base,
+            changed,
+            plan: &plan,
+            options: &options,
+            deadline: None,
+            say: &|_| {},
+        },
+        report,
+    );
+}
+
 /// Runs check and then the planned lint, typecheck and test commands.
 /// `progress` turns on the live lines on stderr.
 /// How a verify run is used: by a person or CI, or by an agent's stop hook.
@@ -1336,6 +1386,7 @@ fn verify_report(
     args: &Args,
     progress: bool,
     mode: VerifyMode,
+    hook_deadline: Option<Instant>,
 ) -> Result<(VerifyReport, Vec<String>)> {
     // Blame-aware verify (ADR 0037): with a base commit, every step runs and
     // each failure is compared with the base.
@@ -1545,7 +1596,29 @@ fn verify_report(
                     // The tamper guard: the same base, the same changed
                     // files, and its policy from the base commit (ADR 0042).
                     if let Some(changed) = &changed {
-                        add_tamper(&mut verify, tamper::guard(root, base, changed));
+                        let mut found = tamper::guard(root, base, changed);
+                        // The base's tests on the head's code, as evidence
+                        // for what the guard found; report only (ADR 0089).
+                        // Never in a pull_request_target run, which holds
+                        // secrets and a token that can write: no code of the
+                        // change may run there (ADR 0045).
+                        let target_run =
+                            env::var("GITHUB_EVENT_NAME").as_deref() == Ok("pull_request_target");
+                        if !target_run {
+                            firescale_core::oldtests::judge(
+                                &firescale_core::oldtests::Run {
+                                    root,
+                                    base,
+                                    changed,
+                                    plan: &plan,
+                                    options: &options,
+                                    deadline: hook_deadline,
+                                    say: &say,
+                                },
+                                &mut found,
+                            );
+                        }
+                        add_tamper(&mut verify, found);
                     }
                 }
                 Err(error) => {
@@ -1839,7 +1912,7 @@ fn verify(root: &Path, args: &Args, extra: &[String]) -> Result<Output> {
         .progress
         .unwrap_or_else(|| std::io::stderr().is_terminal());
     let started = Instant::now();
-    let (report, notes) = match verify_report(root, args, progress, VerifyMode::Full) {
+    let (report, notes) = match verify_report(root, args, progress, VerifyMode::Full, None) {
         Ok(done) => done,
         // Ctrl+C during the check also reaches the Node host and git, which
         // then fail: that is a stop, not an error. `--json` still prints a
@@ -2413,6 +2486,18 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                 std::io::read_to_string(std::io::stdin()).unwrap_or_default()
             };
             let input = parse_hook_input(&stdin);
+            // The hook's own time limit: Claude Code's `timeout` (ADR 0083),
+            // less a margin to answer in. Past it, nothing more is started
+            // for the base's tests on the head's code (ADR 0089).
+            let hook_deadline = (agent == Agent::Claude).then(|| {
+                firescale_core::hooks::hook_deadline(
+                    Instant::now(),
+                    firescale_core::hooks::claude_hook_timeout(root)
+                        .flatten()
+                        .as_ref()
+                        .and_then(firescale_core::hooks::timeout_seconds),
+                )
+            });
             // A hook that cannot run verify must not trap the agent: report and let it stop.
             // An agent reads the hook's stderr: no progress unless asked for.
             let report = match verify_report(
@@ -2420,6 +2505,7 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
                 args,
                 args.progress.unwrap_or(false),
                 VerifyMode::Hook,
+                hook_deadline,
             ) {
                 Ok((report, _)) if report.result == VerifyResult::Stopped => {
                     return Ok(Output {

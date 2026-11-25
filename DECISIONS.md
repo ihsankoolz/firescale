@@ -60,6 +60,14 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **Decided on your behalf:** "report-only, needing approval as the snapshot kinds do" read as `needs_approval` (never blocks where the change runs; CI's approval check applies under `enforced`). An assertion that became a tautology is named once, as weakened, not also as `expected-changed`.
 - **See it:** `fscale tamper --base main` on a branch that wraps an assert in `if`.
 
+**Pull request 8: old tests, new code (verification idea 1, first step, ADR 0089)**
+
+- **Evidence only**: when the guard has an `expected-changed`, `snapshot-changed` or assertion finding in a test file the base has, the unit's test step runs once in a worktree of the head with those test files, every changed conftest, snapshot and runner config taken from the base. A failing test is added to its finding as `evidence:` with its reason; a pass never lowers a finding; otherwise `not judged`. Report only. Pytest, Vitest, Jest, `cargo test`.
+- **Where**: `fscale verify` (laptop and the `pull_request` CI job), the stop hook (within its `timeout` less 30 s, else `not judged`), `fix --agent`. Never in a `pull_request_target` run.
+- **Measured**: misses 37 of 98 and 89 of 100, unchanged by construction; 0 false findings (0 of 196).
+- **Decided on your behalf:** its time is `verify.baseBudget`; a Rust file with its tests beside the code is not judged; runner config read from `pyproject.toml`/`package.json` is not taken from the base.
+- **See it:** `fscale verify` on a branch that changes an expected value and the code together: the finding gains `evidence:` lines.
+
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
 Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.

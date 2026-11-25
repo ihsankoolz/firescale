@@ -31,6 +31,7 @@ pub mod ledger;
 pub mod lintsource;
 pub mod model;
 pub mod node;
+pub mod oldtests;
 pub mod ownfolder;
 pub mod pertest;
 pub mod process;

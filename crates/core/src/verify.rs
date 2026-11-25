@@ -1232,6 +1232,12 @@ pub struct StepReport {
     /// The runner's per-test results. Not in JSON.
     #[serde(skip)]
     pub test_results: Option<crate::pertest::TestResults>,
+    /// Each failing test's reason as the runner wrote it, its first lines
+    /// (at most [`REASON_LINES`]), before they are hashed: evidence for the
+    /// run of the base's tests on the head's code (ADR 0089). Not in JSON,
+    /// and never kept.
+    #[serde(skip)]
+    pub reason_text: BTreeMap<String, Vec<String>>,
     /// For a step that passed now: a blake3 digest of its output, kept in
     /// the shared cache's record (ADR 0041). Not in JSON.
     #[serde(skip)]
@@ -2425,6 +2431,7 @@ fn run_step(
                 signature: Vec::new(),
                 failed_tests: Vec::new(),
                 test_results: None,
+                reason_text: BTreeMap::new(),
                 output_digest: None,
                 not_cached: None,
                 ran_again: None,
@@ -2590,6 +2597,7 @@ fn run_step(
         signature: Vec::new(),
         failed_tests: Vec::new(),
         test_results: None,
+        reason_text: BTreeMap::new(),
         output_digest: None,
         not_cached: None,
         ran_again: None,
@@ -2631,13 +2639,32 @@ fn run_step(
         let stdout = strip_ansi(&String::from_utf8_lossy(&finished.stdout));
         let stderr = strip_ansi(&String::from_utf8_lossy(&finished.stderr));
         report.test_results = runner.read(&stdout, &stderr, xml.as_deref());
-        // Each failing test's reason, as hashes of its normalised lines.
+        // Each failing test's reason, as hashes of its normalised lines;
+        // the first lines as text, for evidence only (ADR 0089).
         if let Some(results) = report.test_results.as_mut() {
             let mut roots = crate::pertest::roots_of(unit.root);
             if let Some(head) = unit.head_root {
                 roots.extend(crate::pertest::roots_of(head));
                 roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
             }
+            // With the run's folders written as `<root>` and forward
+            // slashes, as all output is (review of ADR 0089).
+            report.reason_text = results
+                .reasons
+                .iter()
+                .map(|(id, lines)| {
+                    let first: Vec<String> = lines
+                        .iter()
+                        .map(|line| line.trim())
+                        .filter(|line| !line.is_empty())
+                        .take(REASON_LINES)
+                        .map(|line| {
+                            crate::pertest::normalise_reason_line(line, &roots).replace('\\', "/")
+                        })
+                        .collect();
+                    (id.clone(), first)
+                })
+                .collect();
             results.hash_reasons(&roots);
         }
         if finished.ending == Ending::Exited(Some(0)) && !options.base_run {
@@ -3046,6 +3073,7 @@ fn run_unit(
                 signature: Vec::new(),
                 failed_tests: Vec::new(),
                 test_results: None,
+                reason_text: BTreeMap::new(),
                 output_digest: None,
                 not_cached: None,
                 ran_again: None,
@@ -3081,6 +3109,7 @@ fn run_unit(
             signature: Vec::new(),
             failed_tests: Vec::new(),
             test_results: None,
+            reason_text: BTreeMap::new(),
             output_digest: None,
             not_cached: None,
             ran_again: None,
@@ -3256,6 +3285,9 @@ pub(crate) fn run_base_step(
     run_step(&unit, name, command, &base)
 }
 
+/// How many lines of a failing test's reason are kept as text (ADR 0089).
+pub const REASON_LINES: usize = 3;
+
 /// A step that ran for at least this long, and was not served from the
 /// cache, says why in the normal output (ADR 0075).
 pub const RAN_AGAIN_NOTE_MS: u64 = 60_000;
@@ -3345,6 +3377,7 @@ fn cached_or_run(
             signature: Vec::new(),
             failed_tests: Vec::new(),
             test_results: None,
+            reason_text: BTreeMap::new(),
                 output_digest: None,
                 not_cached: None,
                 ran_again: None,
@@ -3453,6 +3486,7 @@ pub fn run_verify_with(
         signature: Vec::new(),
         failed_tests: Vec::new(),
         test_results: None,
+        reason_text: BTreeMap::new(),
         output_digest: None,
         not_cached: None,
         ran_again: None,
@@ -3764,6 +3798,7 @@ pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> Verif
             signature: Vec::new(),
             failed_tests: Vec::new(),
             test_results: None,
+            reason_text: BTreeMap::new(),
             output_digest: None,
             not_cached: None,
             ran_again: None,
@@ -5139,6 +5174,25 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
                 "  {}: {place}: {}{approval}\n",
                 finding.kind.as_str(),
                 finding.what
+            ));
+            // What the base's tests showed on the head's code: evidence, not
+            // a verdict (ADR 0089).
+            for line in &finding.evidence {
+                out.push_str(&format!("    evidence: {line}\n"));
+            }
+        }
+        // The runs of the base's tests on the head's code (ADR 0089).
+        for run in &tamper.old_tests {
+            let status = match run.status {
+                crate::tamper::OldTestsStatus::Failed => "failed",
+                crate::tamper::OldTestsStatus::Passed => "passed",
+                crate::tamper::OldTestsStatus::NotJudged => "not judged",
+            };
+            out.push_str(&format!(
+                "  Old tests, new code ({}; {}; report only): {status}: {}.\n",
+                run.step,
+                run.files.join(", "),
+                run.detail
             ));
         }
         let c = &tamper.counts;

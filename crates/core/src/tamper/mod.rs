@@ -823,6 +823,12 @@ pub struct Finding {
     /// The test's id, the assertion's text, or the suppression's comment
     /// or attribute with its key.
     pub what: String,
+    /// What the run of the base's tests on the head's code showed for this
+    /// file (ADR 0089): each failing test with its reason. Evidence for a
+    /// reviewer, never a verdict: it never adds, lowers or removes a
+    /// finding.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
 }
 
 /// Net counts over the changed files.
@@ -876,6 +882,39 @@ pub struct TamperReport {
     /// else: no approval can be recorded where the change itself runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approvals: Option<Approvals>,
+    /// The run of the base's tests on the head's code, when the guard had a
+    /// finding it applies to (ADR 0089).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub old_tests: Vec<OldTests>,
+}
+
+/// One run of a test step with the base's tests on the head's code (ADR
+/// 0089): report only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OldTests {
+    /// The step, as verify names it: `test`, `test in packages/api`.
+    pub step: String,
+    /// `failed`, `passed` or `not-judged`.
+    pub status: OldTestsStatus,
+    /// The files taken from the base commit.
+    pub files: Vec<String>,
+    /// What happened, in a sentence.
+    pub detail: String,
+}
+
+/// What a run of the base's tests on the head's code showed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OldTestsStatus {
+    /// A test of the base's files failed on the head's code.
+    Failed,
+    /// They passed: the edits to them were not needed to pass. Never lowers
+    /// a finding.
+    Passed,
+    /// The run could not tell: no runner it reads, no time, nothing
+    /// collected, a failure outside those files.
+    NotJudged,
 }
 
 /// The approvals of a pull request, read from GitHub's reviews.
@@ -1141,6 +1180,7 @@ pub fn guard_at(
         not_checked: Vec::new(),
         allowed: Vec::new(),
         approvals: None,
+        old_tests: Vec::new(),
     };
     if policy.mode == Policy::Off {
         return report;
@@ -1379,6 +1419,7 @@ pub fn guard_at(
                         {
                             report.not_checked.push(file.path.clone());
                             config_findings.push(Finding {
+                                evidence: Vec::new(),
                                 kind: Kind::NotChecked,
                                 file: file.path.clone(),
                                 line,
@@ -1430,6 +1471,7 @@ pub fn guard_at(
         };
         for (name, line) in approval::rewritten(path, &base_text, &head_text) {
             approval_findings.push(Finding {
+                evidence: Vec::new(),
                 kind: Kind::SnapshotChanged,
                 file: (*path).clone(),
                 line,
@@ -1484,6 +1526,7 @@ pub fn guard_at(
             if !allows(&file.path, Kind::NotChecked) {
                 report.not_checked.push(file.path.clone());
                 not_checked.push(Finding {
+                    evidence: Vec::new(),
                     kind: Kind::NotChecked,
                     file: file.path.clone(),
                     line,
@@ -1802,6 +1845,7 @@ pub fn guard_at(
         for (id, file, line) in missing.into_iter().take(shortfall) {
             if named.insert((id, file, *line)) {
                 findings.push(Finding {
+                    evidence: Vec::new(),
                     kind: Kind::TestDeleted,
                     file: file.clone(),
                     line: *line,
@@ -1890,6 +1934,7 @@ pub fn guard_at(
                 ));
             }
             findings.push(Finding {
+                evidence: Vec::new(),
                 kind: Kind::TestSkipped,
                 file: skip.file.to_owned(),
                 line: skip.line,
@@ -1904,6 +1949,7 @@ pub fn guard_at(
         .filter(|(_, _, id)| !base_focus.contains(id))
     {
         findings.push(Finding {
+            evidence: Vec::new(),
             kind: Kind::TestSkipped,
             file: file.clone(),
             line: *line,
@@ -1941,6 +1987,7 @@ pub fn guard_at(
         for entry in missing.into_iter().take(shortfall) {
             if named.insert((&entry.file, entry.line)) {
                 findings.push(Finding {
+                    evidence: Vec::new(),
                     kind: Kind::AssertionRemoved,
                     file: entry.file.clone(),
                     line: entry.line,
@@ -2135,6 +2182,7 @@ pub fn guard_at(
             continue;
         }
         findings.push(Finding {
+            evidence: Vec::new(),
             kind: Kind::SuppressionAdded,
             file: path.clone(),
             line: found.line,
@@ -2276,6 +2324,7 @@ fn weakened_in_tests(path: &str, before: &TestFile, after: &TestFile) -> Vec<Fin
             .collect();
         for (why, _, assertion) in new.into_iter().take(lost) {
             findings.push(Finding {
+                evidence: Vec::new(),
                 kind: Kind::AssertionWeakened,
                 file: path.to_owned(),
                 line: assertion.line,
@@ -2571,6 +2620,7 @@ fn expected_changes(
     paired
         .into_iter()
         .map(|(old, now)| Finding {
+            evidence: Vec::new(),
             kind: Kind::ExpectedChanged,
             file: path.to_owned(),
             line: new[now].line,
@@ -2712,6 +2762,7 @@ fn followed_losses(
                 "now"
             };
             found.push(Finding {
+                evidence: Vec::new(),
                 kind: Kind::AssertionRemoved,
                 file: path.to_owned(),
                 line: a.line,
@@ -2978,6 +3029,7 @@ mod tests {
                     line: 1,
                     on_base: false,
                     what: "x".to_owned(),
+                    evidence: vec!["a > adds: expected 1".to_owned()],
                 })
                 .collect(),
             not_checked: vec!["b.test.ts".to_owned()],
@@ -2989,6 +3041,12 @@ mod tests {
                 head: "def".to_owned(),
                 by: vec!["someone".to_owned()],
             }),
+            old_tests: vec![OldTests {
+                step: "test".to_owned(),
+                status: OldTestsStatus::Failed,
+                files: vec!["a.test.ts".to_owned()],
+                detail: "x".to_owned(),
+            }],
         };
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(

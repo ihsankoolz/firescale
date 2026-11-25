@@ -190,6 +190,17 @@ Findings are **report-only** by default: they are listed with file and line (a d
 
 `testPaths` are globs of more files to read as test files. `allow` leaves files out of the counts, for every kind of finding or only the `kinds` listed (`test-deleted`, `test-skipped`, `assertion-removed`, `suppression-added`, `coverage-lowered`, `ci-weakened`, `no-verify`, `rule-disabled`, `snapshot-changed`, `expected-changed`, `not-checked`); the summary and `--json` (`tamper.allowed`) name the files it left out. **All of it is read from the base commit**, never from the working tree, so a change cannot turn the guard off, widen `allow` or drop a test path for itself: a change to it takes effect once merged.
 
+### Old tests, new code: evidence, never a verdict
+
+When the guard has an `expected-changed`, `snapshot-changed`, `assertion-removed` or `assertion-weakened` finding in a test file the base commit has, verify runs the test step of that file's unit once more, in a worktree of the head, with the base's version of those test files, and of every changed `conftest.py`, `pytest.ini`, `vitest.config.*`, `vitest.workspace.*`, `jest.config.*` and snapshot (ADR 0089). Pytest, Vitest, Jest and `cargo test`.
+
+- A test of those files that fails there is listed under its finding as `evidence:`, with its first reason lines: the change needed different tests to pass. It is evidence for a reviewer, not a verdict: honest changes of behaviour fail it too.
+- A failing test in the runner's results counts even when the step exits 0. A run that passes never lowers or removes a finding, and does not show that the base's tests ran (the head's config could leave them out). One that cannot tell (the tests do not collect against the head's code, a failure outside those files, no time left) says `not judged`.
+- **Report only**: it never adds a finding and never makes verify fail. The JSON has `tamper.oldTests` and each finding's `evidence`.
+- It runs in `fscale verify` (on a laptop, and in the `pull_request` CI job), in the stop hook, and in `fix --agent`'s referee. **Never in a `pull_request_target` run**: `fscale tamper --pr-base` never runs it, and verify skips it there.
+- Its time: `verify.baseBudget`, and in Claude Code's stop hook the hook's `timeout` less 30 seconds (ADR 0083). A step whose kept time is longer than what is left is not started: `not judged`. Making and removing the worktree are not timed.
+- A Rust file whose tests sit beside its code (`src/lib.rs`) is not judged: the base's copy would bring the base's code with it. Files under `tests/` are.
+
 ### `fscale tamper`, and the base in CI
 
 `fscale tamper` runs the guard alone, with no step: against the working tree, or with `--head <commit>` against a commit read from git (nothing is checked out or run). `--json` prints the report; the exit code is 1 when the base's policy is `enforced` and there are findings.

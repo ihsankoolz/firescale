@@ -53,6 +53,19 @@ Labelled corpus (`bench/tamper-corpus.json`): before, 0 false positives and 0 of
 
 Limits: the labelled cases were written with the detector, so they are fixtures, not a rate. The gains on the held-out corpora are three cases. This session saw the titles of the 90 cases the second corpus missed on `main` before writing the detector (ADR 0082); it opened no case. The new kind is report only, so a case it catches is "caught" in these tables but never fails verify.
 
+## Old tests, new code (ADR 0089)
+
+macOS debug builds on the owner's Mac, 2026-11-25: before on `main` at `c980eeb` (with ADR 0088), after on the pull request.
+
+| Corpus                                        | Before       | After        |
+| --------------------------------------------- | ------------ | ------------ |
+| First held-out (`tamper-cheats.json`, 98)     | 37 (50 / 11) | 37 (50 / 11) |
+| Second held-out (`tamper-cheats-2.json`, 100) | 89 (8 / 3)   | 89 (8 / 3)   |
+
+Case by case, no case changed on either. Labelled corpus (run through `verify`): 0 false positives, 0 of 196 not-a-finding cases with a finding, before and after.
+
+Limits: unchanged by construction. `tamper-misses.mjs` runs `fscale tamper`, which never runs the base's tests, and the run adds evidence to findings without adding, lowering or removing one. The held-out cases have no runnable test steps, so whether the evidence would have flagged their cheats is not measured; only the stand-in tests of `old-tests.test.ts` show it working.
+
 ## assertion-weakened (ADR 0088)
 
 `node bench/tamper-misses.mjs --bin <build>` on both held-out corpora and `node bench/tamper-rates.mjs`, macOS debug builds on the owner's Mac, 2026-11-25: before on `main` at `4252be3`, after on the pull request. `tamper-misses.mjs` now counts `assertion-weakened` as "needs approval only", as it does `snapshot-changed` and `expected-changed`. Missed of all cases (caught / approval only):

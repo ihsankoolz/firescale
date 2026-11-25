@@ -635,7 +635,7 @@ fn unlink_dependency_links(top: &Path) {
     }
 }
 
-fn is_link(path: &Path) -> bool {
+pub(crate) fn is_link(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| {
         meta.file_type().is_symlink() || {
             #[cfg(windows)]
@@ -706,7 +706,7 @@ const ENV_FILES: [&str; 2] = [".env", ".env.local"];
 /// bytes. Git ignores them, so a worktree has none, and tests that read
 /// one fail there for a reason of the worktree. Only the hash goes into a
 /// kept result's key; the contents are never logged, kept or shown.
-fn env_files(root: &Path, plan: &VerifyPlan) -> Vec<(String, String)> {
+pub(crate) fn env_files(root: &Path, plan: &VerifyPlan) -> Vec<(String, String)> {
     let mut folders: BTreeSet<String> = BTreeSet::new();
     folders.insert(".".to_owned());
     for project in &plan.projects {
@@ -843,7 +843,7 @@ const DEPENDENCY_FOLDERS: [&str; 3] = ["node_modules", ".venv", "venv"];
 /// Every ignored dependency folder of the head (`node_modules`, `.venv`,
 /// `venv`), wherever it is: the repo root, a project, a workspace package.
 /// Not those inside another one.
-fn dependency_folders(root: &Path) -> Vec<String> {
+pub(crate) fn dependency_folders(root: &Path) -> Vec<String> {
     let Ok(out) = run_git(
         root,
         &[
@@ -936,7 +936,7 @@ fn links_into_repo(root: &Path, folder: &Path) -> bool {
         })
 }
 
-fn folder_of(root: &Path, folder: Option<&str>) -> PathBuf {
+pub(crate) fn folder_of(root: &Path, folder: Option<&str>) -> PathBuf {
     match folder {
         None | Some(".") => root.to_path_buf(),
         Some(folder) => folder
@@ -1075,7 +1075,14 @@ fn not_started(
 /// The base run's time budget: `verify.baseBudget`, 5 minutes by default,
 /// `None` with no limit.
 fn base_budget(run: &BaseRun<'_>) -> Option<Duration> {
-    match run.options.config.base_budget {
+    budget_of(run.options)
+}
+
+/// `verify.baseBudget` of these options: 5 minutes by default, `None` with
+/// no limit. The run of the base's tests on the head's code has the same
+/// budget (ADR 0089).
+pub(crate) fn budget_of(options: &RunOptions<'_>) -> Option<Duration> {
+    match options.config.base_budget {
         Some(Limit::Off) => None,
         Some(Limit::After(limit)) => Some(limit),
         None => Some(DEFAULT_BASE_BUDGET),
@@ -1646,19 +1653,20 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
 
 /// What a worktree is given from the head: its dependency folders (none
 /// with `verify.baseInstall`) and its env files.
-struct WorktreeSetup {
-    folders: Vec<String>,
-    env_files: Vec<String>,
+pub(crate) struct WorktreeSetup {
+    pub(crate) folders: Vec<String>,
+    pub(crate) env_files: Vec<String>,
     /// Where `target` is linked to the kept build folder (ADR 0081).
-    cargo_folders: Vec<String>,
+    pub(crate) cargo_folders: Vec<String>,
 }
 
 /// Gives a worktree its dependencies: the head's dependency folders linked
 /// in, or `verify.baseInstall` run at its root. `which` names it in notes
 /// (`base`, or `head` for the control run of ADR 0040). Returns why the
 /// worktree cannot judge anything, if it cannot.
-fn prepare_worktree(
-    run: &BaseRun<'_>,
+pub(crate) fn prepare_worktree(
+    root: &Path,
+    options: &RunOptions<'_>,
     worktree: &Worktree,
     links: &WorktreeSetup,
     deadline: Option<Instant>,
@@ -1671,7 +1679,7 @@ fn prepare_worktree(
     let mut not_judged: Option<String> = None;
     for folder in &links.folders {
         let made = worktree.link(
-            &folder_of(run.root, Some(folder)),
+            &folder_of(root, Some(folder)),
             &folder_of(&worktree.root, Some(folder)),
         );
         if !made && not_judged.is_none() {
@@ -1687,7 +1695,7 @@ fn prepare_worktree(
     // link that cannot be made, or a `target` the commit has, is left
     // alone: cargo then builds in the worktree.
     if !links.cargo_folders.is_empty() {
-        let shared = base_cargo_target(run.root);
+        let shared = base_cargo_target(root);
         if let Some(lock) = lock_kept_targets(&shared) {
             for folder in &links.cargo_folders {
                 let kept = kept_target(&shared, folder);
@@ -1709,12 +1717,11 @@ fn prepare_worktree(
     // nothing is linked; that is no reason not to judge.
     for file in &links.env_files {
         let _ = worktree.copy_file(
-            &folder_of(run.root, Some(file)),
+            &folder_of(root, Some(file)),
             &folder_of(&worktree.root, Some(file)),
         );
     }
-    if let Some(install) = run
-        .options
+    if let Some(install) = options
         .config
         .base_install
         .as_ref()
@@ -1723,11 +1730,11 @@ fn prepare_worktree(
         say(&format!("installing: {install}"));
         match run_base_step(
             &worktree.root,
-            run.root,
+            root,
             None,
             "install",
             install,
-            run.options,
+            options,
             deadline,
         ) {
             Ok(installed) if installed.status == StepStatus::Passed => {}
@@ -1760,7 +1767,15 @@ fn run_in_worktree(
     summary: &mut BaseReport,
     say: &dyn Fn(&str),
 ) {
-    let not_judged = prepare_worktree(run, worktree, links, deadline, say, "base");
+    let not_judged = prepare_worktree(
+        run.root,
+        run.options,
+        worktree,
+        links,
+        deadline,
+        say,
+        "base",
+    );
 
     // The check, when it failed on the head and can be judged.
     if check_failed && not_judged.is_none() && !past(deadline) {
@@ -2041,7 +2056,15 @@ fn confirm_fixed(
             return verdicts;
         }
     };
-    let not_judged = prepare_worktree(run, &worktree, links, deadline, say, "head");
+    let not_judged = prepare_worktree(
+        run.root,
+        run.options,
+        &worktree,
+        links,
+        deadline,
+        say,
+        "head",
+    );
     for (index, key) in needed {
         let step = &report.steps[index];
         let status = if let Some(problem) = &not_judged {
@@ -2105,7 +2128,7 @@ fn confirm_fixed(
 ///
 /// Errors: `Some(why)` when it cannot be done, `None` when the budget ran
 /// out first.
-fn overlay_head(
+pub(crate) fn overlay_head(
     root: &Path,
     into: &Path,
     deadline: Option<Instant>,
@@ -2475,7 +2498,7 @@ fn touched(file: &str, folder: Option<&str>, changed: &BTreeSet<String>) -> Opti
         .cloned()
 }
 
-fn past(deadline: Option<Instant>) -> bool {
+pub(crate) fn past(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
