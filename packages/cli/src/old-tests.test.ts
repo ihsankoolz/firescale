@@ -225,7 +225,9 @@ describe('old tests, new code (ADR 0089)', () => {
       repo.root,
       env,
     );
-    // It exits 1 here: npx cannot start the unpublished version. The file is written.
+    // It may exit 1 here (npx cannot start an unpublished version); the
+    // file is written either way.
+    expect(install.stdout).toContain("Claude Code's stop hook may run for 30s");
     expect(await readFile(path.join(repo.root, '.claude', 'settings.json'), 'utf8')).toContain(
       '"timeout": 30',
     );
