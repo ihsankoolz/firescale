@@ -170,6 +170,16 @@ Build idea 9, first step only.
 - **The fresh review** found no change to the other events and no path that reads a ref. Fixed: a comment. Logged: `fscale --help` still names only the pull request event (its text is pinned by a snapshot test); the base rests on the event file, which a step that ran the change's code before verify could rewrite (ADR 0080, "Not done").
 - **Failing test first:** `packages/cli/src/pr-base-merge-group.test.ts`, with a fixture event file: 4 of 5 failed in WSL before the change (the fifth says tamper still refuses).
 
+**Pull request 11: an expected time for a step with no kept time (ADR 0078, addendum)**
+
+Build idea 14, first step. Run of 2026-11-25, on the laptop (macOS), in its own worktree.
+
+- `verify.projects.<folder>.<step>.expected: "1h 40m"`. `--budget` reads it only when no time is kept for the step on this machine; a kept time always wins, longer or shorter. Per project only; `false`, `0` and `verify.<step>.expected` are errors. No cache key holds it.
+- A step left out for it is `NOT RUN  over the budget of 30m: it is expected to take 1h 40m (verify.projects["…"].test.expected) and has no kept time`. A file of kept times that cannot be read is not taken for an empty one.
+- **Verify's JSON is schema version 9**: such a step has `expectedMs` and no `lastKnownMs`, so two fields of `notRun` became optional. Seven tests pinned version 8 or the list of a project step's keys; each now says the new value, named in the ADR. The tamper guard reports them for your approval.
+- **Decided on your behalf:** the wording; schema version 9 rather than a fake last time; the hint does nothing without `--budget` (no slow-step line).
+- **Failing test first:** `packages/cli/src/duration-hint.test.ts`, 12 of 12 failed before the change (the key was unknown).
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.
