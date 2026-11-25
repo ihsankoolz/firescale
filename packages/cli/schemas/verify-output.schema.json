@@ -21,8 +21,8 @@
   ],
   "properties": {
     "schemaVersion": {
-      "description": "Version of this format. Changes only on a breaking change. Version 8 added the step status report-only and a step's reportOnly (ADR 0070). Version 7 added the step status over-budget, a step's lastKnownMs and lastKnownFinished, and the report's budgetMs and notRun (ADR 0057).",
-      "const": 8
+      "description": "Version of this format. Changes only on a breaking change. Version 9 added expectedMs to a step and to notRun, where lastKnownMs and lastKnownFinished are now absent for a step left out by its expected time (ADR 0078, addendum). Version 8 added the step status report-only and a step's reportOnly (ADR 0070). Version 7 added the step status over-budget, a step's lastKnownMs and lastKnownFinished, and the report's budgetMs and notRun (ADR 0057).",
+      "const": 9
     },
     "version": {
       "description": "The firescale version that produced the report.",
@@ -216,6 +216,11 @@
             "description": "With lastKnownMs: false when that run did not finish (it was stopped or timed out), so the step takes at least that long.",
             "type": "boolean"
           },
+          "expectedMs": {
+            "description": "For a step whose status is over-budget and that has no kept time on this machine: how long its project's config says it is expected to take (verify.projects.<folder>.<step>.expected, ADR 0078, addendum). A step has either this or lastKnownMs.",
+            "type": "integer",
+            "minimum": 0
+          },
           "reportOnly": {
             "description": "For a lint step whose command fscale guessed and the repo does not declare itself: why it is a guess, with what was looked for (ADR 0070). Such a step never fails the run: when its command does not pass, its status is report-only.",
             "type": "string"
@@ -321,7 +326,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["step", "reason", "lastKnownMs", "lastKnownFinished"],
+        "required": ["step", "reason"],
+        "oneOf": [
+          {
+            "properties": { "lastKnownMs": true, "lastKnownFinished": true },
+            "required": ["lastKnownMs", "lastKnownFinished"]
+          },
+          { "properties": { "expectedMs": true }, "required": ["expectedMs"] }
+        ],
         "properties": {
           "step": {
             "enum": ["lint", "typecheck", "test"]
@@ -331,17 +343,22 @@
             "type": "string"
           },
           "reason": {
-            "description": "Why it was not started, with the budget and its last known time, for example: over the budget of 30m: it took 1h 40m when it last ran.",
+            "description": "Why it was not started, with the budget and its last known time, for example: over the budget of 30m: it took 1h 40m when it last ran. With no kept time and an expected time: over the budget of 30m: it is expected to take 1h 40m (verify.projects[\"api\"].test.expected) and has no kept time.",
             "type": "string"
           },
           "lastKnownMs": {
-            "description": "How long it took the last time it ran, or how long it ran at least.",
+            "description": "How long it took the last time it ran, or how long it ran at least. Absent when the step was left out for its expected time.",
             "type": "integer",
             "minimum": 0
           },
           "lastKnownFinished": {
-            "description": "False when that run did not finish (it was stopped or timed out).",
+            "description": "False when that run did not finish (it was stopped or timed out). With lastKnownMs.",
             "type": "boolean"
+          },
+          "expectedMs": {
+            "description": "When no time is kept for the step: how long its project's config says it is expected to take (ADR 0078, addendum).",
+            "type": "integer",
+            "minimum": 0
           }
         }
       }

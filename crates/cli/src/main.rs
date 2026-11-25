@@ -1301,7 +1301,12 @@ fn verify_dry_run(root: &Path, args: &Args) -> Result<Output> {
     let mut text = format_verify_plan(&plan, check_command);
     // With a budget the plan also names the steps a run would not start.
     if let Some(budget) = budget(args)? {
-        text.push_str(&format_budget_plan(&plan, &StepTimes::new(root), budget));
+        text.push_str(&format_budget_plan(
+            &plan,
+            &verify_config,
+            &StepTimes::new(root),
+            budget,
+        ));
     }
     Ok(Output::ok(text))
 }

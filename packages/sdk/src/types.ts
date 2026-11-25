@@ -217,13 +217,20 @@ export interface VerifySteps {
  */
 export type VerifyInput = { ignored: string } | { env: string };
 
-/** A step's setting under `verify.projects`: as at the top level, or an object that may also name `inputs`. */
+/** A step's setting under `verify.projects`: as at the top level, or an object that may also name `inputs` and `expected`. */
 export type VerifyProjectStepSetting =
   | string
   | false
   | (VerifyStepObject & {
       /** More inputs of this step's key. */
       inputs?: VerifyInput[];
+      /**
+       * How long the step is expected to take: a number of seconds, or a
+       * text such as `"10m"` or `"1h 40m"`. `fscale verify --budget` uses it
+       * only when no time is kept for the step on this machine; a kept time
+       * always wins (ADR 0078, addendum). It is in no cache key.
+       */
+      expected?: number | string;
     });
 
 /** A project's settings under `verify.projects`. */

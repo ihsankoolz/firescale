@@ -489,11 +489,36 @@ struct StepSetting {
     limit: Option<Limit>,
     /// `inputs`, which only a project's step may have (ADR 0076).
     inputs: Option<Vec<DeclaredInput>>,
+    /// `expected`, which only a project's step may have (ADR 0078,
+    /// addendum).
+    expected: Option<std::time::Duration>,
+}
+
+/// Reads `expected`: how long a step is expected to take, which `--budget`
+/// uses when no time is kept for it (ADR 0078, addendum). Unlike a time
+/// limit it has no `false`: leaving it out is how to have none.
+fn parse_expected(name: &str, key: &str, value: &Value) -> Result<std::time::Duration> {
+    let bad = || {
+        Error::user(format!(
+            "{name}: {key} must be a time such as \"10m\", \"90s\" or \"1h 30m\", or a number of seconds. It is how long the step is expected to take, which --budget uses when no time is kept for the step."
+        ))
+    };
+    let seconds = match value {
+        Value::Number(number) => number.as_u64().ok_or_else(bad)?,
+        Value::String(text) => time_text_seconds(text).ok_or_else(bad)?,
+        _ => return Err(bad()),
+    };
+    if seconds == 0 {
+        return Err(Error::user(format!(
+            "{name}: {key} must be longer than zero. Leave it out when the step has no expected time."
+        )));
+    }
+    Ok(std::time::Duration::from_secs(seconds))
 }
 
 /// Reads one step setting: a command, `false` for "do not run this step",
 /// or an object with a `command`, a `timeout` and, under `verify.projects`,
-/// `inputs`.
+/// `inputs` and `expected`.
 fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepSetting> {
     if !crate::verify::STEPS.contains(&step) {
         return Err(Error::user(format!(
@@ -518,6 +543,7 @@ fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepSe
             let mut command = None;
             let mut limit = None;
             let mut inputs = None;
+            let mut expected = None;
             for (field, value) in fields {
                 match field.as_str() {
                     "command" => match value {
@@ -536,10 +562,17 @@ fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepSe
                     "inputs" => {
                         inputs = Some(parse_inputs(name, &format!("{key}.{step}.inputs"), value)?);
                     }
+                    "expected" => {
+                        expected = Some(parse_expected(
+                            name,
+                            &format!("{key}.{step}.expected"),
+                            value,
+                        )?);
+                    }
                     other => {
                         return Err(Error::user(format!(
                             "{name}: unknown key \"{other}\" in {key}.{step}. Allowed keys: command, timeout{}.",
-                            if key == "verify" { "" } else { ", inputs" }
+                            if key == "verify" { "" } else { ", inputs, expected" }
                         )));
                     }
                 }
@@ -548,6 +581,7 @@ fn parse_step(name: &str, key: &str, step: &str, value: &Value) -> Result<StepSe
                 command,
                 limit,
                 inputs,
+                expected,
             })
         }
         _ => Err(bad()),
@@ -662,6 +696,7 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     }
                     let mut timeouts = ProjectTimeouts::default();
                     let mut inputs = ProjectInputs::default();
+                    let mut expected = BTreeMap::new();
                     let parsed = match setting {
                         Value::Bool(false) => ProjectOverride::Off,
                         Value::Object(steps) => {
@@ -690,6 +725,9 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                                 {
                                     inputs.steps.insert(step.clone(), named);
                                 }
+                                if let Some(time) = setting.expected {
+                                    expected.insert(step.clone(), time);
+                                }
                             }
                             ProjectOverride::Steps(map)
                         }
@@ -710,6 +748,9 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                     if inputs != ProjectInputs::default() {
                         verify.project_inputs.insert(clean.to_owned(), inputs);
                     }
+                    if !expected.is_empty() {
+                        verify.project_expected.insert(clean.to_owned(), expected);
+                    }
                 }
             }
             step if crate::verify::STEPS.contains(&step) => {
@@ -717,6 +758,11 @@ fn parse_verify(name: &str, value: Option<&Value>) -> Result<VerifyConfig> {
                 if setting.inputs.is_some() {
                     return Err(Error::user(format!(
                         "{name}: verify.{step}.inputs is not a setting: inputs are set per project, under verify.projects.<folder>.inputs or verify.projects.<folder>.{step}.inputs."
+                    )));
+                }
+                if setting.expected.is_some() {
+                    return Err(Error::user(format!(
+                        "{name}: verify.{step}.expected is not a setting: an expected time is set per project, under verify.projects.<folder>.{step}.expected."
                     )));
                 }
                 if let Some(command) = setting.command {
