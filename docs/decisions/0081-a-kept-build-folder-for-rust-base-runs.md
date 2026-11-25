@@ -101,7 +101,7 @@ The first word of a command cannot tell these apart.
 - `never uses the head's folder, also when the environment names it`: with the head's `target/` in `CARGO_TARGET_DIR`, no base step gets it, the head's steps keep it, and nothing is written there.
 - `changes nothing for a repo with no Rust`.
 
-The unit tests of the kept folders and their lock were removed with the code they tested.
+The tests of the kept folders were removed with the code they tested, because the feature is withdrawn, not because they failed. The tamper guard reports each (23 findings against `main`: 4 deleted tests and 19 removed assertions): `only_one_base_run_at_a_time_takes_the_kept_rust_build_folders` and `each_folder_with_a_cargo_toml_has_a_kept_folder_of_its_own` in `blame.rs`, and in `rust-base-target.test.ts` the cases of a kept `target` link (one folder per run, per folder, per repo). The case `never uses the head's folder, also when the environment names it` is kept, under the new `describe`, with stronger assertions: no base step gets the folder.
 
 ## Addendum 2 (2026-11-25): disk space
 
