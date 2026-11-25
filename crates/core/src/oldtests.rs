@@ -406,6 +406,9 @@ fn run_units(
             .into_iter()
             .map(|(path, _)| path)
             .collect(),
+        // The base runs' kept Rust build folders (ADR 0081) are not lent to
+        // a run of the head's code: cargo builds in the worktree.
+        cargo_folders: Vec::new(),
     };
     if let Some(problem) =
         blame::prepare_worktree(root, options, &worktree, &links, deadline, say, "head")
