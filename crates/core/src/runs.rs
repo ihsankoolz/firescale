@@ -67,7 +67,7 @@ fn now() -> u64 {
 
 /// A short, stable name for a repo root, so records of different repos do
 /// not mix.
-fn repo_key(root: &Path) -> String {
+pub(crate) fn repo_key(root: &Path) -> String {
     let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let text = root.to_string_lossy().replace('\\', "/");
     let hash = blake3::hash(text.as_bytes()).to_hex();

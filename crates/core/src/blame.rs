@@ -473,6 +473,9 @@ pub struct Worktree {
     /// The head's env files copied in (ADR 0043), removed before the
     /// worktree.
     files: std::sync::Mutex<Vec<PathBuf>>,
+    /// The lock on the repo's kept build folders, held while the worktree
+    /// lives (ADR 0081).
+    kept_lock: std::sync::Mutex<Option<KeptLock>>,
     /// The firescale root inside it.
     pub root: PathBuf,
 }
@@ -523,6 +526,7 @@ impl Worktree {
             root: inner,
             links: std::sync::Mutex::new(Vec::new()),
             files: std::sync::Mutex::new(Vec::new()),
+            kept_lock: std::sync::Mutex::new(None),
         })
     }
 
@@ -622,7 +626,10 @@ fn unlink_dependency_links(top: &Path) {
         .filter_map(std::result::Result::ok)
     {
         let name = entry.file_name().to_string_lossy();
-        if DEPENDENCY_FOLDERS.contains(&name.as_ref()) && is_link(entry.path()) {
+        // `target`: a kept Rust build folder's link (ADR 0081).
+        if (DEPENDENCY_FOLDERS.contains(&name.as_ref()) || name == "target")
+            && is_link(entry.path())
+        {
             unlink_dir(entry.path());
         }
     }
@@ -736,6 +743,98 @@ fn unlink_dir(link: &Path) {
         // A junction is removed as an empty folder; its target is untouched.
         let _ = fs::remove_dir(link);
     }
+}
+
+/// The folder that holds the kept build folders of one repo's base runs
+/// (ADR 0081): `firescale-base-target/<repo key>` in the temp folder. Never
+/// the head's own `target/`, and never inside the repo.
+#[must_use]
+pub fn base_cargo_target(head_root: &Path) -> PathBuf {
+    std::env::temp_dir()
+        .join("firescale-base-target")
+        .join(crate::runs::repo_key(head_root))
+}
+
+/// The kept build folder of one folder with a `Cargo.toml` (repo-relative,
+/// `.` for the root): each has its own, so two workspaces never share a
+/// `debug/` folder.
+fn kept_target(shared: &Path, folder: &str) -> PathBuf {
+    let hash = blake3::hash(folder.as_bytes()).to_hex();
+    shared.join(&hash.as_str()[..16])
+}
+
+/// The folders where cargo may put a `target`: every folder of the head
+/// that holds a `Cargo.toml` git tracks. Repo-relative, `.` for the root,
+/// sorted. Empty for a repo with no Rust. A workspace member is listed
+/// too: its link is never used by cargo, which builds a member in its
+/// workspace's folder, and a crate that is a workspace of its own gets the
+/// folder it builds into.
+fn cargo_folders(root: &Path) -> Vec<String> {
+    let Ok(out) = run_git(root, &["-c", "core.quotepath=off", "ls-files", "-z"]) else {
+        return Vec::new();
+    };
+    let mut folders: Vec<String> = out
+        .stdout
+        .split('\0')
+        .map(|path| path.replace('\\', "/"))
+        .filter_map(|path| match path.rsplit_once('/') {
+            Some((folder, "Cargo.toml")) => Some(folder.to_owned()),
+            None if path == "Cargo.toml" => Some(".".to_owned()),
+            _ => None,
+        })
+        .collect();
+    folders.sort();
+    folders.dedup();
+    folders
+}
+
+/// A lock this old was left by a base run that was killed: it is taken
+/// back. Until then, base runs of the repo build from nothing, as before
+/// ADR 0081, which is safe.
+const KEPT_LOCK_STALE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The lock on a repo's kept Rust build folders, held by one base run: a
+/// file made with `create_new`, removed when this is dropped.
+#[derive(Debug)]
+struct KeptLock {
+    path: PathBuf,
+}
+
+impl Drop for KeptLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Takes the kept build folders of a repo for one base run, or `None` when
+/// another base run of the same repo holds them (or the lock cannot be
+/// made): that run then builds in its own worktree, from nothing, as before
+/// ADR 0081. Otherwise one run's step could run a binary that the other
+/// built from another base commit.
+fn lock_kept_targets(shared: &Path) -> Option<KeptLock> {
+    fs::create_dir_all(shared).ok()?;
+    let path = shared.join(".lock");
+    let take = || {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .ok()
+            .map(|_| KeptLock { path: path.clone() })
+    };
+    if let Some(lock) = take() {
+        return Some(lock);
+    }
+    let stale = fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|written| written.elapsed().ok())
+        .is_some_and(|age| age > KEPT_LOCK_STALE);
+    if stale {
+        let _ = fs::remove_file(&path);
+        return take();
+    }
+    None
 }
 
 /// The ignored dependency folders that are linked from the head.
@@ -1068,13 +1167,20 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         .map(|(path, hash)| format!("{path}:{hash}"))
         .collect::<Vec<_>>()
         .join(",");
-    let environment = match &run.options.config.base_install {
+    let cargo = cargo_folders(run.root);
+    let mut environment = match &run.options.config.base_install {
         Some(install) => format!("install={install};env={env_part}"),
         None => format!("links={};env={env_part}", links.join(",")),
     };
+    // A base result built with the kept build folder is not one built from
+    // nothing: it only adds to the key (ADR 0081).
+    if !cargo.is_empty() {
+        environment.push_str(&format!(";cargo-target={}", cargo.join(",")));
+    }
     let links = WorktreeSetup {
         folders: links,
         env_files: envs.into_iter().map(|(path, _)| path).collect(),
+        cargo_folders: cargo,
     };
 
     // 1. What each step's base result is, where it is known without a run.
@@ -1543,6 +1649,8 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
 struct WorktreeSetup {
     folders: Vec<String>,
     env_files: Vec<String>,
+    /// Where `target` is linked to the kept build folder (ADR 0081).
+    cargo_folders: Vec<String>,
 }
 
 /// Gives a worktree its dependencies: the head's dependency folders linked
@@ -1570,6 +1678,30 @@ fn prepare_worktree(
             not_judged = Some(format!(
                 "the head's {folder} could not be linked into the {which} worktree"
             ));
+        }
+    }
+    // A Rust repo's build folders, kept from one base run to the next (ADR
+    // 0081): each folder with a `Cargo.toml` gets `target` linked to a kept
+    // folder of its own, and cargo builds there. Only one base run of a
+    // repo uses them at a time; another builds from nothing, as before. A
+    // link that cannot be made, or a `target` the commit has, is left
+    // alone: cargo then builds in the worktree.
+    if !links.cargo_folders.is_empty() {
+        let shared = base_cargo_target(run.root);
+        if let Some(lock) = lock_kept_targets(&shared) {
+            for folder in &links.cargo_folders {
+                let kept = kept_target(&shared, folder);
+                let place = folder_of(&worktree.root, Some(folder));
+                if place.is_dir() && fs::create_dir_all(&kept).is_ok() {
+                    let _ = worktree.link(&kept, &place.join("target"));
+                }
+            }
+            *worktree
+                .kept_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lock);
+        } else {
+            say("another base run of this repo is using the kept Rust build folders, so this one builds from nothing");
         }
     }
     // The head's ignored env files, which tests read (ADR 0043). Where the
@@ -2414,6 +2546,34 @@ pub fn violation_id(rule: &str, file: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two base runs of one repo never share the kept Rust build folders
+    /// (ADR 0081): one step's built binary could be the other's base.
+    #[test]
+    fn only_one_base_run_at_a_time_takes_the_kept_rust_build_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("kept");
+        let first = lock_kept_targets(&shared).expect("the first run takes them");
+        assert!(
+            lock_kept_targets(&shared).is_none(),
+            "a second run must not"
+        );
+        drop(first);
+        assert!(
+            lock_kept_targets(&shared).is_some(),
+            "free again once let go"
+        );
+    }
+
+    #[test]
+    fn each_folder_with_a_cargo_toml_has_a_kept_folder_of_its_own() {
+        let shared = Path::new("kept");
+        let root = kept_target(shared, ".");
+        let gen = kept_target(shared, "tools/gen");
+        assert_ne!(root, gen);
+        assert_eq!(root.parent(), Some(shared));
+        assert_eq!(kept_target(shared, "."), root);
+    }
 
     #[test]
     fn a_changed_file_is_a_tests_file_from_the_steps_folder_or_any_folder_above_it() {
