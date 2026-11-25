@@ -14,7 +14,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
@@ -1001,6 +1001,26 @@ fn claude_entry_mut(value: &mut Value) -> Option<&mut Map<String, Value>> {
                 .is_some_and(|command| command.contains(&needle))
         })?
         .as_object_mut()
+}
+
+/// When the stop hook must have stopped starting work (ADR 0089): `now`
+/// plus the hook's `timeout` (Claude Code's 600 s when it sets none, or a
+/// value that is not a number of seconds) less 30 seconds to answer in.
+/// A limit too large to add to the clock counts as the default, so an odd
+/// value in the file can never make the hook panic (review of ADR 0089).
+#[must_use]
+pub fn hook_deadline(now: Instant, timeout: Option<f64>) -> Instant {
+    const MARGIN: f64 = 30.0;
+    let after = |seconds: f64| {
+        Duration::try_from_secs_f64((seconds - MARGIN).max(0.0))
+            .ok()
+            .and_then(|left| now.checked_add(left))
+    };
+    timeout
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .and_then(after)
+        .or_else(|| after(CLAUDE_DEFAULT_TIMEOUT as f64))
+        .unwrap_or(now)
 }
 
 /// The time limit of the repo's Claude Code stop hook that runs firescale:
@@ -2219,6 +2239,20 @@ mod tests {
         assert_eq!(give_up.exit_code, 0);
         assert_eq!(give_up.stdout, "{}\n");
         assert!(give_up.stderr.contains("allowed to stop"));
+    }
+
+    #[test]
+    fn the_hooks_deadline_never_panics_on_a_huge_or_odd_timeout() {
+        let now = Instant::now();
+        let default = now + Duration::from_secs(CLAUDE_DEFAULT_TIMEOUT - 30);
+        assert_eq!(hook_deadline(now, Some(1e20)), default);
+        assert_eq!(hook_deadline(now, Some(f64::MAX)), default);
+        assert_eq!(hook_deadline(now, None), default);
+        assert_eq!(
+            hook_deadline(now, Some(90.0)),
+            now + Duration::from_secs(60)
+        );
+        assert_eq!(hook_deadline(now, Some(10.0)), now);
     }
 
     #[test]

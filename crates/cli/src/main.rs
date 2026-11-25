@@ -1350,9 +1350,6 @@ pub(crate) fn old_tests_for(
     firescale_core::oldtests::judge(root, base, changed, report, &plan, &options, None, &|_| {});
 }
 
-/// Seconds kept free before the stop hook's limit, to answer the agent.
-const HOOK_MARGIN_SECS: f64 = 30.0;
-
 /// Runs check and then the planned lint, typecheck and test commands.
 /// `progress` turns on the live lines on stderr.
 /// How a verify run is used: by a person or CI, or by an agent's stop hook.
@@ -2480,13 +2477,13 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             // less a margin to answer in. Past it, nothing more is started
             // for the base's tests on the head's code (ADR 0089).
             let hook_deadline = (agent == Agent::Claude).then(|| {
-                let seconds = firescale_core::hooks::claude_hook_timeout(root)
-                    .flatten()
-                    .as_ref()
-                    .and_then(firescale_core::hooks::timeout_seconds)
-                    .unwrap_or(600.0);
-                Instant::now()
-                    + Duration::from_secs_f64((seconds - HOOK_MARGIN_SECS).max(0.0))
+                firescale_core::hooks::hook_deadline(
+                    Instant::now(),
+                    firescale_core::hooks::claude_hook_timeout(root)
+                        .flatten()
+                        .as_ref()
+                        .and_then(firescale_core::hooks::timeout_seconds),
+                )
             });
             // A hook that cannot run verify must not trap the agent: report and let it stop.
             // An agent reads the hook's stderr: no progress unless asked for.

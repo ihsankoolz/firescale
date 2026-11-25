@@ -117,10 +117,19 @@ fn in_file(runner: TestRunner, id: &str, folder: &str, file: &str) -> bool {
     if runner == TestRunner::Cargo {
         // `cargo test` names the test binary, which for `tests/cart.rs` is
         // `cart`.
+        // `tests/foo/main.rs` is the binary `foo`; cargo writes `-` as `_`.
         let binary = id.split("::").next().unwrap_or(id);
-        let stem = Path::new(&target)
+        let path = Path::new(&target);
+        let stem = path
             .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned());
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|stem| stem != "main")
+            .or_else(|| {
+                path.parent()
+                    .and_then(Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .map(|stem| stem.replace('-', "_"));
         return target.split('/').any(|part| part == "tests") && stem.as_deref() == Some(binary);
     }
     let Some(named) = pertest::file_of(runner, id) else {
@@ -153,7 +162,23 @@ fn put_base_file(root: &Path, base: &BaseCommit, into: &Path, path: &str) -> Res
     if blame::is_link(&to) {
         let _ = fs::remove_file(&to);
     }
+    let real_into = into
+        .canonicalize()
+        .map_err(|error| format!("the worktree cannot be read: {error}"))?;
+    // Never through a link that could not be taken away: the folder must be
+    // inside the worktree before anything is removed or written there.
+    let inside = |folder: &Path| {
+        folder
+            .canonicalize()
+            .is_ok_and(|real| real.starts_with(&real_into))
+    };
     if !on_base(root, base, path) {
+        if to
+            .parent()
+            .is_some_and(|parent| parent.exists() && !inside(parent))
+        {
+            return Err(format!("{path} is not inside the worktree"));
+        }
         return match fs::remove_file(&to) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
                 Err(format!("{path} could not be removed: {error}"))
@@ -166,15 +191,9 @@ fn put_base_file(root: &Path, base: &BaseCommit, into: &Path, path: &str) -> Res
     if out.code != 0 {
         return Err(format!("git show could not read {path} on the base commit"));
     }
-    let real_into = into
-        .canonicalize()
-        .map_err(|error| format!("the worktree cannot be read: {error}"))?;
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("{path}: {error}"))?;
-        let inside = parent
-            .canonicalize()
-            .is_ok_and(|real| real.starts_with(&real_into));
-        if !inside {
+        if !inside(parent) {
             return Err(format!("{path} would be written out of the worktree"));
         }
     }
@@ -476,17 +495,19 @@ fn run_units(
             }
         };
         match report.status {
-            StepStatus::Passed => results.push(OldTests {
-                step,
-                status: OldTestsStatus::Passed,
-                files: unit.files.clone(),
-                detail: "the base's versions of these files pass on the head's code: the edits to them were not needed to pass (this lowers no finding)".to_owned(),
-            }),
-            StepStatus::Failed => {
+            // The results, not the exit code alone: a step that exits 0
+            // while the base's tests fail is `failed` (review of ADR 0089).
+            StepStatus::Passed | StepStatus::Failed => {
                 let failing: Vec<&String> = report
                     .test_results
                     .as_ref()
-                    .map(|results| results.failed.iter().filter(|id| pertest::is_test(id)).collect())
+                    .map(|results| {
+                        results
+                            .failed
+                            .iter()
+                            .filter(|id| pertest::is_test(id))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let mut named = 0;
                 for file in &unit.files {
@@ -506,7 +527,10 @@ fn run_units(
                                 .reason_text
                                 .get(id.as_str())
                                 .filter(|lines| !lines.is_empty())
-                                .map_or_else(String::new, |lines| format!(": {}", lines.join(" / ")));
+                                .map_or_else(String::new, |lines| {
+                                    format!(": {}", lines.join(" / "))
+                                });
+                            let id = id.replace('\\', "/");
                             format!("the base's version fails on the head's code: {id}{reason}")
                         })
                         .collect();
@@ -528,6 +552,15 @@ fn run_units(
                             if named == 1 { "" } else { "s" },
                             if named == 1 { "s" } else { "" }
                         ),
+                    });
+                } else if report.status == StepStatus::Passed {
+                    // Not proof that the edits were not needed: the head's
+                    // own config may leave those tests out.
+                    results.push(OldTests {
+                        step,
+                        status: OldTestsStatus::Passed,
+                        files: unit.files.clone(),
+                        detail: "the step passed with the base's versions of these files on the head's code; no test of them was reported failing (this lowers no finding, and does not show that they ran)".to_owned(),
                     });
                 } else if report.test_results.is_none() {
                     results.push(not_judged(
@@ -627,6 +660,20 @@ mod tests {
             "cart::totals",
             ".",
             "src/cart.rs"
+        ));
+        // Cargo names a test binary with `_` for `-`, and `tests/foo/main.rs`
+        // after its folder (review of ADR 0089).
+        assert!(in_file(
+            TestRunner::Cargo,
+            "my_file::totals",
+            ".",
+            "tests/my-file.rs"
+        ));
+        assert!(in_file(
+            TestRunner::Cargo,
+            "foo::totals",
+            ".",
+            "tests/foo/main.rs"
         ));
     }
 }

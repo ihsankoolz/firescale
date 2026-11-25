@@ -5,7 +5,7 @@
 // finding. Report only: it never adds, lowers or removes a finding, and
 // never makes verify fail. The stand-in `vitest` reads the test file it is
 // given and fails when it still expects the base's value.
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
@@ -19,7 +19,7 @@ const fixtures = fixtureSet();
 afterEach(() => fixtures.cleanup());
 
 /** How the stand-in answers: `honest` reads the file; the others ignore it. */
-type Mode = 'honest' | 'always-pass' | 'cannot-collect';
+type Mode = 'honest' | 'always-pass' | 'cannot-collect' | 'exit-zero';
 
 async function writeVitest(dir: string, mode: Mode): Promise<void> {
   await mkdir(dir, { recursive: true });
@@ -33,9 +33,10 @@ async function writeVitest(dir: string, mode: Mode): Promise<void> {
     "if (mode === 'cannot-collect') { console.error('SyntaxError: the module has no export named total'); process.exit(1); }",
     "const text = fs.readFileSync(path.join(process.cwd(), 'src', 'cart.test.ts'), 'utf8');",
     "const fails = mode === 'honest' && text.includes('toBe(10)');",
-    'if (fails) {',
+    "const exitZero = mode === 'exit-zero' && text.includes('toBe(10)');",
+    'if (fails || exitZero) {',
     "  process.stdout.write('⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\\n\\n FAIL  src/cart.test.ts > cart > adds the items\\nAssertionError: expected 11 to be 10\\n Test Files  1 failed (1)\\n      Tests  1 failed | 1 passed (2)\\n');",
-    '  process.exit(1);',
+    '  process.exit(exitZero ? 0 : 1);',
     '}',
     "process.stdout.write(' Test Files  1 passed (1)\\n      Tests  2 passed (2)\\n');",
     'process.exit(0);',
@@ -163,6 +164,31 @@ describe('old tests, new code (ADR 0089)', () => {
     expect(finding).toBeDefined();
     expect(finding?.evidence).toBeUndefined();
     expect(report.tamper?.oldTests?.map((run) => run.status)).toEqual(['passed']);
+  });
+
+  it('says "failed", not "passed", when the step exits 0 while the base’s test fails (review)', async () => {
+    const { repo, env } = await repoWith('exit-zero');
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
+    const report = JSON.parse(result.stdout) as Report;
+    expect(report.tamper?.oldTests?.map((run) => run.status)).toEqual(['failed']);
+    expect(
+      report.tamper?.findings.find((f) => f.kind === 'expected-changed')?.evidence,
+    ).toHaveLength(1);
+  });
+
+  it('never runs in a pull_request_target run (ADR 0045)', async () => {
+    const { repo, env, calls } = await repoWith('honest');
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, {
+      ...env,
+      GITHUB_EVENT_NAME: 'pull_request_target',
+    });
+    const report = JSON.parse(result.stdout) as Report;
+    expect(report.tamper?.findings.find((f) => f.kind === 'expected-changed')).toBeDefined();
+    expect(report.tamper?.oldTests).toBeUndefined();
+    // Only the head's own run: nothing ran in a worktree.
+    for (const cwd of await calls()) {
+      expect(await realpath(cwd)).toBe(await realpath(repo.root));
+    }
   });
 
   it('says "not judged" when the base’s tests cannot be collected on the head’s code', async () => {

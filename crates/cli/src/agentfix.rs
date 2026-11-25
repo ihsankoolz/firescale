@@ -622,11 +622,10 @@ fn judge(j: &Judged<'_>) -> Result<Run> {
         crate::old_tests_for(j.worktree, &base_commit, &changed_set, &mut report);
     }
     if let Some(finding) = report.findings.first() {
-        let evidence = report
-            .findings
-            .iter()
-            .flat_map(|finding| finding.evidence.iter())
-            .next()
+        // The evidence of the finding named, never another file's.
+        let evidence = finding
+            .evidence
+            .first()
             .map_or_else(String::new, |line| format!(" ({line})"));
         return Ok(fail(
             "tamper",

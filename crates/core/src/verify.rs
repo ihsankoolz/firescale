@@ -2642,6 +2642,13 @@ fn run_step(
         // Each failing test's reason, as hashes of its normalised lines;
         // the first lines as text, for evidence only (ADR 0089).
         if let Some(results) = report.test_results.as_mut() {
+            let mut roots = crate::pertest::roots_of(unit.root);
+            if let Some(head) = unit.head_root {
+                roots.extend(crate::pertest::roots_of(head));
+                roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
+            }
+            // With the run's folders written as `<root>` and forward
+            // slashes, as all output is (review of ADR 0089).
             report.reason_text = results
                 .reasons
                 .iter()
@@ -2651,16 +2658,13 @@ fn run_step(
                         .map(|line| line.trim())
                         .filter(|line| !line.is_empty())
                         .take(REASON_LINES)
-                        .map(str::to_owned)
+                        .map(|line| {
+                            crate::pertest::normalise_reason_line(line, &roots).replace('\\', "/")
+                        })
                         .collect();
                     (id.clone(), first)
                 })
                 .collect();
-            let mut roots = crate::pertest::roots_of(unit.root);
-            if let Some(head) = unit.head_root {
-                roots.extend(crate::pertest::roots_of(head));
-                roots.sort_by_key(|text| std::cmp::Reverse(text.len()));
-            }
             results.hash_reasons(&roots);
         }
         if finished.ending == Ending::Exited(Some(0)) && !options.base_run {
