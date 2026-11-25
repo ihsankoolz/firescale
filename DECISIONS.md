@@ -244,6 +244,13 @@ For the course project:
 - A script that reads `fscale verify --json` sees `schemaVersion: 9`: `fscale verify --json` and look at the first field.
 - Nothing else: it has no Rust and no project at the root, so the base run and `--affected` are as they were. Check with `fscale verify --affected --dry-run`.
 
+**Pull request 14: your decisions after items 11 to 13 (ADR 0081, addenda 1 and 2; ADR 0078)**
+
+- **Schema version 9 (#104): approved by you.** Recorded in ADR 0078's addendum. The tamper guard takes an approval only as a GitHub review of the pull request's last commit by someone other than its author; you are #104's author, so that review cannot be given, and #104 is merged. The ADR line is the record.
+- **ADR 0081, stale build: fixed as you decided.** A base step gets a kept build folder only when its command starts with `cargo` (`CARGO_TARGET_DIR`, one kept folder per step folder); every other base step gets an empty `target/`, as before. No more `target` links. A base result kept with the links is never reused (its key part is now `v2`). What it costs: this repo's own base steps (`pnpm test`) get no kept folder.
+- **Disk space:** firescale has no command that clears its caches, so the clear command and doctor's size line are under "Later" in ADR 0081. No pruning.
+- **Failing test first:** `packages/cli/src/rust-base-target.test.ts`, rewritten with a stand-in `cargo`: 4 of 5 failed on `main`.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.

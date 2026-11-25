@@ -626,7 +626,8 @@ fn unlink_dependency_links(top: &Path) {
         .filter_map(std::result::Result::ok)
     {
         let name = entry.file_name().to_string_lossy();
-        // `target`: a kept Rust build folder's link (ADR 0081).
+        // `target`: a kept Rust build folder's link, which the first form
+        // of ADR 0081 made.
         if (DEPENDENCY_FOLDERS.contains(&name.as_ref()) || name == "target")
             && is_link(entry.path())
         {
@@ -806,21 +807,25 @@ impl Drop for KeptLock {
     }
 }
 
-/// Takes the kept build folders of a repo for one base run, or `None` when
-/// another base run of the same repo holds them (or the lock cannot be
-/// made): that run then builds in its own worktree, from nothing, as before
-/// ADR 0081. Otherwise one run's step could run a binary that the other
-/// built from another base commit.
-fn lock_kept_targets(shared: &Path) -> Option<KeptLock> {
+/// Takes the kept build folders of a repo for the base run in the worktree
+/// `holder`, or `None` when another base run of the same repo holds them
+/// (or the lock cannot be made): that run then builds in its own worktree,
+/// from nothing, as before ADR 0081. Otherwise one run's step could build
+/// over the other's. The lock file names its holder, which is how a step
+/// knows that its worktree holds the folders ([`kept_cargo_target`]).
+fn lock_kept_targets(shared: &Path, holder: &Path) -> Option<KeptLock> {
+    use std::io::Write as _;
     fs::create_dir_all(shared).ok()?;
     let path = shared.join(".lock");
     let take = || {
-        fs::OpenOptions::new()
+        let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
-            .ok()
-            .map(|_| KeptLock { path: path.clone() })
+            .ok()?;
+        let lock = KeptLock { path: path.clone() };
+        file.write_all(holder.to_string_lossy().as_bytes()).ok()?;
+        Some(lock)
     };
     if let Some(lock) = take() {
         return Some(lock);
@@ -835,6 +840,36 @@ fn lock_kept_targets(shared: &Path) -> Option<KeptLock> {
         return take();
     }
     None
+}
+
+/// The kept build folder for a base step whose command starts with `cargo`
+/// (ADR 0081, addendum): the one of the step's folder (`None`, the repo
+/// root's own steps, counts as `.`), when the worktree the step runs in
+/// holds the repo's kept folders. `None` otherwise: the step builds in the
+/// worktree, as before. Only cargo gets one, as cargo checks freshness
+/// itself; any other program would read whatever an older base run left.
+#[must_use]
+pub(crate) fn kept_cargo_target(
+    head_root: &Path,
+    worktree_root: &Path,
+    folder: Option<&str>,
+    command: &str,
+) -> Option<PathBuf> {
+    if !starts_with_cargo(command) {
+        return None;
+    }
+    let shared = base_cargo_target(head_root);
+    let holder = fs::read_to_string(shared.join(".lock")).ok()?;
+    (holder == worktree_root.to_string_lossy()).then(|| kept_target(&shared, folder.unwrap_or(".")))
+}
+
+/// True when a command's first word is the program `cargo`: `cargo test`,
+/// `cargo build && ./target/debug/app`. Not `cargo-nextest`, a path to
+/// cargo, or a command that sets a variable first: those build in the
+/// worktree, which is the safe side.
+fn starts_with_cargo(command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or_default();
+    first == "cargo" || first.eq_ignore_ascii_case("cargo.exe")
 }
 
 /// The ignored dependency folders that are linked from the head.
@@ -1182,7 +1217,9 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
     // A base result built with the kept build folder is not one built from
     // nothing: it only adds to the key (ADR 0081).
     if !cargo.is_empty() {
-        environment.push_str(&format!(";cargo-target={}", cargo.join(",")));
+        // `v2`: cargo steps only (ADR 0081, addendum). A base result kept
+        // with the links of the first form is never reused.
+        environment.push_str(&format!(";cargo-target=v2:{}", cargo.join(",")));
     }
     let links = WorktreeSetup {
         folders: links,
@@ -1656,7 +1693,9 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
 pub(crate) struct WorktreeSetup {
     pub(crate) folders: Vec<String>,
     pub(crate) env_files: Vec<String>,
-    /// Where `target` is linked to the kept build folder (ADR 0081).
+    /// The folders with a tracked `Cargo.toml`: when there is one, a base
+    /// run takes the repo's kept build folders, for its cargo steps (ADR
+    /// 0081, addendum).
     pub(crate) cargo_folders: Vec<String>,
 }
 
@@ -1689,21 +1728,14 @@ pub(crate) fn prepare_worktree(
         }
     }
     // A Rust repo's build folders, kept from one base run to the next (ADR
-    // 0081): each folder with a `Cargo.toml` gets `target` linked to a kept
-    // folder of its own, and cargo builds there. Only one base run of a
-    // repo uses them at a time; another builds from nothing, as before. A
-    // link that cannot be made, or a `target` the commit has, is left
-    // alone: cargo then builds in the worktree.
+    // 0081 and its addendum): a base step whose command starts with `cargo`
+    // gets the kept folder of its own folder as CARGO_TARGET_DIR
+    // ([`kept_cargo_target`]); every other base step builds in the
+    // worktree, as before. Only one base run of a repo holds them at a
+    // time; another builds from nothing.
     if !links.cargo_folders.is_empty() {
         let shared = base_cargo_target(root);
-        if let Some(lock) = lock_kept_targets(&shared) {
-            for folder in &links.cargo_folders {
-                let kept = kept_target(&shared, folder);
-                let place = folder_of(&worktree.root, Some(folder));
-                if place.is_dir() && fs::create_dir_all(&kept).is_ok() {
-                    let _ = worktree.link(&kept, &place.join("target"));
-                }
-            }
+        if let Some(lock) = lock_kept_targets(&shared, &worktree.root) {
             *worktree
                 .kept_lock
                 .lock()
@@ -2576,16 +2608,72 @@ mod tests {
     fn only_one_base_run_at_a_time_takes_the_kept_rust_build_folders() {
         let dir = tempfile::tempdir().unwrap();
         let shared = dir.path().join("kept");
-        let first = lock_kept_targets(&shared).expect("the first run takes them");
+        let first = lock_kept_targets(&shared, Path::new("w1")).expect("the first run takes them");
         assert!(
-            lock_kept_targets(&shared).is_none(),
+            lock_kept_targets(&shared, Path::new("w2")).is_none(),
             "a second run must not"
         );
         drop(first);
         assert!(
-            lock_kept_targets(&shared).is_some(),
+            lock_kept_targets(&shared, Path::new("w2")).is_some(),
             "free again once let go"
         );
+    }
+
+    /// Only a command whose first word is cargo gets a kept build folder
+    /// (ADR 0081, addendum): cargo checks freshness itself.
+    #[test]
+    fn only_a_command_that_starts_with_cargo_gets_a_kept_build_folder() {
+        for yes in [
+            "cargo test",
+            "  cargo build && ./target/debug/app",
+            "cargo.exe test",
+            "CARGO.EXE test",
+        ] {
+            assert!(starts_with_cargo(yes), "{yes}");
+        }
+        for no in [
+            "pnpm test",
+            "node run.js cargo",
+            "cargo-nextest run",
+            "RUSTFLAGS=-Dwarnings cargo test",
+            "/usr/bin/cargo test",
+            "",
+        ] {
+            assert!(!starts_with_cargo(no), "{no}");
+        }
+    }
+
+    /// A step gets the kept folder only when its own worktree holds them.
+    #[test]
+    fn a_cargo_step_gets_the_kept_folder_only_in_the_worktree_that_holds_it() {
+        let head = tempfile::tempdir().unwrap();
+        let shared = base_cargo_target(head.path());
+        let mine = Path::new("/tmp/firescale-base-mine");
+        let lock = lock_kept_targets(&shared, mine).expect("free");
+        assert_eq!(
+            kept_cargo_target(head.path(), mine, Some("tools/gen"), "cargo test"),
+            Some(kept_target(&shared, "tools/gen"))
+        );
+        assert_eq!(
+            kept_cargo_target(head.path(), mine, None, "cargo test"),
+            Some(kept_target(&shared, "."))
+        );
+        assert_eq!(
+            kept_cargo_target(head.path(), mine, None, "pnpm test"),
+            None
+        );
+        let other = Path::new("/tmp/firescale-base-other");
+        assert_eq!(
+            kept_cargo_target(head.path(), other, None, "cargo test"),
+            None
+        );
+        drop(lock);
+        assert_eq!(
+            kept_cargo_target(head.path(), mine, None, "cargo test"),
+            None
+        );
+        let _ = fs::remove_dir_all(&shared);
     }
 
     #[test]
