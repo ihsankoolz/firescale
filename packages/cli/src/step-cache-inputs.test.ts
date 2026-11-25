@@ -268,7 +268,7 @@ describe('the config reader and additive inputs', () => {
 
   it('names inputs among the keys of a project step', async () => {
     expect(await refused({ web: { test: { cmd: 'x' } } })).toContain(
-      'unknown key "cmd" in verify.projects["web"].test. Allowed keys: command, timeout, inputs.',
+      'unknown key "cmd" in verify.projects["web"].test. Allowed keys: command, timeout, inputs, expected.',
     );
   });
 
