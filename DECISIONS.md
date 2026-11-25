@@ -199,6 +199,15 @@ Build idea 10. Measured first, on the laptop, a scratch clone whose only step wa
 - **Not done:** pruning (about 2 GB for this repo), other build folders.
 - **Failing test first:** `packages/cli/src/rust-base-target.test.ts`, 3 of 4 failed on `main`; the fourth (no Rust) is a guard.
 
+**Pull request 13: your decisions on ADR 0077's gaps, `--help` and ADR 0080 (ADR 0077, ADR 0080)**
+
+- **Gap 2, widened as you decided:** with a project at the repo root, a file in no project below it (and held by no narrow shared node, and not inert) affects every project, as every key holds it. Before, the root project only. A file a project copies or imports is still that project's and the root's.
+- **Tests that pinned the narrow form, updated to the new one:** `an_image_a_project_imports_or_a_root_project_holds_is_not_inert` and `a_root_file_that_a_project_copies_affects_that_project_and_the_root_project` (both in `graph.rs`); `known_gap_a_file_of_the_root_project_is_in_the_keys_of_the_projects_below` became `a_file_of_the_root_project_affects_the_projects_below_it_too`. Named in ADR 0077.
+- **Gap 1, kept as you decided:** inert documents stay out of `--affected` (ADR 0034); the property test names it as its one known exception. Property after the change: 763 keys, 0 broken.
+- **`--help`:** `--pr-base` now says verify also reads a merge queue's `merge_group` event; the snapshot changed with it, seen failing first.
+- **ADR 0080:** the first-parent check is under "Later", not built.
+- **Failing tests first:** the new gap-2 test and the property below a root project, then the two updated `graph.rs` tests, all seen failing before the change.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.
