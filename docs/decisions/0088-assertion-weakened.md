@@ -24,8 +24,13 @@ The guard counts assertions net per test file. An assertion moved under an `if`,
 - **What the author saw.** This session measured both held-out corpora with counts only and opened no case; the titles of the second corpus's misses were seen by an earlier session (ADR 0082, 0086). The patterns are the research report's items ii and iii, written before the second corpus existed.
 - A renamed test is not followed: its assertions are not compared.
 
+## From the fresh review
+
+Fixed, each with a test written first and seen failing: the base's `allow` list in the report left out `assertion-weakened` (and `runner-weakened`, from ADR 0086), so an exemption was not named to the reviewer (the test of that list gains both); `assert a or b == True` and the like were read as ending in `or True` (now only the last operand of a top-level `or`); a handler that raises, throws or fails the test anyway (`except AssertionError: raise`, `catch (e) { done(e) }`) counted as swallowing; a call compared with itself (`memo() == memo()`) counted as a tautology; a closure given to `catch_unwind` through `AssertUnwindSafe` was missed. Numbers unchanged.
+
 ## Not done
 
+- Python's `except*` (`except_group_clause`) is not read.
 - Other languages (Java, Kotlin, Swift, Dart, C, C++, C#, Go): `weakened` is `None` there.
 - A condition that is always true but not by its shape (`if True:`, `if (1)`), a loop that never runs, and `expect.assertions` are not read.
 - Items i, iv, v and vi of idea 6 (matcher classes, tolerances, a dropped `await`, a new `should_panic`): Later.

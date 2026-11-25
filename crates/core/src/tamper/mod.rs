@@ -1264,7 +1264,7 @@ pub fn guard_at(
     }
 
     // Files the base's `allow` leaves out, for the kinds it names.
-    const KINDS: [Kind; 11] = [
+    const KINDS: [Kind; 13] = [
         Kind::TestDeleted,
         Kind::TestSkipped,
         Kind::AssertionRemoved,
@@ -1275,6 +1275,8 @@ pub fn guard_at(
         Kind::RuleDisabled,
         Kind::SnapshotChanged,
         Kind::ExpectedChanged,
+        Kind::RunnerWeakened,
+        Kind::AssertionWeakened,
         Kind::NotChecked,
     ];
     for file in files.iter().chain(

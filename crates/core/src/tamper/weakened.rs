@@ -58,6 +58,16 @@ fn source(node: Node<'_>, src: &[u8]) -> String {
     String::from_utf8_lossy(&src[node.start_byte()..node.end_byte()]).into_owned()
 }
 
+/// The call `node` is an argument of, and that call's name.
+fn called<'t>(node: Node<'t>, src: &[u8]) -> Option<(Node<'t>, String)> {
+    let call = node
+        .parent()
+        .filter(|arguments| arguments.kind() == "arguments")?
+        .parent()?;
+    let name = source(call.child_by_field_name("function")?, src);
+    Some((call, name))
+}
+
 fn inside(outer: Node<'_>, node: Node<'_>) -> bool {
     outer.start_byte() <= node.start_byte() && node.end_byte() <= outer.end_byte()
 }
@@ -70,13 +80,14 @@ fn guarded(node: Node<'_>, src: &[u8]) -> Option<&'static str> {
         let kind = parent.kind();
         if BOUNDARIES.contains(&kind) {
             // A closure handed to `catch_unwind` swallows its panics.
+            // The call a node is an argument of, and that call's name.
             let caught = parent.kind() == "closure_expression"
-                && parent
-                    .parent()
-                    .filter(|arguments| arguments.kind() == "arguments")
-                    .and_then(|arguments| arguments.parent())
-                    .and_then(|call| call.child_by_field_name("function"))
-                    .is_some_and(|function| source(function, src).ends_with("catch_unwind"));
+                && called(parent, src).is_some_and(|(call, name)| {
+                    name.ends_with("catch_unwind")
+                        || (name.ends_with("AssertUnwindSafe")
+                            && called(call, src)
+                                .is_some_and(|(_, outer)| outer.ends_with("catch_unwind")))
+                });
             return caught.then_some("inside catch_unwind, which swallows its panic");
         }
         match kind {
@@ -144,10 +155,14 @@ fn guarded(node: Node<'_>, src: &[u8]) -> Option<&'static str> {
 }
 
 /// A Python `except` header that catches an assertion's failure, or a
-/// JavaScript `try` with a `catch`.
+/// JavaScript `try` with a `catch`, whose handler does not fail the test
+/// anyway (`raise`, `throw`, `done(e)`, `fail(…)`: the review of ADR 0088).
 fn swallows(statement: Node<'_>, src: &[u8]) -> bool {
-    if statement.child_by_field_name("handler").is_some() {
-        return true;
+    if let Some(handler) = statement.child_by_field_name("handler") {
+        let body = handler
+            .child_by_field_name("body")
+            .map_or_else(|| source(handler, src), |body| source(body, src));
+        return !fails_anyway(&body);
     }
     let mut cursor = statement.walk();
     let found = statement.named_children(&mut cursor).any(|part| {
@@ -155,10 +170,17 @@ fn swallows(statement: Node<'_>, src: &[u8]) -> bool {
             return false;
         }
         let whole = source(part, src);
-        let header = whole.split(':').next().unwrap_or("").trim();
-        header == "except" || catches_assertion(header)
+        let (header, body) = whole.split_once(':').unwrap_or((&whole, ""));
+        let header = header.trim();
+        (header == "except" || catches_assertion(header)) && !fails_anyway(body)
     });
     found
+}
+
+/// A handler's body that raises again or fails the test itself.
+fn fails_anyway(body: &str) -> bool {
+    body.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|word| matches!(word, "raise" | "throw" | "fail" | "done" | "reject"))
 }
 
 fn catches_assertion(header: &str) -> bool {
@@ -341,15 +363,20 @@ const OR_TRUE: &str = "a tautology: its condition ends in `or True`";
 /// A condition that always holds.
 fn condition_always(condition: &str) -> Option<&'static str> {
     let condition = unwrap(condition);
-    if let Some((_, _, right)) = split_top(condition, &[" or ", "||"]) {
-        let last = right.rsplit([' ', '|']).next().unwrap_or(right);
-        if matches!(unwrap(last), "True" | "true") || matches!(unwrap(right), "True" | "true") {
-            return Some(OR_TRUE);
-        }
+    // The last operand of a top-level `or`: `a == 1 or True`, not
+    // `a or b == True` (review of ADR 0088).
+    let mut last: Option<&str> = None;
+    let mut rest = condition;
+    while let Some((_, _, right)) = split_top(rest, &[" or ", "||"]) {
+        last = Some(right);
+        rest = right;
+    }
+    if last.is_some_and(|operand| matches!(unwrap(operand), "True" | "true")) {
+        return Some(OR_TRUE);
     }
     let (left, operator, right) = split_top(condition, &["===", "==", ">=", "<=", " is "])?;
     let (left, right) = (unwrap(left), unwrap(right));
-    if left == right && !left.is_empty() {
+    if same_value(left, right) {
         return Some(SELF);
     }
     match operator {
@@ -359,10 +386,16 @@ fn condition_always(condition: &str) -> Option<&'static str> {
     }
 }
 
+/// Two sides written the same that hold no call: a call can give a fresh
+/// value each time (`memo() == memo()`), so it is no tautology (review of
+/// ADR 0088).
+fn same_value(left: &str, right: &str) -> bool {
+    !left.is_empty() && left == right && !left.contains('(')
+}
+
 /// An equality whose two sides are the same.
 fn pair_always(actual: &str, expected: &str) -> Option<&'static str> {
-    let (actual, expected) = (unwrap(actual), unwrap(expected));
-    (!actual.is_empty() && actual == expected).then_some(SELF)
+    same_value(unwrap(actual), unwrap(expected)).then_some(SELF)
 }
 
 /// What the assertion's text checks always holds.
@@ -449,6 +482,16 @@ mod tests {
             ("assert.equal(a, b)", None),
             ("assert x >= y", None),
             ("assert x is not None", None),
+            // From the review: `or` with a comparison after it is no
+            // tautology, nor is a call compared with itself (a fresh value
+            // each time).
+            ("assert a or b == True", None),
+            ("assert x or y is True", None),
+            ("assert!(a || b == true)", None),
+            ("expect(a || b === true).toBe(true)", None),
+            ("expect(memo()).toBe(memo())", None),
+            ("assert_eq!(compute(), compute())", None),
+            ("assert hash(x) == hash(x)", None),
         ];
         for (text, want) in cases {
             assert_eq!(tautology(text), want, "{text}");
@@ -498,6 +541,18 @@ mod tests {
                 .unwrap()
                 .contains("try")
         );
+        for handler in [
+            "except AssertionError:\n        raise",
+            "except Exception as e:\n        pytest.fail(str(e))",
+        ] {
+            let source =
+                format!("def test_a():\n    try:\n        assert f() == 1\n    {handler}\n");
+            assert_eq!(
+                first_assertion_why(&source, tree_sitter_python::LANGUAGE.into(), &kinds),
+                None,
+                "{handler}"
+            );
+        }
         let other_error = "def test_a():\n    try:\n        assert f() == 1\n    except ValueError:\n        pass\n";
         assert_eq!(
             first_assertion_why(other_error, tree_sitter_python::LANGUAGE.into(), &kinds),
@@ -533,6 +588,19 @@ mod tests {
         assert!(first_assertion_why(try_catch, ts(), &kinds)
             .unwrap()
             .contains("try"));
+        // A handler that fails the test anyway swallows nothing (review).
+        for handler in [
+            "catch (e) { throw e; }",
+            "catch (e) { done(e); }",
+            "catch (e) { fail(e); }",
+        ] {
+            let source = format!("it('a', (done) => {{\n  try {{\n    expect(f()).toBe(1);\n    done();\n  }} {handler}\n}});\n");
+            assert_eq!(
+                first_assertion_why(&source, ts(), &kinds),
+                None,
+                "{handler}"
+            );
+        }
         let finally_only =
             "it('a', () => {\n  try {\n    expect(f()).toBe(1);\n  } finally { done(); }\n});\n";
         assert_eq!(first_assertion_why(finally_only, ts(), &kinds), None);
@@ -547,6 +615,10 @@ mod tests {
             .contains("if let"));
         let unwind = "#[test]\nfn a() {\n    let _ = std::panic::catch_unwind(|| {\n        assert_eq!(f(), 1);\n    });\n}\n";
         assert!(first_assertion_why(unwind, rs(), &kinds)
+            .unwrap()
+            .contains("catch_unwind"));
+        let wrapped = "#[test]\nfn a() {\n    let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {\n        assert_eq!(f(), 1);\n    }));\n}\n";
+        assert!(first_assertion_why(wrapped, rs(), &kinds)
             .unwrap()
             .contains("catch_unwind"));
         let plain = "#[test]\nfn a() {\n    let v = f();\n    assert_eq!(v, 1);\n}\n";
