@@ -13,7 +13,10 @@ Current state of the project, so a new session can resume cold. Updated in every
 5. A runner made unable to fail: `runner-weakened`, report only (ADR 0086). Second corpus 90 to 89 missed, first 42 to 40, no new false finding.
 6. The agent's explanation when the loop guard lets it go: a `systemMessage` with `last_assistant_message` for Claude Code and Codex; blocking unchanged (ADR 0087, the owner's decision on ADR 0084). Merged as [#103](https://github.com/ihsankoolz/firescale/pull/103).
 7. An assertion made conditional or a tautology: `assertion-weakened`, needs approval (ADR 0088). First corpus 40 to 37 missed, second 89 to 89, no new false finding. Merged as [#105](https://github.com/ihsankoolz/firescale/pull/105).
-8. Old tests, new code: the base's tests on the head's code, as evidence on the guard's findings, report only (ADR 0089; `crates/core/src/oldtests.rs`). Misses unchanged by construction.
+8. Old tests, new code: the base's tests on the head's code, as evidence on the guard's findings, report only (ADR 0089; `crates/core/src/oldtests.rs`). Misses unchanged by construction. Merged as [#108](https://github.com/ihsankoolz/firescale/pull/108).
+9. Docs: the README's "Measured, with limits" gives both held-out corpora (the second is the blind number: 89 of 100 missed), what the guard catches and what it does not; `bench/RESULTS.md` has the second corpus by category; DECISIONS.md "Track B: what changes for a user, and for the course project". This pull request.
+
+**Track B has ended** with pull request 9. Waiting for the owner: ADR 0089's "Not done" (the worktree's time in the stop hook is not bounded; `verify.baseBudget` is counted twice); ADR 0088's other languages; nothing is released. ADRs 0090 and 0091 were not used.
 
 **Track A (cache and verify), the run of 2026-11-18 after 0.5.4** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
 
