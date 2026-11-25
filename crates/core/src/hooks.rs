@@ -1201,6 +1201,10 @@ pub struct HookInput {
     pub continuing: Option<bool>,
     /// Cursor's own count of how many times the stop hook has sent it back.
     pub loop_count: Option<u32>,
+    /// The text of the agent's final message (`last_assistant_message`, sent
+    /// by Claude Code and Codex). Shown to the person when the loop guard
+    /// lets the agent go (ADR 0087). Never sent back to the agent.
+    pub last_message: Option<String>,
 }
 
 /// Reads the hook's stdin. Anything unreadable gives the defaults: a hook
@@ -1218,6 +1222,7 @@ pub fn parse_hook_input(stdin: &str) -> HookInput {
             .get("loop_count")
             .and_then(Value::as_u64)
             .and_then(|count| u32::try_from(count).ok()),
+        last_message: text("last_assistant_message").filter(|message| !message.trim().is_empty()),
     }
 }
 
@@ -1408,23 +1413,78 @@ pub fn block_summary(report: &crate::verify::VerifyReport) -> String {
     )
 }
 
+/// The longest part of the agent's last message the person is shown when
+/// the loop guard lets it go; the rest is in the agent's own transcript.
+const LAST_MESSAGE_MAX_CHARS: usize = 4000;
+
+/// Why the loop guard let the agent go: on stderr, and opening what the
+/// person is shown.
+fn let_go_line(blocks: u32) -> String {
+    format!(
+        "fscale: verify still fails after {blocks} attempts, so the agent is allowed to stop. Run `fscale verify` to see what is left."
+    )
+}
+
+/// What the person is shown when the loop guard lets the agent go: why, and
+/// the agent's last message, which may say which test it believes wrong
+/// (ADR 0084, ADR 0087).
+fn give_up_text(blocks: u32, last_message: Option<&str>) -> String {
+    let mut text = let_go_line(blocks);
+    if let Some(message) = last_message
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+    {
+        let shown: String = message.chars().take(LAST_MESSAGE_MAX_CHARS).collect();
+        let cut = if shown.len() < message.len() {
+            "\n[cut: the whole message is in the agent's transcript]"
+        } else {
+            ""
+        };
+        text.push_str(&format!("\nThe agent's last message:\n{shown}{cut}"));
+    }
+    text
+}
+
 /// Turns a decision into the output the agent expects.
 ///
 /// Claude Code and Codex: exit code 2 with the message on stderr blocks the
 /// stop. Cursor: a JSON object on stdout with `followup_message`.
 #[must_use]
 pub fn reply(agent: Agent, decision: &Decision, summary: &str, max_blocks: u32) -> HookReply {
+    reply_with(agent, decision, summary, max_blocks, None)
+}
+
+/// [`reply`], with the agent's last message for the person when the loop
+/// guard lets it go. Claude Code and Codex show `systemMessage` to the
+/// person (their hooks pages); Cursor's stop hook has no field for the
+/// person and sends no last message, so it gets `{}` as before (ADR 0087).
+#[must_use]
+pub fn reply_with(
+    agent: Agent,
+    decision: &Decision,
+    summary: &str,
+    max_blocks: u32,
+    last_message: Option<&str>,
+) -> HookReply {
     match decision {
-        Decision::Allow => {
-            HookReply { stdout: String::new(), stderr: String::new(), exit_code: 0 }
-        }
-        Decision::GiveUp { blocks } => HookReply {
-            stdout: if agent == Agent::Cursor { "{}\n".to_owned() } else { String::new() },
-            stderr: format!(
-                "fscale: verify still fails after {blocks} attempts, so the agent is allowed to stop. Run `fscale verify` to see what is left.\n"
-            ),
+        Decision::Allow => HookReply {
+            stdout: String::new(),
+            stderr: String::new(),
             exit_code: 0,
         },
+        Decision::GiveUp { blocks } => {
+            let text = give_up_text(*blocks, last_message);
+            HookReply {
+                stdout: match agent {
+                    Agent::Cursor => "{}\n".to_owned(),
+                    Agent::Claude | Agent::Codex => {
+                        format!("{}\n", json!({ "systemMessage": text }))
+                    }
+                },
+                stderr: format!("{}\n", let_go_line(*blocks)),
+                exit_code: 0,
+            }
+        }
         Decision::Block { blocks } => {
             // A setup problem is not a wrong test: its note says what to
             // run, and no line before it may tell the agent to stop
@@ -1438,9 +1498,11 @@ pub fn reply(agent: Agent, decision: &Decision, summary: &str, max_blocks: u32) 
                 "fscale verify failed, so the work is not done yet (attempt {blocks} of {max_blocks}).{way_out}\n\n{summary}"
             );
             match agent {
-                Agent::Claude | Agent::Codex => {
-                    HookReply { stdout: String::new(), stderr: message, exit_code: 2 }
-                }
+                Agent::Claude | Agent::Codex => HookReply {
+                    stdout: String::new(),
+                    stderr: message,
+                    exit_code: 2,
+                },
                 Agent::Cursor => HookReply {
                     stdout: format!("{}\n", json!({ "followup_message": message })),
                     stderr: String::new(),
@@ -1461,6 +1523,7 @@ mod tests {
             session: session.to_owned(),
             continuing: Some(continuing),
             loop_count: None,
+            last_message: None,
         }
     }
 
@@ -1912,7 +1975,8 @@ mod tests {
             HookInput {
                 session: "abc".to_owned(),
                 continuing: Some(true),
-                loop_count: None
+                loop_count: None,
+                last_message: None
             }
         );
         let cursor = parse_hook_input(r#"{"conversation_id":"c1","loop_count":2}"#);
@@ -2005,6 +2069,7 @@ mod tests {
             session: "c".to_owned(),
             continuing: None,
             loop_count: Some(3),
+            last_message: None,
         };
         assert_eq!(
             decide(fixture.root(), Agent::Cursor, &from_cursor, false, 3),
@@ -2039,6 +2104,7 @@ mod tests {
             session: "quiet".to_owned(),
             continuing: None,
             loop_count: None,
+            last_message: None,
         };
         let decisions: Vec<Decision> = (0..5)
             .map(|_| decide(fixture.root(), Agent::Cursor, &silent, false, 3))
@@ -2153,6 +2219,47 @@ mod tests {
         assert_eq!(give_up.exit_code, 0);
         assert_eq!(give_up.stdout, "{}\n");
         assert!(give_up.stderr.contains("allowed to stop"));
+    }
+
+    #[test]
+    fn letting_the_agent_go_shows_the_person_its_last_message() {
+        let give_up = Decision::GiveUp { blocks: 3 };
+        for agent in [Agent::Claude, Agent::Codex] {
+            let said = reply_with(agent, &give_up, "", 3, Some("  test_a is wrong: why.  "));
+            let shown: Value = serde_json::from_str(&said.stdout).unwrap();
+            let text = shown["systemMessage"].as_str().unwrap();
+            assert!(text.contains("allowed to stop"), "{text}");
+            assert!(
+                text.ends_with("The agent's last message:\ntest_a is wrong: why."),
+                "{text}"
+            );
+            assert_eq!(said.exit_code, 0);
+            assert!(
+                !said.stderr.contains("test_a"),
+                "the agent never gets it back"
+            );
+        }
+        // Cursor has no field for the person: unchanged.
+        let cursor = reply_with(Agent::Cursor, &give_up, "", 3, Some("x"));
+        assert_eq!(cursor.stdout, "{}\n");
+        // A long message is cut on a character, and says so.
+        let long = "é".repeat(LAST_MESSAGE_MAX_CHARS + 5);
+        let text = give_up_text(3, Some(&long));
+        assert!(text.ends_with("[cut: the whole message is in the agent's transcript]"));
+        assert_eq!(text.matches('é').count(), LAST_MESSAGE_MAX_CHARS);
+        // A blocked agent is never shown its own message.
+        let block = reply_with(
+            Agent::Claude,
+            &Decision::Block { blocks: 1 },
+            "s",
+            3,
+            Some("x"),
+        );
+        assert!(block.stdout.is_empty());
+        assert_eq!(
+            parse_hook_input(r#"{"last_assistant_message":"  "}"#).last_message,
+            None
+        );
     }
 
     #[test]

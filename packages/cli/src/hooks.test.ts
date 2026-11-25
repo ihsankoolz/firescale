@@ -938,6 +938,45 @@ describe('fscale hooks run (the stop hook)', () => {
     expect(await read(repo.root, '.firescale/.gitignore')).toContain('*');
   });
 
+  it('loop guard: when it lets the agent go, the person sees the agent’s last message (ADR 0087)', async () => {
+    const repo = await fixtures.create({ files: FAILING });
+    const env = { FSCALE_HOOK_MAX_BLOCKS: '1' };
+    const explanation =
+      'I believe test_total in tests/test_cart.py is wrong: it expects 11 but the spec says 10. Stopping.';
+    for (const agent of ['claude', 'codex'] as const) {
+      const session = `explain-${agent}`;
+      const blocked = await stop(
+        repo.root,
+        agent,
+        { session_id: session, stop_hook_active: false },
+        env,
+      );
+      expect(blocked.code).toBe(EXIT_BLOCK);
+      const released = await stop(
+        repo.root,
+        agent,
+        { session_id: session, stop_hook_active: true, last_assistant_message: explanation },
+        env,
+      );
+      expect(released.code).toBe(EXIT_OK);
+      const shown = JSON.parse(released.stdout) as { systemMessage: string };
+      expect(shown.systemMessage).toContain('verify still fails after 1 attempts');
+      expect(shown.systemMessage).toContain(`The agent's last message:\n${explanation}`);
+      expect(released.stderr).toContain('allowed to stop');
+    }
+    // No message from the agent: the person still sees why it stopped.
+    await stop(repo.root, 'claude', { session_id: 'quiet', stop_hook_active: false }, env);
+    const quiet = await stop(
+      repo.root,
+      'claude',
+      { session_id: 'quiet', stop_hook_active: true },
+      env,
+    );
+    const shown = JSON.parse(quiet.stdout) as { systemMessage: string };
+    expect(shown.systemMessage).toContain('allowed to stop');
+    expect(shown.systemMessage).not.toContain("The agent's last message");
+  });
+
   it('loop guard: FSCALE_HOOK_MAX_BLOCKS changes the cap, and sessions do not share a count', async () => {
     const repo = await fixtures.create({ files: FAILING });
     const env = { FSCALE_HOOK_MAX_BLOCKS: '1' };
