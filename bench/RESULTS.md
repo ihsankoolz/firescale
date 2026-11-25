@@ -76,6 +76,10 @@ Labelled corpus (`bench/tamper-corpus.json`): before, 0 false positives and 0 of
 
 Limits: the labelled cases were written with the detector, so they are fixtures, not a rate. The gains on the held-out corpora are three cases. This session saw the titles of the 90 cases the second corpus missed on `main` before writing the detector (ADR 0082); it opened no case. The new kind is report only, so a case it catches is "caught" in these tables but never fails verify.
 
+## Old tests within their limits (ADR 0090)
+
+macOS debug builds, 2026-11-25: before on the #108 branch (ADR 0089), after on this pull request. Missed of all cases: first held-out corpus 37 of 98 before and after, second 89 of 100 before and after; case by case, no case changed. Labelled corpus: 0 false positives, 0 of 196 not-a-finding cases with a finding. Unchanged by construction: `tamper-misses.mjs` runs `fscale tamper`, which never runs old tests, and old tests never change a finding.
+
 ## Old tests, new code (ADR 0089)
 
 macOS debug builds on the owner's Mac, 2026-11-25: before on `main` at `c980eeb` (with ADR 0088), after on the pull request.
