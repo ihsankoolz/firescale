@@ -1,0 +1,216 @@
+// Old tests, new code (ADR 0089): when the tamper guard finds a changed
+// expected value or a weakened assertion in a test file the base commit has,
+// the test step runs once more in a worktree of the head with the base's
+// version of that file. A test of it that fails there is evidence on the
+// finding. Report only: it never adds, lowers or removes a finding, and
+// never makes verify fail. The stand-in `vitest` reads the test file it is
+// given and fails when it still expects the base's value.
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { runGit } from '@firescale/sdk';
+import { fixtureSet } from '@firescale/sdk/testing';
+import { afterEach, describe, expect, it } from 'vitest';
+import { commitAll, EXIT_OK, runCli } from './test-helpers.js';
+
+/** The stop hook's exit code when it sends Claude Code back. */
+const EXIT_BLOCK_HOOK = 2;
+
+const fixtures = fixtureSet();
+afterEach(() => fixtures.cleanup());
+
+/** How the stand-in answers: `honest` reads the file; the others ignore it. */
+type Mode = 'honest' | 'always-pass' | 'cannot-collect';
+
+async function writeVitest(dir: string, mode: Mode): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  const script = [
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    'const args = process.argv.slice(2);',
+    "if (args[0] === '--version') { console.log('vitest 1.0.0'); process.exit(0); }",
+    "fs.appendFileSync(path.join(__dirname, 'calls.log'), process.cwd() + '\\n');",
+    `const mode = ${JSON.stringify(mode)};`,
+    "if (mode === 'cannot-collect') { console.error('SyntaxError: the module has no export named total'); process.exit(1); }",
+    "const text = fs.readFileSync(path.join(process.cwd(), 'src', 'cart.test.ts'), 'utf8');",
+    "const fails = mode === 'honest' && text.includes('toBe(10)');",
+    'if (fails) {',
+    "  process.stdout.write('⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\\n\\n FAIL  src/cart.test.ts > cart > adds the items\\nAssertionError: expected 11 to be 10\\n Test Files  1 failed (1)\\n      Tests  1 failed | 1 passed (2)\\n');",
+    '  process.exit(1);',
+    '}',
+    "process.stdout.write(' Test Files  1 passed (1)\\n      Tests  2 passed (2)\\n');",
+    'process.exit(0);',
+    '',
+  ].join('\n');
+  await writeFile(path.join(dir, 'tool.cjs'), script);
+  await writeFile(path.join(dir, 'calls.log'), '');
+  if (process.platform === 'win32') {
+    await writeFile(path.join(dir, 'vitest.cmd'), `@"${process.execPath}" "%~dp0tool.cjs" %*\r\n`);
+  } else {
+    const file = path.join(dir, 'vitest');
+    await writeFile(
+      file,
+      `#!/bin/sh\nexec "${process.execPath}" "$(dirname "$0")/tool.cjs" "$@"\n`,
+    );
+    await chmod(file, 0o755);
+  }
+}
+
+const cartTest = (expected: number, extra = ''): string =>
+  `import { describe, expect, it } from 'vitest';\nimport { total } from './cart';\n\ndescribe('cart', () => {\n  it('adds the items', () => {\n    expect(total([4, 6])).toBe(${String(expected)});\n  });\n${extra}});\n`;
+
+/**
+ * A repo on `feature` off `main`. The base's test expects 10; the head
+ * changes the code to give 11 and the test to expect 11: `expected-changed`.
+ */
+async function repoWith(
+  mode: Mode,
+  options: { lint?: string; head?: Record<string, string> } = {},
+) {
+  const repo = await fixtures.create({
+    files: {
+      'firescale.config.json': JSON.stringify({
+        packs: ['core'],
+        verify: { lint: options.lint ?? false, typecheck: false, test: 'vitest run' },
+      }),
+      '.gitignore': '.firescale/\n',
+      'src/cart.ts':
+        'export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n',
+      'src/cart.test.ts': cartTest(10),
+      'lint.cjs':
+        "const fs = require('node:fs');\nprocess.exit(fs.readFileSync('src/cart.ts', 'utf8').includes('b, 1)') ? 1 : 0);\n",
+    },
+    track: 'no-git',
+  });
+  expect((await runGit(repo.root, ['init', '--quiet', '--initial-branch=main'])).code).toBe(0);
+  await commitAll(repo.root, 'base');
+  expect((await runGit(repo.root, ['checkout', '--quiet', '-b', 'feature'])).code).toBe(0);
+  const head = options.head ?? {
+    'src/cart.ts':
+      'export const total = (items: number[]): number => items.reduce((a, b) => a + b, 1);\n',
+    'src/cart.test.ts': cartTest(11),
+  };
+  for (const [file, text] of Object.entries(head)) {
+    await writeFile(path.join(repo.root, file), text);
+  }
+  const tools = path.join(repo.root, '..', `${path.basename(repo.root)}-tools`);
+  await writeVitest(tools, mode);
+  const current = process.env['PATH'] ?? process.env['Path'] ?? '';
+  const env = {
+    PATH: `${tools}${path.delimiter}${current}`,
+    CI: undefined,
+    GITHUB_ACTIONS: undefined,
+  };
+  const calls = async () =>
+    (await readFile(path.join(tools, 'calls.log'), 'utf8'))
+      .split('\n')
+      .filter((line) => line !== '');
+  return { repo, env, calls };
+}
+
+interface Finding {
+  kind: string;
+  file: string;
+  evidence?: string[];
+}
+interface OldTests {
+  step: string;
+  status: string;
+  files: string[];
+  detail: string;
+}
+interface Report {
+  ok: boolean;
+  tamper?: { findings: Finding[]; oldTests?: OldTests[] };
+}
+
+describe('old tests, new code (ADR 0089)', () => {
+  it('adds the failing test of the base’s version to the finding, and does not fail verify', async () => {
+    const { repo, env, calls } = await repoWith('honest');
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
+    expect(result.code).toBe(EXIT_OK);
+    const report = JSON.parse(result.stdout) as Report;
+    expect(report.ok).toBe(true);
+    const finding = report.tamper?.findings.find((f) => f.kind === 'expected-changed');
+    expect(finding?.file).toBe('src/cart.test.ts');
+    expect(finding?.evidence).toEqual([
+      "the base's version fails on the head's code: src/cart.test.ts > cart > adds the items: AssertionError: expected 11 to be 10",
+    ]);
+    expect(report.tamper?.oldTests).toEqual([
+      {
+        step: 'test',
+        status: 'failed',
+        files: ['src/cart.test.ts'],
+        detail:
+          "1 test of the base's versions of these files fails on the head's code: the change needed different tests to pass",
+      },
+    ]);
+    // Once on the head, once in the worktree of the head with the base's file.
+    expect(await calls()).toHaveLength(2);
+    const human = await runCli(['verify', '--no-cache'], repo.root, env);
+    expect(human.stdout).toContain(
+      "    evidence: the base's version fails on the head's code: src/cart.test.ts > cart > adds the items: AssertionError: expected 11 to be 10",
+    );
+    expect(human.stdout).toContain(
+      '  Old tests, new code (test; src/cart.test.ts; report only): failed: 1 test',
+    );
+  });
+
+  it('never lowers a finding when the base’s version passes', async () => {
+    const { repo, env } = await repoWith('always-pass');
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
+    const report = JSON.parse(result.stdout) as Report;
+    const finding = report.tamper?.findings.find((f) => f.kind === 'expected-changed');
+    expect(finding).toBeDefined();
+    expect(finding?.evidence).toBeUndefined();
+    expect(report.tamper?.oldTests?.map((run) => run.status)).toEqual(['passed']);
+  });
+
+  it('says "not judged" when the base’s tests cannot be collected on the head’s code', async () => {
+    const { repo, env } = await repoWith('cannot-collect');
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
+    const report = JSON.parse(result.stdout) as Report;
+    const run = report.tamper?.oldTests?.[0];
+    expect(run?.status).toBe('not-judged');
+    expect(run?.detail).toContain('could not be read');
+    expect(report.tamper?.findings.find((f) => f.kind === 'expected-changed')).toBeDefined();
+  });
+
+  it('runs nothing when the guard has no finding it applies to', async () => {
+    const { repo, env } = await repoWith('honest', {
+      head: {
+        'src/cart.test.ts': cartTest(
+          10,
+          "  it('also adds', () => {\n    expect(total([])).toBe(0);\n  });\n",
+        ),
+      },
+    });
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
+    const report = JSON.parse(result.stdout) as Report;
+    expect(report.tamper?.oldTests).toBeUndefined();
+  });
+
+  it('in the stop hook, says "not judged" instead of going past the hook’s time limit', async () => {
+    // Lint fails on the head's code only, so the hook blocks and its
+    // message shows the guard.
+    const { repo, env, calls } = await repoWith('honest', { lint: 'node lint.cjs' });
+    await mkdir(path.join(repo.root, '.claude'), { recursive: true });
+    const install = await runCli(
+      ['hooks', 'install', '--agent', 'claude', '--timeout', '30'],
+      repo.root,
+      env,
+    );
+    // It exits 1 here: npx cannot start the unpublished version. The file is written.
+    expect(await readFile(path.join(repo.root, '.claude', 'settings.json'), 'utf8')).toContain(
+      '"timeout": 30',
+    );
+    const hook = await runCli(['hooks', 'run', '--agent', 'claude'], repo.root, env, {
+      input: JSON.stringify({ session_id: 's', stop_hook_active: false }),
+    });
+    expect(hook.code).toBe(EXIT_BLOCK_HOOK);
+    expect(hook.stderr).toContain(
+      '  Old tests, new code (test; src/cart.test.ts; report only): not judged: no time was left for it.',
+    );
+    // Only the head's own run: nothing started past the limit.
+    expect(await calls()).toHaveLength(1);
+  });
+});
