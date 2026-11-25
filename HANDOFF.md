@@ -18,7 +18,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 **Track B has ended** with pull request 9. Waiting for the owner: ADR 0089's "Not done" (the worktree's time in the stop hook is not bounded; `verify.baseBudget` is counted twice); ADR 0088's other languages; nothing is released. ADRs 0090 and 0091 were not used.
 
-**Track A (cache and verify), the run of 2026-11-18 after 0.5.4** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
+**Track A (cache and verify), the run of 2026-11-18 after 0.5.4, finished on 2026-11-25 with items 11 to 13** (DECISIONS.md, "Track A — cache and verify"; ADR 0072 to 0081). Twelve ideas of the two research reports in `docs/research/`, one pull request each, first steps only. The version is unchanged. Merged so far:
 
 1. A test command that exits 0 while its per-test results hold failing tests is `FAILED` and never cached (ADR 0072; `run_step` in `crates/core/src/verify.rs`, `pertest::is_test`).
 2. A new failing test in a file the change added or edited is never labelled `flaky`, and its step is not run again (ADR 0073; `own_tests` and `touched` in `crates/core/src/blame.rs`, `pertest::file_of`).
@@ -32,6 +32,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 10. `verify --pr-base` in a merge queue run takes the base from the `merge_group` event (ADR 0080; `merge_group` in `crates/core/src/tamper/github.rs`, `with_pr_base` in `crates/cli/src/main.rs`). The starter workflow has no `merge_group` trigger yet.
 11. An expected time for a step with no kept time, `verify.projects.<folder>.<step>.expected`, read by `--budget` only when no time is kept (ADR 0078, addendum). Verify's JSON is schema version 9. Merged as [#104](https://github.com/ihsankoolz/firescale/pull/104).
 12. Rust base runs keep their build folders: each folder with a tracked `Cargo.toml` has `target` linked, in the base worktree, to a folder of its own in `firescale-base-target/<repo key>/` in the temp folder; base steps never get `CARGO_TARGET_DIR`; one base run of a repo at a time (ADR 0081; `cargo_folders`, `kept_target`, `lock_kept_targets` in `blame.rs`). Measured first: 52.7 s, then 59.1 s, the second from scratch. With it, dependencies are reused and the repo's own crates rebuild (a build-only step: 14.4 s, then 11.0 s). One case waits for the owner (ADR 0081, "Needs your decision").
+13. The owner's decisions on ADR 0077: gap 2 widened (with a root project, a file in no project below it affects every project; `affected_except` in `graph.rs`), gap 1 kept as the property's one exception (ADR 0034). `fscale --help` names `merge_group` for `--pr-base`. ADR 0080's first-parent check is under "Later".
 
 **The 0.5.4 run of 2026-11-18 has ended** (DECISIONS.md, "0.5.4 — the run of 2026-11-18, on the laptop"; its "Morning list for you" says what waits for the owner). Six pull requests:
 

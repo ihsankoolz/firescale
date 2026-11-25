@@ -30,7 +30,7 @@ Nothing blocks. Decided on your behalf: tamper stays refused for this event; the
 ## Not done
 
 - **The base rests on the event file.** In a `pull_request` run that checks out GitHub's merge commit, the base is that commit's first parent, so rewriting the event file cannot move it. Here the base is `merge_group.base_sha` from the file, and the only check is that it is part of the head's history. A step that ran the change's own code before verify (a postinstall script) could rewrite the file and name an older commit inside the change, and verify would compare with less. The same trust is placed in the file for a `pull_request` run that checks out the head, and for `pull_request_target`. A tightening: require the base to be on the head's first-parent chain. Not built: it narrows but does not close this, and it waits for a run in a real queue.
-- `fscale --help` still says `--pr-base` reads the pull request event. Its text is pinned by the snapshot in `packages/cli/src/__snapshots__/cli.test.ts.snap`.
+- ~~`fscale --help` still says `--pr-base` reads the pull request event.~~ Done on 2026-11-25 (Track A, item 13, the owner's decision): it now says verify also reads a merge queue's `merge_group` event; the snapshot in `packages/cli/src/__snapshots__/cli.test.ts.snap` changed with it, seen failing first.
 - No run in a real merge queue. The test uses a fixture event file with the documented fields.
 - The starter workflow `fscale adopt` writes has no `merge_group` trigger.
 - `docs/ci.md` does not show a merge queue job.
@@ -42,6 +42,7 @@ It found nothing that changes a `pull_request`, `pull_request_target`, push or l
 ## Later
 
 - `merge_group` in the starter workflow, behind a rule option.
+- Require `merge_group.base_sha` to be on the head's first-parent chain, not only in its history (see "Not done"). The owner's decision of 2026-11-25: logged here, not built. It narrows the trust placed in the event file but does not close it, and wants a run in a real queue first.
 - The tamper guard for a merge group: each pull request in the group judged by its own event.
 
 ## Tests

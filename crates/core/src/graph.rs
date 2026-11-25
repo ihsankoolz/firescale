@@ -1828,7 +1828,8 @@ pub enum Why {
     ComposeFile { file: String },
     /// The firescale config changed as a file: everything runs.
     ConfigFile { file: String },
-    /// A file that belongs to no project changed: everything runs.
+    /// A file that belongs to no project changed, or, with a project at
+    /// the repo root, to no project below it: everything runs.
     UnownedFile { file: String },
     /// A file at the repo root, where settings every project may read are
     /// kept, changed: everything runs.
@@ -2029,8 +2030,9 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
         let media = is_document_or_media(file);
         if unowned && media && roots.is_empty() {
             // image.png, report.pdf, submission.zip: nothing to run for it.
-            // With a root project it is that project's, like any other file
-            // below the repo root (its tests may read a fixture image).
+            // With a root project it is in every project's key, like any
+            // other file in no project below the root (its tests may read a
+            // fixture image), and affects every project below.
             result.inert_files.push(file.clone());
             continue;
         }
@@ -2055,6 +2057,20 @@ pub fn affected_except(graph: &Graph, changed: &Changed, settled: &[&str]) -> Af
                 });
                 continue;
             }
+        }
+        if unowned {
+            // With a root project, a file in no project below it is the
+            // root project's, and is in the key of every project below as
+            // well: it affects them all (ADR 0077, gap 2, closed by the
+            // owner's decision of 2026-11-25). Inert documents are set
+            // apart above (ADR 0034).
+            if everything.is_none() {
+                everything_why = Some(Why::UnownedFile { file: file.clone() });
+            }
+            everything.get_or_insert_with(|| {
+                format!("{file} is in no project below the repo root's project, and every project's key holds it")
+            });
+            continue;
         }
         if deepest.is_none() {
             // The repo root's project holds every file no other project
@@ -2591,8 +2607,10 @@ mod tests {
         assert!(affected(&graph, &changed(&["assets/logo.png"]))
             .inert_files
             .is_empty());
-        // With a root project, every file below the root is the root
-        // project's: an image runs that project, and only that one.
+        // With a root project, a file in no project below it is the root
+        // project's, and is in the key of every project below as well: an
+        // image runs them all (ADR 0077, gap 2, closed by the owner's
+        // decision of 2026-11-25).
         let fixture = owned(&[
             (
                 "package.json".to_owned(),
@@ -2606,9 +2624,9 @@ mod tests {
         let graph = graph_of(&fixture);
         for file in ["image.png", "test/fixtures/scan.png"] {
             let set = affected(&graph, &changed(&[file]));
-            assert!(set.everything.is_none(), "{file}");
+            assert!(set.everything.is_some(), "{file}");
             assert!(set.inert_files.is_empty(), "{file}");
-            assert_eq!(affected_projects(&graph, &[file]), ["."], "{file}");
+            assert_eq!(affected_projects(&graph, &[file]), [".", "web"], "{file}");
         }
         // A README stays inert there (ADR 0034).
         assert!(affected(&graph, &changed(&["README.md"])).is_empty());
@@ -3159,18 +3177,25 @@ mod tests {
             sources(edge(&graph, "backend", "package.json")),
             [Source::Dockerfile]
         );
+        // A file a project copies is a shared node of that project, which
+        // takes it out of the other projects' keys: it runs that project
+        // and the root's, as before.
         assert_eq!(
             affected_projects(&graph, &["package.json"]),
             [".", "backend"]
         );
         // Another file at the root may be a setting every project reads:
-        // everything. One in a folder of the root's project is the root's.
+        // everything. One in a folder of the root's project is in every
+        // project's key too.
         assert!(affected(&graph, &changed(&["Makefile"]))
             .everything
             .is_some());
         // A README cannot change a build or a test: nothing.
         assert!(affected(&graph, &changed(&["README.md"])).is_empty());
-        assert_eq!(affected_projects(&graph, &["scripts/x.js"]), ["."]);
+        assert_eq!(
+            affected_projects(&graph, &["scripts/x.js"]),
+            [".", "backend", "web"]
+        );
     }
 
     // ------------------------------- regressions from the M17 review
