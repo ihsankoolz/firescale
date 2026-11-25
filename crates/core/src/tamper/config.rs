@@ -280,6 +280,7 @@ pub(crate) fn compare(base: &[Located], head: &[Located]) -> Vec<Finding> {
                 }
                 match (head_best, base_best) {
                     (Some(head), Some(base)) => findings.push(Finding {
+                        evidence: Vec::new(),
                         kind,
                         file: head.file.clone(),
                         line: head.measure.line,
@@ -290,6 +291,7 @@ pub(crate) fn compare(base: &[Located], head: &[Located]) -> Vec<Finding> {
                         ),
                     }),
                     (Some(head), None) => findings.push(Finding {
+                        evidence: Vec::new(),
                         kind,
                         file: head.file.clone(),
                         line: head.measure.line,
@@ -297,6 +299,7 @@ pub(crate) fn compare(base: &[Located], head: &[Located]) -> Vec<Finding> {
                         what: format!("{} (not set on the base)", head.measure.what),
                     }),
                     (None, Some(base)) => findings.push(Finding {
+                        evidence: Vec::new(),
                         kind,
                         file: base.file.clone(),
                         line: base.measure.line,
@@ -340,6 +343,7 @@ pub(crate) fn compare(base: &[Located], head: &[Located]) -> Vec<Finding> {
                     }
                     shortfall -= located.measure.value.abs().max(1);
                     findings.push(Finding {
+                        evidence: Vec::new(),
                         kind,
                         file: located.file.clone(),
                         line: located.measure.line,
@@ -361,6 +365,7 @@ pub(crate) fn compare(base: &[Located], head: &[Located]) -> Vec<Finding> {
                     }
                     shortfall -= located.measure.value;
                     findings.push(Finding {
+                        evidence: Vec::new(),
                         kind,
                         file: located.file.clone(),
                         line: located.measure.line,

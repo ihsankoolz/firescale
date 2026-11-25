@@ -615,12 +615,23 @@ fn judge(j: &Judged<'_>) -> Result<Run> {
         commit: j.base.to_owned(),
     };
     let changed_set = changed.iter().map(|c| c.path.clone()).collect();
-    let report = tamper::guard(j.worktree, &base_commit, &changed_set);
+    let mut report = tamper::guard(j.worktree, &base_commit, &changed_set);
+    if !report.findings.is_empty() {
+        // The base's tests on the agent's code: evidence in the reason,
+        // never a verdict (ADR 0089). The job fails on the finding anyway.
+        crate::old_tests_for(j.worktree, &base_commit, &changed_set, &mut report);
+    }
     if let Some(finding) = report.findings.first() {
+        let evidence = report
+            .findings
+            .iter()
+            .flat_map(|finding| finding.evidence.iter())
+            .next()
+            .map_or_else(String::new, |line| format!(" ({line})"));
         return Ok(fail(
             "tamper",
             format!(
-                "the tamper guard found {}: {}:{}: {}",
+                "the tamper guard found {}: {}:{}: {}{evidence}",
                 finding.kind.as_str(),
                 finding.file,
                 finding.line,
@@ -634,8 +645,13 @@ fn judge(j: &Judged<'_>) -> Result<Run> {
         base: Some(j.base.to_owned()),
         ..Args::default()
     };
-    let (verify, _) =
-        crate::verify_report(j.worktree, &verify_args, false, crate::VerifyMode::Full)?;
+    let (verify, _) = crate::verify_report(
+        j.worktree,
+        &verify_args,
+        false,
+        crate::VerifyMode::Full,
+        None,
+    )?;
     drop(guard);
     let after_checks = RepoState::capture(j.root);
     let outside = j.before.changes(&after_checks, j.branch);

@@ -651,6 +651,13 @@
               "what": {
                 "description": "The test's suite path and name, the assertion's source with white space squeezed, or the suppression's comment or attribute with its key.",
                 "type": "string"
+              },
+              "evidence": {
+                "description": "What running the base's version of this file's tests on the head's code showed (ADR 0089): each failing test and its reason. Evidence for a reviewer; it never adds, lowers or removes a finding. Absent when there is none.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -710,6 +717,36 @@
               "description": "The people whose latest review approved that commit, other than its author, with write access.",
               "type": "array",
               "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "oldTests": {
+          "description": "Each run of a test step with the base's test files, conftest, snapshots and runner config on the head's code (ADR 0089), when the guard had an expected-changed, snapshot-changed or assertion finding in a test file the base has. Report only. Absent when none ran.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["step", "status", "files", "detail"],
+            "properties": {
+              "step": {
+                "description": "The step, as verify names it.",
+                "type": "string"
+              },
+              "status": {
+                "description": "failed (a test of those files failed on the head's code), passed (they passed; never lowers a finding), not-judged (the run could not tell).",
+                "enum": ["failed", "passed", "not-judged"]
+              },
+              "files": {
+                "description": "The files taken from the base commit.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "detail": {
+                "description": "What happened, in a sentence.",
                 "type": "string"
               }
             }
