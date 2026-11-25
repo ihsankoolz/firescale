@@ -738,6 +738,43 @@ fn unlink_dir(link: &Path) {
     }
 }
 
+/// The build folder that the base runs of one repo share (ADR 0081):
+/// `firescale-base-target/<repo key>` in the temp folder. Cargo gets it as
+/// `CARGO_TARGET_DIR`, so a second base run reuses what the first built.
+/// Never the head's own `target/`, and never inside the repo.
+#[must_use]
+pub fn base_cargo_target(head_root: &Path) -> PathBuf {
+    std::env::temp_dir()
+        .join("firescale-base-target")
+        .join(crate::runs::repo_key(head_root))
+}
+
+/// The folders of a worktree where cargo would put its `target` without
+/// `CARGO_TARGET_DIR`: the root and each Rust project that has a
+/// `Cargo.toml`, leaving out one below another of them (a workspace
+/// member builds into its workspace's folder). Repo-relative, `.` for the
+/// root. Empty for a repo with no Rust.
+fn cargo_folders(root: &Path, plan: &VerifyPlan) -> Vec<String> {
+    let mut folders: Vec<String> = std::iter::once(".".to_owned())
+        .chain(
+            plan.projects
+                .iter()
+                .filter(|project| project.kind.as_deref() == Some("rust"))
+                .map(|project| project.root.clone()),
+        )
+        .filter(|folder| folder_of(root, Some(folder)).join("Cargo.toml").is_file())
+        .collect();
+    folders.sort();
+    folders.dedup();
+    let kept: Vec<String> = folders.clone();
+    folders.retain(|folder| {
+        !kept.iter().any(|other| {
+            other != folder && (other == "." || folder.starts_with(&format!("{other}/")))
+        })
+    });
+    folders
+}
+
 /// The ignored dependency folders that are linked from the head.
 const DEPENDENCY_FOLDERS: [&str; 3] = ["node_modules", ".venv", "venv"];
 
@@ -1068,13 +1105,20 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         .map(|(path, hash)| format!("{path}:{hash}"))
         .collect::<Vec<_>>()
         .join(",");
-    let environment = match &run.options.config.base_install {
+    let cargo = cargo_folders(run.root, run.plan);
+    let mut environment = match &run.options.config.base_install {
         Some(install) => format!("install={install};env={env_part}"),
         None => format!("links={};env={env_part}", links.join(",")),
     };
+    // A base result built with the kept build folder is not one built from
+    // nothing: it only adds to the key (ADR 0081).
+    if !cargo.is_empty() {
+        environment.push_str(&format!(";cargo-target={}", cargo.join(",")));
+    }
     let links = WorktreeSetup {
         folders: links,
         env_files: envs.into_iter().map(|(path, _)| path).collect(),
+        cargo_folders: cargo,
     };
 
     // 1. What each step's base result is, where it is known without a run.
@@ -1543,6 +1587,8 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
 struct WorktreeSetup {
     folders: Vec<String>,
     env_files: Vec<String>,
+    /// Where `target` is linked to the kept build folder (ADR 0081).
+    cargo_folders: Vec<String>,
 }
 
 /// Gives a worktree its dependencies: the head's dependency folders linked
@@ -1570,6 +1616,23 @@ fn prepare_worktree(
             not_judged = Some(format!(
                 "the head's {folder} could not be linked into the {which} worktree"
             ));
+        }
+    }
+    // A Rust repo's build folder, kept from one base run to the next (ADR
+    // 0081). The base steps get it as CARGO_TARGET_DIR; `target` is linked
+    // to it where cargo would have made it, so a step that runs a built
+    // binary by its path (`target/debug/<name>`) finds it. A link that
+    // cannot be made, or a `target` the commit tracks, is left alone: cargo
+    // still builds into the kept folder.
+    if !links.cargo_folders.is_empty() {
+        let shared = base_cargo_target(run.root);
+        if fs::create_dir_all(&shared).is_ok() {
+            for folder in &links.cargo_folders {
+                let _ = worktree.link(
+                    &shared,
+                    &folder_of(&worktree.root, Some(folder)).join("target"),
+                );
+            }
         }
     }
     // The head's ignored env files, which tests read (ADR 0043). Where the
