@@ -68,6 +68,18 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **Decided on your behalf:** its time is `verify.baseBudget`; a Rust file with its tests beside the code is not judged; runner config read from `pyproject.toml`/`package.json` is not taken from the base.
 - **See it:** `fscale verify` on a branch that changes an expected value and the code together: the finding gains `evidence:` lines.
 
+**Track B: what changes for a user, and for the course project**
+
+Each with the command that shows it. None of it is released: it reaches the course project with the next version.
+
+- **The stop hook says when it gave up, and what the agent said.** After three blocks, Claude Code and Codex show `verify still fails after 3 attempts` and the agent's last message (ADR 0087). See it: the next time an agent is let go on a failing branch; or by hand, as in pull request 6 above.
+- **The stop hook has a time limit, and doctor warns when the suite is longer** (ADR 0083). See it: `fscale hooks install --agent claude` (prints the limit), `fscale doctor` (`Agent hooks`).
+- **An agent may stop and say a test is wrong** (ADR 0084): the AGENTS.md block and the block message say so. See it: `fscale sync --check` (the course project's block is out of date until `fscale sync`).
+- **Doctor checks every program the verify plan starts** (ADR 0085). See it: `fscale doctor`.
+- **New tamper findings, none of which fail verify on a laptop:** a test script or `conftest.py` made unable to fail, `runner-weakened`, report only (ADR 0086); an assertion moved under an `if`, swallowed by a `try`, or made always true, `assertion-weakened`, needs a person's approval in CI when the guard is `enforced` (ADR 0088). See it: `fscale tamper --base main` on a branch.
+- **Evidence from the base's tests on the new code** (ADR 0089): on a finding of a changed expected value, snapshot or assertion, verify runs the old test file against the new code once and lists the failing tests under the finding. It costs one more test run when there is such a finding, never fails verify, and says `not judged` when it cannot tell. See it: `fscale verify` on a branch that changes code and its test's expected value together.
+- **On the course project**: expect `fscale sync --check` to fail until `fscale sync` is run (ADR 0084); a branch whose test edits hit the guard runs its pytest step once more in a worktree (ADR 0089), within `verify.baseBudget`.
+
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
 Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.
