@@ -187,6 +187,17 @@ Build idea 14, first step. Run of 2026-11-25, on the laptop (macOS), in its own 
 - **Decided on your behalf:** the wording; schema version 9 rather than a fake last time; the hint does nothing without `--budget` (no slow-step line).
 - **Failing test first:** `packages/cli/src/duration-hint.test.ts`, 12 of 12 failed before the change (the key was unknown).
 
+**Pull request 12: a kept build folder for Rust base runs (ADR 0081)**
+
+Build idea 10. Measured first, on the laptop, a scratch clone whose only step was `cargo test --workspace`.
+
+- **Numbers:** the base run took **52.7 s**, then **59.1 s**: the second rebuilt from scratch (a new worktree has an empty `target/`). So the folder was built.
+- **What changed:** base steps of a repo with a `Cargo.toml` get `CARGO_TARGET_DIR=firescale-base-target/<repo key>` in the temp folder, the same for every base run, and the worktree's `target` is a link to it (this repo's Vitest base run reads `target/debug/fscale`). Never the head's `target/`. The kept base result's key gains a part; it only adds.
+- **What it gains:** cargo reuses the dependencies (57 of 61 units fresh) and builds the repo's own 4 crates again (their files are newer). A build-only step went from 13.8 s to 11.3–12.8 s here; most of the 53–60 s is the tests running.
+- **Needs your decision:** a step that reads `target/` without building could see an older base run's build, and so read `pre-existing` where it blocked before. A step that builds first is not affected. ADR 0081 has it.
+- **Not done:** pruning (about 2 GB for this repo), other build folders.
+- **Failing test first:** `packages/cli/src/rust-base-target.test.ts`, 3 of 4 failed on `main`; the fourth (no Rust) is a guard.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.
