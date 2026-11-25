@@ -25,10 +25,10 @@ use crate::progress::{format_duration, format_limit, Progress, DEFAULT_HEARTBEAT
 use crate::runs::{RunRecord, RunningStep};
 use crate::setup::{locked_install, refused_service, service_down, setup_problem, SetupProblem};
 use crate::stepcache::{format_iso, format_time, now_secs, Entry, StepCache};
-use crate::steptimes::{Outcome, StepTimes};
+use crate::steptimes::{Known, Outcome, StepTimes};
 
 /// Version of the `fscale verify --json` format.
-pub const VERIFY_SCHEMA_VERSION: u32 = 8;
+pub const VERIFY_SCHEMA_VERSION: u32 = 9;
 
 /// Errors with no test passed and none failed before a test step is stopped
 /// as likely setup, by default (ADR 0035).
@@ -169,6 +169,11 @@ pub struct VerifyConfig {
     pub project_timeouts: BTreeMap<String, ProjectTimeouts>,
     /// Inputs named per project, keyed by the project's folder (ADR 0076).
     pub project_inputs: BTreeMap<String, ProjectInputs>,
+    /// `verify.projects.<folder>.<step>.expected`: how long a step is
+    /// expected to take, keyed by the project's folder, then the step.
+    /// `--budget` uses it only when no time is kept for the step (ADR 0078,
+    /// addendum).
+    pub project_expected: BTreeMap<String, BTreeMap<String, Duration>>,
     /// `verify.ci: false`: do not set `CI=1` for the commands.
     pub no_ci_variable: bool,
     /// `verify.stopWhenServiceDown: false`: a step whose output shows that
@@ -198,6 +203,14 @@ pub struct VerifyConfig {
 }
 
 impl VerifyConfig {
+    /// How long the config says a project's step is expected to take. `None`
+    /// for the repo root's own steps, which cannot have one.
+    #[must_use]
+    pub fn expected_for(&self, project: Option<&str>, step: &str) -> Option<Duration> {
+        let folder = project?;
+        self.project_expected.get(folder)?.get(step).copied()
+    }
+
     /// The inputs the config names for a step of a project: the project's
     /// own and the step's, sorted, each once (ADR 0076).
     #[must_use]
@@ -1250,6 +1263,11 @@ pub struct StepReport {
     /// stopped or timed out), so the step takes at least that long.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_known_finished: Option<bool>,
+    /// For a step whose status is `over-budget` and that has no kept time:
+    /// how long its project's config says it is expected to take
+    /// (`verify.projects.<folder>.<step>.expected`, ADR 0078, addendum).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_ms: Option<u64>,
     /// For a lint step whose command fscale guessed and the repo does not
     /// declare: why it is a guess. Such a step never fails the run; when
     /// it does not pass, its status is `report-only` (ADR 0070).
@@ -1346,10 +1364,17 @@ pub struct NotRunStep {
     pub project: Option<String>,
     /// `over the budget of 30m: it took 1h 40m when it last ran`.
     pub reason: String,
-    /// How long it took the last time it ran, or ran at least.
-    pub last_known_ms: u64,
-    /// False when that run did not finish.
-    pub last_known_finished: bool,
+    /// How long it took the last time it ran, or ran at least. Absent when
+    /// no time is kept and the step was left out for its expected time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_known_ms: Option<u64>,
+    /// False when that run did not finish. With `last_known_ms`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_known_finished: Option<bool>,
+    /// With no kept time: how long the config says the step is expected to
+    /// take (ADR 0078, addendum).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_ms: Option<u64>,
 }
 
 /// A step that was skipped because no command was found.
@@ -2252,6 +2277,69 @@ fn environment(command: &mut Command, config: &VerifyConfig, base_run: bool) {
     }
 }
 
+/// What `--budget` judges a step by: the time kept for it on this machine
+/// (ADR 0057), or, when none is kept, the time its project's config says
+/// to expect (ADR 0078, addendum). A kept time always wins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BudgetTime {
+    Kept(Known),
+    Expected { duration: Duration, key: String },
+}
+
+impl BudgetTime {
+    /// From what `StepTimes::last` gave: a kept time, or `None` when the
+    /// file was read and holds none for the step. A file that could not be
+    /// read is not "no kept time", so the caller does not ask then.
+    fn of(
+        kept: Option<Known>,
+        config: &VerifyConfig,
+        project: Option<&str>,
+        step: &str,
+    ) -> Option<Self> {
+        match kept {
+            Some(known) => Some(Self::Kept(known)),
+            None => config
+                .expected_for(project, step)
+                .map(|duration| Self::Expected {
+                    duration,
+                    key: expected_key(project.unwrap_or_default(), step),
+                }),
+        }
+    }
+
+    fn duration(&self) -> Duration {
+        match self {
+            Self::Kept(known) => known.duration,
+            Self::Expected { duration, .. } => *duration,
+        }
+    }
+
+    /// `it took 1h 40m when it last ran`, or `it is expected to take 1h 40m
+    /// (verify.projects["api"].test.expected) and has no kept time`.
+    fn describe(&self) -> String {
+        match self {
+            Self::Kept(known) => known.describe(),
+            Self::Expected { duration, key } => expected_said(*duration, key),
+        }
+    }
+}
+
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The config key of a project step's expected time.
+fn expected_key(project: &str, step: &str) -> String {
+    format!("verify.projects[\"{project}\"].{step}.expected")
+}
+
+fn expected_said(duration: Duration, key: &str) -> String {
+    format!(
+        "it is expected to take {} ({key}) and has no kept time",
+        format_duration(duration)
+    )
+}
+
 /// Runs one command through the platform shell, in the unit's folder, with
 /// no input and a time limit, and reports how it went. A failure whose
 /// output shows an environment that is not set up is reported as
@@ -2282,25 +2370,35 @@ fn run_step(
     // long is stopped (ADR 0043).
     let idle = options.config.idle_for(project, name);
     // A step that was slow the last time is announced (ADR 0057).
-    let known = options.times.and_then(|times| {
-        times.last(project, name, command).unwrap_or_else(|error| {
+    let kept = options.times.map(|times| {
+        times.last(project, name, command).map_err(|error| {
             // Said, not hidden: with --budget this step would have been
             // left out if its kept time were over the budget.
             options.say(&format!(
                 "{place}: {error}, so how long this step took the last time is not known: it runs"
             ));
-            None
         })
     });
-    // A step known to take longer than the budget is not started. Nothing
-    // is kept about it: no pass, no time (ADR 0057).
-    if let (Some(budget), Some(known)) = (options.budget, known) {
-        if known.duration > budget {
+    let known = kept.and_then(|kept| kept.ok().flatten());
+    // A step known, or expected with no kept time, to take longer than the
+    // budget is not started. Nothing is kept about it: no pass, no time
+    // (ADR 0057). A file of kept times that could not be read is not "no
+    // kept time": the expected time is not used then.
+    let judged = match (options.budget, kept) {
+        (Some(_), Some(Ok(kept))) => BudgetTime::of(kept, options.config, project, name),
+        _ => None,
+    };
+    if let (Some(budget), Some(judged)) = (options.budget, judged) {
+        if judged.duration() > budget {
             let limit = format_limit(budget);
             options.say(&format!(
                 "{place}: NOT RUN: {}, and the budget is {limit} (--budget)",
-                known.describe()
+                judged.describe()
             ));
+            let (last_known, expected) = match &judged {
+                BudgetTime::Kept(known) => (Some(*known), None),
+                BudgetTime::Expected { duration, .. } => (None, Some(*duration)),
+            };
             return Ok(StepReport {
                 name: name.to_owned(),
                 project: project.map(str::to_owned),
@@ -2309,7 +2407,7 @@ fn run_step(
                 command: Some(command.to_owned()),
                 exit_code: None,
                 duration_ms: 0,
-                detail: format!("over the budget of {limit}: {}", known.describe()),
+                detail: format!("over the budget of {limit}: {}", judged.describe()),
                 output_tail: Vec::new(),
                 fix: None,
                 timeout_ms: None,
@@ -2326,8 +2424,9 @@ fn run_step(
                 not_cached: None,
                 ran_again: None,
                 estimate: None,
-                last_known_ms: Some(known.millis()),
-                last_known_finished: Some(known.finished),
+                last_known_ms: last_known.map(|known| known.millis()),
+                last_known_finished: last_known.map(|known| known.finished),
+                expected_ms: expected.map(millis),
                 report_only: None,
             });
         }
@@ -2492,6 +2591,7 @@ fn run_step(
         estimate: None,
         last_known_ms: None,
         last_known_finished: None,
+        expected_ms: None,
         report_only: None,
     };
     let text = || {
@@ -2947,6 +3047,7 @@ fn run_unit(
                 estimate: None,
                 last_known_ms: None,
                 last_known_finished: None,
+                expected_ms: None,
                 report_only: None,
             })
             .collect());
@@ -2981,6 +3082,7 @@ fn run_unit(
             estimate: None,
             last_known_ms: None,
             last_known_finished: None,
+            expected_ms: None,
             report_only: None,
         };
         let report = match planned {
@@ -3244,6 +3346,7 @@ fn cached_or_run(
                 estimate: None,
                 last_known_ms: None,
                 last_known_finished: None,
+                expected_ms: None,
                 report_only: None,
         });
     }
@@ -3351,6 +3454,7 @@ pub fn run_verify_with(
         estimate: None,
         last_known_ms: None,
         last_known_finished: None,
+        expected_ms: None,
         report_only: None,
     }];
     let check_failed = !check.ok && !options.every_step;
@@ -3483,8 +3587,9 @@ pub fn run_verify_with(
             step: step.name.clone(),
             project: step.project.clone(),
             reason: step.detail.clone(),
-            last_known_ms: step.last_known_ms.unwrap_or_default(),
-            last_known_finished: step.last_known_finished.unwrap_or_default(),
+            last_known_ms: step.last_known_ms,
+            last_known_finished: step.last_known_finished,
+            expected_ms: step.expected_ms,
         })
         .collect();
     let warnings = match skipped.first() {
@@ -3660,6 +3765,7 @@ pub fn stopped_in_check(version: &str, command: &str, duration_ms: u64) -> Verif
             estimate: None,
             last_known_ms: None,
             last_known_finished: None,
+            expected_ms: None,
             report_only: None,
         }],
         skipped: Vec::new(),
@@ -4082,7 +4188,12 @@ fn affected_report(plan: &VerifyPlan) -> Option<AffectedReport> {
 /// dry run does not read the step cache, so it says that a kept pass there
 /// would be taken first.
 #[must_use]
-pub fn format_budget_plan(plan: &VerifyPlan, times: &StepTimes, budget: Duration) -> String {
+pub fn format_budget_plan(
+    plan: &VerifyPlan,
+    config: &VerifyConfig,
+    times: &StepTimes,
+    budget: Duration,
+) -> String {
     let limit = format_limit(budget);
     let runs =
         |project: Option<&ProjectPlan>| plan.affected.as_ref().is_none_or(|a| a.runs(project));
@@ -4106,12 +4217,13 @@ pub fn format_budget_plan(plan: &VerifyPlan, times: &StepTimes, budget: Duration
                     );
                 }
             };
-            if let Some(known) = known.filter(|known| known.duration > budget) {
+            let judged = BudgetTime::of(known, config, project, name);
+            if let Some(judged) = judged.filter(|judged| judged.duration() > budget) {
                 let place = match project {
                     Some(project) => format!("{name} in {}", place_name(project)),
                     None => name.clone(),
                 };
-                left_out.push(format!("  {place}: {}\n", known.describe()));
+                left_out.push(format!("  {place}: {}\n", judged.describe()));
             }
         }
     }
@@ -4847,22 +4959,36 @@ pub fn format_verify_human(report: &VerifyReport) -> String {
         .iter()
         .filter(|step| step.status == StepStatus::OverBudget)
     {
-        let known = crate::steptimes::Known {
-            duration: Duration::from_millis(step.last_known_ms.unwrap_or_default()),
-            finished: step.last_known_finished.unwrap_or_default(),
-        };
         let place = step.project.as_ref().map_or_else(String::new, |project| {
             format!(" in {}", place_name(project))
         });
         // Running the command by hand leaves the kept time as it is, so the
         // paragraph says what does change it (ADR 0057).
+        let (why, after) = match (step.expected_ms, &step.project) {
+            (Some(expected), Some(project)) => (
+                expected_said(
+                    Duration::from_millis(expected),
+                    &expected_key(project, &step.name),
+                ),
+                "Once it passes in a run of fscale verify without --budget, its kept time is used in place of the expected one.".to_owned(),
+            ),
+            _ => (
+                Known {
+                    duration: Duration::from_millis(step.last_known_ms.unwrap_or_default()),
+                    finished: step.last_known_finished.unwrap_or_default(),
+                }
+                .describe(),
+                format!(
+                    "Its kept time comes down only when it passes in a run of fscale verify without --budget; running the command by hand changes nothing. To forget every kept time, delete .firescale/{}.",
+                    crate::steptimes::STEP_TIMES_FILE
+                ),
+            ),
+        };
         out.push_str(&format!(
-            "\nNot run: {} was not started, because {} and the budget is {} (--budget). This run says nothing about it. To run it{place}: {}. Its kept time comes down only when it passes in a run of fscale verify without --budget; running the command by hand changes nothing. To forget every kept time, delete .firescale/{}.\n",
+            "\nNot run: {} was not started, because {why} and the budget is {} (--budget). This run says nothing about it. To run it{place}: {}. {after}\n",
             step_place(step),
-            known.describe(),
             format_limit(Duration::from_millis(report.budget_ms.unwrap_or_default())),
             step.command.as_deref().unwrap_or_default(),
-            crate::steptimes::STEP_TIMES_FILE
         ));
     }
     if report.result == VerifyResult::Stopped {
@@ -5656,8 +5782,9 @@ mod tests {
                 step: "lint".to_owned(),
                 project: None,
                 reason: "over the budget of 30m: it took 1h 40m when it last ran".to_owned(),
-                last_known_ms: 100 * 60 * 1000,
-                last_known_finished: true,
+                last_known_ms: Some(100 * 60 * 1000),
+                last_known_finished: Some(true),
+                expected_ms: None,
             }]
         );
         // The step after it still ran: a step that is left out blocks nothing.
@@ -6658,7 +6785,7 @@ mod tests {
         let json = format_verify_json(&report);
         assert!(json.contains("\"result\": \"setup-needed\""), "{json}");
         assert!(json.contains("\"status\": \"setup-needed\""), "{json}");
-        assert!(json.contains("\"schemaVersion\": 8"), "{json}");
+        assert!(json.contains("\"schemaVersion\": 9"), "{json}");
     }
 
     #[test]

@@ -129,6 +129,10 @@ fn shared_parts(config: &VerifyConfig) -> BTreeMap<String, String> {
         step_timeouts: _,
         project_timeouts: _,
         base_budget: _,
+        // Out: how long a step is expected to take. Only --budget reads
+        // it, to leave a step out; a step left out is never kept (ADR
+        // 0078, addendum).
+        project_expected: _,
         // Out: which passing steps are judged on the base. The label is
         // worked out again in every run.
         label_fixed: _,
@@ -782,6 +786,12 @@ mod tests {
                 project(json!({ "test": { "timeout": "2h" } })),
                 Side::Out,
             ),
+            (
+                "verify.projects.<folder>.<step>.expected",
+                project(json!({ "test": { "expected": "1h" } })),
+                project(json!({ "test": { "expected": "2h" } })),
+                Side::Out,
+            ),
             // A top-level key of a newer firescale, in the base commit.
             (
                 "(unknown)",
@@ -869,6 +879,7 @@ mod tests {
             step_timeouts: _,
             project_timeouts: _,
             project_inputs: _,
+            project_expected: _,
             no_ci_variable: _,
             keep_running_when_service_down: _,
             stop_after_errors: _,
@@ -910,6 +921,8 @@ mod tests {
             // project_inputs: all, steps
             "verify.projects.<folder>.inputs",
             "verify.projects.<folder>.<step>.inputs",
+            // project_expected
+            "verify.projects.<folder>.<step>.expected",
             // no_ci_variable, keep_running_when_service_down, stop_after_errors
             "verify.ci",
             "verify.stopWhenServiceDown",

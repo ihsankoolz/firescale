@@ -52,3 +52,40 @@ Written first and seen failing in WSL, three of three (the plan's order; no unit
 - `with_jobs_the_changed_unit_is_among_the_first_started_and_the_report_keeps_its_order`
 - `the_units_that_hold_a_changed_file_are_known_to_the_plan` (the course project's shape)
 - After the review, seen failing first: `the_repo_root_s_own_steps_still_start_before_any_project`.
+
+## Addendum: an expected time for a step with no kept time (build idea 14, first step)
+
+Added 2026-11-25, Track A, item 11 (the owner's brief: this addendum, no ADR number of its own). Adds to ADR 0057 (`--budget`).
+
+### Context
+
+`docs/research/research-build-tools.md`, idea 14. Kept times live in `.firescale/step-times.json`, on one machine. A step with no kept time always runs under `--budget`, so a fresh clone or a fresh worktree gets no help from the budget on its first run: the course project's 1h 40m suite runs.
+
+### Decision
+
+**`verify.projects.<folder>.<step>.expected`: how long the step is expected to take. `--budget` uses it only when no time is kept for the step. A kept time always wins.**
+
+- Written as the time limits are: `"1h 40m"`, `"90s"`, or a number of seconds. `false`, `0`, and any other value are config errors.
+- Per project only. `verify.<step>.expected` is an error that names the per-project key; the repo root's own steps have none.
+- A kept time wins, longer or shorter. Once the step passes in a run without `--budget`, its kept time is what `--budget` reads.
+- **A file of kept times that could not be read is not "no kept time".** The expected time is not used then; the step runs and the run says so, as before (ADR 0057).
+- Only `--budget` reads it: no slow-step line, no change to the base run's order (ADR 0062), no time limit. It is in no cache key (ADR 0058's table has its row: out).
+- A step left out for its expected time is reported as any step `--budget` left out, with the setting named: `over the budget of 30m: it is expected to take 1h 40m (verify.projects["backend/ledger_service"].test.expected) and has no kept time`. The "Not run" paragraph ends with `Once it passes in a run of fscale verify without --budget, its kept time is used in place of the expected one.` The dry run lists it.
+- **Verify's JSON is schema version 9.** Such a step has `expectedMs`, in `steps` and in `notRun`, and no `lastKnownMs` or `lastKnownFinished`: an expected time is not a time that was measured. In `notRun` an entry has either `lastKnownMs` and `lastKnownFinished`, or `expectedMs`. That makes two fields of `notRun` optional, which is the breaking part. Six places pinned version 8 and now say 9: `slow-steps.test.ts`, `python-env.test.ts`, `verify-run.test.ts`, `blame.test.ts`, the snapshot in `verify.test.ts.snap`, and `a_missing_module_is_setup_needed_with_the_install_command` in `verify.rs`.
+
+`BudgetTime`, `expected_key` in `crates/core/src/verify.rs`; `VerifyConfig::expected_for` and `project_expected`; `parse_expected` in `crates/core/src/config.rs`; `expected` in `VerifyProjectStepSetting`, `packages/sdk/src/types.ts`.
+
+### Consequences
+
+- A fresh clone with a committed hint leaves the slow step out of its first `--budget` run. The run is `PARTIAL`, never `OK`, and fails with `verify.failOnSkipped`, as for any step `--budget` leaves out. Without `--budget`, in CI and in the stop hook, nothing changes.
+- A stale hint (the suite is now quick) leaves a step out until the step passes once in a run without `--budget`. It never makes a pass: the run is already `PARTIAL`.
+
+### Not done
+
+- The second half of idea 14: a note when a step's time limit is more than ten times its kept time.
+- `fscale doctor`'s check of the stop hook's time limit (ADR 0083) reads kept times only, not expected ones.
+- `fscale adopt` and `init` write no expected time.
+
+### Tests
+
+`packages/cli/src/duration-hint.test.ts`, written first and seen failing: 12 of 12 (the key was unknown, so every run stopped at the config with exit 2). The hint leaves a step out, names its key, and never reads OK; the same in JSON with `expectedMs` and no `lastKnownMs`, checked against the schema; the dry run lists it; a hint within the budget runs; without `--budget` nothing changes; a kept time within the budget wins over a long hint; a kept time over the budget wins over a short hint; after a pass the kept time is used; `false`, `0` and `"soon"` are refused; `verify.test.expected` is refused. A row in `configkey.rs`: a change of `expected` affects no step.

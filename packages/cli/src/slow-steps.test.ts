@@ -530,7 +530,7 @@ describe('verify --budget leaves out the steps that are known to take longer', (
     const result = await runCli(['verify', '--budget=1h', '--json'], repo.root, NOT_CI);
     expect(result.code).toBe(EXIT_OK);
     const report = await budgetReport(result.stdout);
-    expect(report.schemaVersion).toBe(8);
+    expect(report.schemaVersion).toBe(9);
     expect([report.result, report.ok]).toEqual(['partial', true]);
     expect([report.stepsTotal, report.stepsRun]).toEqual([3, 2]);
     expect(report.budgetMs).toBe(60 * MINUTE);
