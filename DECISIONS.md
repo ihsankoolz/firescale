@@ -47,6 +47,12 @@ Seven pull requests from `docs/research/research-verification.md`, one idea each
 - **From the fresh review, fixed:** a hook over several lines (as Black writes it) or in a plugin class was not read; a status passed as a keyword or printed counted as set; a renamed script counted as new; the `fscale tamper` headline and the heading under `evaluated` spoke of approval and of failing. 6 tests from the review, 5 seen failing first (the sixth guards that a mixed change still blocks). Numbers unchanged. **Not done:** a bare `|| exit` still counts, as in CI's shared matcher (narrowing it would drop `ci-weakened` findings); the `conftest.py` reader reads column 0 only (a docstring line can be a false finding; an exit under a top-level `if` is missed).
 - **What this run's author saw:** the 90 missed titles of the second corpus (ADR 0082). The patterns were named in the task before that corpus existed (ADR 0086).
 
+**Pull request 6: the agent's explanation when the loop guard lets it go (the owner's decision on ADR 0084, ADR 0087)**
+
+- **Blocking is unchanged**, as decided. When the guard lets the agent go after the cap, Claude Code and Codex now get `{"systemMessage": ...}` on stdout: that verify still fails, and `The agent's last message:` with `last_assistant_message` (first 4000 characters). Both agents document the field as shown to the person. Cursor: unchanged (`{}`), as its stop hook has neither a last message nor a field for the person.
+- **See it:** a failing repo, `FSCALE_HOOK_MAX_BLOCKS=1`, then `echo '{"session_id":"s","stop_hook_active":true,"last_assistant_message":"test_x is wrong"}' | fscale hooks run --agent claude` twice.
+- **Failing test first:** `hooks.test.ts`, seen failing on `main`.
+
 ## Track A — cache and verify (the run of 2026-11-18, after 0.5.4)
 
 Twelve ideas from `docs/research/research-build-tools.md` and `docs/research/research-verification.md`, one pull request each, in the owner's order. Only the first step each idea names is built; the later steps are in each ADR under "Later". Another session worked on Track B at the same time. Built and tested in WSL on the owner's laptop, in a worktree of its own (`C:\Users\ihsan\fs-track-a`, Linux clone `~/fs-a`); the course project is not touched. The version is unchanged and no tag was pushed.
