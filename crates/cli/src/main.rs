@@ -103,7 +103,8 @@ Options:
   --base <ref>     With --affected: also count commits since the merge base with <ref>;
                    verify, tamper: compare with the merge base with <ref>
   --pr-base        verify, tamper, in GitHub Actions: the base from the pull request
-                   event GitHub gives, never from refs in the clone
+                   event GitHub gives, never from refs in the clone; verify also
+                   reads a merge queue's merge_group event
   --head <commit>  tamper: compare <commit> (read from git, nothing checked out)
                    instead of the working tree
   --approvals <file>

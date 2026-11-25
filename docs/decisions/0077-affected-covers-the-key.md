@@ -89,3 +89,24 @@ The review of the ambiguous-import change found that its first form could narrow
 - `the_roots_own_steps_run_when_a_project_below_the_root_changed`: the fix by itself.
 - The two `known_gap_` tests.
 - Ambiguous imports, in `crates/core/src/graph.rs`, written first: `a_python_import_that_two_folders_above_could_hold_is_an_edge_to_each_with_a_warning` and `a_python_import_that_a_folder_above_and_another_project_could_hold_is_an_edge_to_each` were seen failing in WSL (no edge to the second place). `a_python_import_with_one_place_or_in_the_importer_s_own_code_has_no_warning` passed before and after: it guards what must not change. After the review: `a_second_place_that_is_no_node_stays_a_file_of_no_project` and `a_package_of_the_root_project_found_from_above_is_one_place`, both seen failing on the first form.
+
+## The owner's decisions (2026-11-25, Track A, item 13)
+
+**Gap 2 is closed by widening.** With a project at the repo root, a file in no project below it that no narrow shared node holds (and that is not inert) affects every project, as every project's key holds it. Before, it affected the root project only. `affected_except` in `crates/core/src/graph.rs`; its reason is the type `unowned-file` with the words `<file> is in no project below the repo root's project, and every project's key holds it`. A file a project copies or imports is still a shared node of that project, which takes it out of the other keys, so it still runs that project and the root's only.
+
+- Test first: `a_file_of_the_root_project_affects_the_projects_below_it_too` (it replaces `known_gap_a_file_of_the_root_project_is_in_the_keys_of_the_projects_below`) and the property `every_unit_whose_key_differs_is_affected_below_a_root_project`, with the gap-2 excuse taken out, both seen failing (`Some(false)` for the projects below).
+- **Existing tests that pinned the narrower behaviour, updated to the new one (a deliberate change, not a weakened test):**
+  - `an_image_a_project_imports_or_a_root_project_holds_is_not_inert` (`graph.rs`): an image in no project below a root project now runs `[".", "web"]`, not `["."]`, and sets `everything`, where it pinned `everything.is_none()`.
+  - `a_root_file_that_a_project_copies_affects_that_project_and_the_root_project` (`graph.rs`): `scripts/x.js` now runs `[".", "backend", "web"]`, not `["."]`. Its `package.json`, which backend's Dockerfile copies, still runs `[".", "backend"]`.
+- Consequences: in a repo with a project at the root and projects below it, a change to the root project's own code runs every project under `--affected` and in the stop hook. The course project has no project at the root: nothing changes there.
+
+**Gap 1 is kept.** Inert documents stay out of `--affected` (ADR 0034). The property test records it as its one known exception, with a comment naming ADR 0034 and this decision; `known_gap_a_document_below_the_root_is_in_the_keys_and_affects_nothing` still pins it.
+
+The property after the change:
+
+| Fixture                            | Keys compared | In the known exception (gap 1) | Broken |
+| ---------------------------------- | ------------- | ------------------------------ | ------ |
+| Course project                     | 355           | 7                              | 0      |
+| Workspace with a root project      | 60            | 7                              | 0      |
+| Projects below a plain root        | 173           | 13                             | 0      |
+| A root project with projects below | 175           | 5                              | 0      |
