@@ -71,6 +71,7 @@ async function repoWith(
     lint?: string;
     head?: Record<string, string>;
     verify?: Record<string, unknown>;
+    base?: Record<string, string>;
   } = {},
 ) {
   const repo = await fixtures.create({
@@ -88,10 +89,11 @@ async function repoWith(
       'src/cart.ts':
         'export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n',
       'src/cart.test.ts': cartTest(10),
-      // Fails on the head's code only; with SLOW_BASE_LINT, takes 3 s on
+      ...options.base,
+      // Fails on the head's code only; with a file `slow-base-lint`, takes 3 s on
       // the base commit.
       'lint.cjs':
-        "const fs = require('node:fs');\nif (process.env.FSCALE_BASE_RUN === '1' && process.env.SLOW_BASE_LINT) { const end = Date.now() + 3000; while (Date.now() < end) {} }\nprocess.exit(fs.readFileSync('src/cart.ts', 'utf8').includes('b, 1)') ? 1 : 0);\n",
+        "const fs = require('node:fs');\nif (process.env.FSCALE_BASE_RUN === '1' && fs.existsSync('slow-base-lint')) { const end = Date.now() + 3000; while (Date.now() < end) {} }\nprocess.exit(fs.readFileSync('src/cart.ts', 'utf8').includes('b, 1)') ? 1 : 0);\n",
     },
     track: 'no-git',
   });
@@ -232,11 +234,10 @@ describe('old tests, new code (ADR 0089)', () => {
     const { repo, env } = await repoWith('honest', {
       lint: 'node lint.cjs',
       verify: { baseBudget: '2s' },
+      // Lint takes 3 s on the base commit: the base run uses up the budget.
+      base: { 'slow-base-lint': '' },
     });
-    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, {
-      ...env,
-      SLOW_BASE_LINT: '1',
-    });
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
     const report = JSON.parse(result.stdout) as Report;
     const run = report.tamper?.oldTests?.[0];
     expect(run?.status).toBe('not-judged');
