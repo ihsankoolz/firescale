@@ -1,6 +1,6 @@
 # 0084 — A way out for agents: say which test is wrong, and stop
 
-Status: accepted (2026-11-18, Track B run). Amends ADR 0027 (the AGENTS.md block), and the stop hook's block message of ADR 0014 and ADR 0022. Verification idea 5, first step: wording only.
+Status: accepted (2026-11-18, Track B run). Amends ADR 0027 (the AGENTS.md block), and the stop hook's block message of ADR 0014 and ADR 0022. Verification idea 5, first step: wording only. Amended by ADR 0087 (the owner's decision: keep blocking; show the agent's explanation to the person when the guard lets it go).
 
 ## Context
 

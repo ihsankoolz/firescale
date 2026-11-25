@@ -36,8 +36,8 @@ use firescale_core::hooks::{
     block_summary, check_path, check_start, claude_hook_timeout, decide, default_bin,
     has_fscale_script, hook_command, hook_file_changes, hook_timeout_for, install_hook_with,
     installed_prefixes, launch_note, max_blocks_from_env, may_start, no_download, not_downloaded,
-    not_started, parse_hook_input, pinned_answer, pinned_version, probe_line, reply, start_verdict,
-    timeout_seconds, Agent, HookFileChanges, Installed, KeptTimeout, AGENTS,
+    not_started, parse_hook_input, pinned_answer, pinned_version, probe_line, reply_with,
+    start_verdict, timeout_seconds, Agent, HookFileChanges, Installed, KeptTimeout, AGENTS,
     CLAUDE_DEFAULT_TIMEOUT, MAX_HOOK_TIMEOUT,
 };
 use firescale_core::model::Status;
@@ -2439,7 +2439,13 @@ fn hooks(root: &Path, args: &Args, rest: &[String]) -> Result<Output> {
             };
             let max_blocks = max_blocks_from_env();
             let decision = decide(root, agent, &input, report.ok, max_blocks);
-            let answer = reply(agent, &decision, &block_summary(&report), max_blocks);
+            let answer = reply_with(
+                agent,
+                &decision,
+                &block_summary(&report),
+                max_blocks,
+                input.last_message.as_deref(),
+            );
             let mut notes = if answer.stderr.is_empty() {
                 Vec::new()
             } else {

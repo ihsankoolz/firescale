@@ -118,6 +118,7 @@ An agent that cannot fix a failure must not be held forever. The hook counts how
 
 - A failure adds one to the count and blocks the stop: "attempt 1 of 3".
 - After 3 blocks in a row the agent is allowed to stop, with a note that verify still fails. The count starts again.
+- When it lets the agent go, Claude Code and Codex show the person a `systemMessage`: that verify still fails, and the agent's last message (`last_assistant_message`, the first 4000 characters), so that an agent which said a test is wrong and stopped (ADR 0084) is heard. Cursor's stop hook has neither a last message nor a field for the person, so it shows nothing new (ADR 0087).
 - A pass resets the count. So does a stop attempt the agent marks as fresh (`stop_hook_active: false` from Claude Code and Codex, `loop_count: 0` from Cursor). An agent that says nothing either way is counted, so the cap always holds.
 - Cursor's own `loop_count` is used when it is higher than firescale's.
 - A count older than one hour is ignored.
