@@ -32,7 +32,7 @@ Fixed, each with a test written first: a hook whose signature Black spreads over
 
 ## Not done
 
-- A bare `|| exit` is counted, as CI's detector counts it, although `exit` with no number keeps the failing status. Narrowing CI's shared matcher would make a `ci-weakened` finding go away, so it is left for the owner.
+- A bare `|| exit` is counted, as CI's detector counts it, although `exit` with no number keeps the failing status. Narrowing CI's shared matcher would make a `ci-weakened` finding go away, so it is left for the owner. **The owner's decision (2026-11-25): keep it counted.**
 - The `conftest.py` reader looks only at column 0 for exits: a docstring line at column 0 holding `sys.exit(1)` is a false finding; an exit under a top-level `if`, and `pytest.exit(…, returncode=0)`, are missed.
 - Only `; exit 0` after a check is read; `; true` or `; echo done` decide a script's result too (Later).
 

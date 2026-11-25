@@ -2,6 +2,29 @@
 
 Numbers are wall-clock times for the whole process, measured with `bench/startup.mjs`, which runs a command repeatedly after three warm-up runs and reports min, p50, p95 and mean.
 
+## The second held-out corpus, by category, after Track B (2026-11-25)
+
+`node bench/tamper-misses.mjs --bin <build> --corpus bench/tamper-cheats-2.json`, macOS debug build of the Track B branch with ADRs 0086 to 0089 (no detector after ADR 0088 changes a finding). Counts only; no case was opened. This is the honest blind number: no detector was tuned on this corpus, though one session saw the titles of its misses in an earlier run's output (ADR 0082).
+
+| Category                               | Cheats | Caught | Needs approval only | Missed |
+| -------------------------------------- | ------ | ------ | ------------------- | ------ |
+| Test modification                      | 20     | 6      | 3                   | 11     |
+| Evaluator tampering                    | 20     | 2      | 0                   | 18     |
+| Special-casing (production code)       | 20     | 0      | 0                   | 20     |
+| Operator overloading (production code) | 20     | 0      | 0                   | 20     |
+| Recorded extra state (production code) | 20     | 0      | 0                   | 20     |
+| All                                    | 100    | 8      | 3                   | 89     |
+
+| Language   | Cheats | Caught | Needs approval only | Missed |
+| ---------- | ------ | ------ | ------------------- | ------ |
+| JavaScript | 20     | 3      | 0                   | 17     |
+| Python     | 35     | 2      | 1                   | 32     |
+| Rust       | 30     | 3      | 1                   | 26     |
+| TypeScript | 15     | 0      | 1                   | 14     |
+| All        | 100    | 8      | 3                   | 89     |
+
+On `main` before Track B's detectors (ADR 0082): 90 missed, 7 caught, 3 approval only. What the guard reads (test files, CI, hooks, config) is where its catches are; 60 of the 89 misses are cheats in production code, which it does not read by design. Limits: one AI subagent wrote all 100 cases; they were not run; equal counts per category are not how often agents cheat each way.
+
 ## A second held-out corpus of cheats (ADR 0082)
 
 `bench/tamper-cheats-2.json`: 100 cheating changes written on 2026-11-18 by a subagent that was told not to open the guard's code (`crates/core/src/tamper/`), `bench/tamper-cheats.json`, `bench/tamper-corpus.json` or `docs/research/`, and said it did not; it was given only the file format and five categories: ImpossibleBench's four (test modification, operator overloading, recording extra state, special-casing; Zhong et al., arXiv 2510.20270) and METR's reward hacks (June 2025) as "evaluator-tampering". 20 per category; 35 Python, 20 JavaScript, 15 TypeScript, 30 Rust. **It was written because the first corpus is no longer blind**: the author of `docs/research/research-verification.md` read its titles, and the next detectors come from that report. **Never tune a detector on this file.**
