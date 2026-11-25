@@ -353,6 +353,44 @@ pub fn judge(run: &Run<'_, '_>, tamper: &mut TamperReport) {
     tamper.old_tests = results;
 }
 
+/// True when `need` from `now` ends no later than `end` (always, with no
+/// end). Never panics, whatever the kept time (review of ADR 0090).
+fn fits(now: Instant, end: Option<Instant>, need: Duration) -> bool {
+    end.is_none_or(|end| now.checked_add(need).is_some_and(|done| done <= end))
+}
+
+/// A run's status and detail from its failing tests tied for sure to the
+/// base's files, and those that could not be tied. Only the sure ones make
+/// it `failed`; a run whose failures are all unsure says it cannot tell
+/// (review of ADR 0090).
+fn status_of(sure: usize, unsure: usize) -> (OldTestsStatus, String) {
+    let untied = if unsure == 0 {
+        String::new()
+    } else {
+        format!(
+            "; {unsure} more failing test{} cannot be tied to one file for sure",
+            if unsure == 1 { "" } else { "s" }
+        )
+    };
+    if sure == 0 {
+        return (
+            OldTestsStatus::NotJudged,
+            format!(
+                "{unsure} failing test{} cannot be tied to one file for sure, so this run cannot tell whether the base's tests of these files fail",
+                if unsure == 1 { "" } else { "s" }
+            ),
+        );
+    }
+    (
+        OldTestsStatus::Failed,
+        format!(
+            "{sure} test{} of the base's versions of these files fail{} on the head's code: the change needed different tests to pass{untied}",
+            if sure == 1 { "" } else { "s" },
+            if sure == 1 { "s" } else { "" }
+        ),
+    )
+}
+
 /// The kept time of a command, if one is kept and readable.
 fn kept(
     options: &RunOptions<'_>,
@@ -429,7 +467,7 @@ fn run_units(
             return;
         };
         let total = worktree + steps.iter().sum::<Duration>();
-        if Instant::now() + total > limit {
+        if !fits(Instant::now(), Some(limit), total) {
             all_not_judged(
                 results,
                 units,
@@ -441,8 +479,14 @@ fn run_units(
             return;
         }
     }
-    // Room for removing the worktree after the last step.
+    // Room for removing the worktree after the last step; setup and steps
+    // stop before it (review of ADR 0090).
     let reserve = worktree_kept.unwrap_or_default();
+    let step_deadline = deadline.map(|at| at.checked_sub(reserve).unwrap_or_else(Instant::now));
+    if blame::past(step_deadline) {
+        all_not_judged(results, units, out_of_time(budget_ends));
+        return;
+    }
     say("old tests, new code: running the base's versions of the changed test files on the head's code");
     let setting_up = Instant::now();
     let head = match run_git(root, &["rev-parse", "--verify", "HEAD"]) {
@@ -463,7 +507,7 @@ fn run_units(
             return;
         }
     };
-    if let Err(problem) = blame::overlay_head(root, &worktree.root, deadline, options.stop) {
+    if let Err(problem) = blame::overlay_head(root, &worktree.root, step_deadline, options.stop) {
         let why = problem.unwrap_or_else(|| out_of_time(budget_ends).to_owned());
         all_not_judged(
             results,
@@ -484,7 +528,7 @@ fn run_units(
             .collect(),
     };
     if let Some(problem) =
-        blame::prepare_worktree(root, options, &worktree, &links, deadline, say, "head")
+        blame::prepare_worktree(root, options, &worktree, &links, step_deadline, say, "head")
     {
         all_not_judged(results, units, &problem);
         return;
@@ -502,6 +546,10 @@ fn run_units(
             .cloned(),
     );
     for path in &taken {
+        if blame::past(step_deadline) {
+            all_not_judged(results, units, out_of_time(budget_ends));
+            return;
+        }
         if let Err(problem) = put_base_file(root, base, &worktree.root, path) {
             all_not_judged(
                 results,
@@ -513,7 +561,6 @@ fn run_units(
     }
     let set_up = setting_up.elapsed();
     // Each step stops early enough to remove the worktree in time.
-    let step_deadline = deadline.map(|at| at.checked_sub(reserve).unwrap_or(at));
 
     for unit in units.values() {
         let step = place(&unit.folder);
@@ -537,14 +584,14 @@ fn run_units(
             &unit.command,
         );
         if let (Some(known), Some(at)) = (known, step_deadline) {
-            if Instant::now() + known > at {
+            if !fits(Instant::now(), Some(at), known) {
                 results.push(not_judged(
                     &step,
                     unit.files.clone(),
                     format!(
                         "it took {} when it last ran, longer than the time left ({})",
                         crate::progress::format_duration(known),
-                        if blame::past(budget_ends.map(|end| end - known)) {
+                        if !fits(Instant::now(), budget_ends, known) {
                             "verify.baseBudget, which the base run shares"
                         } else {
                             "the stop hook's limit"
@@ -621,10 +668,16 @@ fn read_run(
             .map_or_else(String::new, |lines| format!(": {}", lines.join(" / ")));
         format!("{}{reason}", id.replace('\\', "/"))
     };
+    // What cargo could build each binary from, read once per run.
+    let index = if unit.runner == TestRunner::Cargo {
+        CargoIndex::of(root)
+    } else {
+        CargoIndex::default()
+    };
     let mut sure: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unsure: Vec<(String, String)> = Vec::new();
     for id in results.failed.iter().filter(|id| pertest::is_test(id)) {
-        match tie(root, &unit.folder, unit.runner, id, &unit.files) {
+        match tie(&index, &unit.folder, unit.runner, id, &unit.files) {
             Tie::File(file) => sure.entry(file).or_default().push(id.clone()),
             Tie::Unsure(why) => unsure.push((id.clone(), why)),
             Tie::Elsewhere => {}
@@ -659,25 +712,14 @@ fn read_run(
             finding.evidence.push(text.clone());
         }
     }
-    let named: usize = sure.values().map(Vec::len).sum::<usize>() + unsure.len();
-    if named > 0 {
-        let untied = if unsure.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "; {} of them cannot be tied to one file for sure",
-                unsure.len()
-            )
-        };
+    let tied: usize = sure.values().map(Vec::len).sum();
+    if tied + unsure.len() > 0 {
+        let (status, detail) = status_of(tied, unsure.len());
         return OldTests {
             step,
-            status: OldTestsStatus::Failed,
+            status,
             files: unit.files.clone(),
-            detail: format!(
-                "{named} test{} of the base's versions of these files fail{} on the head's code: the change needed different tests to pass{untied}",
-                if named == 1 { "" } else { "s" },
-                if named == 1 { "s" } else { "" }
-            ),
+            detail,
         };
     }
     if report.status == StepStatus::Failed {
@@ -691,7 +733,7 @@ fn read_run(
     // reassurance (ADR 0090): `ran-no-failure` is in JSON only.
     let collected = results.ran.iter().any(|id| {
         matches!(
-            tie(root, &unit.folder, unit.runner, id, &unit.files),
+            tie(&index, &unit.folder, unit.runner, id, &unit.files),
             Tie::File(_)
         )
     });
@@ -728,44 +770,92 @@ const SKIPPED_FOLDERS: [&str; 4] = ["target", "node_modules", ".git", ".firescal
 /// At most this many files are looked at for `cargo test`'s binaries.
 const MAX_FILES: usize = 50_000;
 
-/// Every file below `folder` of `root`, repo-relative, forward slashes,
-/// leaving out build and dependency folders.
-fn files_below(root: &Path, folder: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut stack = vec![(
-        blame::folder_of(root, Some(folder)),
-        if folder == "." {
-            String::new()
-        } else {
-            format!("{folder}/")
-        },
-    )];
-    while let Some((dir, prefix)) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if out.len() >= MAX_FILES {
-                return out;
-            }
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_dir() {
-                if !SKIPPED_FOLDERS.contains(&name.as_str()) {
-                    stack.push((entry.path(), format!("{prefix}{name}/")));
-                }
-            } else if kind.is_file() {
-                out.push(format!("{prefix}{name}"));
-            }
-        }
-    }
-    out
+/// What the repo's files say about the binaries `cargo test` builds, read
+/// once per run from the repo root (a workspace's step can run any crate's
+/// tests): its files, and every crate, library, binary and test target
+/// name, with `-` written `_`.
+#[derive(Debug, Default)]
+struct CargoIndex {
+    files: Vec<String>,
+    names: BTreeSet<String>,
+    /// More than [`MAX_FILES`] files: what is past them is not known, so no
+    /// tie is sure.
+    truncated: bool,
 }
 
-/// The name of the test binary cargo builds from `path`: `tests/cart.rs`
-/// and `tests/cart/main.rs` are `cart`; `-` is written `_`.
+impl CargoIndex {
+    fn of(root: &Path) -> Self {
+        let mut index = Self::default();
+        let mut stack = vec![(root.to_path_buf(), String::new())];
+        while let Some((dir, prefix)) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                if index.files.len() >= MAX_FILES {
+                    index.truncated = true;
+                    return index;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
+                    if !SKIPPED_FOLDERS.contains(&name.as_str()) {
+                        stack.push((entry.path(), format!("{prefix}{name}/")));
+                    }
+                } else if kind.is_file() {
+                    if name == "Cargo.toml" {
+                        if let Ok(text) = fs::read_to_string(entry.path()) {
+                            index.names.extend(target_names(&text));
+                        }
+                    }
+                    index.files.push(format!("{prefix}{name}"));
+                }
+            }
+        }
+        index
+    }
+}
+
+/// The `name` of each `[package]`, `[lib]`, `[[bin]]` and `[[test]]` of a
+/// `Cargo.toml`, with `-` written `_`. The value is read between its quotes,
+/// so a comment after it is left out.
+fn target_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut section = String::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            section = line.split('#').next().unwrap_or(line).trim().to_owned();
+            continue;
+        }
+        if !matches!(
+            section.as_str(),
+            "[package]" | "[lib]" | "[[bin]]" | "[[test]]"
+        ) {
+            continue;
+        }
+        let Some(rest) = line
+            .strip_prefix("name")
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(str::trim_start)
+        else {
+            continue;
+        };
+        let Some(quote) = rest.chars().next().filter(|c| *c == '"' || *c == '\'') else {
+            continue;
+        };
+        if let Some(value) = rest[1..].split(quote).next() {
+            names.push(value.replace('-', "_"));
+        }
+    }
+    names
+}
+
+/// The name of the test binary cargo builds from an integration test file:
+/// `tests/cart.rs` and `tests/cart/main.rs` are `cart`; `-` is written `_`.
 fn cargo_binary(path: &str) -> Option<String> {
     let parts: Vec<&str> = path.split('/').collect();
     let name = match parts.as_slice() {
@@ -776,46 +866,27 @@ fn cargo_binary(path: &str) -> Option<String> {
     Some(name.replace('-', "_"))
 }
 
-/// The names cargo may give a binary of the crates below `folder`: each
-/// `[package]`, `[lib]` and `[[test]]` name, with `-` written `_`.
-fn crate_names(root: &Path, files: &[String]) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    for manifest in files
-        .iter()
-        .filter(|path| path.rsplit('/').next() == Some("Cargo.toml"))
-    {
-        let Ok(text) = fs::read_to_string(blame::folder_of(root, Some(manifest))) else {
-            continue;
-        };
-        let mut section = String::new();
-        for line in text.lines() {
-            let line = line.trim();
-            if line.starts_with('[') {
-                section = line.to_owned();
-                continue;
-            }
-            if !matches!(section.as_str(), "[package]" | "[lib]" | "[[test]]") {
-                continue;
-            }
-            if let Some(value) = line
-                .strip_prefix("name")
-                .map(str::trim_start)
-                .and_then(|rest| rest.strip_prefix('='))
-            {
-                let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
-                names.insert(value.replace('-', "_"));
-            }
+/// The binary a file of another target builds, whose own tests cargo also
+/// runs under its name: `src/bin/cart.rs`, `src/bin/cart/main.rs`, and the
+/// same under `examples/` and `benches/`.
+fn other_binary(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let name = match parts.as_slice() {
+        [.., "src", "bin", file] | [.., "examples" | "benches", file] => {
+            file.strip_suffix(".rs")?
         }
-    }
-    names
+        [.., "src", "bin", dir, "main.rs"] | [.., "examples" | "benches", dir, "main.rs"] => dir,
+        _ => return None,
+    };
+    Some(name.replace('-', "_"))
 }
 
 /// Ties a test the runner names (failing, or passing in `ran`) to one of
 /// `files`, only when no other file could hold it (ADR 0090). Pytest,
 /// Vitest and Jest name a file; `cargo test` names a binary, which a
-/// crate's library, a `[[test]]` target or another crate's file of the same
-/// name could also be.
-fn tie(root: &Path, folder: &str, runner: TestRunner, id: &str, files: &[String]) -> Tie {
+/// crate's library or binary, a `[[test]]` target, or another file of the
+/// same name could also be.
+fn tie(index: &CargoIndex, folder: &str, runner: TestRunner, id: &str, files: &[String]) -> Tie {
     if runner != TestRunner::Cargo {
         let mine: Vec<&String> = files
             .iter()
@@ -834,15 +905,23 @@ fn tie(root: &Path, folder: &str, runner: TestRunner, id: &str, files: &[String]
     {
         return Tie::Elsewhere;
     }
-    let below = files_below(root, folder);
-    if crate_names(root, &below).contains(binary) {
+    if index.truncated {
         return Tie::Unsure(format!(
-            "cargo names the test binary `{binary}`, and a crate is named `{binary}` too: its library's own tests run under that name"
+            "cargo names the test binary `{binary}`, and the repo has more files than are looked through to find what else could build it"
         ));
     }
-    let holders: Vec<&String> = below
+    if index.names.contains(binary) {
+        return Tie::Unsure(format!(
+            "cargo names the test binary `{binary}`, and a crate is named `{binary}` too, or a target of it: its own tests run under that name"
+        ));
+    }
+    let holders: Vec<&String> = index
+        .files
         .iter()
-        .filter(|path| cargo_binary(path).as_deref() == Some(binary))
+        .filter(|path| {
+            cargo_binary(path).as_deref() == Some(binary)
+                || other_binary(path).as_deref() == Some(binary)
+        })
         .collect();
     match holders.as_slice() {
         [one] if files.contains(one) => Tie::File((*one).clone()),
@@ -904,7 +983,7 @@ mod tests {
         ]);
         assert_eq!(
             tie(
-                clear.path(),
+                &CargoIndex::of(clear.path()),
                 ".",
                 TestRunner::Cargo,
                 "cart::totals",
@@ -918,7 +997,7 @@ mod tests {
             ("tests/cart.rs", ""),
         ]);
         assert!(matches!(
-            tie(clash.path(), ".", TestRunner::Cargo, "cart::totals", &cand(&["tests/cart.rs"])),
+            tie(&CargoIndex::of(clash.path()), ".", TestRunner::Cargo, "cart::totals", &cand(&["tests/cart.rs"])),
             Tie::Unsure(why) if why.contains("a crate is named `cart`")
         ));
         // Two crates' `tests/x.rs` under one unit.
@@ -929,13 +1008,13 @@ mod tests {
             ("b/tests/x.rs", ""),
         ]);
         assert!(matches!(
-            tie(two.path(), ".", TestRunner::Cargo, "x::totals", &cand(&["a/tests/x.rs"])),
+            tie(&CargoIndex::of(two.path()), ".", TestRunner::Cargo, "x::totals", &cand(&["a/tests/x.rs"])),
             Tie::Unsure(why) if why.contains("2 files")
         ));
         // A binary no candidate could be.
         assert_eq!(
             tie(
-                clear.path(),
+                &CargoIndex::of(clear.path()),
                 ".",
                 TestRunner::Cargo,
                 "other::t",
@@ -946,7 +1025,7 @@ mod tests {
         // Pytest names the file: sure.
         assert_eq!(
             tie(
-                clear.path(),
+                &CargoIndex::of(clear.path()),
                 ".",
                 TestRunner::Pytest,
                 "tests/test_a.py::t",
@@ -954,6 +1033,74 @@ mod tests {
             ),
             Tie::File("tests/test_a.py".to_owned())
         );
+    }
+
+    #[test]
+    fn a_cargo_binary_a_bin_target_could_also_be_is_not_tied() {
+        let cand = vec!["tests/cart.rs".to_owned()];
+        for extra in [("src/bin/cart.rs", ""), ("src/bin/cart/main.rs", "")] {
+            let dir = tree(&[
+                ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+                ("tests/cart.rs", ""),
+                extra,
+            ]);
+            let index = CargoIndex::of(dir.path());
+            assert!(
+                matches!(
+                    tie(&index, ".", TestRunner::Cargo, "cart::t", &cand),
+                    Tie::Unsure(_)
+                ),
+                "{extra:?}"
+            );
+        }
+        // A `[[bin]]` named so, and a name with a comment after it.
+        for manifest in [
+            "[package]\nname = \"shop\"\n\n[[bin]]\nname = \"cart\"\npath = \"src/x.rs\"\n",
+            "[package]\nname = \"cart\" # the shop\n",
+        ] {
+            let dir = tree(&[("Cargo.toml", manifest), ("tests/cart.rs", "")]);
+            let index = CargoIndex::of(dir.path());
+            assert!(
+                matches!(
+                    tie(&index, ".", TestRunner::Cargo, "cart::t", &cand),
+                    Tie::Unsure(_)
+                ),
+                "{manifest}"
+            );
+        }
+        // A tree too large to read whole: never sure.
+        let dir = tree(&[
+            ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+            ("tests/cart.rs", ""),
+        ]);
+        let mut index = CargoIndex::of(dir.path());
+        index.truncated = true;
+        assert!(matches!(
+            tie(&index, ".", TestRunner::Cargo, "cart::t", &cand),
+            Tie::Unsure(_)
+        ));
+    }
+
+    #[test]
+    fn a_run_whose_failures_are_all_unsure_is_not_judged_and_never_panics_on_time() {
+        assert_eq!(status_of(0, 2).0, OldTestsStatus::NotJudged);
+        assert!(status_of(0, 2).1.contains("cannot be tied to one file"));
+        assert_eq!(status_of(1, 0).0, OldTestsStatus::Failed);
+        let (status, detail) = status_of(1, 2);
+        assert_eq!(status, OldTestsStatus::Failed);
+        assert!(
+            detail.starts_with("1 test of the base's versions"),
+            "{detail}"
+        );
+        // A kept time longer than the clock has run: no panic, and no time.
+        let now = Instant::now();
+        assert!(!fits(now, Some(now), Duration::from_secs(u64::MAX / 4)));
+        assert!(fits(now, None, Duration::from_secs(60)));
+        assert!(fits(
+            now,
+            Some(now + Duration::from_secs(120)),
+            Duration::from_secs(60)
+        ));
     }
 
     #[test]
