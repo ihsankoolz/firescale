@@ -2269,10 +2269,9 @@ impl RunOptions<'_> {
 fn environment(command: &mut Command, config: &VerifyConfig, base_run: bool) {
     if base_run {
         command.env("FSCALE_BASE_RUN", "1");
-        // A base step never builds into a folder the environment names,
-        // which may be the head's: cargo builds into the worktree's
-        // `target`, which for a Rust repo is a link to a kept folder (ADR
-        // 0081).
+        // Every base step builds in its worktree's own, empty `target/`,
+        // never into a folder the environment names, which may be the
+        // head's (ADR 0081, addendum 1).
         command.env_remove("CARGO_TARGET_DIR");
     }
     command.env("NO_COLOR", "1").env("FORCE_COLOR", "0");

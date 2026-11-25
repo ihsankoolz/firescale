@@ -244,6 +244,13 @@ For the course project:
 - A script that reads `fscale verify --json` sees `schemaVersion: 9`: `fscale verify --json` and look at the first field.
 - Nothing else: it has no Rust and no project at the root, so the base run and `--affected` are as they were. Check with `fscale verify --affected --dry-run`.
 
+**Pull request 14: your decisions after items 11 to 13 (ADR 0081, addenda 1 and 2; ADR 0078)**
+
+- **Schema version 9 (#104): approved by you.** Recorded in ADR 0078's addendum. The tamper guard takes an approval only as a GitHub review of the pull request's last commit by someone other than its author; you are #104's author, so that review cannot be given, and #104 is merged. The ADR line is the record.
+- **ADR 0081, stale build: every base step gets an empty target.** First built as you said (kept folders for base steps that start with `cargo` only). The fresh review found cargo can still reuse a stale build: a sibling binary that `cargo test -p` does not rebuild, a program after `cargo build &&`, `cargo xtask`, and the control run building the head's code into the kept folders. So, by your second rule, no base step gets a kept folder; the reasons are in addendum 1. Base steps still never get `CARGO_TARGET_DIR` from the environment. A base result kept by either earlier form is never reused (key part `cargo-target=empty:…`). The measured gain is given up.
+- **Disk space:** firescale has no command that clears its caches, so the clear command and doctor's size line are under "Later" in ADR 0081. No pruning.
+- **Failing tests first:** `packages/cli/src/rust-base-target.test.ts`, with a stand-in `cargo`: 4 of 5 failed on `main` for the cargo-only form; then rewritten for empty targets, 2 of 3 failed on the cargo-only form.
+
 ## 0.5.4 — the run of 2026-11-18, on the laptop
 
 Six pull requests, in order. This run builds and tests on the owner's Windows laptop (the owner asked for a local build), in scratch worktrees beside the checkout (`C:\Users\ihsan\fs-proof`, `C:\Users\ihsan\fs-docs`); the course project is not touched.
