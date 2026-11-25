@@ -1266,10 +1266,12 @@ pub(super) fn read(source: &str) -> TestFile {
                         Scope::Class { .. } => None,
                     });
                     let whole = text(node, src);
+                    let shown = whole.split_whitespace().collect::<Vec<_>>().join(" ");
                     file.assertions.push(Assertion {
                         line: node.start_position().row + 1,
                         shape: whole.split_whitespace().collect(),
-                        text: whole.split_whitespace().collect::<Vec<_>>().join(" "),
+                        weakened: super::weakened::why(node, src, &shown),
+                        text: shown,
                         weight: test
                             .and_then(|index| file.tests.get(index))
                             .map_or(1, |test| test.weight),

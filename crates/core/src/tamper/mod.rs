@@ -53,6 +53,7 @@ mod runner;
 mod rust;
 mod suppress;
 mod swift;
+mod weakened;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -364,6 +365,10 @@ pub struct Assertion {
     /// one. Counted, and also counted apart: an assertion made conditional
     /// is a removal (ADR 0052, found in review).
     pub conditional: bool,
+    /// How it can pass without checking anything, when it can: under an
+    /// `if` or swallowed inside its test, or a tautology (ADR 0088). Read
+    /// for Python, JavaScript/TypeScript and Rust; `None` elsewhere.
+    pub weakened: Option<&'static str>,
     /// The shape without the failure message, when the assertion has one
     /// (`assert x == 1, "why"`, `pytest.fail("why")`, `assert_eq!(a, b,
     /// "why")`): what it checks. Only the expected values of what it checks
@@ -758,6 +763,10 @@ pub enum Kind {
     /// A test or lint script, or a `conftest.py`, made unable to fail
     /// (ADR 0086): report only, never fails verify.
     RunnerWeakened,
+    /// An assertion of a test on both sides now under an `if`, swallowed by
+    /// a `try`, or a tautology, where one that always ran is gone (ADR
+    /// 0088): needs a person's approval.
+    AssertionWeakened,
     /// A changed test file tree-sitter cannot read, on the base or now: its
     /// tests and assertions could not be compared.
     NotChecked,
@@ -768,7 +777,10 @@ impl Kind {
     /// 0046), rather than a clear cheat.
     #[must_use]
     pub fn needs_approval(self) -> bool {
-        matches!(self, Self::SnapshotChanged | Self::ExpectedChanged)
+        matches!(
+            self,
+            Self::SnapshotChanged | Self::ExpectedChanged | Self::AssertionWeakened
+        )
     }
 
     /// A finding shown for a reviewer that never fails verify, even when
@@ -792,6 +804,7 @@ impl Kind {
             Self::SnapshotChanged => "snapshot changed",
             Self::ExpectedChanged => "expected value changed",
             Self::RunnerWeakened => "runner weakened",
+            Self::AssertionWeakened => "assertion weakened",
             Self::NotChecked => "not checked",
         }
     }
@@ -1691,10 +1704,23 @@ pub fn guard_at(
         }
         // Assertions that changed only in their values, file by file (M26).
         if let (Some(before), Some(after)) = (base_file, head_file) {
+            // An assertion made a tautology also changed its value: it is
+            // named once, as weakened, which needs an approval too (ADR 0088).
+            let weak = if allows(path, Kind::AssertionWeakened) {
+                Vec::new()
+            } else {
+                weakened_in_tests(path, before, after)
+            };
+            let weak_lines: BTreeSet<usize> = weak.iter().map(|weak| weak.line).collect();
             if !allows(path, Kind::ExpectedChanged) {
                 let lost: BTreeSet<usize> = file_losses.iter().map(|lost| lost.line).collect();
-                approval_findings.extend(expected_changes(path, before, after, &renamed, &lost));
+                approval_findings.extend(
+                    expected_changes(path, before, after, &renamed, &lost)
+                        .into_iter()
+                        .filter(|changed| changed.on_base || !weak_lines.contains(&changed.line)),
+                );
             }
+            approval_findings.extend(weak);
         }
         lost_in_renames.extend(file_losses);
         // A file whose every test is skipped on the base and now (the whole
@@ -2188,6 +2214,75 @@ fn unpaired<'a>(
         }
     }
     missing
+}
+
+/// Assertions made conditional or tautologies in tests on both sides (ADR
+/// 0088). Per test that keeps its id: one finding for each assertion that
+/// can pass without checking anything and was not so on the base, as long
+/// as the test has fewer assertions that always check than on the base. So
+/// an assertion wrapped in an `if`, or replaced by `len(x) >= 0`, is found;
+/// a new assertion under an `if` beside the others is not.
+fn weakened_in_tests(path: &str, before: &TestFile, after: &TestFile) -> Vec<Finding> {
+    #[derive(Default)]
+    struct Tally<'a> {
+        plain: usize,
+        weak: Vec<(&'static str, &'a str, &'a Assertion)>,
+    }
+    fn tally(file: &TestFile) -> BTreeMap<&str, Tally<'_>> {
+        let mut out: BTreeMap<&str, Tally<'_>> = BTreeMap::new();
+        for assertion in &file.assertions {
+            let test = test_of(file, assertion);
+            if test.is_empty() {
+                continue;
+            }
+            let entry = out.entry(test).or_default();
+            match assertion.weakened {
+                Some(why) => entry.weak.push((why, assertion.checked(), assertion)),
+                None => entry.plain += 1,
+            }
+        }
+        out
+    }
+    let base = tally(before);
+    let head = tally(after);
+    let mut findings = Vec::new();
+    for (test, now) in &head {
+        let Some(was) = base.get(test) else {
+            continue;
+        };
+        let lost = was.plain.saturating_sub(now.plain);
+        if lost == 0 {
+            continue;
+        }
+        let mut on_base: Vec<(&str, &str)> = was
+            .weak
+            .iter()
+            .map(|(why, shape, _)| (*why, *shape))
+            .collect();
+        let new: Vec<&(&'static str, &str, &Assertion)> = now
+            .weak
+            .iter()
+            .filter(|(why, shape, _)| {
+                match on_base.iter().position(|seen| *seen == (*why, *shape)) {
+                    Some(index) => {
+                        on_base.swap_remove(index);
+                        false
+                    }
+                    None => true,
+                }
+            })
+            .collect();
+        for (why, _, assertion) in new.into_iter().take(lost) {
+            findings.push(Finding {
+                kind: Kind::AssertionWeakened,
+                file: path.to_owned(),
+                line: assertion.line,
+                on_base: false,
+                what: format!("{} ({why}; in {test})", assertion.text),
+            });
+        }
+    }
+    findings
 }
 
 /// The id of the test an assertion is in, or "" outside any test.
@@ -2738,6 +2833,7 @@ mod tests {
             Kind::SnapshotChanged,
             Kind::ExpectedChanged,
             Kind::RunnerWeakened,
+            Kind::AssertionWeakened,
             Kind::NotChecked,
         ];
         for kind in &all {
@@ -2753,6 +2849,7 @@ mod tests {
                 | Kind::SnapshotChanged
                 | Kind::ExpectedChanged
                 | Kind::RunnerWeakened
+                | Kind::AssertionWeakened
                 | Kind::NotChecked => {}
             }
         }

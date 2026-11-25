@@ -502,7 +502,12 @@ pub(super) fn read(source: &str, dialect: JsDialect) -> TestFile {
                 return true;
             }
             let inside = open.iter().rev().find(|block| block.test.is_some());
+            let shown = text(whole, src)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             file.assertions.push(Assertion {
+                weakened: super::weakened::why(whole, src, &shown),
                 line: node.start_position().row + 1,
                 shape: text(whole, src).split_whitespace().collect(),
                 text: text(whole, src)

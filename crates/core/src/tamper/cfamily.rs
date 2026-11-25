@@ -1281,6 +1281,7 @@ impl Reader<'_> {
                 .map_or(1, |test| test.weight),
             test,
             conditional,
+            weakened: None,
             checked: checked(node, name, self.src),
         });
     }

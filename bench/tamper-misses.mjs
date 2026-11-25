@@ -72,7 +72,7 @@ function put(root, files) {
   }
 }
 
-const APPROVAL = new Set(['snapshot-changed', 'expected-changed']);
+const APPROVAL = new Set(['snapshot-changed', 'expected-changed', 'assertion-weakened']);
 const rows = [];
 for (const cheat of cheats.cases) {
   const root = mkdtempSync(path.join(tmpdir(), 'firescale-cheat-'));
