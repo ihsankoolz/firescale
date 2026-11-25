@@ -735,8 +735,8 @@
                 "type": "string"
               },
               "status": {
-                "description": "failed (a test of those files failed on the head's code), passed (they passed; never lowers a finding), not-judged (the run could not tell).",
-                "enum": ["failed", "passed", "not-judged"]
+                "description": "failed (a test of those files failed on the head's code), ran-no-failure (it ran and collected the base's tests of those files, and none failed: never reassurance, and it never lowers a finding), not-judged (the run could not tell).",
+                "enum": ["failed", "ran-no-failure", "not-judged"]
               },
               "files": {
                 "description": "The files taken from the base commit.",

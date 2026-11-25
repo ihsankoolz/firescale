@@ -181,7 +181,7 @@ describe('old tests, new code (ADR 0089)', () => {
     expect(report.tamper?.oldTests?.map((run) => run.status)).toEqual(['ran-no-failure']);
     const human = await runCli(['verify', '--no-cache'], repo.root, env);
     expect(human.stdout).not.toContain('Old tests, new code');
-    expect(human.stdout).not.toContain('pass');
+    expect(human.stdout).not.toContain('no test of these files failed');
   });
 
   it('says "failed", not "passed", when the step exits 0 while the base’s test fails (review)', async () => {
@@ -318,7 +318,7 @@ describe('old tests, new code (ADR 0089)', () => {
     });
     expect(hook.code).toBe(EXIT_BLOCK_HOOK);
     expect(hook.stderr).toContain(
-      '  Old tests, new code (test; src/cart.test.ts; report only): not judged: no time was left for it.',
+      "  Old tests, new code (test; src/cart.test.ts; report only): not judged: no time was left for it before the stop hook's limit.",
     );
     // Only the head's own run: nothing started past the limit.
     expect(await calls()).toHaveLength(1);

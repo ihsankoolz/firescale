@@ -149,6 +149,11 @@ pub struct BaseReport {
     pub duration_ms: u64,
     /// True when the budget ran out before every base step had run.
     pub over_budget: bool,
+    /// When `verify.baseBudget` ends for this run: the base run and the
+    /// run of the base's tests on the head's code share it (ADR 0090).
+    /// `None` with no limit. Not in JSON.
+    #[serde(skip)]
+    pub budget_ends: Option<Instant>,
 }
 
 /// The `reason` of a run that was stopped before its failures were compared
@@ -411,6 +416,8 @@ fn lookup(root: &Path, key: &str) -> Option<(BaseStatus, Vec<String>, Option<Tes
             passed: stored.passed_tests,
             reasons,
             partial: stored.partial_tests,
+            // Not kept: a base result needs only what failed.
+            ran: BTreeSet::new(),
         });
         (stored.status, stored.signature, tests)
     })
@@ -1081,6 +1088,7 @@ pub fn compare(report: &mut VerifyReport, run: &BaseRun<'_>) {
         reference: Some(run.base.reference.clone()),
         commit: Some(run.base.commit.clone()),
         budget_ms: budget.map(|limit| u64::try_from(limit.as_millis()).unwrap_or(u64::MAX)),
+        budget_ends: deadline,
         ..BaseReport::default()
     };
     let say = |text: &str| {

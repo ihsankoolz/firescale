@@ -5182,9 +5182,11 @@ fn tamper_section(tamper: &crate::tamper::TamperReport) -> String {
         }
         // The runs of the base's tests on the head's code (ADR 0089).
         for run in &tamper.old_tests {
+            // A run with no failing test adds nothing here: it is never
+            // reassurance (ADR 0090). `--json` has it.
             let status = match run.status {
                 crate::tamper::OldTestsStatus::Failed => "failed",
-                crate::tamper::OldTestsStatus::Passed => "passed",
+                crate::tamper::OldTestsStatus::RanNoFailure => continue,
                 crate::tamper::OldTestsStatus::NotJudged => "not judged",
             };
             out.push_str(&format!(

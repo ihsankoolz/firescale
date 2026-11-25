@@ -1356,6 +1356,8 @@ pub(crate) fn old_tests_for(
             plan: &plan,
             options: &options,
             deadline: None,
+            // No base run here: the budget starts with this run.
+            budget_ends: None,
             say: &|_| {},
         },
         report,
@@ -1614,6 +1616,13 @@ fn verify_report(
                                     plan: &plan,
                                     options: &options,
                                     deadline: hook_deadline,
+                                    // The budget the base run started
+                                    // (ADR 0090).
+                                    budget_ends: verify
+                                        .base
+                                        .as_ref()
+                                        .filter(|base| base.compared)
+                                        .map(|base| base.budget_ends),
                                     say: &say,
                                 },
                                 &mut found,
