@@ -2266,21 +2266,13 @@ impl RunOptions<'_> {
 /// The variables every command gets. `CI=1` makes tools that would wait for
 /// input or watch for changes run once (ADR 0024); a `CI` the environment
 /// already sets is kept.
-fn environment(
-    command: &mut Command,
-    config: &VerifyConfig,
-    base_run: bool,
-    cargo_target: Option<&Path>,
-) {
+fn environment(command: &mut Command, config: &VerifyConfig, base_run: bool) {
     if base_run {
         command.env("FSCALE_BASE_RUN", "1");
-        // A base step never builds into a folder the environment names,
-        // which may be the head's. A cargo step of a Rust repo builds into
-        // its kept folder; any other into the worktree (ADR 0081, addendum).
-        match cargo_target {
-            Some(kept) => command.env("CARGO_TARGET_DIR", kept),
-            None => command.env_remove("CARGO_TARGET_DIR"),
-        };
+        // Every base step builds in its worktree's own, empty `target/`,
+        // never into a folder the environment names, which may be the
+        // head's (ADR 0081, addendum 1).
+        command.env_remove("CARGO_TARGET_DIR");
     }
     command.env("NO_COLOR", "1").env("FORCE_COLOR", "0");
     // Python holds output in a buffer when it writes to a pipe, so a suite
@@ -2456,20 +2448,7 @@ fn run_step(
     options.say(&format!("{place}: started: {command}"));
     let mut shell = shell(command);
     shell.current_dir(&dir);
-    // A base step that runs cargo builds into a folder kept between base
-    // runs, when its worktree holds them (ADR 0081, addendum).
-    let cargo_target = unit
-        .head_root
-        .filter(|_| options.base_run)
-        .and_then(|head_root| {
-            crate::blame::kept_cargo_target(head_root, unit.root, project, command)
-        });
-    environment(
-        &mut shell,
-        options.config,
-        options.base_run,
-        cargo_target.as_deref(),
-    );
+    environment(&mut shell, options.config, options.base_run);
     // Per-test results (ADR 0038): pytest writes a JUnit report through
     // PYTEST_ADDOPTS, so the command stays as the user wrote it.
     let runner = crate::pertest::TestRunner::of(
@@ -2773,12 +2752,7 @@ fn run_step(
         ));
         let mut again = self::shell(&probe);
         again.current_dir(&dir);
-        environment(
-            &mut again,
-            options.config,
-            options.base_run,
-            cargo_target.as_deref(),
-        );
+        environment(&mut again, options.config, options.base_run);
         let quiet = |_: Duration, _: Option<&str>, _: Option<Pace>| {};
         let watch = Watch {
             timeout: Some(FIRST_ERROR_LIMIT),

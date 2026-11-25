@@ -1,6 +1,6 @@
 # 0081 — A kept build folder for Rust base runs
 
-Status: accepted (2026-11-25, Track A, item 12; the owner's brief). Adds to ADR 0037 (the base run) and ADR 0043 (what the base worktree gets).
+Status: withdrawn by addendum 1 (2026-11-25): every base step builds in an empty `target/` again. First accepted the same day (Track A, item 12; the owner's brief). Adds to ADR 0037 (the base run) and ADR 0043 (what the base worktree gets).
 
 ## Context
 
@@ -51,7 +51,7 @@ After the change, the build-only step again: 14.4 s with no kept folder, then 11
 
 ## Needs your decision
 
-- **Decided by the owner on 2026-11-25: not acceptable; fixed in the first addendum below.** **A step that reads `target/` without building could see an older base run's build.** Before, a new worktree had no `target/`, so such a step failed on the base with a missing file, and the head's failure blocked. Now the link holds whatever the last base run of this repo built, from another base commit. If that old build happens to fail the same way as the head, the head's failure would read `pre-existing`. A step that builds first (`cargo test`, `cargo build` in `verify.baseInstall`, as this repo does) brings the files up to date, so it is not affected. Closing it fully means no link (which breaks this repo's own base runs) or emptying the kept binaries before each base run. I left it as is and logged it here.
+- **Decided by the owner on 2026-11-25: not acceptable. Addendum 1 below gives every base step an empty target.** **A step that reads `target/` without building could see an older base run's build.** Before, a new worktree had no `target/`, so such a step failed on the base with a missing file, and the head's failure blocked. Now the link holds whatever the last base run of this repo built, from another base commit. If that old build happens to fail the same way as the head, the head's failure would read `pre-existing`. A step that builds first (`cargo test`, `cargo build` in `verify.baseInstall`, as this repo does) brings the files up to date, so it is not affected. Closing it fully means no link (which breaks this repo's own base runs) or emptying the kept binaries before each base run. I left it as is and logged it here.
 
 ## Not done
 
@@ -69,33 +69,47 @@ It found two ways the first form could turn a head failure into `pre-existing`: 
 
 `packages/cli/src/rust-base-target.test.ts`, written first: 3 of 4 failed on `main` (`expected null not to be null`). The fourth, a repo with no Rust, is a guard that passed before and after. After the review the cases were rewritten for the links: the worktree's `target` is a folder in the temp folder, the same in two runs, with what the first left there seen by the second, and no `CARGO_TARGET_DIR`; with the head's `target/` named in `CARGO_TARGET_DIR`, the base does not use it, the head's steps keep it, and nothing is written there; a crate below the root that is a workspace of its own gets a folder of its own; two repos get two folders; a repo with no Rust is as before.
 
-## Addendum 1 (2026-11-25): kept folders for cargo steps only
+## Addendum 1 (2026-11-25): every base step gets an empty target
 
-The owner's decision on "Needs your decision" above: not acceptable. A base read as `pre-existing` lets a head failure through, and a stale pass is worse than no cache.
+The owner's decision on "Needs your decision" above: not acceptable. A base read as `pre-existing` lets a head failure through, and a stale pass is worse than no cache. The owner's fix: kept folders only for a base step whose command starts with `cargo`, since cargo checks freshness itself, and an empty `target` for every other; **and if the review finds cargo can still reuse a stale build, an empty target for every base step, with the reason logged.**
 
-**A base step gets a kept build folder only when its command starts with `cargo`.** Cargo checks the freshness of what it finds there itself. Every other base step gets an empty `target`, as before ADR 0081.
+That form was built first, test first (a stand-in `cargo` on the PATH; 4 of 5 tests failed on `main`). **The fresh review found that cargo can still reuse a stale build**, so the second rule applies:
 
-- A base step whose first word is `cargo` (or `cargo.exe`) gets `CARGO_TARGET_DIR` set to the kept folder of its own folder: `firescale-base-target/<repo key>/<hash of the folder>`, the repo root's own steps as `.`. `cargo test` and `cargo build && ./target/debug/app` count; `cargo-nextest`, a path to cargo and `RUSTFLAGS=… cargo test` do not, and build in the worktree, which is the safe side. `starts_with_cargo` and `kept_cargo_target` in `crates/core/src/blame.rs`; `environment` in `crates/core/src/verify.rs`.
-- **No `target` links.** Every other base step (`pnpm test`, `node run.js`, `verify.baseInstall`) has no `CARGO_TARGET_DIR` and finds the worktree's own `target/`: empty until something in that run builds into it. So nothing but cargo ever reads a kept build.
-- A step gets the kept folder only when its worktree holds the repo's lock; the lock file names the worktree that holds it. The control run of ADR 0040 takes it the same way; the run of the head's code with the base's tests (ADR 0089) lends none.
-- **The kept base result's key part is now `cargo-target=v2:<folders>`**, so a base result kept under the first form, with links, is never reused.
-- A cargo step that runs its binary by the path `./target/debug/<name>` finds nothing on the base (cargo built it in the kept folder), so it fails there for a reason of the worktree, and the head's failure blocks: the safe side. Before ADR 0081 it found its own build.
-- **What it costs:** this repo's base steps (`pnpm test`, with `pnpm build` in `verify.baseInstall`) do not start with `cargo`, so this repo's own base runs get no kept folder and build from nothing, as before ADR 0081. A repo whose steps are `cargo test` and the like keeps the gain measured above.
+- **A sibling binary in `cargo test`.** `cargo test -p core` runs tests that look for a binary of another workspace package next to the test (`assert_cmd`'s `cargo_bin("cli")`). `-p core` does not build that package, so the test runs the binary an earlier base run left, from another commit. Before ADR 0081 it was missing, and the base failed in another way.
+- **A command with more than one part.** `cargo build -p core && node e2e.mjs`, where `e2e.mjs` runs `$CARGO_TARGET_DIR/debug/cli`: the first word is `cargo`, but that build did not touch `cli`.
+- **Cargo commands that run other programs.** `cargo xtask …` (`cargo run -p xtask`), `cargo make`, `cargo run -p runner`: the programs they start inherit `CARGO_TARGET_DIR` and read what is there.
+- **The control run.** The run of the head's code that confirms `fixed` (ADR 0040) set up its worktree the same way, so it built the head's code into the kept folders. A later base run could then run a binary built from the head, fail the same way, and label the head's failure `pre-existing`.
+- **Build scripts.** A build script whose `rerun-if-changed` names only files linked in from the head, or absolute paths, keeps its `OUT_DIR` from another commit.
 
-**Can cargo still reuse a stale build?** Cargo compares the modification times of a package's files with the times it recorded at its last build. A worktree is a fresh checkout, so every file of the repo's own crates is newer than anything kept: they are built again, as `cargo -v` showed above (57 of 61 units fresh, the repo's own 4 built). Dependencies from a registry are keyed by name, version and source, and a git dependency by its commit. What cargo itself does not see changing (a build script that reads a file without `cargo:rerun-if-changed`) is reused stale on the head's own `target/` just the same; that is cargo's freshness, not this change's. The fresh review checked this; its answer is below.
+The first word of a command cannot tell these apart.
+
+**So every base step, cargo or not, builds in the worktree's own `target/`, which is empty, as before ADR 0081.** Base steps still never get a `CARGO_TARGET_DIR` from the environment (`environment` in `crates/core/src/verify.rs`), so none builds into a folder that may be the head's. The kept folders, their lock and the `target` links are gone. The sweep of left-behind worktrees still unlinks a `target` link, in case an earlier form left one.
+
+- **The kept base result's key part is now `cargo-target=empty:<folders>`** for a repo with a tracked `Cargo.toml` (`cargo_folders` in `crates/core/src/blame.rs`). A result kept by either earlier form, with a kept folder, is never reused; the part only adds to the key.
+- **What it costs:** the gain measured above (11.0 s against 14.4 s for a build-only step here) is given up. Rust base runs build from nothing again, as the research report's idea 10 found them. Version 0.5.4 was never released with a kept folder, so no user has one.
+- **Kept from ADR 0081:** base steps never get `CARGO_TARGET_DIR` from the environment. Before ADR 0081 a base step inherited it, and with the head's folder named there, the base built into the head's folder.
+
+### Later
+
+- Kept builds again only with evidence of the base commit they came from: for example one kept folder per base commit, used only by a base run of that same commit, and never by the control run. Not built: it wants its own decision.
 
 ### Tests
 
-`packages/cli/src/rust-base-target.test.ts`, rewritten first for this decision, with a stand-in `cargo` on the PATH: 4 of 5 failed on `main` (`expected null not to be null`, and the node step's `target` was the kept link). The cases: a cargo step gets one folder in the temp folder, the same in two runs, with what the first left there seen by the second, and no `target` link; with the head's `target/` named in `CARGO_TARGET_DIR`, the cargo step gets the kept folder and the node step none, and the head's steps keep theirs; a node step gets an empty target in both runs, after a cargo step kept a build; two repos get two folders; a repo with no Rust is as before (the fifth, passed before and after). In `blame.rs`: `only_a_command_that_starts_with_cargo_gets_a_kept_build_folder` and `a_cargo_step_gets_the_kept_folder_only_in_the_worktree_that_holds_it`, written with the fix.
+`packages/cli/src/rust-base-target.test.ts`, with a stand-in `cargo` on the PATH, rewritten first for this outcome and seen failing on the cargo-only form (2 of 3: the cargo step got the kept folder):
+
+- `a cargo step and any other: no CARGO_TARGET_DIR, no target, nothing kept from the last base run` (two base runs).
+- `never uses the head's folder, also when the environment names it`: with the head's `target/` in `CARGO_TARGET_DIR`, no base step gets it, the head's steps keep it, and nothing is written there.
+- `changes nothing for a repo with no Rust`.
+
+The unit tests of the kept folders and their lock were removed with the code they tested.
 
 ## Addendum 2 (2026-11-25): disk space
 
 The owner's decision: if firescale has a command that clears its caches, it clears the kept folders too, and doctor shows their size; no automatic pruning.
 
-firescale has no command that clears its caches: `fscale --help` lists none, and the docs say to delete `.firescale/` files by hand. So, as the owner asked, both are under "Later" and nothing is built. Read as one condition: doctor's size line waits for the command too.
+firescale has no command that clears its caches: `fscale --help` lists none, and the docs say to delete `.firescale/` files by hand. So, as the owner asked, nothing is built here. Since addendum 1 there are no kept build folders, so nothing of ADR 0081 takes disk space after a base run. Kept folders that a build of this branch made while it was in review (`firescale-base-target` in the temp folder) can be deleted by hand; no release made them.
 
 ### Later
 
-- A command that clears firescale's caches (`.firescale/cache`, the step cache, the kept times, the base store), and with it the kept Rust build folders in `firescale-base-target/<repo key>/`.
-- With it, `fscale doctor` shows the kept folders' size and the command that clears them.
+- A command that clears firescale's caches (`.firescale/cache`, the step cache, the kept times, the base store). If kept build folders ever come back (addendum 1, "Later"), it clears them too, and `fscale doctor` shows their size.
 - No automatic pruning (the owner's decision).
