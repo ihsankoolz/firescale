@@ -200,6 +200,18 @@ describe('a kept time always wins over the expected time', () => {
     expect(await ran(repo.root)).toEqual(['lint']);
   });
 
+  it('does not take kept times it cannot read for none: the step runs, and the hint is not used', async () => {
+    const repo = await repoWith({ expected: '1h 40m' });
+    // A folder where the file should be: it is there, and is not a file.
+    await mkdir(path.join(repo.root, '.firescale', 'step-times.json'), { recursive: true });
+    const result = await runCli(['verify', '--budget', '30m', '--dry-run'], repo.root, NOT_CI);
+    expect(result.stdout).toContain('so which steps would be left out is not known');
+    expect(result.stdout).not.toContain('expected to take');
+    const run = await runCli(['verify', '--budget', '30m'], repo.root, NOT_CI);
+    expect(run.stdout).not.toContain('NOT RUN');
+    expect(await ran(repo.root)).toEqual(['lint', 'test']);
+  });
+
   it('after a pass without --budget, the kept time is used and the hint no longer is', async () => {
     const repo = await repoWith({ expected: '1h 40m' });
     expect((await runCli(['verify', '--no-cache'], repo.root, NOT_CI)).code).toBe(EXIT_OK);

@@ -86,6 +86,14 @@ Added 2026-11-25, Track A, item 11 (the owner's brief: this addendum, no ADR num
 - `fscale doctor`'s check of the stop hook's time limit (ADR 0083) reads kept times only, not expected ones.
 - `fscale adopt` and `init` write no expected time.
 
+### From the fresh review
+
+It found nothing newly broken: a kept time wins, an unreadable file never lets the hint in, a step left out reads `PARTIAL` by the same path as before, the base run and the run again have no budget, and the setting is in no key. Added after it, a guard that passed at once: kept times that cannot be read, with a hint set, run the step (`duration-hint.test.ts`). Logged, not fixed:
+
+- The warning for an unreadable file says `--budget` "left out no step for its kept time"; it does not say "or its expected time".
+- `expected_key` puts the folder in `["…"]` without escaping, as the other `verify.projects["…"]` messages do.
+- The "Not run" paragraph reads `expectedMs` only for a project's step; a root step never has one, so the other branch would print `0s` only for a report made by hand.
+
 ### Tests
 
 `packages/cli/src/duration-hint.test.ts`, written first and seen failing: 12 of 12 (the key was unknown, so every run stopped at the config with exit 2). The hint leaves a step out, names its key, and never reads OK; the same in JSON with `expectedMs` and no `lastKnownMs`, checked against the schema; the dry run lists it; a hint within the budget runs; without `--budget` nothing changes; a kept time within the budget wins over a long hint; a kept time over the budget wins over a short hint; after a pass the kept time is used; `false`, `0` and `"soon"` are refused; `verify.test.expected` is refused. A row in `configkey.rs`: a change of `expected` affects no step.
