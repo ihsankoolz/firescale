@@ -19,7 +19,7 @@ const fixtures = fixtureSet();
 afterEach(() => fixtures.cleanup());
 
 /** How the stand-in answers: `honest` reads the file; the others ignore it. */
-type Mode = 'honest' | 'always-pass' | 'cannot-collect' | 'exit-zero';
+type Mode = 'honest' | 'always-pass' | 'cannot-collect' | 'exit-zero' | 'other-file';
 
 async function writeVitest(dir: string, mode: Mode): Promise<void> {
   await mkdir(dir, { recursive: true });
@@ -38,7 +38,9 @@ async function writeVitest(dir: string, mode: Mode): Promise<void> {
     "  process.stdout.write('⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯\\n\\n FAIL  src/cart.test.ts > cart > adds the items\\nAssertionError: expected 11 to be 10\\n Test Files  1 failed (1)\\n      Tests  1 failed | 1 passed (2)\\n');",
     '  process.exit(exitZero ? 0 : 1);',
     '}',
-    "process.stdout.write(' Test Files  1 passed (1)\\n      Tests  2 passed (2)\\n');",
+    // Vitest names each file it ran: ` ✓ src/cart.test.ts (2 tests) 3ms`.
+    "const ran = mode === 'other-file' ? 'src/other.test.ts' : 'src/cart.test.ts';",
+    "process.stdout.write(' ✓ ' + ran + ' (2 tests) 3ms\\n Test Files  1 passed (1)\\n      Tests  2 passed (2)\\n');",
     'process.exit(0);',
     '',
   ].join('\n');
@@ -65,20 +67,31 @@ const cartTest = (expected: number, extra = ''): string =>
  */
 async function repoWith(
   mode: Mode,
-  options: { lint?: string; head?: Record<string, string> } = {},
+  options: {
+    lint?: string;
+    head?: Record<string, string>;
+    verify?: Record<string, unknown>;
+  } = {},
 ) {
   const repo = await fixtures.create({
     files: {
       'firescale.config.json': JSON.stringify({
         packs: ['core'],
-        verify: { lint: options.lint ?? false, typecheck: false, test: 'vitest run' },
+        verify: {
+          lint: options.lint ?? false,
+          typecheck: false,
+          test: 'vitest run',
+          ...options.verify,
+        },
       }),
       '.gitignore': '.firescale/\n',
       'src/cart.ts':
         'export const total = (items: number[]): number => items.reduce((a, b) => a + b, 0);\n',
       'src/cart.test.ts': cartTest(10),
+      // Fails on the head's code only; with SLOW_BASE_LINT, takes 3 s on
+      // the base commit.
       'lint.cjs':
-        "const fs = require('node:fs');\nprocess.exit(fs.readFileSync('src/cart.ts', 'utf8').includes('b, 1)') ? 1 : 0);\n",
+        "const fs = require('node:fs');\nif (process.env.FSCALE_BASE_RUN === '1' && process.env.SLOW_BASE_LINT) { const end = Date.now() + 3000; while (Date.now() < end) {} }\nprocess.exit(fs.readFileSync('src/cart.ts', 'utf8').includes('b, 1)') ? 1 : 0);\n",
     },
     track: 'no-git',
   });
@@ -163,7 +176,12 @@ describe('old tests, new code (ADR 0089)', () => {
     const finding = report.tamper?.findings.find((f) => f.kind === 'expected-changed');
     expect(finding).toBeDefined();
     expect(finding?.evidence).toBeUndefined();
-    expect(report.tamper?.oldTests?.map((run) => run.status)).toEqual(['passed']);
+    // Never shown as reassurance (ADR 0090): the JSON says it ran and
+    // found no failure; the normal output says nothing of it.
+    expect(report.tamper?.oldTests?.map((run) => run.status)).toEqual(['ran-no-failure']);
+    const human = await runCli(['verify', '--no-cache'], repo.root, env);
+    expect(human.stdout).not.toContain('Old tests, new code');
+    expect(human.stdout).not.toContain('pass');
   });
 
   it('says "failed", not "passed", when the step exits 0 while the base’s test fails (review)', async () => {
@@ -201,6 +219,30 @@ describe('old tests, new code (ADR 0089)', () => {
     expect(report.tamper?.findings.find((f) => f.kind === 'expected-changed')).toBeDefined();
   });
 
+  it('says "not judged" when the run collected none of the base’s tests (ADR 0090)', async () => {
+    const { repo, env } = await repoWith('other-file');
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
+    const report = JSON.parse(result.stdout) as Report;
+    const run = report.tamper?.oldTests?.[0];
+    expect(run?.status).toBe('not-judged');
+    expect(run?.detail).toContain('collected none of the base');
+  });
+
+  it('shares verify.baseBudget with the base run, and says "not judged" when it has run out (ADR 0090)', async () => {
+    const { repo, env } = await repoWith('honest', {
+      lint: 'node lint.cjs',
+      verify: { baseBudget: '2s' },
+    });
+    const result = await runCli(['verify', '--json', '--no-cache'], repo.root, {
+      ...env,
+      SLOW_BASE_LINT: '1',
+    });
+    const report = JSON.parse(result.stdout) as Report;
+    const run = report.tamper?.oldTests?.[0];
+    expect(run?.status).toBe('not-judged');
+    expect(run?.detail).toContain('verify.baseBudget');
+  });
+
   it('runs nothing when the guard has no finding it applies to', async () => {
     const { repo, env } = await repoWith('honest', {
       head: {
@@ -213,6 +255,46 @@ describe('old tests, new code (ADR 0089)', () => {
     const result = await runCli(['verify', '--json', '--no-cache'], repo.root, env);
     const report = JSON.parse(result.stdout) as Report;
     expect(report.tamper?.oldTests).toBeUndefined();
+  });
+
+  /** Installs Claude Code's stop hook with this limit, and runs it once. */
+  async function stopHook(root: string, env: Record<string, string | undefined>, seconds: number) {
+    await mkdir(path.join(root, '.claude'), { recursive: true });
+    await runCli(
+      ['hooks', 'install', '--agent', 'claude', '--timeout', String(seconds)],
+      root,
+      env,
+    );
+    expect(await readFile(path.join(root, '.claude', 'settings.json'), 'utf8')).toContain(
+      `"timeout": ${String(seconds)}`,
+    );
+    return runCli(['hooks', 'run', '--agent', 'claude'], root, env, {
+      input: JSON.stringify({ session_id: 's', stop_hook_active: false }),
+    });
+  }
+
+  it('in the stop hook, says "not judged" when no time is kept for the run, however long the limit (ADR 0090)', async () => {
+    const { repo, env, calls } = await repoWith('honest', { lint: 'node lint.cjs' });
+    const hook = await stopHook(repo.root, env, 3600);
+    expect(hook.code).toBe(EXIT_BLOCK_HOOK);
+    expect(hook.stderr).toContain(
+      '  Old tests, new code (test; src/cart.test.ts; report only): not judged: no time is kept yet for this run',
+    );
+    // Nothing started in a worktree.
+    expect(await calls()).toHaveLength(1);
+  });
+
+  it('in the stop hook, runs once the worktree’s and the step’s times are kept, and keeps the worktree’s time (ADR 0090)', async () => {
+    const { repo, env } = await repoWith('honest', { lint: 'node lint.cjs' });
+    // A verify keeps the step's time, and the worktree's making and removal.
+    await runCli(['verify', '--no-cache'], repo.root, env);
+    const kept = await readFile(path.join(repo.root, '.firescale', 'step-times.json'), 'utf8');
+    expect(kept).toContain('old tests: worktree');
+    const hook = await stopHook(repo.root, env, 3600);
+    expect(hook.code).toBe(EXIT_BLOCK_HOOK);
+    expect(hook.stderr).toContain(
+      "    evidence: the base's version fails on the head's code: src/cart.test.ts > cart > adds the items",
+    );
   });
 
   it('in the stop hook, says "not judged" instead of going past the hook’s time limit', async () => {

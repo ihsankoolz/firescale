@@ -616,6 +616,60 @@ mod tests {
         assert!(!holds_code("tests/test_a.py"));
     }
 
+    fn tree(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (path, text) in files {
+            let at = dir.path().join(path);
+            fs::create_dir_all(at.parent().unwrap()).unwrap();
+            fs::write(at, text).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_cargo_test_is_tied_to_a_file_only_when_no_other_could_be_it() {
+        let cand = |files: &[&str]| files.iter().map(|f| (*f).to_owned()).collect::<Vec<_>>();
+        // One crate `shop`, one `tests/cart.rs`: sure.
+        let clear = tree(&[
+            ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+            ("tests/cart.rs", ""),
+        ]);
+        assert_eq!(
+            tie(clear.path(), ".", TestRunner::Cargo, "cart::totals", &cand(&["tests/cart.rs"])),
+            Tie::File("tests/cart.rs".to_owned())
+        );
+        // The crate is named `cart` too: its library's own tests run as `cart`.
+        let clash = tree(&[
+            ("Cargo.toml", "[package]\nname = \"cart\"\n"),
+            ("tests/cart.rs", ""),
+        ]);
+        assert!(matches!(
+            tie(clash.path(), ".", TestRunner::Cargo, "cart::totals", &cand(&["tests/cart.rs"])),
+            Tie::Unsure(why) if why.contains("a crate is named `cart`")
+        ));
+        // Two crates' `tests/x.rs` under one unit.
+        let two = tree(&[
+            ("a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("a/tests/x.rs", ""),
+            ("b/Cargo.toml", "[package]\nname = \"b\"\n"),
+            ("b/tests/x.rs", ""),
+        ]);
+        assert!(matches!(
+            tie(two.path(), ".", TestRunner::Cargo, "x::totals", &cand(&["a/tests/x.rs"])),
+            Tie::Unsure(why) if why.contains("2 files")
+        ));
+        // A binary no candidate could be.
+        assert_eq!(
+            tie(clear.path(), ".", TestRunner::Cargo, "other::t", &cand(&["tests/cart.rs"])),
+            Tie::Elsewhere
+        );
+        // Pytest names the file: sure.
+        assert_eq!(
+            tie(clear.path(), ".", TestRunner::Pytest, "tests/test_a.py::t", &cand(&["tests/test_a.py"])),
+            Tie::File("tests/test_a.py".to_owned())
+        );
+    }
+
     #[test]
     fn a_failing_test_is_matched_to_its_file() {
         assert!(in_file(
