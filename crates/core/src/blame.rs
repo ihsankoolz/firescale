@@ -475,7 +475,7 @@ pub struct Worktree {
     files: std::sync::Mutex<Vec<PathBuf>>,
     /// The lock on the repo's kept build folders, held while the worktree
     /// lives (ADR 0081).
-    kept_lock: std::sync::Mutex<Option<fs::File>>,
+    kept_lock: std::sync::Mutex<Option<KeptLock>>,
     /// The firescale root inside it.
     pub root: PathBuf,
 }
@@ -788,21 +788,53 @@ fn cargo_folders(root: &Path) -> Vec<String> {
     folders
 }
 
+/// A lock this old was left by a base run that was killed: it is taken
+/// back. Until then, base runs of the repo build from nothing, as before
+/// ADR 0081, which is safe.
+const KEPT_LOCK_STALE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The lock on a repo's kept Rust build folders, held by one base run: a
+/// file made with `create_new`, removed when this is dropped.
+#[derive(Debug)]
+struct KeptLock {
+    path: PathBuf,
+}
+
+impl Drop for KeptLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 /// Takes the kept build folders of a repo for one base run, or `None` when
 /// another base run of the same repo holds them (or the lock cannot be
 /// made): that run then builds in its own worktree, from nothing, as before
-/// ADR 0081. The lock is let go when the returned file is closed, also
-/// when the process dies, so it is never left behind.
-fn lock_kept_targets(shared: &Path) -> Option<fs::File> {
+/// ADR 0081. Otherwise one run's step could run a binary that the other
+/// built from another base commit.
+fn lock_kept_targets(shared: &Path) -> Option<KeptLock> {
     fs::create_dir_all(shared).ok()?;
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(shared.join(".lock"))
-        .ok()?;
-    file.try_lock().ok()?;
-    Some(file)
+    let path = shared.join(".lock");
+    let take = || {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .ok()
+            .map(|_| KeptLock { path: path.clone() })
+    };
+    if let Some(lock) = take() {
+        return Some(lock);
+    }
+    let stale = fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|written| written.elapsed().ok())
+        .is_some_and(|age| age > KEPT_LOCK_STALE);
+    if stale {
+        let _ = fs::remove_file(&path);
+        return take();
+    }
+    None
 }
 
 /// The ignored dependency folders that are linked from the head.
