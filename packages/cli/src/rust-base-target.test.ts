@@ -1,13 +1,10 @@
-// Rust base runs keep their build folders (ADR 0081; build idea 10), for
-// cargo only (ADR 0081, addendum). A base step whose command starts with
-// `cargo` gets CARGO_TARGET_DIR set to a folder of its own in the temp
-// folder, kept from one base run to the next: cargo checks freshness
-// itself. Every other base step gets an empty target, as before: a kept
-// build from another base commit could make a head failure read
-// pre-existing. Never the head's folder.
+// Base runs of a Rust repo get an empty target, every step of them (ADR 0081,
+// addendum 1). A build kept between base runs could be read without cargo
+// rebuilding it (a sibling binary of `cargo test -p`, a program after
+// `cargo build &&`, `cargo xtask`) and make a head failure read
+// pre-existing. A base step never gets CARGO_TARGET_DIR, so it never
+// builds into the head's folder either.
 import { chmod, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { runGit } from '@firescale/sdk';
 import { fixtureSet } from '@firescale/sdk/testing';
@@ -15,9 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { commitAll, EXIT_VIOLATIONS, runCli } from './test-helpers.js';
 
 const fixtures = fixtureSet();
-const made: string[] = [];
 afterEach(async () => {
-  for (const folder of made.splice(0)) await rm(folder, { recursive: true, force: true });
   await fixtures.cleanup();
 });
 
@@ -120,28 +115,18 @@ async function repo(files: Record<string, string>) {
   return { root, seen, base, verify };
 }
 
-/** Deletes the kept folders of a test's repo afterwards. */
-function forget(target: string | null | undefined): void {
-  if (target) made.push(path.dirname(target));
-}
-
-describe('a base step that runs cargo keeps its build folder from one base run to the next', () => {
-  it('gets CARGO_TARGET_DIR in the temp folder, the same each run, with what the last run left there', async () => {
-    const { root, base, verify } = await repo({ 'Cargo.toml': CARGO, 'src/lib.rs': '' });
+describe('every base step of a Rust repo gets an empty target', () => {
+  it('a cargo step and any other: no CARGO_TARGET_DIR, no target, nothing kept from the last base run', async () => {
+    const { base, verify } = await repo({ 'Cargo.toml': CARGO, 'src/lib.rs': '' });
     await verify();
     await verify();
-    const runs = await base('cargo');
-    expect(runs).toHaveLength(2);
-    const [first, second] = runs;
-    forget(first?.cargoTarget);
-    expect(first?.cargoTarget).not.toBeNull();
-    expect(second?.cargoTarget).toBe(first?.cargoTarget);
-    expect([first?.marker, second?.marker]).toEqual([false, true]);
-    const folder = realpathSync(first?.cargoTarget ?? '');
-    expect(folder.startsWith(realpathSync(os.tmpdir()) + path.sep)).toBe(true);
-    expect(folder.startsWith(realpathSync(root) + path.sep)).toBe(false);
-    // No link: the worktree's own target is as it was, empty.
-    expect([first?.target, second?.target]).toEqual([null, null]);
+    for (const step of ['cargo', 'node'] as const) {
+      const runs = await base(step);
+      expect(runs).toHaveLength(2);
+      for (const entry of runs) {
+        expect([entry.cargoTarget, entry.target, entry.marker]).toEqual([null, null, false]);
+      }
+    }
   });
 
   it("never uses the head's folder, also when the environment names it", async () => {
@@ -150,43 +135,15 @@ describe('a base step that runs cargo keeps its build folder from one base run t
     await mkdir(own);
     await writeFile(path.join(own, 'kept.txt'), 'head\n');
     await verify({ CARGO_TARGET_DIR: own });
-    const [cargo] = await base('cargo');
-    forget(cargo?.cargoTarget);
-    expect(cargo?.cargoTarget).not.toBeNull();
-    expect(cargo?.cargoTarget).not.toBe(own);
-    const [node] = await base('node');
-    expect(node?.cargoTarget).toBeNull();
+    for (const step of ['cargo', 'node'] as const) {
+      const [entry] = await base(step);
+      expect([entry?.cargoTarget, entry?.target]).toEqual([null, null]);
+    }
     // The head's steps keep what the environment gives them.
     const head = (await seen()).filter((entry) => entry.where === 'head');
     expect(head.length).toBeGreaterThan(0);
     for (const entry of head) expect(entry.cargoTarget).toBe(own);
     expect(await readdir(own)).toEqual(['kept.txt']);
-  });
-
-  it('gives every other base step an empty target, as before, also after a cargo step kept a build', async () => {
-    const { base, verify } = await repo({ 'Cargo.toml': CARGO, 'src/lib.rs': '' });
-    await verify();
-    await verify();
-    forget((await base('cargo'))[0]?.cargoTarget);
-    const node = await base('node');
-    expect(node).toHaveLength(2);
-    for (const entry of node) {
-      expect([entry.cargoTarget, entry.target, entry.marker]).toEqual([null, null, false]);
-    }
-  });
-
-  it('two repos get two folders', async () => {
-    const one = await repo({ 'Cargo.toml': CARGO, 'src/lib.rs': '' });
-    const two = await repo({ 'Cargo.toml': CARGO, 'src/lib.rs': '' });
-    await one.verify();
-    await two.verify();
-    const a = (await one.base('cargo'))[0]?.cargoTarget;
-    const b = (await two.base('cargo'))[0]?.cargoTarget;
-    forget(a);
-    forget(b);
-    expect(a).not.toBeNull();
-    expect(b).not.toBeNull();
-    expect(a).not.toBe(b);
   });
 
   it('changes nothing for a repo with no Rust', async () => {
