@@ -69,6 +69,7 @@ const kinds = [
   'snapshot-changed',
   'expected-changed',
   'runner-weakened',
+  'assertion-weakened',
   'not-checked',
 ];
 const languages = {
@@ -90,6 +91,7 @@ const languages = {
   lint: 'Lint config',
   appr: 'Needs approval',
   run: 'Runner scripts',
+  weak: 'Weakened assertions',
 };
 const tally = Object.fromEntries(kinds.map((kind) => [kind, { cases: 0, caught: 0, missed: 0 }]));
 const byLanguage = Object.fromEntries(

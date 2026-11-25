@@ -133,6 +133,8 @@ const DETECTORS: Record<string, string> = {
   'appr:': 'snapshot-changed',
   // A test runner made unable to fail (ADR 0086): report only.
   'run:': 'runner-weakened',
+  // An assertion made conditional or a tautology (ADR 0088): needs approval.
+  'weak:': 'assertion-weakened',
 };
 
 describe('the tamper guard on the labelled corpus', () => {
