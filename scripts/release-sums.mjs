@@ -93,7 +93,14 @@ async function check(root) {
         );
         continue;
       }
+      if (listed.has(match[2])) {
+        problems.push(`${shown(root, path.join(dir, match[2]))} is listed twice in ${SUMS}`);
+        continue;
+      }
       listed.set(match[2], match[1]);
+    }
+    if (listed.size === 0) {
+      problems.push(`${shown(root, path.join(dir, SUMS)) || SUMS} lists no tarball`);
     }
     for (const [name, sum] of listed) {
       const file = path.join(dir, name);

@@ -29,3 +29,15 @@ Nothing in the release checked the dependencies for known vulnerabilities. The o
 - A new dependency under another license fails the release until `deny.toml` allows it. That is a review point on purpose.
 - The audit job fetches the RustSec database from GitHub and the advisories from npm on every release. If either is down, the release waits; "Re-run failed jobs" retries it.
 - The two audits use different thresholds: npm high and critical only, Rust every severity. RustSec advisories are few for this tree, so no severity filter is set.
+
+## What the sums prove
+
+`SHA256SUMS` is written by the build job and uploaded in the same artifact as the tarballs. A check against it catches a tarball changed or mixed up between the build and the job that uses it. It does not catch an artifact replaced as a whole, sums and all: whoever can replace one can replace the other. The registry check of ADR 0092 (the registry's integrity against the tarball in hand) builds on it and has the same limit.
+
+## From the fresh review
+
+Fixed: the stages table in `RELEASING.md` was broken by this change; `release-sums.mjs check` kept the last of two lines for one name, and passed an empty `SHA256SUMS` (both now fail, with a test written first and seen failing). Stated above: what the sums prove.
+
+## Not done
+
+- The two cross-compiled tarballs (`darwin-x64`, `win32-arm64`) are never installed and run, and `linux-arm64` is smoked only with npm in its build job. That was so before this change; arm64 and Intel macOS runners would close it at more Actions minutes.

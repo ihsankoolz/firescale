@@ -22,6 +22,7 @@ One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums,
 - A job `smoke` per OS (linux-x64, darwin-arm64, win32-x64) runs `smoke-npm.mjs` with npm, pnpm and yarn on the downloaded tarballs; publish needs it.
 - **Failing tests first:** 8 new tests in `release.test.ts` (5 for the sums script, 3 for the workflow), seen failing, plus 2 existing ones that list the jobs.
 - **Decided on your behalf:** the audit runs in the release only, not on every pull request; Rust advisories fail at any severity; the license allow list is exactly what the tree uses today.
+- **From the fresh review, fixed:** the stages table in `RELEASING.md` (broken by this change); a name listed twice in `SHA256SUMS`, and an empty one, now fail (a test first, seen failing). ADR 0093 now says the sums catch a tarball changed between jobs, not an artifact replaced with its sums. Not done: the cross-compiled tarballs are still never run (as before).
 
 ## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
 
