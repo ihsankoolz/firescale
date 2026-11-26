@@ -1,8 +1,17 @@
-# Builds the npm tarballs for all six platforms. For a version tag it then
-# publishes the eight packages to npm and checks the result from clean runners.
+# From a tag to `latest` on npm, the same bytes all the way (ADR 0092):
+#   check version, audit, build (with SHA-256 sums), smoke the tarballs,
+#   staging (publish under next), staging tests (npx firescale@next, real repos),
+#   record latest, approval (environment production), promote (move latest),
+#   production smoke (npx firescale@latest), and rollback (move latest back,
+#   open an issue) when promotion or that smoke fails.
 #
-#   started by hand (workflow_dispatch)   audits, builds and smokes the tarballs, publishes nothing
-#   push of a tag v<version>              audits, builds, smokes, publishes under next, tests next
+#   push of a tag v<version>           the whole pipeline; a pre-release stops
+#                                      after the staging tests
+#   started by hand                    audit, build and smoke; publishes nothing
+#   started by hand with `rehearsal`   the whole pipeline with a stand-in for npm
+#                                      (scripts/fake-npm.mjs): nothing on npm
+#                                      changes, the production smoke fails on
+#                                      purpose, and the rollback runs
 #
 # Publishing uses npm trusted publishing (OIDC): there is no npm token and no
 # secret in this file. Each package names this workflow file, release.yml, as
@@ -12,6 +21,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      rehearsal:
+        description: 'Rehearse the whole release with a stand-in for npm: nothing on npm changes, the rollback runs (ADR 0092)'
+        type: boolean
+        default: false
   push:
     tags: ['v*']
 
@@ -255,13 +269,18 @@ jobs:
     # Step 5 of ADR 0092. Only for a pushed version tag: a run started by hand
     # stops after the smoke. Every package goes out under the dist-tag next,
     # a normal version too, so latest is never touched here.
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.rehearsal)
     needs: [version, build, smoke]
     name: staging / publish to npm under next
     # Trusted publishing works on GitHub-hosted runners only.
     runs-on: ubuntu-latest
     environment: staging
     timeout-minutes: 25
+    # A rehearsal uses the stand-in for npm, and its registry file (ADR 0092).
+    # For a tag push the expression is empty: the real npm.
+    env:
+      FSCALE_NPM_COMMAND: ${{ inputs.rehearsal && 'scripts/fake-npm.mjs' || '' }}
+      FSCALE_FAKE_NPM_STATE: rehearsal/registry.json
     permissions:
       contents: read
       # Lets npm exchange a short-lived GitHub OIDC token for the right to
@@ -288,6 +307,13 @@ jobs:
       - name: The tarballs match their sums
         run: node scripts/release-sums.mjs check artifacts
 
+      # The stand-in starts with npm's real latest of the eight (a public read).
+      - name: 'rehearsal: seed the stand-in registry'
+        if: inputs.rehearsal
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/rehearsal-seed.mjs --version "$VERSION"
+
       # Platform packages, then @firescale/sdk, then firescale, under next. A
       # version that is already on the registry is skipped, so this job can be
       # run again. Then each is read back: the registry's integrity against
@@ -297,10 +323,20 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: node scripts/publish-npm.mjs --dir artifacts --version "$VERSION"
 
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && inputs.rehearsal
+        with:
+          name: rehearsal-registry
+          path: rehearsal/registry.json
+          overwrite: true
+          if-no-files-found: error
+
   staging-test:
     # Step 6 of ADR 0092: what npm serves under next, installed the way a user
     # would, on each OS.
     needs: [version, staging]
+    # A rehearsal published nothing on npm, so there is nothing to install.
+    if: ${{ !inputs.rehearsal }}
     name: staging test / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -341,9 +377,267 @@ jobs:
     # npm under next instead of a build. After the staging tests, so that its
     # many jobs start only once next installs everywhere.
     needs: [version, staging, staging-test]
+    if: ${{ !inputs.rehearsal }}
     permissions:
       contents: read
     uses: ./.github/workflows/real-repos.yml
     with:
       fscale: next
       version: ${{ needs.version.outputs.version }}
+
+  record:
+    # Step 8 of ADR 0092, first half: the current latest of all eight, kept
+    # as an artifact before anything moves. Its own job, so that "Re-run
+    # failed jobs" never records again: a re-run of promotion uses this
+    # record. Never for a pre-release, which stays under next.
+    needs: [version, staging, staging-test, real-repos]
+    if: >-
+      always() && needs.staging.result == 'success'
+      && (needs.staging-test.result == 'success' || inputs.rehearsal)
+      && (needs.real-repos.result == 'success' || inputs.rehearsal)
+      && !contains(needs.version.outputs.version, '-')
+    name: record latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FSCALE_NPM_COMMAND: ${{ inputs.rehearsal && 'scripts/fake-npm.mjs' || '' }}
+      FSCALE_FAKE_NPM_STATE: rehearsal/registry.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.rehearsal
+        with:
+          name: rehearsal-registry
+          path: rehearsal
+
+      # A public read; it refuses a latest that is already the candidate, and
+      # a version lower than the latest of firescale.
+      - name: Record the latest of the eight packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mkdir -p record
+          node scripts/promote-npm.mjs record --version "$VERSION" --out record/promotion-record.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: promotion-record
+          path: record/promotion-record.json
+          # "Re-run all jobs" records again; that record refuses once anything moved.
+          overwrite: true
+          if-no-files-found: error
+
+  promote:
+    # Steps 7 and 8 of ADR 0092: the environment production has a required
+    # reviewer, the owner, so this job waits for the approval. Then latest
+    # moves to the version on all eight, firescale last.
+    needs: [version, record]
+    name: production / move latest
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # npm dist-tag through trusted publishing (OIDC): no npm token.
+      id-token: write
+    env:
+      FSCALE_NPM_COMMAND: ${{ inputs.rehearsal && 'scripts/fake-npm.mjs' || '' }}
+      FSCALE_FAKE_NPM_STATE: rehearsal/registry.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      # dist-tags through OIDC need npm 11.21.0 or later, and no Node ships it
+      # yet (ADR 0092). One exact version.
+      - name: Install npm 11.21.3
+        run: |
+          npm install -g npm@11.21.3
+          npm --version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          pattern: npm-*
+
+      - name: The tarballs match their sums
+        run: node scripts/release-sums.mjs check artifacts
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: promotion-record
+          path: record
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.rehearsal
+        with:
+          name: rehearsal-registry
+          path: rehearsal
+
+      # The registry's bytes once more, then each latest still the recorded
+      # one, then the moves, each read back.
+      - name: Move latest on the eight packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/promote-npm.mjs promote --version "$VERSION" --record record/promotion-record.json --dir artifacts
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && inputs.rehearsal
+        with:
+          name: rehearsal-registry
+          path: rehearsal/registry.json
+          overwrite: true
+          if-no-files-found: error
+
+  smoke-latest:
+    # Step 9 of ADR 0092: what npm now serves as latest, installed the way a
+    # user would, on each OS, with a new empty npm cache.
+    needs: [version, promote]
+    name: production smoke / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # The point of a rehearsal: a failed production smoke must roll back.
+      - name: 'rehearsal: forced failure'
+        if: inputs.rehearsal
+        shell: bash
+        run: |
+          echo "::error::rehearsal: forced failure of the production smoke, so that the rollback runs (ADR 0092)."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
+          package-manager-cache: false
+
+      - name: npx firescale@latest --version is the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/verify-published.mjs "$VERSION" --tag latest
+
+      - name: npx firescale@latest init, check, verify and doctor
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/try-published.mjs latest --expect "$VERSION"
+
+  rollback:
+    # Step 10 of ADR 0092: when promotion or the production smoke failed or
+    # was cancelled, latest goes back to the record on all eight. Its own
+    # environment, with no reviewer: a rollback never waits for anyone. Only
+    # dist-tags move; nothing is unpublished. When promotion never started (a
+    # pre-release, a failed staging), there is no record and this is skipped.
+    needs: [version, promote, smoke-latest]
+    if: >-
+      always() && needs.promote.result != 'skipped'
+      && (needs.promote.result == 'failure' || needs.promote.result == 'cancelled'
+      || needs.smoke-latest.result == 'failure' || needs.smoke-latest.result == 'cancelled')
+    name: rollback / move latest back
+    runs-on: ubuntu-latest
+    environment: rollback
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # npm dist-tag through trusted publishing (OIDC): no npm token.
+      id-token: write
+    env:
+      FSCALE_NPM_COMMAND: ${{ inputs.rehearsal && 'scripts/fake-npm.mjs' || '' }}
+      FSCALE_FAKE_NPM_STATE: rehearsal/registry.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Install npm 11.21.3
+        run: |
+          npm install -g npm@11.21.3
+          npm --version
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: promotion-record
+          path: record
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.rehearsal
+        with:
+          name: rehearsal-registry
+          path: rehearsal
+
+      - name: Move latest back on the eight packages
+        run: node scripts/promote-npm.mjs rollback --record record/promotion-record.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && inputs.rehearsal
+        with:
+          name: rehearsal-registry
+          path: rehearsal/registry.json
+          overwrite: true
+          if-no-files-found: error
+
+  issue:
+    # Step 10 of ADR 0092: an issue that says what failed, what the rollback
+    # did, to ship a patch and to consider npm deprecate. The run fails
+    # anyway: the job that failed is red. A rehearsal's issue is closed at once.
+    needs: [version, promote, smoke-latest, rollback]
+    if: always() && needs.rollback.result != 'skipped'
+    name: open an issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
+          package-manager-cache: false
+
+      - name: Open the issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PROMOTE: ${{ needs.promote.result }}
+          SMOKE: ${{ needs.smoke-latest.result }}
+          ROLLBACK: ${{ needs.rollback.result }}
+          REHEARSAL: ${{ inputs.rehearsal && 'true' || '' }}
+        run: |
+          flags=()
+          if [ -n "$REHEARSAL" ]; then flags=(--rehearsal); fi
+          title=$(node scripts/release-issue.mjs --version "$VERSION" --run "$RUN_URL" \
+            --promote "$PROMOTE" --smoke "$SMOKE" --rollback "$ROLLBACK" --out "$RUNNER_TEMP/issue.md" "${flags[@]}")
+          url=$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/issue.md")
+          echo "Opened $url"
+          if [ -n "$REHEARSAL" ]; then
+            gh issue close "$url" --repo "$GITHUB_REPOSITORY" --comment "Closed at once: a rehearsal (ADR 0092)."
+          fi

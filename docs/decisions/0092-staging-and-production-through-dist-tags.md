@@ -47,7 +47,7 @@ npm's documentation was read on 2026-11-25 from its documentation repository (`n
 7. **approval**: the promotion job is in the environment `production`, whose required reviewer is the owner. "Prevent self-review" is off: the owner is the only reviewer and pushes the tag.
 8. **production**, in two jobs. **record** (no environment, no OIDC, after the staging tests): read the current `latest` of all eight from the registry and upload it as the artifact `promotion-record`. It refuses when any package's `latest` is already the candidate, so a record never holds the candidate as a previous `latest`. It runs once per run: "Re-run failed jobs" does not run a job that passed, so a re-run of promotion uses the first record. **promote** (environment `production`, so it waits for the owner): download the tarballs and check the sums; check the registry's integrity again for all eight; download the record and check that each package's `latest` is still the recorded one or already the candidate (anything else means `latest` moved since, and the job stops before moving anything); then **move `latest`** on each package not yet on the candidate, the platform packages first, `@firescale/sdk`, then `firescale` last, and read each back.
 9. **production smoke**: `npx firescale@latest --version` prints the version, then the same `init`, `check`, `verify` and `doctor`, on Linux, macOS and Windows, a new empty npm cache for every attempt.
-10. **rollback** (environment `rollback`, which has no reviewer, so it starts at once), when promotion or the production smoke failed **or was cancelled** (`always()` with the results of both jobs, so a cancelled run still rolls back): move `latest` back on every package whose `latest` is not the recorded one, and read each back; then a separate job opens an issue that names the version, what failed and the run, says to ship a patch, and suggests `npm deprecate firescale@<version> "<reason>"`. The run fails. When promotion never started (a pre-release, a failure in staging or its tests, no approval), there is no record and nothing to undo: rollback does not run.
+10. **rollback** (environment `rollback`, which has no reviewer, so it starts at once), when promotion or the production smoke failed **or was cancelled** (`always()` with the results of both jobs, so a cancelled run still rolls back): move `latest` back on every package whose `latest` is the candidate, and read each back (a `latest` that is neither the candidate nor the recorded one was moved by someone else, another release or a person, and is left alone); then a separate job opens an issue that names the version, what failed and the run, says to ship a patch, and suggests `npm deprecate firescale@<version> "<reason>"`. The run fails. When promotion never started (a pre-release, a failure in staging or its tests, no approval), there is no record and nothing to undo: rollback does not run.
 
 ### Dist-tags through OIDC, never silently
 
@@ -93,7 +93,12 @@ A run started by hand with the input `rehearsal` runs the whole pipeline with **
 
 ## Not done
 
-(Filled in by the pull requests that build this.)
+- Two releases of different tags are not serialised (the concurrency group is per ref). The rollback leaves alone a `latest` it did not move, but a promotion and another release's promotion can still interleave; release one version at a time.
+- A rejected approval makes the promotion job fail, so the rollback runs (it finds nothing moved) and an issue is opened that says so. Telling a rejection apart from a failure would need the deployment's review state.
+- A rehearsal cannot run the staging tests or the real repos: nothing was published to install. They are proven only by a real tag.
+- A rehearsal needs a version that is not yet `latest` on npm.
+- The workflow's syntax was not checked with actionlint locally; the rehearsal run checks it.
+- Pinning the trusted publishers to environments: see "Needs your decision".
 
 ## From the fresh review
 

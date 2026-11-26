@@ -20,7 +20,7 @@
 //   seed <name> <tag> <version>      a version that exists elsewhere (bytes unknown), with a tag
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -52,7 +52,11 @@ const load = () => {
     return { packages: {} };
   }
 };
-const save = (state) => writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+const save = (state) => {
+  // A rehearsal job starts with no folder for it.
+  mkdirSync(path.dirname(path.resolve(stateFile)), { recursive: true });
+  writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`);
+};
 const entry = (state, name) => (state.packages[name] ??= { versions: {}, tags: {} });
 
 const shown = args.map((arg) => (arg.endsWith('.tgz') ? path.basename(arg) : arg)).join(' ');

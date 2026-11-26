@@ -792,10 +792,10 @@ Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (t
 - ☑ `smoke-npm.mjs` runs on Linux, macOS and Windows with npm, pnpm and yarn before anything is published.
 - ☑ Staging publishes all eight packages under `next` (never `latest`) in the environment `staging`, and checks the registry's integrity against the tarballs.
 - ☑ Staging tests run `npx firescale@next` (`init`, `check`, `verify`, `doctor`) on three OSes, and `real-repos.yml` runs as a `workflow_call` against `next`.
-- ☐ A pre-release stops after the staging tests and is never moved to `latest`.
-- ☐ Promotion waits for the environment `production`, records `latest` of all eight, moves it, and reads it back.
-- ☐ A failed production smoke moves `latest` back on all eight, opens an issue, and fails the run; nothing is unpublished.
-- ☐ Unit tests for the promotion and rollback scripts with the fake npm; only the publishing and tag-moving jobs have `id-token: write`; no secret is named.
+- ☑ A pre-release stops after the staging tests and is never moved to `latest`.
+- ☑ Promotion waits for the environment `production`, records `latest` of all eight, moves it, and reads it back.
+- ☑ A failed production smoke moves `latest` back on all eight, opens an issue, and fails the run; nothing is unpublished.
+- ☑ Unit tests for the promotion and rollback scripts with the fake npm; only the publishing and tag-moving jobs have `id-token: write`; no secret is named.
 - ☐ The environments `staging`, `production` (reviewer `ihsankoolz`) and `rollback` exist.
 - ☐ A rehearsal (`workflow_dispatch` with `rehearsal`) runs the rollback path end to end without touching npm, and its result is recorded.
 

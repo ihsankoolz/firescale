@@ -624,11 +624,21 @@ describe('.github/workflows/release.yml', () => {
     expect(text).not.toMatch(/NODE_AUTH_TOKEN|NPM_TOKEN|_authToken/);
   });
 
-  it('gives only the staging publish job the OIDC permission, in its environment', async () => {
+  it('gives the OIDC permission only to the jobs that publish or move tags, each in its environment', async () => {
     const text = await read();
-    expect(text.match(/id-token: write/g)).toHaveLength(1);
-    expect(job(text, 'staging')).toContain('id-token: write');
-    expect(job(text, 'staging')).toContain('environment: staging');
+    expect(text.match(/id-token: write/g)).toHaveLength(3);
+    for (const [name, environment] of [
+      ['staging', 'staging'],
+      ['promote', 'production'],
+      ['rollback', 'rollback'],
+    ] as const) {
+      expect(job(text, name), name).toContain('id-token: write');
+      expect(job(text, name), name).toContain(`environment: ${environment}`);
+    }
+    // The record reads public data; the issue job writes an issue, nothing on npm.
+    expect(job(text, 'record')).not.toContain('id-token');
+    expect(job(text, 'issue')).not.toContain('id-token');
+    expect(job(text, 'issue')).toMatch(/permissions:\n {6}contents: read\n {6}issues: write\n/);
     // The default for every other job.
     expect(text).toMatch(/\npermissions:\n {2}contents: read\n/);
   });
@@ -636,7 +646,9 @@ describe('.github/workflows/release.yml', () => {
   it('publishes only for a pushed tag, after the version check and the build', async () => {
     const text = await read();
     const publish = job(text, 'staging');
-    expect(publish).toContain("if: github.event_name == 'push' && github.ref_type == 'tag'");
+    expect(publish).toContain(
+      "if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.rehearsal)",
+    );
     expect(publish).toContain('runs-on: ubuntu-latest');
     expect(publish).toContain('node scripts/publish-npm.mjs --dir artifacts');
     expect(job(text, 'build')).toContain('needs: [version, audit]');
@@ -649,11 +661,13 @@ describe('.github/workflows/release.yml', () => {
     for (const name of ['version', 'staging', 'staging-test']) {
       expect(job(text, name)).toMatch(/timeout-minutes: \d+/);
     }
-    // A manual run has no job that publishes: the staging tests need staging, which is skipped.
+    // A manual run without the rehearsal has no job that publishes: the staging tests need staging, which is skipped.
     const verify = job(text, 'staging-test');
     expect(verify).toContain('needs: [version, staging]');
     expect(verify).toContain('os: [ubuntu-latest, macos-latest, windows-latest]');
-    expect(text).toMatch(/\non:\n {2}workflow_dispatch:\n {2}push:\n {4}tags: \['v\*'\]\n/);
+    expect(text).toMatch(
+      /\non:\n {2}workflow_dispatch:\n {4}inputs:\n {6}rehearsal:\n(?: {8}.+\n)+ {2}push:\n {4}tags: \['v\*'\]\n/,
+    );
   });
 
   it('audits the dependencies before any build: pnpm audit and a pinned cargo-deny', async () => {
@@ -728,6 +742,84 @@ describe('.github/workflows/release.yml', () => {
     expect(real).toMatch(/permissions:\n {6}contents: read\n/);
   });
 
+  it('records latest once, after the staging tests, and never for a pre-release', async () => {
+    const text = await read();
+    const record = job(text, 'record');
+    expect(record).toContain('needs: [version, staging, staging-test, real-repos]');
+    expect(record).toContain("!contains(needs.version.outputs.version, '-')");
+    // In a rehearsal the staging tests are skipped; otherwise they must pass.
+    expect(record).toContain("(needs.staging-test.result == 'success' || inputs.rehearsal)");
+    expect(record).toContain("(needs.real-repos.result == 'success' || inputs.rehearsal)");
+    expect(record).toContain('node scripts/promote-npm.mjs record --version "$VERSION"');
+    expect(record).toContain('name: promotion-record');
+    expect(record).not.toContain('environment:');
+  });
+
+  it('promotes after the approval, with the sums and npm 11.21.3, then smokes latest on three OSes', async () => {
+    const text = await read();
+    const promote = job(text, 'promote');
+    expect(promote).toContain('needs: [version, record]');
+    expect(promote).toContain('environment: production');
+    expect(promote).toContain('npm install -g npm@11.21.3');
+    const sums = promote.indexOf('release-sums.mjs check artifacts');
+    const move = promote.indexOf('node scripts/promote-npm.mjs promote --version "$VERSION"');
+    expect(sums).toBeGreaterThan(-1);
+    expect(move).toBeGreaterThan(sums);
+
+    const smoke = job(text, 'smoke-latest');
+    expect(smoke).toContain('needs: [version, promote]');
+    expect(smoke).toContain('os: [ubuntu-latest, macos-latest, windows-latest]');
+    expect(smoke).toContain('node scripts/verify-published.mjs "$VERSION" --tag latest');
+    expect(smoke).toContain('node scripts/try-published.mjs latest --expect "$VERSION"');
+    expect(smoke).not.toContain('id-token');
+  });
+
+  it('rolls back on a failed or cancelled promotion or smoke, without waiting for anyone, then opens an issue', async () => {
+    const text = await read();
+    const rollback = job(text, 'rollback');
+    expect(rollback).toContain('needs: [version, promote, smoke-latest]');
+    expect(rollback).toContain('always()');
+    // No record, nothing to undo: rollback never runs when promotion did not start.
+    expect(rollback).toContain("needs.promote.result != 'skipped'");
+    for (const result of ['failure', 'cancelled']) {
+      expect(rollback).toContain(`needs.promote.result == '${result}'`);
+      expect(rollback).toContain(`needs.smoke-latest.result == '${result}'`);
+    }
+    expect(rollback).toContain('environment: rollback');
+    expect(rollback).toContain('npm install -g npm@11.21.3');
+    expect(rollback).toContain('node scripts/promote-npm.mjs rollback --record');
+    // Only dist-tags move back: nothing is unpublished, anywhere.
+    expect(text.replace(/^\s*#.*$/gm, '')).not.toMatch(/npm unpublish/);
+
+    const issue = job(text, 'issue');
+    expect(issue).toContain('needs: [version, promote, smoke-latest, rollback]');
+    expect(issue).toContain("needs.rollback.result != 'skipped'");
+    expect(issue).toContain('node scripts/release-issue.mjs');
+    expect(issue).toContain('gh issue create');
+    expect(issue).toContain('GH_TOKEN: ${{ github.token }}');
+  });
+
+  it('uses the stand-in npm only in a rehearsal, and fails the production smoke there on purpose', async () => {
+    const text = await read();
+    const standIn = "FSCALE_NPM_COMMAND: ${{ inputs.rehearsal && 'scripts/fake-npm.mjs' || '' }}";
+    for (const name of ['staging', 'record', 'promote', 'rollback']) {
+      expect(job(text, name), name).toContain(standIn);
+    }
+    expect(text.match(/FSCALE_NPM_COMMAND:/g)).toHaveLength(4);
+    // A rehearsal reaches staging only when started by hand with the input.
+    expect(job(text, 'staging')).toContain(
+      "if: (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.rehearsal)",
+    );
+    expect(job(text, 'staging')).toContain('node scripts/rehearsal-seed.mjs --version "$VERSION"');
+    for (const name of ['staging-test', 'real-repos']) {
+      expect(job(text, name), name).toContain('if: ${{ !inputs.rehearsal }}');
+    }
+    const smoke = job(text, 'smoke-latest');
+    expect(smoke).toContain('rehearsal: forced failure');
+    // The rehearsal's issue is closed at once.
+    expect(job(text, 'issue')).toContain('gh issue close');
+  });
+
   it('pins every action to a commit', async () => {
     const uses = (await read()).match(/uses: .+/g) ?? [];
     expect(uses.length).toBeGreaterThan(8);
@@ -763,6 +855,11 @@ describe('.github/workflows/release.yml', () => {
       'staging',
       'staging-test',
       'real-repos',
+      'record',
+      'promote',
+      'smoke-latest',
+      'rollback',
+      'issue',
     ]);
     const turnedOff = /^\s*(- )?[\w-]*cache[\w-]*: (false|none)$/i;
     const found = names.flatMap((name) =>
@@ -780,7 +877,19 @@ describe('.github/workflows/release.yml', () => {
     // setup-node can cache a package manager's store without a `cache:`
     // input (ADR 0041), and it saves in a post step. A release turns it off.
     const text = await read();
-    for (const name of ['version', 'audit', 'build', 'smoke', 'staging', 'staging-test']) {
+    for (const name of [
+      'version',
+      'audit',
+      'build',
+      'smoke',
+      'staging',
+      'staging-test',
+      'record',
+      'promote',
+      'smoke-latest',
+      'rollback',
+      'issue',
+    ]) {
       const steps = job(text, name).split(/\r?\n(?= {6}- )/);
       const setups = steps.filter((step) => step.includes('uses: actions/setup-node@'));
       expect(setups, name).toHaveLength(1);
