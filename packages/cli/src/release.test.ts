@@ -820,6 +820,34 @@ describe('.github/workflows/release.yml', () => {
     expect(job(text, 'issue')).toContain('gh issue close');
   });
 
+  it('reaches promotion when the staging tests were skipped in a rehearsal, and never in a cancelled run', async () => {
+    // A job's implicit success() also looks at the jobs before the ones it
+    // needs: with the staging tests skipped (a rehearsal), promote would be
+    // skipped too. The first rehearsal showed it (run 45747767942).
+    const text = await read();
+    expect(job(text, 'record')).toMatch(
+      /if: >-\n {6}!cancelled\(\) && needs\.staging\.result == 'success'/,
+    );
+    expect(job(text, 'promote')).toContain(
+      "if: ${{ !cancelled() && needs.record.result == 'success' }}",
+    );
+    expect(job(text, 'smoke-latest')).toContain(
+      "if: ${{ !cancelled() && needs.promote.result == 'success' }}",
+    );
+    // Only the rollback and the issue run in a cancelled run (a step may still
+    // use always() to keep the rehearsal's registry).
+    const jobLevel = (name: string) =>
+      job(text, name)
+        .split(/\r?\n(?= {6}- )/)[0]
+        ?.split(/\r?\n/)
+        .filter((line) => !/^\s*#/.test(line))
+        .join('\n') ?? '';
+    for (const name of ['record', 'promote', 'smoke-latest']) {
+      expect(jobLevel(name), name).not.toContain('always()');
+    }
+    for (const name of ['rollback', 'issue']) expect(jobLevel(name), name).toContain('always()');
+  });
+
   it('pins every action to a commit', async () => {
     const uses = (await read()).match(/uses: .+/g) ?? [];
     expect(uses.length).toBeGreaterThan(8);
