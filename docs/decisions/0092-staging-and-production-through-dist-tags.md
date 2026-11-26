@@ -1,6 +1,6 @@
 # 0092 — Staging and production through dist-tags
 
-Status: accepted (2026-11-26, M40). Amends ADR 0021 (automated releases): its stages, its "no GitHub environment and no approval step", and its "no `npm install -g npm`" for the jobs that move dist-tags. Everything else in ADR 0021 stands: no npm token, no secret, `release.yml` keeps its name, only a commit on `main` is published, a run can be repeated.
+Status: accepted (2026-11-26, M40). Amends ADR 0021 (automated releases): its stages, its "no GitHub environment and no approval step", and its "no `npm install -g npm`" for the jobs that move dist-tags. Everything else in ADR 0021 stands: no npm token, no secret, `release.yml` keeps its name, only a commit on `main` is published, a run can be repeated, and **a run started by hand never calls npm to publish or to move a tag** (a rehearsal, below, uses a stand-in for npm).
 
 ## Context
 
@@ -45,14 +45,14 @@ npm's documentation was read on 2026-11-25 from its documentation repository (`n
 5. **staging** (environment `staging`): publish the eight packages under `next` (the order of ADR 0021), then compare, for each, the registry's `dist.integrity` for that version with the SHA-512 of the tarball in hand, and check that `next` is that version.
 6. **staging tests**: on Linux, macOS and Windows, `npx firescale@next` in a new empty folder with an empty npm cache: `--version` prints the version (retried while the registry catches up), then `init` (exit 0), `check` (0), `verify` (0) and `doctor` (0; in a folder made by `init`, doctor checks that the hook's `npx --yes firescale@<version>` starts, so it checks the published version once more). And `real-repos.yml`, now also a `workflow_call` workflow, with fscale installed from npm at `next` instead of built: its steps stay observations, plus one gate per repo that fails when the installed fscale is not the version, or when any fscale command exits with a code fscale never uses (anything but 0, 1, 2 and 130: a panic, a launcher that found no binary, a missing program).
 7. **approval**: the promotion job is in the environment `production`, whose required reviewer is the owner. "Prevent self-review" is off: the owner is the only reviewer and pushes the tag.
-8. **production** (environment `production`): download the tarballs and check the sums; check the registry's integrity again for all eight; **record** the current `latest` of all eight in a file uploaded with the run (`promotion-record`); then **move `latest`** on each, the platform packages first, `@firescale/sdk`, then `firescale` last, and read each back.
+8. **production**, in two jobs. **record** (no environment, no OIDC, after the staging tests): read the current `latest` of all eight from the registry and upload it as the artifact `promotion-record`. It refuses when any package's `latest` is already the candidate, so a record never holds the candidate as a previous `latest`. It runs once per run: "Re-run failed jobs" does not run a job that passed, so a re-run of promotion uses the first record. **promote** (environment `production`, so it waits for the owner): download the tarballs and check the sums; check the registry's integrity again for all eight; download the record and check that each package's `latest` is still the recorded one or already the candidate (anything else means `latest` moved since, and the job stops before moving anything); then **move `latest`** on each package not yet on the candidate, the platform packages first, `@firescale/sdk`, then `firescale` last, and read each back.
 9. **production smoke**: `npx firescale@latest --version` prints the version, then the same `init`, `check`, `verify` and `doctor`, on Linux, macOS and Windows, a new empty npm cache for every attempt.
-10. **rollback**, when promotion or the production smoke failed: move `latest` back on every package whose `latest` is not the recorded one, and read each back; then a separate job opens an issue that names the version, what failed and the run, says to ship a patch, and suggests `npm deprecate firescale@<version> "<reason>"`. The run fails.
+10. **rollback** (environment `rollback`, which has no reviewer, so it starts at once), when promotion or the production smoke failed **or was cancelled** (`always()` with the results of both jobs, so a cancelled run still rolls back): move `latest` back on every package whose `latest` is not the recorded one, and read each back; then a separate job opens an issue that names the version, what failed and the run, says to ship a patch, and suggests `npm deprecate firescale@<version> "<reason>"`. The run fails. When promotion never started (a pre-release, a failure in staging or its tests, no approval), there is no record and nothing to undo: rollback does not run.
 
 ### Dist-tags through OIDC, never silently
 
 - **No npm token and no secret**, as in ADR 0021. The test that fails if the workflow names `secrets.` or an npm token stays.
-- **`id-token: write` only on the three jobs that publish or move tags**, each in its environment: staging publish (`staging`), promotion and rollback (`production`). The issue job has `issues: write` and no OIDC. A test pins all of it.
+- **`id-token: write` only on the three jobs that publish or move tags**, each in its environment: staging publish (`staging`), promotion (`production`) and rollback (`rollback`). The record job reads public data only and has no OIDC. The issue job has `issues: write` and no OIDC. A test pins all of it.
 - **The jobs that move tags install npm 11.21.3** (`npm install -g npm@11.21.3`, an exact version) because no Node ships 11.21.0 yet. This amends ADR 0021's "no `npm install -g npm`" for those two jobs; the publishing job keeps the npm Node 24 ships. The promotion script refuses an npm older than 11.21.0 before it moves anything.
 - **A dist-tag call that fails stops the job** with the package, the npm output and the next step ("allow npm dist-tag in that package's trusted publisher"). And because a command that exits 0 proves nothing about the registry, **every tag is read back** from the registry (`GET /-/package/<name>/dist-tags`, public, no authentication) after it is moved, a few times while the registry catches up, and the job fails unless it is the expected version.
 - **Rollback only moves dist-tags. Nothing is ever unpublished.**
@@ -65,21 +65,21 @@ Pinning configurations to environments (one for `staging` allowing `npm publish`
 
 ### The environments
 
-Created with `gh api`: `staging` (no reviewer) and `production` (required reviewer `ihsankoolz`, "prevent self-review" off). **Both accept deployments only from the branch `main` and from tags `v*`**, so a run started by hand on another branch never reaches a job that has `id-token: write`.
+Created with `gh api`: `staging` (no reviewer), `production` (required reviewer `ihsankoolz`, "prevent self-review" off) and `rollback` (no reviewer). The brief named two; the third exists because GitHub holds every job in an environment with a required reviewer until someone approves it, and a rollback that waits for the owner leaves a bad `latest` in place meanwhile. **All three accept deployments only from the branch `main` and from tags `v*`**, so a run started by hand on another branch never reaches a job that has `id-token: write`. On `main`, the jobs that publish or move tags run only for a pushed tag or a rehearsal (their `if:`), and the scripts refuse to call the real npm in a run whose event is not a tag push (`GITHUB_EVENT_NAME`, `GITHUB_REF_TYPE`).
 
 ### The rehearsal
 
 A run started by hand with the input `rehearsal` runs the whole pipeline with **a stand-in for npm** (`scripts/fake-npm.mjs`, through `FSCALE_NPM_COMMAND`), whose registry is a JSON file passed from job to job as an artifact. It is seeded with the real `latest` of the eight packages (a public read). In a rehearsal:
 
 - steps 1 to 4 run for real (audit, build, smoke);
-- staging publishes to the stand-in, and the integrity and `next` checks read the stand-in;
+- staging publishes to the stand-in, and **every registry read** (whether a version exists, its integrity, its dist-tags) asks the stand-in, not npm;
 - the staging tests on `next` and `real-repos.yml` are skipped: they would install from npm, where nothing was published;
 - the approval is the real `production` environment: the owner approves the rehearsal like a release;
 - promotion moves `latest` in the stand-in;
 - the production smoke fails on purpose (`rehearsal: forced failure`), which starts the rollback, which moves `latest` back in the stand-in and checks it;
 - the issue is opened with the title `[rehearsal]` and closed at once.
 
-**A rehearsal therefore ends as a failed run**, with the rollback and issue jobs green. That is its pass: it proves that a failed production smoke fails the run. Every script refuses `--rehearsal` without `FSCALE_NPM_COMMAND`, and the workflow sets `FSCALE_NPM_COMMAND` only when the run is a rehearsal, so a rehearsal can never reach npm with OIDC. A rehearsal from a ref other than `main` stops at the first environment.
+**A rehearsal therefore ends as a failed run**, with the rollback and issue jobs green. That is its pass: it proves that a failed production smoke fails the run. The workflow sets `FSCALE_NPM_COMMAND` only when the run is a rehearsal, and the scripts refuse the real npm in any run that is not a tag push, so a rehearsal can never reach npm with OIDC. A rehearsal from a ref other than `main` stops at the first environment.
 
 ## Consequences
 
@@ -89,11 +89,15 @@ A run started by hand with the input `rehearsal` runs the whole pipeline with **
 - If npm refuses a token from a job in an environment because the configuration has no environment name, the staging publish fails with `ENEEDAUTH`: nothing is public, `latest` is untouched, and the fix is to set the environment name in each configuration (`RELEASING.md`).
 - A candidate that fails staging stays on npm under its version number and under `next`. The next attempt is a new version; `next` then moves to it.
 - During promotion, for a few seconds, some packages' `latest` is the new version and some the old. `firescale` moves last and its dependencies are exact versions, so `npx firescale` installs either the old set or the new set, never a mix.
-- A re-run of the promotion job needs a new approval (GitHub asks again for a job in an environment). After a rollback, re-running promotion would promote the same bad version: `RELEASING.md` says to ship a patch instead.
+- A re-run of the promotion job needs a new approval (GitHub asks again for a job in an environment with a reviewer). It moves only the packages not yet on the candidate. After a rollback, re-running promotion would promote the same bad version: `RELEASING.md` says to ship a patch instead.
 
 ## Not done
 
 (Filled in by the pull requests that build this.)
+
+## From the fresh review
+
+Fixed in the ADR before it was merged: the rollback was in `production` and would have waited for the owner's approval (now its own environment `rollback`, no reviewer); a re-run of promotion would have recorded the candidate as the previous `latest` (now a separate record job, run once, that refuses the candidate); a cancelled promotion or smoke did not roll back (now it does); ADR 0021's "a run started by hand publishes nothing" was not restated (now it is, and the scripts check the event); a rehearsal's registry reads outside staging were not said to use the stand-in; and rollback with no record was not covered (it does not run).
 
 ## Needs your decision
 

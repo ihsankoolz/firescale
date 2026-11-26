@@ -12,6 +12,7 @@ One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums,
 - Every publish uses `--tag next`; only promotion moves `latest`, so a failure before it leaves `latest` untouched by construction.
 - Checked in npm's docs on 2026-11-25: dist-tags through OIDC since 2026-09-30, opt-in, npm 11.21.0 or later. No Node ships it yet (Node 26.13.1 has npm 11.20.0), so the jobs that move tags install npm 11.21.3: an amendment to ADR 0021.
 - **Decided on your behalf:** keep the one trusted publisher configuration each package has, with "Allow npm dist-tag" turned on and no environment name, because a new configuration that only allows dist-tags may expire before it is ever validated (npm's page does not say). The GitHub environments are the gate.
+- **From the fresh review, fixed in the ADR:** the rollback would have waited for the owner's approval in `production` (now a third environment, `rollback`, with no reviewer: you asked for two); a re-run of promotion would have recorded the candidate as the previous `latest` (now a separate record job, run once); a cancelled promotion or smoke did not roll back; ADR 0021's "a run started by hand publishes nothing" was not restated; a rehearsal's registry reads were not all said to use the stand-in; rollback with no record was not covered.
 
 ## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
 

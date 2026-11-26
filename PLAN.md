@@ -796,7 +796,7 @@ Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (t
 - ☐ Promotion waits for the environment `production`, records `latest` of all eight, moves it, and reads it back.
 - ☐ A failed production smoke moves `latest` back on all eight, opens an issue, and fails the run; nothing is unpublished.
 - ☐ Unit tests for the promotion and rollback scripts with the fake npm; only the publishing and tag-moving jobs have `id-token: write`; no secret is named.
-- ☐ The environments `staging` and `production` exist (reviewer `ihsankoolz`).
+- ☐ The environments `staging`, `production` (reviewer `ihsankoolz`) and `rollback` exist.
 - ☐ A rehearsal (`workflow_dispatch` with `rehearsal`) runs the rollback path end to end without touching npm, and its result is recorded.
 
 ---
