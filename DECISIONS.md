@@ -14,6 +14,16 @@ One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums,
 - **Decided on your behalf:** keep the one trusted publisher configuration each package has, with "Allow npm dist-tag" turned on and no environment name, because a new configuration that only allows dist-tags may expire before it is ever validated (npm's page does not say). The GitHub environments are the gate.
 - **From the fresh review, fixed in the ADR:** the rollback would have waited for the owner's approval in `production` (now a third environment, `rollback`, with no reviewer: you asked for two); a re-run of promotion would have recorded the candidate as the previous `latest` (now a separate record job, run once); a cancelled promotion or smoke did not roll back; ADR 0021's "a run started by hand publishes nothing" was not restated; a rehearsal's registry reads were not all said to use the stand-in; rollback with no record was not covered.
 
+**Pull request 2: the audit, the sums and the smoke (steps 2 to 4, ADR 0093)**
+
+- A job `audit` before every build: `pnpm audit --audit-level high` (one moderate today, passes) and `cargo-deny check` with a new `deny.toml` (all four checks pass today). cargo-deny 0.22.1 is the project's prebuilt musl binary, its SHA-256 checked in the workflow; no new action.
+- Each workspace crate now says `publish = false`: cargo-deny counts a path dependency of a publishable crate as a wildcard, and none goes to crates.io.
+- `scripts/release-sums.mjs`: each build writes `SHA256SUMS`; the smoke and publish jobs check the tarballs against it first.
+- A job `smoke` per OS (linux-x64, darwin-arm64, win32-x64) runs `smoke-npm.mjs` with npm, pnpm and yarn on the downloaded tarballs; publish needs it.
+- **Failing tests first:** 8 new tests in `release.test.ts` (5 for the sums script, 3 for the workflow), seen failing, plus 2 existing ones that list the jobs.
+- **Decided on your behalf:** the audit runs in the release only, not on every pull request; Rust advisories fail at any severity; the license allow list is exactly what the tree uses today.
+- **From the fresh review, fixed:** the stages table in `RELEASING.md` (broken by this change); a name listed twice in `SHA256SUMS`, and an empty one, now fail (a test first, seen failing). ADR 0093 now says the sums catch a tarball changed between jobs, not an artifact replaced with its sums. Not done: the cross-compiled tarballs are still never run (as before).
+
 ## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
 
 Seven pull requests from `docs/research/research-verification.md`, one idea each, in the owner's order; ADRs 0082 to 0091. Another session works on the other track at the same time. Built and tested in WSL on the laptop (a clone of its own, `~/fs-wsl-b`), from the worktree `C:\Users\ihsan\fs-trackb`; the course project is not touched.

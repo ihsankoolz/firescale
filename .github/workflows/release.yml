@@ -1,8 +1,8 @@
 # Builds the npm tarballs for all six platforms. For a version tag it then
 # publishes the eight packages to npm and checks the result from clean runners.
 #
-#   started by hand (workflow_dispatch)   builds the tarballs, publishes nothing
-#   push of a tag v<version>              builds, publishes, verifies
+#   started by hand (workflow_dispatch)   audits, builds and smokes the tarballs, publishes nothing
+#   push of a tag v<version>              audits, builds, smokes, publishes, verifies
 #
 # Publishing uses npm trusted publishing (OIDC): there is no npm token and no
 # secret in this file. Each package names this workflow file, release.yml, as
@@ -73,8 +73,50 @@ jobs:
         id: read
         run: echo "version=$(node scripts/bump-version.mjs --check)" >> "$GITHUB_OUTPUT"
 
-  build:
+  audit:
+    # Known vulnerabilities in the dependencies, before any build (ADR 0093).
+    # pnpm audit fails on a high or critical advisory; cargo-deny on any
+    # RustSec advisory, a license not in deny.toml, or a source other than
+    # crates.io.
     needs: version
+    name: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Actions are pinned to commit SHAs. The comment is the tag the SHA belongs to (ADR 0009).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
+          package-manager-cache: false
+
+      # Reads pnpm-lock.yaml; nothing is installed.
+      - name: pnpm audit
+        run: pnpm audit --audit-level high
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      # One exact release of cargo-deny, its SHA-256 checked before it runs.
+      - name: Install cargo-deny 0.22.1
+        run: |
+          name=cargo-deny-0.22.1-x86_64-unknown-linux-musl
+          curl --fail --silent --show-error --location --retry 3 --output "$RUNNER_TEMP/$name.tar.gz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.22.1/$name.tar.gz"
+          echo "13f7e825e9cb811c2f8de63f29b0f45851dfb53004029f0f2501af524728364d  $RUNNER_TEMP/$name.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$name.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$name" >> "$GITHUB_PATH"
+
+      # Settings in deny.toml. It fetches the RustSec advisory database.
+      - name: cargo-deny check
+        run: cargo-deny check
+
+  build:
+    needs: [version, audit]
     name: build / ${{ matrix.key }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -151,18 +193,68 @@ jobs:
         if: ${{ !matrix.cross }}
         run: node scripts/smoke-npm.mjs --pm npm
 
+      # The sums every later job checks the tarballs against (ADR 0092).
+      - name: SHA-256 sums of the tarballs
+        run: node scripts/release-sums.mjs write dist-npm
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm-${{ matrix.key }}
           path: |
             dist-npm/*.tgz
             dist-npm/manifest.json
+            dist-npm/SHA256SUMS
           if-no-files-found: error
+
+  smoke:
+    # The tarballs installed with npm, pnpm and yarn on each OS, before
+    # anything is published (ADR 0092). The tarballs are the ones the build
+    # jobs made: downloaded, and checked against their sums first.
+    needs: [version, build]
+    name: smoke / ${{ matrix.key }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, key: linux-x64 }
+          - { os: macos-latest, key: darwin-arm64 }
+          - { os: windows-latest, key: win32-x64 }
+    steps:
+      # The smoke script and its sample rule pack come from the checkout; the
+      # tarballs from the build.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-${{ matrix.key }}
+          path: dist-npm
+
+      - name: The tarballs match their sums
+        run: node scripts/release-sums.mjs check dist-npm
+
+      - name: Install smoke test (npm)
+        run: node scripts/smoke-npm.mjs --pm npm --tarballs dist-npm
+
+      - name: Install smoke test (pnpm)
+        run: node scripts/smoke-npm.mjs --pm pnpm --tarballs dist-npm
+
+      - name: Install smoke test (yarn)
+        run: node scripts/smoke-npm.mjs --pm yarn --tarballs dist-npm
 
   publish:
     # Only for a pushed version tag. A run started by hand stops after the build.
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [version, build]
+    needs: [version, build, smoke]
     name: publish to npm
     # Trusted publishing works on GitHub-hosted runners only.
     runs-on: ubuntu-latest
@@ -189,6 +281,9 @@ jobs:
         with:
           path: artifacts
           pattern: npm-*
+
+      - name: The tarballs match their sums
+        run: node scripts/release-sums.mjs check artifacts
 
       # Platform packages, then @firescale/sdk, then firescale. A version that
       # is already on the registry is skipped, so this job can be run again.
