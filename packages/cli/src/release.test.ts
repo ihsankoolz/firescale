@@ -714,13 +714,14 @@ describe('.github/workflows/release.yml', () => {
     const tests = job(text, 'staging-test');
     // The version first (retried while the registry catches up), then the commands.
     const wait = tests.indexOf('node scripts/verify-published.mjs "$VERSION" --tag next');
-    const run = tests.indexOf('node scripts/try-published.mjs next');
+    const run = tests.indexOf('node scripts/try-published.mjs next --expect "$VERSION"');
     expect(wait).toBeGreaterThan(-1);
     expect(run).toBeGreaterThan(wait);
     expect(tests).not.toContain('id-token');
 
     const real = job(text, 'real-repos');
-    expect(real).toContain('needs: [version, staging]');
+    // After the staging tests: the many repo jobs start only when next installs.
+    expect(real).toContain('needs: [version, staging, staging-test]');
     expect(real).toContain('uses: ./.github/workflows/real-repos.yml');
     expect(real).toContain('fscale: next');
     expect(real).toContain('version: ${{ needs.version.outputs.version }}');

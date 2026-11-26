@@ -138,10 +138,11 @@ describe('scripts/try-published.mjs', () => {
       script,
       [
         "import { appendFileSync, readdirSync } from 'node:fs';",
-        'const [command] = process.argv.slice(2);',
+        'const [spec, command] = process.argv.slice(2);',
         'const entries = readdirSync(process.cwd()).length;',
         'const cache = process.env.npm_config_cache ?? "";',
-        `appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command, entries, cache, cwd: process.cwd() }) + "\\n");`,
+        `appendFileSync(${JSON.stringify(log)}, JSON.stringify({ spec, command, entries, cache, cwd: process.cwd() }) + "\\n");`,
+        "if (command === '--version') { console.log(process.env.FSCALE_FAKE_VERSION ?? '0.0.0'); process.exit(0); }",
         "if (command === 'init') appendFileSync('firescale.config.json', '{}');",
         'console.log(`fake ${command}`);',
         'const code = process.env[`FSCALE_FAKE_EXIT_${command.toUpperCase()}`];',
@@ -149,7 +150,8 @@ describe('scripts/try-published.mjs', () => {
         '',
       ].join('\n'),
     );
-    return { command: `node "${script}"`, log };
+    // `{spec}` is where try-published puts the spec it would give npx.
+    return { command: `node "${script}" {spec}`, log };
   }
   const entries = async (log: string) =>
     (await readFile(log, 'utf8'))
@@ -157,7 +159,13 @@ describe('scripts/try-published.mjs', () => {
       .filter(Boolean)
       .map(
         (line) =>
-          JSON.parse(line) as { command: string; entries: number; cache: string; cwd: string },
+          JSON.parse(line) as {
+            spec: string;
+            command: string;
+            entries: number;
+            cache: string;
+            cwd: string;
+          },
       );
 
   it('runs init, check, verify and doctor in a new empty folder with a new npm cache', async () => {
@@ -194,6 +202,40 @@ describe('scripts/try-published.mjs', () => {
     ]);
   });
 
+  it('with --expect, checks the version first and installs the exact version the hooks pin', async () => {
+    // In a folder made by init, doctor runs `npx --no -- firescale@<version>`.
+    // npx keys its cache by the spec as typed, so firescale@next alone may
+    // leave nothing for firescale@<version> to find.
+    const fake = await fakeFscale();
+    const result = await node('try-published.mjs', ['next', '--expect', '1.2.3'], {
+      FSCALE_NPX_COMMAND: fake.command,
+      FSCALE_FAKE_VERSION: '1.2.3',
+    });
+    expect(result.stderr).toBe('');
+    expect(result.code).toBe(0);
+    const runs = await entries(fake.log);
+    expect(runs.map((run) => `${run.spec} ${run.command}`)).toEqual([
+      'next --version',
+      '1.2.3 --version',
+      'next init',
+      'next check',
+      'next verify',
+      'next doctor',
+    ]);
+    // All in one cache, so doctor finds the exact version there.
+    expect(new Set(runs.map((run) => run.cache)).size).toBe(1);
+
+    const behind = await node('try-published.mjs', ['next', '--expect', '1.2.4'], {
+      FSCALE_NPX_COMMAND: fake.command,
+      FSCALE_FAKE_VERSION: '1.2.3',
+    });
+    expect(behind.code).toBe(1);
+    expect(behind.stderr).toContain('firescale@next printed 1.2.3, not 1.2.4');
+    expect(await node('try-published.mjs', ['next', '--expect', 'x; y'])).toMatchObject({
+      code: 1,
+    });
+  });
+
   it('accepts a dist-tag or a version, nothing else', async () => {
     for (const bad of ['next; echo hi', '1.2', '', 'Latest']) {
       const result = await node('try-published.mjs', [bad]);
@@ -204,66 +246,77 @@ describe('scripts/try-published.mjs', () => {
 });
 
 describe('scripts/real-repos-gate.mjs', () => {
+  /** Every fscale step the job runs, in its order. */
+  const STEPS = [
+    '1-doctor',
+    '1-facts',
+    '1-graph',
+    '1-check',
+    '1-verify-dry-run',
+    '1-verify-budget',
+    '3-verify-again',
+  ];
   async function summary(lines: string[]): Promise<string> {
     const file = path.join(await scratch(), 'summary.txt');
     await writeFile(file, `${lines.join('\n')}\n`);
     return file;
   }
+  const all = (code: (step: string) => string) =>
+    STEPS.map((step) => `${step}: exit ${code(step)} after 1 s`);
+  const gate = (file: string, extra: string[] = ['--printed', '1.2.3']) =>
+    node('real-repos-gate.mjs', ['--summary', file, ...extra]);
 
-  it('passes when every fscale command exited with a code fscale uses', async () => {
+  it('passes when every fscale step ran and exited with a code fscale uses', async () => {
+    const codes: Record<string, string> = {
+      '1-doctor': '1',
+      '1-verify-budget': '2',
+      '3-verify-again': '130',
+    };
     const file = await summary([
-      '1-doctor: exit 1 after 2 s',
-      '1-check: exit 0 after 1 s',
-      '1-verify-budget: exit 2 after 3 s',
+      ...all((step) => codes[step] ?? '0'),
       '2-own-test: exit 101 after 30 s',
-      '3-verify-again: exit 130 after 9 s',
     ]);
-    const result = await node('real-repos-gate.mjs', ['--summary', file]);
+    const result = await gate(file);
     expect(result.stderr).toBe('');
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain('4 fscale commands, none crashed');
+    expect(result.stdout).toContain('7 fscale commands, none crashed');
   });
 
   it("fails on a crash in fscale's own commands, not in the repo's", async () => {
+    const codes: Record<string, string> = { '1-check': '101', '3-verify-again': '127' };
     const file = await summary([
-      '1-doctor: exit 0 after 2 s',
-      '1-check: exit 101 after 1 s',
+      ...all((step) => codes[step] ?? '0'),
       '2-own-test: exit 1 after 30 s',
-      '3-verify-again: exit 127 after 0 s',
     ]);
-    const result = await node('real-repos-gate.mjs', ['--summary', file]);
+    const result = await gate(file);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('1-check exited 101');
     expect(result.stderr).toContain('3-verify-again exited 127');
     expect(result.stderr).not.toContain('2-own-test');
   });
 
-  it('fails when the installed fscale is not the version, or when fscale never ran', async () => {
-    const file = await summary(['1-check: exit 0 after 1 s']);
-    const wrong = await node('real-repos-gate.mjs', [
-      '--summary',
-      file,
-      '--version',
-      '1.2.3',
-      '--printed',
-      '1.2.2',
-    ]);
+  it('fails when a step left no line: it hung and was stopped, or never started', async () => {
+    const file = await summary(
+      all(() => '0').filter((line) => !line.startsWith('1-verify-budget')),
+    );
+    const result = await gate(file);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('1-verify-budget has no exit code');
+  });
+
+  it('fails when the installed fscale is not the version, prints no version, or never ran', async () => {
+    const file = await summary(all(() => '0'));
+    const wrong = await gate(file, ['--version', '1.2.3', '--printed', '1.2.2']);
     expect(wrong.code).toBe(1);
     expect(wrong.stderr).toContain('the installed fscale printed "1.2.2", not 1.2.3');
-    const right = await node('real-repos-gate.mjs', [
-      '--summary',
-      file,
-      '--version',
-      '1.2.3',
-      '--printed',
-      '1.2.3',
-    ]);
-    expect(right.code).toBe(0);
+    expect((await gate(file, ['--version', '1.2.3', '--printed', '1.2.3'])).code).toBe(0);
 
-    const none = await node('real-repos-gate.mjs', [
-      '--summary',
-      path.join(await scratch(), 'none.txt'),
-    ]);
+    // A launcher that finds no binary exits 2, a code fscale uses: its --version catches it.
+    const noBinary = await gate(file, ['--printed', '']);
+    expect(noBinary.code).toBe(1);
+    expect(noBinary.stderr).toContain('fscale --version printed "", not a version');
+
+    const none = await gate(path.join(await scratch(), 'none.txt'));
     expect(none.code).toBe(1);
     expect(none.stderr).toContain('fscale never ran');
   });
@@ -287,6 +340,8 @@ describe('.github/workflows/real-repos.yml', () => {
     const text = await read();
     expect(text).toContain('scripts/real-repos-gate.mjs --summary out/summary.txt');
     expect(text).toContain('--version "$VERSION"');
+    // Only what --version prints on stdout is compared.
+    expect(text).toContain('printed=$(bin/fscale --version 2>/dev/null || true)');
     // The gate is not allowed to fail quietly.
     const gate = text.slice(text.indexOf("- name: 'Gate:"));
     expect(gate.slice(0, gate.indexOf('\n      - '))).not.toContain('continue-on-error');
