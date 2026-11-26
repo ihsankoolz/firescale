@@ -370,11 +370,11 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
+          printed=$(bin/fscale --version 2>/dev/null || true)
           if [ -n "$VERSION" ]; then
-            printed=$(bin/fscale --version 2>&1 || true)
-            node firescale-scripts/scripts/real-repos-gate.mjs --summary out/summary.txt --version "$VERSION" --printed "$printed"
+            node firescale-scripts/scripts/real-repos-gate.mjs --summary out/summary.txt --printed "$printed" --version "$VERSION"
           else
-            node firescale-scripts/scripts/real-repos-gate.mjs --summary out/summary.txt
+            node firescale-scripts/scripts/real-repos-gate.mjs --summary out/summary.txt --printed "$printed"
           fi
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

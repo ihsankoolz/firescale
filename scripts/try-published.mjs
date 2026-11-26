@@ -7,8 +7,15 @@
 // `latest` (ADR 0092). In a folder made by init, doctor also checks that the
 // agent hooks' `npx --yes firescale@<version>` starts.
 //
-// Usage: node scripts/try-published.mjs <dist-tag or version> [--keep]
-// FSCALE_NPX_COMMAND replaces `npx --yes firescale@<spec>` (used by the tests).
+// With --expect <version>, it first checks, in the same new cache, that
+// `firescale@<spec> --version` prints that version, then installs
+// firescale@<version> too. In a folder made by init, doctor runs
+// `npx --no -- firescale@<version>`; npx keys its cache by the spec as typed,
+// so firescale@next alone may leave nothing there for it to find.
+//
+// Usage: node scripts/try-published.mjs <dist-tag or version> [--expect <version>] [--keep]
+// FSCALE_NPX_COMMAND replaces `npx --yes firescale@<spec>` (used by the tests);
+// `{spec}` in it is replaced by the spec.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
@@ -16,7 +23,9 @@ import path from 'node:path';
 import process from 'node:process';
 
 const COMMANDS = ['init', 'check', 'verify', 'doctor'];
-const USAGE = 'Usage: node scripts/try-published.mjs <dist-tag or version> [--keep]';
+const USAGE =
+  'Usage: node scripts/try-published.mjs <dist-tag or version> [--expect <version>] [--keep]';
+const VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 function fail(message) {
   process.stderr.write(`try-published: ${message}\n`);
@@ -25,14 +34,28 @@ function fail(message) {
 
 const argv = process.argv.slice(2);
 const keep = argv.includes('--keep');
-const rest = argv.filter((arg) => arg !== '--keep');
+let expected;
+const rest = [];
+for (let i = 0; i < argv.length; i += 1) {
+  if (argv[i] === '--keep') continue;
+  if (argv[i] === '--expect') {
+    expected = argv[i + 1] ?? '';
+    if (!VERSION.test(expected)) fail(`"${expected}" is not a version such as 1.2.3. ${USAGE}`);
+    i += 1;
+    continue;
+  }
+  rest.push(argv[i]);
+}
 if (rest.length !== 1) fail(USAGE);
 const spec = (rest[0] ?? '').replace(/^v(?=\d)/, '');
 // The spec goes into a command line, so it must be a plain tag or version.
-if (!/^[a-z][a-z0-9-]*$/.test(spec) && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(spec)) {
+if (!/^[a-z][a-z0-9-]*$/.test(spec) && !VERSION.test(spec)) {
   fail(`"${rest[0]}" is not a dist-tag or a version (such as next, latest or 1.2.3). ${USAGE}`);
 }
-const prefix = process.env.FSCALE_NPX_COMMAND || `npx --yes firescale@${spec}`;
+const npx = (version) =>
+  process.env.FSCALE_NPX_COMMAND
+    ? process.env.FSCALE_NPX_COMMAND.replaceAll('{spec}', version)
+    : `npx --yes firescale@${version}`;
 const label = `firescale@${spec}`;
 
 const folder = mkdtempSync(path.join(os.tmpdir(), 'firescale-try-'));
@@ -45,11 +68,22 @@ const tail = (text) =>
     .map((line) => `      ${line}`)
     .join('\n');
 
+const runs = [
+  ...(expected
+    ? [
+        { spec, command: '--version' },
+        { spec: expected, command: '--version' },
+      ]
+    : []),
+  ...COMMANDS.map((command) => ({ spec, command })),
+];
+
 let failed;
 try {
-  for (const command of COMMANDS) {
+  for (const { spec: runSpec, command } of runs) {
     const started = Date.now();
-    const result = spawnSync(`${prefix} ${command}`, {
+    const runLabel = `firescale@${runSpec}`;
+    const result = spawnSync(`${npx(runSpec)} ${command}`, {
       cwd: folder,
       encoding: 'utf8',
       shell: true,
@@ -65,14 +99,19 @@ try {
       },
     });
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
+    const printed = (result.stdout ?? '').trim();
+    if (result.status === 0 && command === '--version' && printed !== expected) {
+      failed = `${runLabel} printed ${printed}, not ${expected}. The tag has not reached this runner yet, or points elsewhere: check the dist-tags on npmjs.com, then run this job again.`;
+      break;
+    }
     if (result.status === 0) {
-      process.stdout.write(`PASS  ${label} ${command} after ${seconds} s\n`);
+      process.stdout.write(`PASS  ${runLabel} ${command} after ${seconds} s\n`);
       continue;
     }
     const code = result.status ?? 'none: timed out or killed';
-    process.stdout.write(`FAIL  ${label} ${command} (exit ${code}) after ${seconds} s\n`);
+    process.stdout.write(`FAIL  ${runLabel} ${command} (exit ${code}) after ${seconds} s\n`);
     process.stdout.write(`${tail(result.stdout)}\n${tail(result.stderr)}\n`);
-    failed = `\`${label} ${command}\` exited ${code} in a new folder made by \`${label} init\`. Read its output above. Do not promote this version.`;
+    failed = `\`${runLabel} ${command}\` exited ${code} in a new folder made by \`${label} init\`. Read its output above. Do not promote this version.`;
     break;
   }
 } finally {
