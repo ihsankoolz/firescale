@@ -780,6 +780,27 @@ Decisions in ADR 0055: five rules; a starter of `CMakeLists.txt` (CMake 3.20, C+
 
 ---
 
+## M40 — Continuous delivery for releases ◐
+
+Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (the audit). One pipeline in `release.yml` from a tag to `latest` on npm, the same bytes all the way. Four pull requests: the ADR; steps 2 to 4; steps 5 and 6; steps 7 to 10 with the rehearsal and the environments.
+
+**Done when**
+
+- ☐ ADR 0092 compares a public `next` with npm's staged publishing and picks one, and amends ADR 0021.
+- ☐ The audit (`pnpm audit --audit-level high`, `cargo deny check`) runs before any build, and fails the run on a high finding.
+- ☐ Each build job writes `SHA256SUMS`, and every later job checks the tarballs against it.
+- ☐ `smoke-npm.mjs` runs on Linux, macOS and Windows with npm, pnpm and yarn before anything is published.
+- ☐ Staging publishes all eight packages under `next` (never `latest`) in the environment `staging`, and checks the registry's integrity against the tarballs.
+- ☐ Staging tests run `npx firescale@next` (`init`, `check`, `verify`, `doctor`) on three OSes, and `real-repos.yml` runs as a `workflow_call` against `next`.
+- ☐ A pre-release stops after the staging tests and is never moved to `latest`.
+- ☐ Promotion waits for the environment `production`, records `latest` of all eight, moves it, and reads it back.
+- ☐ A failed production smoke moves `latest` back on all eight, opens an issue, and fails the run; nothing is unpublished.
+- ☐ Unit tests for the promotion and rollback scripts with the fake npm; only the publishing and tag-moving jobs have `id-token: write`; no secret is named.
+- ☐ The environments `staging`, `production` (reviewer `ihsankoolz`) and `rollback` exist.
+- ☐ A rehearsal (`workflow_dispatch` with `rehearsal`) runs the rollback path end to end without touching npm, and its result is recorded.
+
+---
+
 ## M36 to M39 — on hold
 
 Swift (M36), .NET (M37), Android (M38) and Flutter (M39) are not started and are on hold until the owner says so (2026-11-15). Before them came a run of bug fixes from the audit of 2026-11-14 (`docs/reviews/ponytail-audit.md`; ADR 0056) and the 0.5.0 version, then the 0.5.1 fixes from running 0.5.0 on the course project (ADR 0057 to 0060: slow steps and `verify --budget`, what a config change affects, stopped runs and doctor, leftovers; ADR 0061: seven small fixes found on the way) and the 0.5.1 version. No milestone was started in either run.
