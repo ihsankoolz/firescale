@@ -2,6 +2,17 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## M40 — continuous delivery for releases (run of 2026-11-26)
+
+One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums, smoke before anything is public, staging under `next`, staging tests, the owner's approval, promotion, production smoke, rollback. ADRs from 0092. Worktree `../fs-m40-wt`; another session may run at the same time.
+
+**Pull request 1: the ADR (ADR 0092)**
+
+- Staging is the public dist-tag `next` with a GitHub approval, not `npm stage publish`: a staged version cannot be installed, so the staging tests would have nothing to run, and approving a staged version cannot be seen by the run (it is not an OIDC operation). npm now offers batch approval of staged versions (rolling out), so the brief's "one approval per package" no longer quite holds; that did not change the choice.
+- Every publish uses `--tag next`; only promotion moves `latest`, so a failure before it leaves `latest` untouched by construction.
+- Checked in npm's docs on 2026-11-25: dist-tags through OIDC since 2026-09-30, opt-in, npm 11.21.0 or later. No Node ships it yet (Node 26.13.1 has npm 11.20.0), so the jobs that move tags install npm 11.21.3: an amendment to ADR 0021.
+- **Decided on your behalf:** keep the one trusted publisher configuration each package has, with "Allow npm dist-tag" turned on and no environment name, because a new configuration that only allows dist-tags may expire before it is ever validated (npm's page does not say). The GitHub environments are the gate.
+
 ## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
 
 Seven pull requests from `docs/research/research-verification.md`, one idea each, in the owner's order; ADRs 0082 to 0091. Another session works on the other track at the same time. Built and tested in WSL on the laptop (a clone of its own, `~/fs-wsl-b`), from the worktree `C:\Users\ihsan\fs-trackb`; the course project is not touched.
