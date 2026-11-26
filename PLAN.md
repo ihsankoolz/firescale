@@ -782,7 +782,7 @@ Decisions in ADR 0055: five rules; a starter of `CMakeLists.txt` (CMake 3.20, C+
 
 ## M40 — Continuous delivery for releases ☑
 
-Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (the audit). One pipeline in `release.yml` from a tag to `latest` on npm, the same bytes all the way. Four pull requests: the ADR; steps 2 to 4; steps 5 and 6; steps 7 to 10 with the rehearsal and the environments.
+Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (the audit). One pipeline in `release.yml` from a tag to `latest` on npm, the same bytes all the way. Pull requests: the ADR (#112); steps 2 to 4 (#113); steps 5 and 6 (#114); steps 7 to 10 with the rehearsal and the environments (#115); a fix the first rehearsal found (#116); the rehearsal's result (#118).
 
 **Done when**
 
