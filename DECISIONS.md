@@ -24,6 +24,16 @@ One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums,
 - **Decided on your behalf:** the audit runs in the release only, not on every pull request; Rust advisories fail at any severity; the license allow list is exactly what the tree uses today.
 - **From the fresh review, fixed:** the stages table in `RELEASING.md` (broken by this change); a name listed twice in `SHA256SUMS`, and an empty one, now fail (a test first, seen failing). ADR 0093 now says the sums catch a tarball changed between jobs, not an artifact replaced with its sums. Not done: the cross-compiled tarballs are still never run (as before).
 
+**Pull request 3: staging and its tests (steps 5 and 6)**
+
+- **Every publish is under `next`**, a normal version too (`publish-npm.mjs`); then each package is read back: the registry's `dist.integrity` against the tarball's SHA-512, and `next` against the version. A publish that exits 0 but never shows, or shows other bytes, fails the job.
+- **The real npm is refused in a run that is not a tag push** (`assertRealNpmAllowed` in the new `scripts/release-registry.mjs`, shared by the release scripts). With `FSCALE_NPM_COMMAND` set, every registry read goes through the stand-in too.
+- `scripts/fake-npm.mjs`: a stand-in npm whose registry is a JSON file, for the tests and the rehearsal. It fails a call as npm does when OIDC is refused, can pass one that changes nothing, and can store the wrong bytes.
+- The `verify` job is replaced by `staging-test` on three OSes: `verify-published.mjs <version> --tag next`, then `scripts/try-published.mjs next` (init, check, verify, doctor in an empty folder with an empty npm cache, each exit 0). Run against npm's `latest` (0.5.3) on this Mac: all four pass.
+- `real-repos.yml` is also a `workflow_call` with `fscale`, `version` and `only`; with `fscale` it builds nothing and installs `firescale@<fscale>` from npm. A gate per repo (`scripts/real-repos-gate.mjs`) fails on an fscale exit code other than 0, 1, 2 and 130, or a wrong version. The gate applies to a run started by hand too: a crash there fails the job now.
+- **Do not push a tag until pull request 4 is merged:** a tag now publishes under `next` and stops; nothing moves `latest` yet.
+- **Found while writing the tests first:** the test of the real-npm guard, run before the guard existed, started the real `npm publish` on a placeholder tarball. Nothing was published (the tarball is not a tarball, and npm is not logged in on this Mac; `firescale@1.2.3` is a 404). The test now also points npm at the stand-in registry with npm's own dry run, so it cannot publish even if the guard is ever lost.
+
 ## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
 
 Seven pull requests from `docs/research/research-verification.md`, one idea each, in the owner's order; ADRs 0082 to 0091. Another session works on the other track at the same time. Built and tested in WSL on the laptop (a clone of its own, `~/fs-wsl-b`), from the worktree `C:\Users\ihsan\fs-trackb`; the course project is not touched.

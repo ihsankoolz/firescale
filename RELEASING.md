@@ -1,5 +1,7 @@
 # Releasing firescale
 
+> **Do not push a tag while M40 is half built** (ADR 0092). Since its third pull request, a tag publishes all eight packages under the dist-tag `next` and tests them there, but nothing moves `latest` until the fourth pull request (approval, promotion, production smoke, rollback) is merged.
+
 A release is one pushed tag. The Release workflow (`.github/workflows/release.yml`) builds the six platform tarballs, publishes all eight packages to npm, and checks from clean Linux, macOS and Windows runners that `npx firescale@<version> --version` prints the version.
 
 Publishing uses **npm trusted publishing** (OIDC). There is no npm token anywhere: not in this repo, not in GitHub's secrets. npm accepts the publish because it comes from this repository's `release.yml`. ADR 0021 has the reasons.
@@ -91,16 +93,17 @@ After the first release through the workflow has worked, npm recommends closing 
    git push origin v0.1.2
    ```
 
-4. Watch the **Release** workflow in the repository's Actions tab. It runs six stages:
+4. Watch the **Release** workflow in the repository's Actions tab. It runs these stages:
 
-   | Stage          | What it does                                                                                                        |
-   | -------------- | ------------------------------------------------------------------------------------------------------------------- |
-   | check version  | Fails at once if the tag is not `v` plus the version in `Cargo.toml` and the package manifests.                     |
-   | audit          | `pnpm audit --audit-level high` and `cargo-deny check` (`deny.toml`). A finding stops the release before any build. |
-   | build          | Six jobs, one per platform. Each packs its tarballs, writes their SHA-256 sums (`SHA256SUMS`) and uploads them.     |
-   | smoke          | On Linux, macOS and Windows: the tarballs, checked against their sums, installed with npm, pnpm and yarn.           |
-   | publish to npm | Publishes the six platform packages, then `@firescale/sdk`, then `firescale`.                                       |
-   | verify         | On Linux, macOS and Windows: `npx firescale@0.1.2 --version` from an empty folder. Tries for up to five minutes.    |
+   | Stage         | What it does                                                                                                                                                                                |
+   | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | check version | Fails at once if the tag is not `v` plus the version in `Cargo.toml` and the package manifests.                                                                                             |
+   | audit         | `pnpm audit --audit-level high` and `cargo-deny check` (`deny.toml`). A finding stops the release before any build.                                                                         |
+   | build         | Six jobs, one per platform. Each packs its tarballs, writes their SHA-256 sums (`SHA256SUMS`) and uploads them.                                                                             |
+   | smoke         | On Linux, macOS and Windows: the tarballs, checked against their sums, installed with npm, pnpm and yarn.                                                                                   |
+   | staging       | Environment `staging`: publishes the eight packages under the dist-tag `next` (never `latest`), then checks that the registry has the bytes of each tarball and that `next` is the version. |
+   | staging test  | On Linux, macOS and Windows: `npx firescale@next --version` is the version, then `init`, `check`, `verify` and `doctor` in an empty folder each exit 0.                                     |
+   | real repos    | `real-repos.yml` with fscale from npm under `next`: fails a repo only when fscale crashes or is not the version.                                                                            |
 
 5. When all of it is green, the release is done. `npm view firescale version` prints the new version.
 

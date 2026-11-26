@@ -42,6 +42,8 @@ Keep this list accurate. Run `pnpm build` before `pnpm test`: the Vitest suite r
 - See what a release would publish, from downloaded workflow artifacts: `node scripts/publish-npm.mjs --dir <folder> --version <version> --dry-run`
 - Smoke-test an install from those tarballs: `node scripts/smoke-npm.mjs --pm npm` (also `pnpm`, `yarn`)
 - SHA-256 sums of those tarballs: `node scripts/release-sums.mjs write dist-npm`; check them: `node scripts/release-sums.mjs check <dir>`
+- What npm serves, as a user gets it (read-only): `node scripts/verify-published.mjs <version> --tag latest`, then `node scripts/try-published.mjs latest` (init, check, verify, doctor in an empty folder)
+- The release scripts against the stand-in npm (never the real one): `FSCALE_NPM_COMMAND=scripts/fake-npm.mjs FSCALE_FAKE_NPM_STATE=<file>` (ADR 0092)
 - The release's audit (ADR 0093): `pnpm audit --audit-level high` and `cargo deny check` (needs cargo-deny 0.22.1: `cargo install --locked cargo-deny@0.22.1`)
 - Definition of done (from M7 on): `pnpm fscale verify`. The agent hooks in `.claude/`, `.codex/` and `.cursor/` run it when you try to stop.
 - Verify latency benchmark: `cargo build --release -p firescale-cli`, then `node bench/verify-bench.mjs`
