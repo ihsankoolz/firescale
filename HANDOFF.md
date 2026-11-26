@@ -6,7 +6,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 **M40, continuous delivery for releases, started on 2026-11-26** (DECISIONS.md, "M40"; ADR 0092 on). Worktree `../fs-m40-wt`, branches `m40-*`. Four pull requests: the ADR, steps 2 to 4 (audit, sums, smoke), steps 5 and 6 (staging and its tests), steps 7 to 10 (approval, promotion, production smoke, rollback, rehearsal, environments). No version change and no tag in this run.
 
-**Until M40's pull request 4 is merged, do not push a tag:** a tag publishes under `next` and tests it, but nothing moves `latest` yet.
+**Before the next tag:** tick **Allow npm dist-tag** on the trusted publisher of each of the eight packages on npmjs.com (`RELEASING.md`). Without it promotion fails with `ENEEDAUTH` (and the rollback moves back whatever moved). A release now waits for the owner's approval at the job `production / move latest`.
 
 **Track B of 2026-11-18 (evening): the tamper guard, hooks and doctor** (DECISIONS.md, "Track B"; ADRs 0082 to 0091). Continued on 2026-11-25 on the owner's Mac, worktree `../fs-track-b-wt`. A second session runs the other track at the same time. Pull requests so far:
 

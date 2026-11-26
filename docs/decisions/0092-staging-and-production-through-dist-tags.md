@@ -93,7 +93,11 @@ A run started by hand with the input `rehearsal` runs the whole pipeline with **
 
 ## Not done
 
-(Filled in by the pull requests that build this.)
+- A rejected approval makes the promotion job fail, so the rollback runs (it finds nothing moved) and an issue is opened that says so. Telling a rejection apart from a failure would need the deployment's review state.
+- A rehearsal cannot run the staging tests or the real repos: nothing was published to install. They are proven only by a real tag.
+- A rehearsal needs a version that is not yet `latest` on npm.
+- The workflow's syntax was not checked with actionlint locally; the rehearsal run checks it.
+- Pinning the trusted publishers to environments: see "Needs your decision".
 
 ## From the fresh review
 
