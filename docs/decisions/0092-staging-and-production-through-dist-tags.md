@@ -91,6 +91,10 @@ A run started by hand with the input `rehearsal` runs the whole pipeline with **
 - During promotion, for a few seconds, some packages' `latest` is the new version and some the old. `firescale` moves last and its dependencies are exact versions, so `npx firescale` installs either the old set or the new set, never a mix.
 - A re-run of the promotion job needs a new approval (GitHub asks again for a job in an environment with a reviewer). It moves only the packages not yet on the candidate. After a rollback, re-running promotion would promote the same bad version: `RELEASING.md` says to ship a patch instead.
 
+## The first rehearsal
+
+Run 45747767942 (2026-11-26) passed every job up to the record, then skipped the promotion: a job's implicit `success()` also looks at the jobs before the ones it needs, and a rehearsal skips the staging tests. `promote` and `smoke-latest` now name their condition (`!cancelled() && needs.<before>.result == 'success'`), and `record` uses `!cancelled()`, not `always()`, so a cancelled run never records or promotes.
+
 ## Not done
 
 - Two releases of different tags are not serialised (the concurrency group is per ref). The rollback leaves alone a `latest` it did not move, but a promotion and another release's promotion can still interleave; release one version at a time.

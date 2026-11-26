@@ -391,8 +391,9 @@ jobs:
     # failed jobs" never records again: a re-run of promotion uses this
     # record. Never for a pre-release, which stays under next.
     needs: [version, staging, staging-test, real-repos]
+    # !cancelled(), not always(): a cancelled run never records or promotes.
     if: >-
-      always() && needs.staging.result == 'success'
+      !cancelled() && needs.staging.result == 'success'
       && (needs.staging-test.result == 'success' || inputs.rehearsal)
       && (needs.real-repos.result == 'success' || inputs.rehearsal)
       && !contains(needs.version.outputs.version, '-')
@@ -439,6 +440,9 @@ jobs:
     # reviewer, the owner, so this job waits for the approval. Then latest
     # moves to the version on all eight, firescale last.
     needs: [version, record]
+    # Explicit: the implicit success() also looks at the jobs before record,
+    # and in a rehearsal the staging tests are skipped.
+    if: ${{ !cancelled() && needs.record.result == 'success' }}
     name: production / move latest
     runs-on: ubuntu-latest
     environment: production
@@ -505,6 +509,7 @@ jobs:
     # Step 9 of ADR 0092: what npm now serves as latest, installed the way a
     # user would, on each OS, with a new empty npm cache.
     needs: [version, promote]
+    if: ${{ !cancelled() && needs.promote.result == 'success' }}
     name: production smoke / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30

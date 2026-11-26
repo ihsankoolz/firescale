@@ -46,6 +46,11 @@ One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums,
 - **Decided on your behalf:** an issue is opened whenever the rollback job ran, also when you rejected the approval (it then says nothing moved); the production smoke runs on three OSes in a rehearsal too, only to fail.
 - **From the fresh review, fixed:** the rollback moved back every `latest` that differed from the record, so it could undo another release's promotion or a person's move; now it moves back only a `latest` that is this run's candidate (a test first, seen failing). The record's upload overwrites on "Re-run all jobs". Left as documented in ADR 0092: a rejected approval still opens an issue (saying nothing moved); two releases of different tags are not serialised.
 
+**Pull request 5: what the first rehearsal found**
+
+- **The first rehearsal (run 45747767942) stopped before the approval:** check version, audit, the six builds, the smoke on three OSes, staging through the stand-in (seeded with npm's latest 0.5.3; eight published under `next`, each read back with the built bytes) and the record all passed; then `production / move latest` was skipped. A job's implicit `success()` also looks at the jobs before the ones it needs, and the rehearsal skips the staging tests. A tag push would not have hit it (the staging tests pass there).
+- `promote` and `smoke-latest` now say `!cancelled() && needs.<before>.result == 'success'`, and `record` `!cancelled()` instead of `always()`, so a cancelled run never records or promotes. Only the rollback and the issue run in a cancelled run. A test first, seen failing on the old workflow.
+
 ## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
 
 Seven pull requests from `docs/research/research-verification.md`, one idea each, in the owner's order; ADRs 0082 to 0091. Another session works on the other track at the same time. Built and tested in WSL on the laptop (a clone of its own, `~/fs-wsl-b`), from the worktree `C:\Users\ihsan\fs-trackb`; the course project is not touched.
