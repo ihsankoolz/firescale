@@ -91,14 +91,17 @@ After the first release through the workflow has worked, npm recommends closing 
    git push origin v0.1.2
    ```
 
-4. Watch the **Release** workflow in the repository's Actions tab. It runs four stages:
+4. Watch the **Release** workflow in the repository's Actions tab. It runs six stages:
 
-   | Stage          | What it does                                                                                                     |
-   | -------------- | ---------------------------------------------------------------------------------------------------------------- |
-   | check version  | Fails at once if the tag is not `v` plus the version in `Cargo.toml` and the package manifests.                  |
-   | build          | Six jobs, one per platform. Each packs its tarballs and uploads them.                                            |
-   | publish to npm | Publishes the six platform packages, then `@firescale/sdk`, then `firescale`.                                    |
-   | verify         | On Linux, macOS and Windows: `npx firescale@0.1.2 --version` from an empty folder. Tries for up to five minutes. |
+   | Stage         | What it does                                                                                    |
+   | ------------- | ----------------------------------------------------------------------------------------------- |
+   | check version | Fails at once if the tag is not `v` plus the version in `Cargo.toml` and the package manifests. |
+
+| audit | `pnpm audit --audit-level high` and `cargo-deny check` (`deny.toml`). A finding stops the release before any build. |
+| build | Six jobs, one per platform. Each packs its tarballs, writes their SHA-256 sums (`SHA256SUMS`) and uploads them. |
+| smoke | On Linux, macOS and Windows: the tarballs, checked against their sums, installed with npm, pnpm and yarn. |
+| publish to npm | Publishes the six platform packages, then `@firescale/sdk`, then `firescale`. |
+| verify | On Linux, macOS and Windows: `npx firescale@0.1.2 --version` from an empty folder. Tries for up to five minutes. |
 
 5. When all of it is green, the release is done. `npm view firescale version` prints the new version.
 

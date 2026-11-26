@@ -786,10 +786,10 @@ Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (t
 
 **Done when**
 
-- ☐ ADR 0092 compares a public `next` with npm's staged publishing and picks one, and amends ADR 0021.
-- ☐ The audit (`pnpm audit --audit-level high`, `cargo deny check`) runs before any build, and fails the run on a high finding.
-- ☐ Each build job writes `SHA256SUMS`, and every later job checks the tarballs against it.
-- ☐ `smoke-npm.mjs` runs on Linux, macOS and Windows with npm, pnpm and yarn before anything is published.
+- ☑ ADR 0092 compares a public `next` with npm's staged publishing and picks one, and amends ADR 0021.
+- ☑ The audit (`pnpm audit --audit-level high`, `cargo deny check`) runs before any build, and fails the run on a high finding.
+- ☑ Each build job writes `SHA256SUMS`, and every later job checks the tarballs against it.
+- ☑ `smoke-npm.mjs` runs on Linux, macOS and Windows with npm, pnpm and yarn before anything is published.
 - ☐ Staging publishes all eight packages under `next` (never `latest`) in the environment `staging`, and checks the registry's integrity against the tarballs.
 - ☐ Staging tests run `npx firescale@next` (`init`, `check`, `verify`, `doctor`) on three OSes, and `real-repos.yml` runs as a `workflow_call` against `next`.
 - ☐ A pre-release stops after the staging tests and is never moved to `latest`.
