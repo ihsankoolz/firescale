@@ -430,6 +430,8 @@ jobs:
         with:
           name: promotion-record
           path: record/promotion-record.json
+          # "Re-run all jobs" records again; that record refuses once anything moved.
+          overwrite: true
           if-no-files-found: error
 
   promote:

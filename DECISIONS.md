@@ -44,6 +44,7 @@ One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums,
 - **Failing tests first:** 21 in `release-promotion.test.ts` and 4 new workflow tests (plus 4 updated), all seen failing.
 - **Not checked locally:** the workflow's syntax with actionlint (its download was refused by this session's permission rules); the rehearsal run is the check.
 - **Decided on your behalf:** an issue is opened whenever the rollback job ran, also when you rejected the approval (it then says nothing moved); the production smoke runs on three OSes in a rehearsal too, only to fail.
+- **From the fresh review, fixed:** the rollback moved back every `latest` that differed from the record, so it could undo another release's promotion or a person's move; now it moves back only a `latest` that is this run's candidate (a test first, seen failing). The record's upload overwrites on "Re-run all jobs". Left as documented in ADR 0092: a rejected approval still opens an issue (saying nothing moved); two releases of different tags are not serialised.
 
 ## Track B — the tamper guard, hooks and doctor (run of 2026-11-18, evening, on the laptop)
 

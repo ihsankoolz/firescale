@@ -14,8 +14,10 @@
 //            firescale last, and reads each back.
 //   rollback --record <file>
 //            Moves `latest` back to the recorded version on every package
-//            where it differs, firescale first, and reads each back. Tries
-//            every package, then fails if any could not be moved.
+//            whose `latest` is the candidate, firescale first, and reads each
+//            back. A `latest` that is neither is left alone: someone else
+//            moved it. Tries every package, then fails if any could not be
+//            moved.
 //
 // Moving a dist-tag through trusted publishing (OIDC) needs npm 11.21.0 or
 // later and "Allow npm dist-tag" on the package's trusted publisher. A call
@@ -226,6 +228,14 @@ async function rollback(options) {
     const now = (await distTags(name)).latest;
     if (now === want) {
       process.stdout.write(`already  ${name} is ${want}\n`);
+      continue;
+    }
+    // Only undo what this run did: a latest that is neither the candidate nor
+    // the record was moved by someone else (another release, a person).
+    if (now !== saved.version) {
+      process.stdout.write(
+        `left     ${name} is ${now ?? 'not set'}, neither ${saved.version} nor the recorded ${want}: not moved by this run\n`,
+      );
       continue;
     }
     const problem = await moveTag(name, want, 'latest');
