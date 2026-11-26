@@ -319,6 +319,20 @@ describe('scripts/promote-npm.mjs rollback', () => {
     expect(result.stderr).toContain('latest of firescale is still 1.3.0');
   });
 
+  it('moves back only what this run moved: a latest that is neither the candidate nor the record is left alone', async () => {
+    const r = await promoted();
+    // Another release, or a person, moved firescale's latest after this run promoted.
+    await node('fake-npm.mjs', ['seed', 'firescale', 'latest', '1.3.1'], r.env);
+    const result = await r.run('rollback', ['--record', r.record]);
+    expect(result.code).toBe(0);
+    expect((await r.tags('firescale')).latest).toBe('1.3.1');
+    expect(await r.calls()).not.toContain('dist-tag add firescale@1.2.0 latest');
+    expect(await r.calls()).toHaveLength(7);
+    expect(result.stdout).toContain(
+      'left     firescale is 1.3.1, neither 1.3.0 nor the recorded 1.2.0: not moved by this run',
+    );
+  });
+
   it('needs a record', async () => {
     const r = await staged();
     const result = await r.run('rollback', [
