@@ -490,6 +490,26 @@ describe('scripts/release-sums.mjs', () => {
     expect(none.stderr).toContain('no SHA256SUMS');
   });
 
+  it('fails on a name listed twice, and on an empty SHA256SUMS', async () => {
+    const root = await scratch();
+    const dir = await folder(root, 'npm-linux-x64');
+    await node('release-sums.mjs', ['write', dir]);
+    const sums = path.join(dir, 'SHA256SUMS');
+    const first = (await readFile(sums, 'utf8')).split('\n')[0] ?? '';
+    await writeFile(sums, `${await readFile(sums, 'utf8')}${'0'.repeat(64)}  ${first.slice(66)}\n`);
+    const twice = await node('release-sums.mjs', ['check', root]);
+    expect(twice.code).toBe(1);
+    expect(twice.stderr).toContain(
+      `npm-linux-x64/${first.slice(66)} is listed twice in SHA256SUMS`,
+    );
+
+    const empty = await scratch();
+    await writeFile(path.join(empty, 'SHA256SUMS'), '');
+    const none = await node('release-sums.mjs', ['check', empty]);
+    expect(none.code).toBe(1);
+    expect(none.stderr).toContain('SHA256SUMS lists no tarball');
+  });
+
   it('refuses a folder with no tarballs, and a wrong command', async () => {
     const empty = await scratch();
     expect((await node('release-sums.mjs', ['write', empty])).stderr).toContain('no .tgz');
