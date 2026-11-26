@@ -2,7 +2,7 @@
 # publishes the eight packages to npm and checks the result from clean runners.
 #
 #   started by hand (workflow_dispatch)   audits, builds and smokes the tarballs, publishes nothing
-#   push of a tag v<version>              audits, builds, smokes, publishes, verifies
+#   push of a tag v<version>              audits, builds, smokes, publishes under next, tests next
 #
 # Publishing uses npm trusted publishing (OIDC): there is no npm token and no
 # secret in this file. Each package names this workflow file, release.yml, as
@@ -251,14 +251,17 @@ jobs:
       - name: Install smoke test (yarn)
         run: node scripts/smoke-npm.mjs --pm yarn --tarballs dist-npm
 
-  publish:
-    # Only for a pushed version tag. A run started by hand stops after the build.
+  staging:
+    # Step 5 of ADR 0092. Only for a pushed version tag: a run started by hand
+    # stops after the smoke. Every package goes out under the dist-tag next,
+    # a normal version too, so latest is never touched here.
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [version, build, smoke]
-    name: publish to npm
+    name: staging / publish to npm under next
     # Trusted publishing works on GitHub-hosted runners only.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    environment: staging
+    timeout-minutes: 25
     permissions:
       contents: read
       # Lets npm exchange a short-lived GitHub OIDC token for the right to
@@ -285,24 +288,28 @@ jobs:
       - name: The tarballs match their sums
         run: node scripts/release-sums.mjs check artifacts
 
-      # Platform packages, then @firescale/sdk, then firescale. A version that
-      # is already on the registry is skipped, so this job can be run again.
-      - name: Publish
+      # Platform packages, then @firescale/sdk, then firescale, under next. A
+      # version that is already on the registry is skipped, so this job can be
+      # run again. Then each is read back: the registry's integrity against
+      # the tarball's SHA-512, and next against the version.
+      - name: Publish under next, and check the registry
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: node scripts/publish-npm.mjs --dir artifacts --version "$VERSION"
 
-  verify:
-    needs: [version, publish]
-    name: verify / ${{ matrix.os }}
+  staging-test:
+    # Step 6 of ADR 0092: what npm serves under next, installed the way a user
+    # would, on each OS.
+    needs: [version, staging]
+    name: staging test / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      # Only the script is used from the checkout. It runs npx in an empty
+      # Only the scripts are used from the checkout. They run npx in an empty
       # temp folder with an empty npm cache.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -312,11 +319,25 @@ jobs:
           # setup-node caches npm's store by itself when npm is the package manager. Off: a release restores nothing.
           package-manager-cache: false
 
-      # A new version can take a few minutes to become installable: up to
-      # 20 attempts, 15 seconds apart.
-      - name: npx firescale@<version> --version
+      # A new version can take a few minutes to show: up to 20 attempts, 15
+      # seconds apart.
+      - name: npx firescale@next --version is the version
         # bash on every OS, so the variable is read the same way.
         shell: bash
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: node scripts/verify-published.mjs "$VERSION"
+        run: node scripts/verify-published.mjs "$VERSION" --tag next
+
+      - name: npx firescale@next init, check, verify and doctor
+        run: node scripts/try-published.mjs next
+
+  real-repos:
+    # Step 6 of ADR 0092: the real repos of real-repos.yml, with fscale from
+    # npm under next instead of a build.
+    needs: [version, staging]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/real-repos.yml
+    with:
+      fscale: next
+      version: ${{ needs.version.outputs.version }}

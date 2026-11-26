@@ -3,7 +3,11 @@
 // prints <version>. A new package can take a few minutes to become
 // available, so it tries again for a while before giving up.
 //
-// Usage: node scripts/verify-published.mjs <version or tag> [--attempts <n>] [--wait <seconds>]
+// With --tag <tag>, it runs `npx firescale@<tag> --version` and checks that the
+// tag gives <version>: the staging tests use `next`, the production smoke
+// `latest` (ADR 0092).
+//
+// Usage: node scripts/verify-published.mjs <version> [--tag <tag>] [--attempts <n>] [--wait <seconds>]
 // FSCALE_NPX_COMMAND replaces the command that is run (used by the tests).
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -19,6 +23,7 @@ function fail(message) {
 
 const argv = process.argv.slice(2);
 let version;
+let tag;
 let attempts = 20;
 let wait = 15;
 for (let i = 0; i < argv.length; i += 1) {
@@ -29,11 +34,16 @@ for (let i = 0; i < argv.length; i += 1) {
     if (arg === '--attempts') attempts = Math.max(1, value);
     else wait = value;
     i += 1;
+  } else if (arg === '--tag') {
+    tag = argv[i + 1] ?? '';
+    // The tag goes into a command line, so it must be a plain dist-tag.
+    if (!/^[a-z][a-z0-9-]*$/.test(tag)) fail(`"${tag}" is not a dist-tag such as next or latest.`);
+    i += 1;
   } else if (version === undefined && !arg.startsWith('-')) {
     version = arg.replace(/^v/, '');
   } else {
     fail(
-      `unknown argument "${arg}". Usage: node scripts/verify-published.mjs <version> [--attempts <n>] [--wait <seconds>]`,
+      `unknown argument "${arg}". Usage: node scripts/verify-published.mjs <version> [--tag <tag>] [--attempts <n>] [--wait <seconds>]`,
     );
   }
 }
@@ -47,7 +57,8 @@ if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 // attempt. npm keeps a package's metadata for five minutes without asking
 // again, so one shared cache would repeat the first "not found" for the whole
 // retry window, and would reuse a half-finished install.
-const command = process.env.FSCALE_NPX_COMMAND ?? `npx --yes firescale@${version} --version`;
+const spec = tag ?? version;
+const command = process.env.FSCALE_NPX_COMMAND ?? `npx --yes firescale@${spec} --version`;
 
 let last = '';
 let ok = false;
@@ -70,7 +81,11 @@ for (let attempt = 1; attempt <= attempts && !ok; attempt += 1) {
     });
     const printed = (result.stdout ?? '').trim();
     if (result.status === 0 && printed === version) {
-      process.stdout.write(`firescale@${version} is installable: --version printed ${printed}\n`);
+      process.stdout.write(
+        tag
+          ? `firescale@${tag} is ${version}: --version printed ${printed}\n`
+          : `firescale@${version} is installable: --version printed ${printed}\n`,
+      );
       ok = true;
     } else {
       last =
@@ -85,6 +100,11 @@ for (let attempt = 1; attempt <= attempts && !ok; attempt += 1) {
     }
   }
   if (!ok && attempt < attempts) await sleep(wait * 1000);
+}
+if (!ok && tag) {
+  fail(
+    `firescale@${tag} did not give ${version} after ${attempts} attempts (\`${command}\`: ${last}). Check the dist-tags on https://www.npmjs.com/package/firescale; then run this job again.`,
+  );
 }
 if (!ok) {
   fail(
