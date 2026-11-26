@@ -409,6 +409,94 @@ describe('scripts/verify-published.mjs', () => {
   });
 });
 
+describe('scripts/release-sums.mjs', () => {
+  /** One artifact folder as a build job leaves it: three tarballs. */
+  async function folder(root: string, name: string): Promise<string> {
+    const dir = path.join(root, name);
+    await mkdir(dir, { recursive: true });
+    for (const file of [
+      'firescale-1.2.3.tgz',
+      'firescale-sdk-1.2.3.tgz',
+      'firescale-cli-x-1.2.3.tgz',
+    ]) {
+      await writeFile(path.join(dir, file), `bytes of ${name}/${file}`);
+    }
+    return dir;
+  }
+
+  it('writes SHA256SUMS for every tarball, and a check of the same bytes passes', async () => {
+    const root = await scratch();
+    const dir = await folder(root, 'npm-linux-x64');
+    const written = await node('release-sums.mjs', ['write', dir]);
+    expect(written.stderr).toBe('');
+    expect(written.code).toBe(0);
+    const sums = await readFile(path.join(dir, 'SHA256SUMS'), 'utf8');
+    const lines = sums.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(3);
+    for (const line of lines) expect(line).toMatch(/^[0-9a-f]{64} {2}firescale[\w.-]*\.tgz$/);
+    // The format `sha256sum -c` reads, sorted by file name.
+    expect(lines.map((line) => line.slice(66))).toEqual([
+      'firescale-1.2.3.tgz',
+      'firescale-cli-x-1.2.3.tgz',
+      'firescale-sdk-1.2.3.tgz',
+    ]);
+    const check = await node('release-sums.mjs', ['check', dir]);
+    expect(check.stderr).toBe('');
+    expect(check.code).toBe(0);
+    expect(check.stdout).toContain('3 tarballs match SHA256SUMS');
+  });
+
+  it('checks every artifact folder below the given one', async () => {
+    const root = await scratch();
+    for (const name of ['npm-linux-x64', 'npm-win32-x64']) {
+      await node('release-sums.mjs', ['write', await folder(root, name)]);
+    }
+    const check = await node('release-sums.mjs', ['check', root]);
+    expect(check.code).toBe(0);
+    expect(check.stdout).toContain('6 tarballs match SHA256SUMS');
+  });
+
+  it('fails on a changed byte, naming the file', async () => {
+    const root = await scratch();
+    const dir = await folder(root, 'npm-linux-x64');
+    await node('release-sums.mjs', ['write', dir]);
+    await writeFile(path.join(dir, 'firescale-sdk-1.2.3.tgz'), 'other bytes');
+    const check = await node('release-sums.mjs', ['check', root]);
+    expect(check.code).toBe(1);
+    expect(check.stderr).toContain(
+      'npm-linux-x64/firescale-sdk-1.2.3.tgz does not match SHA256SUMS',
+    );
+  });
+
+  it('fails on a tarball that is not listed, a listed one that is gone, and a folder with no sums', async () => {
+    const root = await scratch();
+    const dir = await folder(root, 'npm-linux-x64');
+    await node('release-sums.mjs', ['write', dir]);
+    await writeFile(path.join(dir, 'extra-1.2.3.tgz'), 'x');
+    const extra = await node('release-sums.mjs', ['check', root]);
+    expect(extra.code).toBe(1);
+    expect(extra.stderr).toContain('npm-linux-x64/extra-1.2.3.tgz is not in SHA256SUMS');
+
+    await rm(path.join(dir, 'extra-1.2.3.tgz'));
+    await rm(path.join(dir, 'firescale-1.2.3.tgz'));
+    const gone = await node('release-sums.mjs', ['check', root]);
+    expect(gone.code).toBe(1);
+    expect(gone.stderr).toContain('npm-linux-x64/firescale-1.2.3.tgz is in SHA256SUMS but missing');
+
+    const bare = await folder(root, 'npm-darwin-arm64');
+    expect(bare).toBeTruthy();
+    const none = await node('release-sums.mjs', ['check', path.join(root, 'npm-darwin-arm64')]);
+    expect(none.code).toBe(1);
+    expect(none.stderr).toContain('no SHA256SUMS');
+  });
+
+  it('refuses a folder with no tarballs, and a wrong command', async () => {
+    const empty = await scratch();
+    expect((await node('release-sums.mjs', ['write', empty])).stderr).toContain('no .tgz');
+    expect((await node('release-sums.mjs', ['frob', empty])).code).toBe(1);
+  });
+});
+
 describe('.github/workflows/release.yml', () => {
   const read = () => readFile(path.join(REPO, '.github', 'workflows', 'release.yml'), 'utf8');
   /** The text of one job: from its key to the next key at the same depth. */
@@ -438,10 +526,9 @@ describe('.github/workflows/release.yml', () => {
     const text = await read();
     const publish = job(text, 'publish');
     expect(publish).toContain("if: github.event_name == 'push' && github.ref_type == 'tag'");
-    expect(publish).toContain('needs: [version, build]');
     expect(publish).toContain('runs-on: ubuntu-latest');
     expect(publish).toContain('node scripts/publish-npm.mjs --dir artifacts');
-    expect(job(text, 'build')).toContain('needs: version');
+    expect(job(text, 'build')).toContain('needs: [version, audit]');
     expect(job(text, 'build')).not.toContain('npm publish');
     expect(job(text, 'version')).toContain('bump-version.mjs --check --tag "$TAG"');
     // A tag on a commit that is not on main is refused before any build.
@@ -456,6 +543,59 @@ describe('.github/workflows/release.yml', () => {
     expect(verify).toContain('needs: [version, publish]');
     expect(verify).toContain('os: [ubuntu-latest, macos-latest, windows-latest]');
     expect(text).toMatch(/\non:\n {2}workflow_dispatch:\n {2}push:\n {4}tags: \['v\*'\]\n/);
+  });
+
+  it('audits the dependencies before any build: pnpm audit and a pinned cargo-deny', async () => {
+    const text = await read();
+    const audit = job(text, 'audit');
+    expect(audit).toContain('needs: version');
+    expect(audit).toContain('run: pnpm audit --audit-level high');
+    // cargo-deny is a downloaded binary: one exact version, its SHA-256 checked before it runs.
+    expect(audit).toMatch(/cargo-deny-0\.22\.1-x86_64-unknown-linux-musl/);
+    expect(audit).toContain('13f7e825e9cb811c2f8de63f29b0f45851dfb53004029f0f2501af524728364d');
+    expect(audit).toMatch(/sha256sum (-c|--check)/);
+    expect(audit).toContain('cargo-deny check');
+    expect(audit).toMatch(/timeout-minutes: \d+/);
+    // Nothing is built until the audit passes.
+    expect(job(text, 'build')).toContain('needs: [version, audit]');
+  });
+
+  it('writes SHA256SUMS in each build, and checks them wherever a tarball is read', async () => {
+    const text = await read();
+    const build = job(text, 'build');
+    const write = build.indexOf('node scripts/release-sums.mjs write dist-npm');
+    expect(write).toBeGreaterThan(build.indexOf('scripts/pack-npm.mjs'));
+    expect(write).toBeLessThan(build.indexOf('actions/upload-artifact'));
+    expect(build).toContain('dist-npm/SHA256SUMS');
+    // The check runs before the tarballs are used.
+    const smoke = job(text, 'smoke');
+    expect(smoke.indexOf('release-sums.mjs check')).toBeGreaterThan(-1);
+    expect(smoke.indexOf('release-sums.mjs check')).toBeLessThan(smoke.indexOf('smoke-npm.mjs'));
+    const publish = job(text, 'publish');
+    expect(publish.indexOf('release-sums.mjs check artifacts')).toBeGreaterThan(-1);
+    expect(publish.indexOf('release-sums.mjs check artifacts')).toBeLessThan(
+      publish.indexOf('publish-npm.mjs'),
+    );
+  });
+
+  it('smokes the tarballs on three OSes with npm, pnpm and yarn before anything is published', async () => {
+    const text = await read();
+    const smoke = job(text, 'smoke');
+    expect(smoke).toContain('needs: [version, build]');
+    for (const [os, key] of [
+      ['ubuntu-latest', 'linux-x64'],
+      ['macos-latest', 'darwin-arm64'],
+      ['windows-latest', 'win32-x64'],
+    ]) {
+      expect(smoke).toMatch(new RegExp(`- \\{ os: ${os}, key: ${key} \\}`));
+    }
+    expect(smoke).toContain('name: npm-${{ matrix.key }}');
+    for (const pm of ['npm', 'pnpm', 'yarn']) {
+      expect(smoke).toContain(`node scripts/smoke-npm.mjs --pm ${pm} --tarballs dist-npm`);
+    }
+    expect(smoke).toMatch(/timeout-minutes: \d+/);
+    expect(smoke).not.toContain('id-token');
+    expect(job(text, 'publish')).toContain('needs: [version, build, smoke]');
   });
 
   it('pins every action to a commit', async () => {
@@ -474,7 +614,7 @@ describe('.github/workflows/release.yml', () => {
     const text = await read();
     const jobs = text.slice(text.indexOf('\njobs:\n'));
     const names = [...jobs.matchAll(/^ {2}([a-z][\w-]*):\r?$/gm)].map((match) => match[1] ?? '');
-    expect(names).toEqual(['version', 'build', 'publish', 'verify']);
+    expect(names).toEqual(['version', 'audit', 'build', 'smoke', 'publish', 'verify']);
     const turnedOff = /^\s*(- )?[\w-]*cache[\w-]*: (false|none)$/i;
     const found = names.flatMap((name) =>
       job(text, name)
@@ -491,7 +631,7 @@ describe('.github/workflows/release.yml', () => {
     // setup-node can cache a package manager's store without a `cache:`
     // input (ADR 0041), and it saves in a post step. A release turns it off.
     const text = await read();
-    for (const name of ['version', 'build', 'publish', 'verify']) {
+    for (const name of ['version', 'audit', 'build', 'smoke', 'publish', 'verify']) {
       const steps = job(text, name).split(/\r?\n(?= {6}- )/);
       const setups = steps.filter((step) => step.includes('uses: actions/setup-node@'));
       expect(setups, name).toHaveLength(1);
