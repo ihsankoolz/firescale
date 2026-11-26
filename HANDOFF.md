@@ -4,7 +4,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**M40, continuous delivery for releases, started on 2026-11-26** (DECISIONS.md, "M40"; ADR 0092 on). Worktree `../fs-m40-wt`, branches `m40-*`. Four pull requests: the ADR, steps 2 to 4 (audit, sums, smoke), steps 5 and 6 (staging and its tests), steps 7 to 10 (approval, promotion, production smoke, rollback, rehearsal, environments). No version change and no tag in this run.
+**M40, continuous delivery for releases, done on 2026-11-26** (merged as #112 to #116, the rehearsal recorded in the next). The rehearsal passed: run 45749423248. (DECISIONS.md, "M40"; ADR 0092 on). Worktree `../fs-m40-wt`, branches `m40-*`. Pull requests: the ADR (#112), steps 2 to 4 (#113), steps 5 and 6 (#114), steps 7 to 10 with the rehearsal and the environments (#115), and a fix the first rehearsal found (#116). No version change and no tag in this run.
 
 **Before the next tag:** tick **Allow npm dist-tag** on the trusted publisher of each of the eight packages on npmjs.com (`RELEASING.md`). Without it promotion fails with `ENEEDAUTH` (and the rollback moves back whatever moved). A release now waits for the owner's approval at the job `production / move latest`.
 

@@ -95,6 +95,8 @@ A run started by hand with the input `rehearsal` runs the whole pipeline with **
 
 Run 45747767942 (2026-11-26) passed every job up to the record, then skipped the promotion: a job's implicit `success()` also looks at the jobs before the ones it needs, and a rehearsal skips the staging tests. `promote` and `smoke-latest` now name their condition (`!cancelled() && needs.<before>.result == 'success'`), and `record` uses `!cancelled()`, not `always()`, so a cancelled run never records or promotes.
 
+The second, run 45749423248, on `main` at `49cf362` (2026-11-26): check version, audit, six builds, smoke on three OSes, staging (eight published under `next` to the stand-in, seeded with npm's latest 0.5.3, each read back with the built bytes) and the record passed; the run waited at `production`, approved through `gh api` on the owner's word; promotion moved `latest` from 0.5.3 to 0.5.4 on all eight in the stand-in, each read back; the production smoke failed on purpose on all three OSes; the rollback moved `latest` back to 0.5.3 on all eight (8 moved), each read back; issue #117 (`[rehearsal] Release 0.5.4 rolled back: the production smoke failed`) was opened and closed. The run ended `failure`, with rollback and issue green: the pass. On npm afterwards: `latest` 0.5.3, and 0.5.4 is a 404 on all eight.
+
 ## Not done
 
 - Two releases of different tags are not serialised (the concurrency group is per ref). The rollback leaves alone a `latest` it did not move, but a promotion and another release's promotion can still interleave; release one version at a time.

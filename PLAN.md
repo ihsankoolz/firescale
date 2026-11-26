@@ -780,9 +780,9 @@ Decisions in ADR 0055: five rules; a starter of `CMakeLists.txt` (CMake 3.20, C+
 
 ---
 
-## M40 — Continuous delivery for releases ◐
+## M40 — Continuous delivery for releases ☑
 
-Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (the audit). One pipeline in `release.yml` from a tag to `latest` on npm, the same bytes all the way. Four pull requests: the ADR; steps 2 to 4; steps 5 and 6; steps 7 to 10 with the rehearsal and the environments.
+Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (the audit). One pipeline in `release.yml` from a tag to `latest` on npm, the same bytes all the way. Pull requests: the ADR (#112); steps 2 to 4 (#113); steps 5 and 6 (#114); steps 7 to 10 with the rehearsal and the environments (#115); a fix the first rehearsal found (#116); the rehearsal's result (#118).
 
 **Done when**
 
@@ -796,8 +796,8 @@ Decisions in ADR 0092 (staging and production through dist-tags) and ADR 0093 (t
 - ☑ Promotion waits for the environment `production`, records `latest` of all eight, moves it, and reads it back.
 - ☑ A failed production smoke moves `latest` back on all eight, opens an issue, and fails the run; nothing is unpublished.
 - ☑ Unit tests for the promotion and rollback scripts with the fake npm; only the publishing and tag-moving jobs have `id-token: write`; no secret is named.
-- ☐ The environments `staging`, `production` (reviewer `ihsankoolz`) and `rollback` exist.
-- ☐ A rehearsal (`workflow_dispatch` with `rehearsal`) runs the rollback path end to end without touching npm, and its result is recorded.
+- ☑ The environments `staging`, `production` (reviewer `ihsankoolz`) and `rollback` exist.
+- ☑ A rehearsal (`workflow_dispatch` with `rehearsal`) runs the rollback path end to end without touching npm, and its result is recorded: run 45749423248 on `main` at `49cf362` (2026-11-26): check version, audit, six builds, smoke on three OSes, staging (eight published under `next` to the stand-in, seeded with npm's latest 0.5.3, each read back with the built bytes) and the record passed; the run waited at `production`, approved through `gh api` on the owner's word; promotion moved `latest` from 0.5.3 to 0.5.4 on all eight in the stand-in, each read back; the production smoke failed on purpose on all three OSes; the rollback moved `latest` back to 0.5.3 on all eight (8 moved), each read back; issue #117 (`[rehearsal] Release 0.5.4 rolled back: the production smoke failed`) was opened and closed. The run ended `failure`, with rollback and issue green: the pass. On npm afterwards: `latest` 0.5.3, and 0.5.4 is a 404 on all eight.
 
 ---
 
