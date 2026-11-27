@@ -29,11 +29,16 @@ on:
   push:
     tags: ['v*']
 
-# Two runs for one tag never publish at the same time. A run in progress is
-# never cancelled: a publish that is cut off is finished by running it again.
+# One release at a time, whatever its tag or branch: two runs never publish or
+# move latest at the same time. A later run waits until the one before it ends,
+# rehearsals included. A run in progress is never cancelled: a publish that is
+# cut off is finished by running it again. queue: max keeps every waiting run in
+# the order it started; without it a third run would cancel the second while it
+# waits (GitHub's default keeps one pending run per group).
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
+  queue: max
 
 # The default for every job. Only the publish job asks for more.
 permissions:

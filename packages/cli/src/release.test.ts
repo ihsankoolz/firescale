@@ -618,6 +618,24 @@ describe('.github/workflows/release.yml', () => {
     return next ? rest.slice(0, next.index + 1) : rest;
   };
 
+  it('runs one release at a time, for every tag: a later run waits in order and never cancels one', async () => {
+    const text = await read();
+    // One group for the whole workflow, not one per ref: two tags never promote at the same time.
+    // queue: max keeps every waiting run; the default queue cancels a pending run when a third arrives.
+    expect(text).toMatch(
+      /\nconcurrency:\n {2}group: release\n {2}cancel-in-progress: false\n {2}queue: max\n/,
+    );
+    expect(text.match(/^\s*concurrency:/gm)).toHaveLength(1);
+    expect(text).not.toMatch(/cancel-in-progress: true/);
+    // The workflow it calls has no group: one in `release` would wait on its own caller forever.
+    const called = await readFile(
+      path.join(REPO, '.github', 'workflows', 'real-repos.yml'),
+      'utf8',
+    );
+    expect(text).toContain('uses: ./.github/workflows/real-repos.yml');
+    expect(called).not.toMatch(/^\s*concurrency:/m);
+  });
+
   it('uses no token and no secret', async () => {
     const text = (await read()).replace(/^\s*#.*$/gm, '');
     expect(text).not.toMatch(/secrets\./);
