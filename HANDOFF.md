@@ -4,6 +4,8 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
+**0.6.0-rc.1, the release run of 2026-11-27** (DECISIONS.md, "0.6.0-rc.1"). Releases are serialised (#119, merged). The version pull request sets 0.6.0-rc.1 and adds `CHANGELOG.md`, and **waits for the owner**: two M0 tests pin a version with no pre-release part (DECISIONS.md says which). The worktrees `../fs-m40-wt` and `../fs-m40-2-wt` were removed (nothing unpushed). No tag was pushed.
+
 **M40, continuous delivery for releases, done on 2026-11-26** (merged as #112 to #116, the rehearsal recorded in the next). The rehearsal passed: run 45749423248. (DECISIONS.md, "M40"; ADR 0092 on). Worktree `../fs-m40-wt`, branches `m40-*`. Pull requests: the ADR (#112), steps 2 to 4 (#113), steps 5 and 6 (#114), steps 7 to 10 with the rehearsal and the environments (#115), and a fix the first rehearsal found (#116). No version change and no tag in this run.
 
 **Before the next tag:** tick **Allow npm dist-tag** on the trusted publisher of each of the eight packages on npmjs.com (`RELEASING.md`). Without it promotion fails with `ENEEDAUTH` (and the rollback moves back whatever moved). A release now waits for the owner's approval at the job `production / move latest`.
@@ -75,7 +77,7 @@ Before this run: the 0.5.2 run (2026-11-16: fixes after running 0.5.1 on the cou
 
 The 0.5.1 run before it (ADR 0057 to 0061, #54 to #59) is merged and released. The 0.5.2 run ended with its version pull request. Do not start M36 without the owner's word. Of the project-type table, the owner asked for an open pull request in the 0.5.3 run: step 1 is #80; do not go further without the owner's word.
 
-- **Version:** 0.5.4 in `Cargo.toml`, `Cargo.lock` and every `package.json`. **0.5.4 is not released**: there is no tag `v0.5.4`. 0.5.3 is released and is npm's latest (the tag `v0.5.3` is on commit `520e1ef`; seen on 2026-11-18).
+- **Version:** 0.6.0-rc.1 in `Cargo.toml`, `Cargo.lock` and every `package.json` once the version pull request of 2026-11-27 merges (0.5.4 before it). **0.5.4 was never released**: there is no tag `v0.5.4`. 0.5.3 is released and is npm's latest (the tag `v0.5.3` is on commit `520e1ef`; seen on 2026-11-18).
 - **Decisions the owner has not confirmed** are at the top of each pull request and in DECISIONS.md "0.5.1": `--budget` with `verify.failOnSkipped` fails the run; `--budget` in the stop hook is refused with exit 1; a kept step time is set by a pass and only raised by a failure or a stop; `protectedPaths` forms that can match no path are config errors; a linked `.firescale` stops `fix --agent` and `fscale ledger` and turns every cache off; verify's JSON was schema version 7 then (it is 8 now); the step cache format is 2; an ignored config is compared with a record of the last passing run; `fscale doctor` says PROBLEM for a `.env` that is a symbolic link when its variables are set nowhere else; `hooks install` no longer prints the note about the Cursor hook format.
 - **Verify's JSON is schema version 8** (version 7: `notRun`, `budgetMs`, the step status `over-budget`; version 8: the step status `report-only` and a step's `reportOnly`, ADR 0070).
 - **Before this run:** the run of 2026-11-15, 01:30 UTC, fixed the bugs of the ponytail audit that the owner chose and set the version to 0.5.0.
