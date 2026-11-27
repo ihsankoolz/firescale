@@ -1,6 +1,6 @@
 {
   "name": "firescale-monorepo",
-  "version": "0.5.4",
+  "version": "0.6.0-rc.1",
   "private": true,
   "description": "Workspace root for firescale, a conformance and verify engine for any repo.",
   "license": "MIT",

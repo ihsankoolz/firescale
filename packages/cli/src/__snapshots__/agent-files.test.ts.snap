@@ -4,11 +4,11 @@ exports[`fscale init in an empty folder > yields a repo where the whole agent-re
 "{
   "permissions": {
     "allow": [
-      "Bash(npx --yes firescale@0.5.4 verify *)",
-      "Bash(npx --yes firescale@0.5.4 check *)",
-      "Bash(npx --yes firescale@0.5.4 facts *)",
-      "Bash(npx --yes firescale@0.5.4 doctor *)",
-      "Bash(npx --yes firescale@0.5.4 explain *)"
+      "Bash(npx --yes firescale@0.6.0-rc.1 verify *)",
+      "Bash(npx --yes firescale@0.6.0-rc.1 check *)",
+      "Bash(npx --yes firescale@0.6.0-rc.1 facts *)",
+      "Bash(npx --yes firescale@0.6.0-rc.1 doctor *)",
+      "Bash(npx --yes firescale@0.6.0-rc.1 explain *)"
     ],
     "deny": [
       "Read(**/.env)",
@@ -29,7 +29,7 @@ exports[`fscale init in an empty folder > yields a repo where the whole agent-re
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes firescale@0.5.4 hooks run --agent claude"
+            "command": "npx --yes firescale@0.6.0-rc.1 hooks run --agent claude"
           }
         ]
       }
@@ -132,7 +132,7 @@ exports[`fscale init in an empty folder > yields a repo where the whole agent-re
         "hooks": [
           {
             "type": "command",
-            "command": "npx --yes firescale@0.5.4 hooks run --agent codex"
+            "command": "npx --yes firescale@0.6.0-rc.1 hooks run --agent codex"
           }
         ]
       }
@@ -168,7 +168,7 @@ exports[`fscale init in an empty folder > yields a repo where the whole agent-re
   "hooks": {
     "stop": [
       {
-        "command": "npx --yes firescale@0.5.4 hooks run --agent cursor"
+        "command": "npx --yes firescale@0.6.0-rc.1 hooks run --agent cursor"
       }
     ]
   }
@@ -189,12 +189,12 @@ No build, lint, typecheck or test commands were found yet. Add them (for example
 
 ## Definition of done
 
-Before you say a task is done, run \`npx --yes firescale@0.5.4 verify\` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.
+Before you say a task is done, run \`npx --yes firescale@0.6.0-rc.1 verify\` from the repo root and fix what it reports. It runs the firescale rules, then lint, typecheck and tests.
 
 - Never skip, delete or weaken a test, a lint rule or a check to make it pass.
 - If you believe a test or check is wrong, do not edit it: say which and why, and stop.
-- \`SETUP NEEDED\` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. \`npx --yes firescale@0.5.4 doctor\` lists what is missing.
-- To learn how to fix a rule's finding: \`npx --yes firescale@0.5.4 explain <rule>\`.
+- \`SETUP NEEDED\` means the machine is not ready: a dependency, a program or a service is missing. Run the setup command it names, or tell the user. Do not change code for it. \`npx --yes firescale@0.6.0-rc.1 doctor\` lists what is missing.
+- To learn how to fix a rule's finding: \`npx --yes firescale@0.6.0-rc.1 explain <rule>\`.
 
 <!-- END firescale -->
 "
