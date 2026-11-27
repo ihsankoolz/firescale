@@ -2,6 +2,27 @@
 
 A running log, newest milestone first. For each milestone: what was built, decisions made on your behalf (with the ADR), known limits, and what needs your decision. Anything you could reasonably disagree with is under "Needs your decision".
 
+## 0.6.0-rc.1 — the release run of 2026-11-27
+
+The owner asked for 0.6.0-rc.1: serialise releases, then the version and the release notes. The owner's prompt overrides "do not change the version" for this run. No tag is pushed: the owner tags.
+
+**Pull request 1: one release at a time (#119, merged)**
+
+- `release.yml`: `concurrency: { group: release, cancel-in-progress: false, queue: max }`. Before, the group was per ref, so two tags could promote at once (ADR 0092, "Not done"). GitHub's docs, checked 2026-11-27: the default `queue: single` cancels a waiting run when a third arrives; `queue: max` keeps up to 100, in order. Run 45986144913 (started by hand on the branch, publishes nothing) showed GitHub accepts it; it was cancelled.
+- **Failing test first:** `runs one release at a time, for every tag` in `release.test.ts`, seen failing on the old group.
+- **From the fresh review, fixed:** the docs now say every run of `release.yml` shares the queue (a build started by hand on any branch, and a re-run of failed jobs, too); a test pins that `real-repos.yml`, which the release calls, has no group of its own.
+- **The cost:** a run waiting for approval at `production` holds the queue (RELEASING.md, ADR 0092 addendum).
+
+**Pull request 2: version 0.6.0-rc.1 and `CHANGELOG.md`**
+
+- `node scripts/bump-version.mjs 0.6.0-rc.1`; the three snapshot files that hold the version follow it, with the digest of the adopted tamper-guard workflow. The platform packages take the version from `Cargo.toml` when packed, so all eight carry it.
+- `CHANGELOG.md` is new: the repo kept no release notes outside this file. One list since 0.5.3 (0.5.4 was never released), merged from the 0.5.4, Track A and Track B lists, plus Track A's items 1 to 10, which had no list. The kept Rust build folders are left out: item 14 withdrew them.
+- **From the fresh check of every line against the code, fixed:** the Rust line described the empty base `target/` as new (it was so in 0.5.3; what is new is that no base step gets `CARGO_TARGET_DIR`); the guessed-lint line left out build-file declarations; the hook limit is Claude Code's only, with `--timeout`; schema 9 also adds `oldTests` and `evidence`; CS464's `expected` needs `test` as an object, and the rc is installable only once the tag's run has published it. Added: ADR 0069's wider rule inputs, ADR 0072's cost for a retrying script, ADR 0093's audit and sums, doctor's `firescale.config.ts` warning, the report-only wording of an enforced guard.
+- **Blocked: two tests pin a version with no pre-release part.** `fscale --version > prints exactly the version in packages/cli/package.json` (`packages/cli/src/cli.test.ts:17`, `/^\d+\.\d+\.\d+\n$/`) and `tests::version_is_semver_like` (`crates/core/src/lib.rs`, three numeric parts) both fail on `0.6.0-rc.1`. Both date from M0. The release pipeline (ADR 0092), `hooks.rs`'s `older` and the release scripts all accept a pre-release, so these two tests look wrong for one; AGENTS.md says not to edit a test believed wrong, so they are not changed and the pull request is not merged.
+
+- **Your decision (2026-11-27): the two version tests accept a pre-release.** Both now read a version by the rule of `scripts/release-registry.mjs`: `x.y.z` with an optional `-<pre>` part. A deliberate change: a test that rejects pre-releases is wrong for a release that has one. Each still rejects anything else, with cases for `0.6`, `v0.6.0`, `0.6.0-` and `""` (and `0.6.0.1`, `0.6.0+build`, a space): `a_release_version_is_x_y_z_with_an_optional_pre_part_and_nothing_else` in `crates/core/src/lib.rs`, and `reads a version by the release scripts' rule` in `cli.test.ts`, which also checks that the rule is the one in `release-registry.mjs`.
+- **To release:** tag `v0.6.0-rc.1` on the merge commit, title `firescale 0.6.0-rc.1`, after Allow npm dist-tag is ticked on the eight packages.
+
 ## M40 — continuous delivery for releases (run of 2026-11-26)
 
 One pipeline from a tag to `latest` on npm: audit, build once with SHA-256 sums, smoke before anything is public, staging under `next`, staging tests, the owner's approval, promotion, production smoke, rollback. ADRs from 0092. Worktree `../fs-m40-wt`; another session may run at the same time.

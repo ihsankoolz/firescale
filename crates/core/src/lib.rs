@@ -66,21 +66,61 @@ pub fn version() -> &'static str {
 mod tests {
     use super::version;
 
+    /// A release version: `MAJOR.MINOR.PATCH` with an optional `-<pre>`
+    /// part of ASCII letters, digits, `.` and `-`: the rule of
+    /// `scripts/release-registry.mjs` (`VERSION`). A pre-release such as
+    /// `0.6.0-rc.1` is a release.
+    fn is_release_version(text: &str) -> bool {
+        let (core, pre) = match text.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (text, None),
+        };
+        let parts: Vec<&str> = core.split('.').collect();
+        let core_ok = parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+        let pre_ok = pre.is_none_or(|pre| {
+            !pre.is_empty()
+                && pre
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        });
+        core_ok && pre_ok
+    }
+
     #[test]
     fn version_is_semver_like() {
-        let parts: Vec<&str> = version().split('.').collect();
-        assert_eq!(
-            parts.len(),
-            3,
-            "expected MAJOR.MINOR.PATCH, got {}",
+        assert!(
+            is_release_version(version()),
+            "expected MAJOR.MINOR.PATCH with an optional -<pre> part, got {}",
             version()
         );
-        for part in parts {
-            assert!(
-                part.chars().all(|c| c.is_ascii_digit()),
-                "non-numeric part in {}",
-                version()
-            );
+    }
+
+    #[test]
+    fn a_release_version_is_x_y_z_with_an_optional_pre_part_and_nothing_else() {
+        for good in [
+            "0.5.3",
+            "0.6.0",
+            "0.6.0-rc.1",
+            "10.20.30",
+            "1.0.0-alpha.1-b",
+        ] {
+            assert!(is_release_version(good), "{good:?} should be a version");
+        }
+        for bad in [
+            "0.6",
+            "v0.6.0",
+            "0.6.0-",
+            "",
+            "0.6.0.1",
+            "0.6.0+build",
+            "0.6.0-rc 1",
+            " 0.6.0",
+            "0..0",
+        ] {
+            assert!(!is_release_version(bad), "{bad:?} should not be a version");
         }
     }
 }
