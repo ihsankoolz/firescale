@@ -4,7 +4,7 @@ Current state of the project, so a new session can resume cold. Updated in every
 
 ## In progress
 
-**0.6.0-rc.1, the release run of 2026-11-27** (DECISIONS.md, "0.6.0-rc.1"). Releases are serialised (#119, merged). The version pull request sets 0.6.0-rc.1 and adds `CHANGELOG.md`, and **waits for the owner**: two M0 tests pin a version with no pre-release part (DECISIONS.md says which). The worktrees `../fs-m40-wt` and `../fs-m40-2-wt` were removed (nothing unpushed). No tag was pushed.
+**0.6.0-rc.1, the release run of 2026-11-27** (DECISIONS.md, "0.6.0-rc.1"). Releases are serialised (#119, merged). The version pull request sets 0.6.0-rc.1 and adds `CHANGELOG.md`, and, on the owner's decision, lets the two version tests accept a pre-release. To release: tag `v0.6.0-rc.1`, title `firescale 0.6.0-rc.1`. The worktrees `../fs-m40-wt` and `../fs-m40-2-wt` were removed (nothing unpushed). No tag was pushed.
 
 **M40, continuous delivery for releases, done on 2026-11-26** (merged as #112 to #116, the rehearsal recorded in the next). The rehearsal passed: run 45749423248. (DECISIONS.md, "M40"; ADR 0092 on). Worktree `../fs-m40-wt`, branches `m40-*`. Pull requests: the ADR (#112), steps 2 to 4 (#113), steps 5 and 6 (#114), steps 7 to 10 with the rehearsal and the environments (#115), and a fix the first rehearsal found (#116). No version change and no tag in this run.
 
