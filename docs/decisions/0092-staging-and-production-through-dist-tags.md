@@ -119,7 +119,8 @@ Fixed in the ADR before it was merged: the rollback was in `production` and woul
 
 `release.yml`'s concurrency group was `release-${{ github.ref }}`, so two tags could run at once and one promotion could interleave with another's. It is now one group for the whole workflow, `release`, with `cancel-in-progress: false` and `queue: max`. Checked in GitHub's documentation on 2026-11-27 ("Control the concurrency of workflows and jobs"): a run that finds the group busy is `pending`; with the default `queue: single`, "any existing `pending` job or workflow run in the same group is canceled and replaced" when another arrives, so a third run would cancel the second; `queue: max` keeps up to 100 pending runs, first in, first out, and may not be combined with `cancel-in-progress: true`.
 
-- A later run waits; no run cancels another. A rehearsal and a tag share the queue.
+- A later run waits; no run cancels another. Every run of `release.yml` shares the queue: a tag, a rehearsal, a build started by hand on any branch, and a re-run of an earlier run's failed jobs.
+- `real-repos.yml`, which the release calls, has no concurrency group of its own, so it can never wait on the release that called it; a test pins that.
 - **The cost:** a run waiting for the owner's approval at `production` holds the group, so every later run waits behind it until it is approved, rejected or cancelled. `RELEASING.md` says so.
 - **Test:** `runs one release at a time, for every tag` in `packages/cli/src/release.test.ts`, seen failing on the old group first.
 - **GitHub accepts `queue` at the workflow level:** run 45986144913, started by hand on the branch (no rehearsal, so it publishes nothing), passed check version and started the audit; it was then cancelled.

@@ -627,6 +627,13 @@ describe('.github/workflows/release.yml', () => {
     );
     expect(text.match(/^\s*concurrency:/gm)).toHaveLength(1);
     expect(text).not.toMatch(/cancel-in-progress: true/);
+    // The workflow it calls has no group: one in `release` would wait on its own caller forever.
+    const called = await readFile(
+      path.join(REPO, '.github', 'workflows', 'real-repos.yml'),
+      'utf8',
+    );
+    expect(text).toContain('uses: ./.github/workflows/real-repos.yml');
+    expect(called).not.toMatch(/^\s*concurrency:/m);
   });
 
   it('uses no token and no secret', async () => {
