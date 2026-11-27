@@ -122,4 +122,4 @@ Fixed in the ADR before it was merged: the rollback was in `production` and woul
 - A later run waits; no run cancels another. A rehearsal and a tag share the queue.
 - **The cost:** a run waiting for the owner's approval at `production` holds the group, so every later run waits behind it until it is approved, rejected or cancelled. `RELEASING.md` says so.
 - **Test:** `runs one release at a time, for every tag` in `packages/cli/src/release.test.ts`, seen failing on the old group first.
-- **Not checked locally:** that GitHub accepts `queue` at the workflow level (the documentation shows it for workflows and jobs); a run started by hand on the branch is the check.
+- **GitHub accepts `queue` at the workflow level:** run 45986144913, started by hand on the branch (no rehearsal, so it publishes nothing), passed check version and started the audit; it was then cancelled.
